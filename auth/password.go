@@ -17,12 +17,12 @@ type PasswordAuth struct {
 	useDefaultUser bool
 }
 
-func NewPasswordAuth(cfg config.PasswordConfig, jwtSvc *JWTService) *PasswordAuth {
+func NewPasswordAuth(cfg config.PasswordConfig, jwtSvc *JWTService, useDefaultUser bool) *PasswordAuth {
 	return &PasswordAuth{
 		db:             cfg.DB,
 		jwtSvc:         jwtSvc,
 		cost:           cfg.HashCost,
-		useDefaultUser: cfg.UseDefaultUser,
+		useDefaultUser: useDefaultUser,
 	}
 }
 

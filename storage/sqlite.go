@@ -25,7 +25,7 @@ func NewSQLiteProvider(dsn string, cfg *DBConfig) (*SQLiteProvider, error) {
 	}
 
 	// Create table if not exists
-	_, err = db.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, password_hash TEXT)")
+	_, err = db.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
 	if err != nil {
 		return nil, err
 	}
@@ -35,8 +35,8 @@ func NewSQLiteProvider(dsn string, cfg *DBConfig) (*SQLiteProvider, error) {
 
 func (s *SQLiteProvider) FindUserByEmail(email string) (models.User, error) {
 	user := &models.DefaultUser{}
-	err := s.db.QueryRow("SELECT id, email, password_hash FROM users WHERE email = ?", email).
-		Scan(&user.ID, &user.Email, &user.PasswordHash)
+	err := s.db.QueryRow("SELECT id, email, username, firstname, lastname, password_hash FROM users WHERE email = ?", email).
+		Scan(&user.ID, &user.Email, &user.Username, &user.Firstname, &user.Lastname, &user.PasswordHash)
 	if err != nil {
 		return nil, err
 	}
@@ -45,23 +45,31 @@ func (s *SQLiteProvider) FindUserByEmail(email string) (models.User, error) {
 
 func (s *SQLiteProvider) FindUserByID(id string) (models.User, error) {
 	user := &models.DefaultUser{}
-	err := s.db.QueryRow("SELECT id, email, password_hash FROM users WHERE id = ?", id).
-		Scan(&user.ID, &user.Email, &user.PasswordHash)
+	err := s.db.QueryRow("SELECT id, email, username, firstname, lastname, password_hash FROM users WHERE id = ?", id).
+		Scan(&user.ID, &user.Email, &user.Username, &user.Firstname, &user.Lastname, &user.PasswordHash)
 	if err != nil {
 		return nil, err
 	}
 	return user, nil
 }
 
-func (s *SQLiteProvider) SaveUser(user models.User) error {
+func (s *SQLiteProvider) SaveUser(user *models.DefaultUser) error {
 	// Use a transaction for atomicity
 	return s.WithTransaction(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-            INSERT OR REPLACE INTO users (id, email, password_hash)
-            VALUES (?, ?, ?)
-        `, user.GetID(), user.GetEmail(), user.GetPasswordHash())
+            INSERT OR REPLACE INTO users (id, email, username, firstname, lastname, password_hash)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `, user.GetID(), user.GetEmail(), user.GetUsername(), user.GetFirstname(), user.GetLastname(), user.GetPasswordHash())
 		return err
 	})
+}
+
+func (p *SQLiteProvider) Update(user models.DefaultUser) error {
+	return nil
+}
+
+func (p *SQLiteProvider) Delete(user models.DefaultUser) error {
+	return nil
 }
 
 func (s *SQLiteProvider) WithTransaction(fn func(tx *sql.Tx) error) error {

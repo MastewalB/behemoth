@@ -8,15 +8,16 @@ import (
 )
 
 type Config struct {
-	Password PasswordConfig
-	JWT      JWTConfig
+	Password       PasswordConfig
+	OAuth          OAuthConfig
+	JWT            JWTConfig
+	UseDefaultUser bool
 }
 
 type PasswordConfig struct {
-	DB             storage.DatabaseProvider
-	HashCost       int
-	UseDefaultUser bool
-	DBConfig       *storage.DBConfig
+	DB       storage.DatabaseProvider
+	HashCost int
+	DBConfig *storage.DBConfig
 }
 
 type JWTConfig struct {
@@ -30,5 +31,9 @@ type OAuthConfig struct {
 	ClientSecret string
 	RedirectURL  string
 	Scopes       []string
-	Endpoint     oauth2.Endpoint
+}
+
+var GoogleEndpoint = oauth2.Endpoint{
+	AuthURL:  "https://accounts.google.com/o/oauth2/auth",
+	TokenURL: "https://accounts.google.com/o/oauth2/token",
 }

@@ -12,6 +12,7 @@ type AuthProvider interface {
 
 type Behemoth struct {
 	Password *PasswordAuth
+	OAuth    *OAuthAuth
 	JWT      *JWTService
 }
 
@@ -19,7 +20,8 @@ type Behemoth struct {
 func New(cfg *config.Config) *Behemoth {
 	jwtSvc := NewJWTService(cfg.JWT)
 	return &Behemoth{
-		Password: NewPasswordAuth(cfg.Password, jwtSvc),
+		Password: NewPasswordAuth(cfg.Password, jwtSvc, cfg.UseDefaultUser),
+		OAuth:    NewOAuthAuth(cfg.OAuth, jwtSvc, cfg.UseDefaultUser),
 		JWT:      jwtSvc,
 	}
 }

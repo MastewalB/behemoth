@@ -59,15 +59,23 @@ func (p *PostgresProvider) FindUserByID(id string) (models.User, error) {
 	return user, nil
 }
 
-func (p *PostgresProvider) SaveUser(user models.User) error {
+func (p *PostgresProvider) SaveUser(user *models.DefaultUser) error {
 	return p.WithTransaction(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
 		INSERT INTO users (id, email, password_hash)
-		VALUES ($1, $2, $3)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (id) DO UPDATE SET email = $2, password_hash = $3
-	`, user.GetID(), user.GetEmail(), user.GetPasswordHash())
+	`, user.GetID(), user.GetEmail(), user.GetUsername(), user.GetFirstname(), user.GetLastname(), user.GetPasswordHash())
 		return err
 	})
+}
+
+func (p *PostgresProvider) Update(user models.DefaultUser) error {
+	return nil
+}
+
+func (p *PostgresProvider) Delete(user models.DefaultUser) error {
+	return nil
 }
 
 func (p *PostgresProvider) WithTransaction(fn func(tx *sql.Tx) error) error {
