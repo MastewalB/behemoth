@@ -1,14 +1,17 @@
 package main
 
 import (
+	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
-	"github.com/MastewalB/behemoth/config"
 	"github.com/MastewalB/behemoth/storage"
+	"github.com/MastewalB/behemoth/utils"
 	"github.com/joho/godotenv"
 )
 
@@ -20,40 +23,74 @@ func main() {
 
 	GoogleClientID := os.Getenv("GOOGLE_CLIENT_ID")
 	GoogleClientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
-	sqliteCfg := &storage.DBConfig{
-		MaxOpenConns:    10,
-		MaxIdleConns:    5,
-		ConnMaxLifetime: 30 * time.Minute,
+	PG_HOST := os.Getenv("PG_HOST")
+	PG_PORT := os.Getenv("PG_PORT")
+	PG_USER := os.Getenv("PG_USER")
+	PG_PASSWORD := os.Getenv("PG_PASSWORD")
+	PG_DATABASE := os.Getenv("PG_DATABASE")
+
+	// Connection string format:
+	// "postgres://username:password@host:port/database?sslmode=disable"
+	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", PG_USER, PG_PASSWORD, PG_HOST, PG_PORT, PG_DATABASE)
+	fmt.Println(connStr)
+	pg, err := sql.Open("postgres", connStr)
+	if err != nil {
+		log.Fatalf("Failed to initialize Postgres db: %v", err)
 	}
 
-	sqliteDB, err := storage.NewSQLiteProvider(":memory:", sqliteCfg)
+	_, err = pg.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
+	if err != nil {
+		log.Fatalf("Failed to initialize Postgres db: %v", err)
+	}
+
+	db, err := sql.Open("sqlite3", "file:main?mode=memory&cache=shared")
+	if err != nil {
+		log.Fatalf("Failed to initialize SQLite db: %v", err)
+	}
+
+	_, err = db.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
+	if err != nil {
+		log.Fatalf("Failed to initialize SQLite db: %v", err)
+	}
+
 	if err != nil {
 		log.Fatalf("Failed to init SQLite: %v", err)
 	}
 
-	cfg := &config.Config{
-		Password: config.PasswordConfig{
-			DB:       sqliteDB,
-			DBConfig: sqliteCfg,
-		},
-		OAuth: config.OAuthConfig{
+	pgCfg := &behemoth.Config[*behemoth.DefaultUser]{
+		Password: &behemoth.PasswordConfig{HashCost: 10},
+		OAuth: &behemoth.OAuthConfig{
 			ClientID:     GoogleClientID,
 			ClientSecret: GoogleClientSecret,
 			RedirectURL:  "http://localhost:8080/callback/google",
-			DB:           sqliteDB,
 			Scopes:       []string{"email", "profile"},
 		},
-		JWT:            config.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
+		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
 		UseDefaultUser: true,
+		DB:             &storage.Postgres[*behemoth.DefaultUser]{DB: pg, PK: "id", Table: "users"},
+		UserModel:      &behemoth.DefaultUser{},
 	}
-	b := auth.New(cfg)
+	bpg := auth.New(pgCfg)
 
-	// Password endpoints (unchanged)
+	cfg := &behemoth.Config[*behemoth.DefaultUser]{
+		Password: &behemoth.PasswordConfig{HashCost: 10},
+		OAuth: &behemoth.OAuthConfig{
+			ClientID:     GoogleClientID,
+			ClientSecret: GoogleClientSecret,
+			RedirectURL:  "http://localhost:8080/callback/google",
+			Scopes:       []string{"email", "profile"},
+		},
+		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
+		UseDefaultUser: true,
+		DB:             &storage.SQLlite[*behemoth.DefaultUser]{DB: db, PK: "id", Table: "users"},
+		UserModel:      &behemoth.DefaultUser{},
+	}
+	bsql := auth.New(cfg)
+
+	// Password endpoints
+	var user *behemoth.DefaultUser
 	http.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
-		user, err := b.Password.Register(auth.PasswordCredentials{
-			Email:    "newuser@example.com",
-			Password: "password123",
-		})
+		user, err = bsql.Password.Create("newuser@example.com", "username", "firstname", "lastname", "password123")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -62,22 +99,59 @@ func main() {
 	})
 
 	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		user, err := b.Password.Authenticate(auth.PasswordCredentials{
-			Email:    "newuser@example.com",
+		if user == nil {
+			http.Error(w, "Please register first", http.StatusBadRequest)
+			return
+		}
+		user, err := bsql.Password.Authenticate(auth.PasswordCredentials{
+			PK:       user.GetID(),
 			Password: "password123",
 		})
 		if err != nil {
+			log.Println(err.Error())
 			http.Error(w, "login failed", http.StatusUnauthorized)
 			return
 		}
-		token, _ := b.JWT.GenerateToken(user)
+		token, _ := bsql.JWT.GenerateToken(user)
+		w.Write([]byte("Token: " + token))
+	})
+
+	var pguser *behemoth.DefaultUser
+	http.HandleFunc("/pg/register", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Received /pg/register request")
+		email := fmt.Sprintf("newuser%d@example.com", time.Now().UnixNano())
+		username := fmt.Sprintf("username%d", time.Now().UnixNano())
+		log.Printf("Registering: email=%s, username=%s", email, username)
+		pguser, err = bpg.Password.Create(email, username, "firstname", "lastname", "password123")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte("Registered: " + pguser.GetID()))
+	})
+
+	http.HandleFunc("/pg/login", func(w http.ResponseWriter, r *http.Request) {
+		if pguser == nil {
+			http.Error(w, "Please register first", http.StatusBadRequest)
+			return
+		}
+		pguser, err := bpg.Password.Authenticate(auth.PasswordCredentials{
+			PK:       pguser.GetID(),
+			Password: "password123",
+		})
+		if err != nil {
+			log.Println(err.Error())
+			http.Error(w, "login failed", http.StatusUnauthorized)
+			return
+		}
+		token, _ := bsql.JWT.GenerateToken(pguser)
 		w.Write([]byte("Token: " + token))
 	})
 
 	// OAuth endpoints
 	http.HandleFunc("/login/google", func(w http.ResponseWriter, r *http.Request) {
-		state := auth.GenerateState() // Generate a unique state
-		url := b.OAuth.AuthURL(state)
+		state := utils.GenerateState() // Generate a unique state
+		url := bsql.OAuth.AuthURL(state)
 		// Store state in a cookie for validation (simplified for demo)
 		http.SetCookie(w, &http.Cookie{
 			Name:     "oauth_state",
@@ -114,13 +188,13 @@ func main() {
 			return
 		}
 
-		user, err := b.OAuth.Authenticate(code)
+		user, err := bsql.OAuth.Authenticate(code)
 		if err != nil {
 			http.Error(w, "Authentication failed: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
 
-		token, err := b.JWT.GenerateToken(user)
+		token, err := bsql.JWT.GenerateToken(user)
 		if err != nil {
 			http.Error(w, "Failed to issue token", http.StatusInternalServerError)
 			return
