@@ -14,9 +14,9 @@
 *.db
 
 # directory structure
-bin/*
-pkg/*
-tmp/*
+**/bin/*
+**/pkg/*
+**/tmp/*
 !.gitkeep
 
 # Test binary, built with `go test -c`

@@ -1,20 +1,19 @@
-package models
+package behemoth
 
 import "fmt"
 
 type User interface {
 	GetID() string
 	GetPasswordHash() string
-	GetEmail() string
 }
 
 type DefaultUser struct {
-	ID           string
-	Email        string
-	Username     string
-	Firstname    string
-	Lastname     string
-	PasswordHash string
+	ID           string `db:"id"`
+	Email        string `db:"email"`
+	Username     string `db:"username"`
+	Firstname    string `db:"firstname"`
+	Lastname     string `db:"lastname"`
+	PasswordHash string `db:"password_hash"`
 }
 
 func (u *DefaultUser) GetID() string           { return u.ID }

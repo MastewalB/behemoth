@@ -2,41 +2,43 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 
-	"github.com/MastewalB/behemoth/config"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/storage"
+	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/utils"
 	"golang.org/x/oauth2"
 )
 
-type OAuthAuth struct {
+type OAuthAuth[T behemoth.User] struct {
 	config         oauth2.Config
-	db             storage.DatabaseProvider
 	jwtSvc         *JWTService
 	useDefaultUser bool
+	db             behemoth.Database[T]
 }
 
-func NewOAuthAuth(cfg config.OAuthConfig, jwtSvc *JWTService, useDefaultUser bool) *OAuthAuth {
-	return &OAuthAuth{
+func NewOAuthAuth[T behemoth.User](cfg behemoth.OAuthConfig,
+	jwtSvc *JWTService,
+	useDefaultUser bool,
+	user behemoth.User,
+	db behemoth.Database[T],
+) *OAuthAuth[T] {
+	return &OAuthAuth[T]{
 		config: oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
 			RedirectURL:  cfg.RedirectURL,
 			Scopes:       cfg.Scopes,
-			Endpoint:     config.GoogleEndpoint,
+			Endpoint:     behemoth.GoogleEndpoint,
 		},
-		db:             cfg.DB,
+		db:             db,
 		jwtSvc:         jwtSvc,
 		useDefaultUser: useDefaultUser,
 	}
 }
 
-func (o *OAuthAuth) Authenticate(creds interface{}) (models.User, error) {
+func (o *OAuthAuth[T]) Authenticate(creds any) (behemoth.User, error) {
 	code, ok := creds.(string) // OAuth code from redirect
 	if !ok {
 		return nil, errors.New("invalid OAuth code")
@@ -68,16 +70,16 @@ func (o *OAuthAuth) Authenticate(creds interface{}) (models.User, error) {
 	}
 
 	// Create or update user
-	var user *models.DefaultUser
+	var user *behemoth.DefaultUser
 	if o.useDefaultUser {
-		user = &models.DefaultUser{
+		user = &behemoth.DefaultUser{
 			ID:    userInfo.ID,
 			Email: userInfo.Email,
 			// PasswordHash not needed for OAuth
 		}
 	} else {
 		// For custom models, assume the developer handles this in their DatabaseProvider
-		user = &models.DefaultUser{ID: userInfo.ID, Email: userInfo.Email} // Placeholder
+		user = &behemoth.DefaultUser{ID: userInfo.ID, Email: userInfo.Email} // Placeholder
 	}
 
 	// Save or update user in DB
@@ -88,19 +90,13 @@ func (o *OAuthAuth) Authenticate(creds interface{}) (models.User, error) {
 	return user, nil
 }
 
-func (o *OAuthAuth) Register(creds any) (models.User, error) {
+func (o *OAuthAuth[T]) Register(creds any) (behemoth.User, error) {
 	return o.Authenticate(creds) // OAuth often combines auth/register
 }
 
-func GenerateState() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
-}
-
-func (o *OAuthAuth) AuthURL(state string) string {
+func (o *OAuthAuth[T]) AuthURL(state string) string {
 	if state == "" {
-		state = GenerateState()
+		state = utils.GenerateState()
 	}
 	return o.config.AuthCodeURL(state)
 }

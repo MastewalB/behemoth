@@ -2,120 +2,74 @@ package storage
 
 import (
 	"database/sql"
+	"fmt"
 
-	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type SQLiteProvider struct {
-	db *sql.DB
+type SQLlite[T behemoth.User] struct {
+	DB    *sql.DB
+	Table string
+	PK    string
 }
 
-func NewSQLiteProvider(dsn string, cfg *DBConfig) (*SQLiteProvider, error) {
-	db, err := sql.Open("sqlite3", dsn) // e.g., ":memory:" or "file.db"
+func (sqlt *SQLlite[T]) FindByPK(val any) (T, error) {
+	var entity T
+
+	query := fmt.Sprintf(`SELECT * FROM %s WHERE %s = ?`, sqlt.Table, sqlt.PK)
+	row := sqlt.DB.QueryRow(query, val)
+
+	columns, err := getSQLiteColumnNames(sqlt.DB, sqlt.Table)
 	if err != nil {
-		return nil, err
+		return entity, err
 	}
 
-	// Apply connection pool settings if provided
-	if cfg != nil {
-		db.SetMaxOpenConns(cfg.MaxOpenConns)
-		db.SetMaxIdleConns(cfg.MaxIdleConns)
-		db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	}
-
-	// Create table if not exists
-	_, err = db.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
-	if err != nil {
-		return nil, err
-	}
-
-	return &SQLiteProvider{db: db}, nil
+	fmt.Println("Columns from DB:", columns)
+	entity, err = mapRowToStruct(row, entity, columns)
+	return entity, err
 }
 
-func (s *SQLiteProvider) FindUserByEmail(email string) (models.User, error) {
-	user := &models.DefaultUser{}
-	err := s.db.QueryRow("SELECT id, email, username, firstname, lastname, password_hash FROM users WHERE email = ?", email).
-		Scan(&user.ID, &user.Email, &user.Username, &user.Firstname, &user.Lastname, &user.PasswordHash)
-	if err != nil {
-		return nil, err
-	}
-	return user, nil
-}
-
-func (s *SQLiteProvider) FindUserByID(id string) (models.User, error) {
-	user := &models.DefaultUser{}
-	err := s.db.QueryRow("SELECT id, email, username, firstname, lastname, password_hash FROM users WHERE id = ?", id).
-		Scan(&user.ID, &user.Email, &user.Username, &user.Firstname, &user.Lastname, &user.PasswordHash)
-	if err != nil {
-		return nil, err
-	}
-	return user, nil
-}
-
-func (s *SQLiteProvider) SaveUser(user *models.DefaultUser) error {
-	// Use a transaction for atomicity
-	return s.WithTransaction(func(tx *sql.Tx) error {
+func (sqlt *SQLlite[T]) SaveUser(user *behemoth.DefaultUser) error {
+	return sqlt.WithTransaction(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-            INSERT OR REPLACE INTO users (id, email, username, firstname, lastname, password_hash)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `, user.GetID(), user.GetEmail(), user.GetUsername(), user.GetFirstname(), user.GetLastname(), user.GetPasswordHash())
+            INSERT INTO users 
+                (id, email, username, firstname, lastname, password_hash)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+			user.GetID(),
+			user.GetEmail(),
+			user.GetUsername(),
+			user.GetFirstname(),
+			user.GetLastname(),
+			user.GetPasswordHash(),
+		)
 		return err
 	})
 }
 
-func (p *SQLiteProvider) Update(user models.DefaultUser) error {
-	return nil
-}
-
-func (p *SQLiteProvider) Delete(user models.DefaultUser) error {
-	return nil
-}
-
-func (s *SQLiteProvider) WithTransaction(fn func(tx *sql.Tx) error) error {
-	tx, err := s.db.Begin()
+func (sqlt *SQLlite[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
+	tx, err := sqlt.DB.Begin()
 	if err != nil {
-		return err
-	}
-	if err := fn(tx); err != nil {
-		tx.Rollback()
-		return err
+		return fmt.Errorf("begin transaction: %w", err)
 	}
 
-	return tx.Commit()
-}
-
-func (s *SQLiteProvider) SaveUsers(users []models.User) error {
-	stmt, err := s.db.Prepare("INSERT OR REPLACE INTO users (id, email, password_hash) VALUES (?, ?, ?)")
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, user := range users {
-		_, err := stmt.Exec(user.GetID(), user.GetEmail(), user.GetPasswordHash())
-		if err != nil {
-			return err
+	defer func() {
+		if p := recover(); p != nil {
+			tx.Rollback()
+			panic(p) // re-throw panic after rollback
 		}
+	}()
+
+	if err := fn(tx); err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return fmt.Errorf("tx failed: %v, rollback failed: %w", err, rbErr)
+		}
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
-}
-
-func (s *SQLiteProvider) Migrate() error {
-	_, err := s.db.Exec(`
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            email TEXT UNIQUE,
-            password_hash TEXT
-        )
-    `)
-	return err
-}
-
-func (s *SQLiteProvider) ExistsByEmail(email string) (bool, error) {
-	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE email = ?", email).Scan(&count)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
 }

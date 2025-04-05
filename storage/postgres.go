@@ -2,91 +2,81 @@ package storage
 
 import (
 	"database/sql"
+	"fmt"
 
-	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth"
 	_ "github.com/lib/pq"
 )
 
-type PostgresProvider struct {
-	db *sql.DB
+type Postgres[T any] struct {
+	DB    *sql.DB
+	Table string
+	PK    string
 }
 
-func NewPostgresProvider(dsn string, cfg *DBConfig) (*PostgresProvider, error) {
-	db, err := sql.Open("postgres", dsn)
+func (pg *Postgres[T]) FindByPK(val any) (T, error) {
+	var entity T
+
+	query := fmt.Sprintf(`SELECT * FROM %s WHERE %s = $1`, pg.Table, pg.PK)
+	row := pg.DB.QueryRow(query, val)
+
+	columns, err := getPGColumnNames(pg.DB, pg.Table)
 	if err != nil {
-		return nil, err
+		return entity, err
 	}
 
-	// Apply connection pool settings if provided
-	if cfg != nil {
-		db.SetMaxOpenConns(cfg.MaxOpenConns)
-		db.SetMaxIdleConns(cfg.MaxIdleConns)
-		db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	}
-
-	// Ensure table exists
-	_, err = db.Exec(`
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            email TEXT UNIQUE,
-            password_hash TEXT
-        )
-    `)
-	if err != nil {
-		return nil, err
-	}
-
-	return &PostgresProvider{db: db}, nil
+	fmt.Println("Columns from DB:", columns)
+	entity, err = mapRowToStruct(row, entity, columns)
+	return entity, err
 }
 
-func (p *PostgresProvider) FindUserByEmail(email string) (models.User, error) {
-	user := &models.DefaultUser{}
-	err := p.db.QueryRow("SELECT id, email, password_hash FROM users WHERE email = $1", email).
-		Scan(&user.ID, &user.Email, &user.PasswordHash)
-	if err != nil {
-		return nil, err
-	}
-	return user, nil
-}
-
-func (p *PostgresProvider) FindUserByID(id string) (models.User, error) {
-	user := &models.DefaultUser{}
-	err := p.db.QueryRow("SELECT id, email, password_hash FROM users WHERE id = ?", id).
-		Scan(&user.ID, &user.Email, &user.PasswordHash)
-	if err != nil {
-		return nil, err
-	}
-	return user, nil
-}
-
-func (p *PostgresProvider) SaveUser(user *models.DefaultUser) error {
+func (p *Postgres[T]) SaveUser(user *behemoth.DefaultUser) error {
 	return p.WithTransaction(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-		INSERT INTO users (id, email, password_hash)
+		INSERT INTO users 
+		(id, email, username, firstname, lastname, password_hash)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (id) DO UPDATE SET email = $2, password_hash = $3
-	`, user.GetID(), user.GetEmail(), user.GetUsername(), user.GetFirstname(), user.GetLastname(), user.GetPasswordHash())
+		ON CONFLICT ON CONSTRAINT users_email_key DO NOTHING
+	`, user.GetID(),
+			user.GetEmail(),
+			user.GetUsername(),
+			user.GetFirstname(),
+			user.GetLastname(),
+			user.GetPasswordHash())
 		return err
 	})
 }
 
-func (p *PostgresProvider) Update(user models.DefaultUser) error {
-	return nil
-}
-
-func (p *PostgresProvider) Delete(user models.DefaultUser) error {
-	return nil
-}
-
-func (p *PostgresProvider) WithTransaction(fn func(tx *sql.Tx) error) error {
-	tx, err := p.db.Begin()
+func (p *Postgres[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
+	tx, err := p.DB.Begin()
 	if err != nil {
-		return err
+		return fmt.Errorf("begin transaction: %w", err)
 	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			tx.Rollback()
+			panic(p) // re-throw panic after rollback
+		}
+	}()
+
 	if err := fn(tx); err != nil {
-		tx.Rollback()
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return fmt.Errorf("tx failed: %v, rollback failed: %w", err, rbErr)
+		}
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres[T]) Update(user behemoth.DefaultUser) error {
+	return nil
+}
+
+func (p *Postgres[T]) Delete(user behemoth.DefaultUser) error {
+	return nil
 }
