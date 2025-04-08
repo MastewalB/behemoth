@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/utils"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -32,18 +33,33 @@ func (sqlt *SQLlite[T]) FindByPK(val any) (T, error) {
 
 func (sqlt *SQLlite[T]) SaveUser(user *behemoth.DefaultUser) error {
 	return sqlt.WithTransaction(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+
+		var emailCount, usernameCount int
+		err := tx.QueryRow(`
+			SELECT
+				EXISTS(SELECT 1 FROM users WHERE email = ?),
+                EXISTS(SELECT 1 FROM users WHERE username = ?)`,
+			user.Email, user.Username).Scan(&emailCount, &usernameCount)
+
+		if err != nil {
+			return err
+		}
+
+		if emailCount == 0 && usernameCount == 0 {
+			uuidStr := utils.GenerateUUID()
+			_, err = tx.Exec(`
             INSERT INTO users 
                 (id, email, username, firstname, lastname, password_hash)
             VALUES ($1, $2, $3, $4, $5, $6)
         `,
-			user.GetID(),
-			user.GetEmail(),
-			user.GetUsername(),
-			user.GetFirstname(),
-			user.GetLastname(),
-			user.GetPasswordHash(),
-		)
+				uuidStr,
+				user.GetEmail(),
+				user.GetUsername(),
+				user.GetFirstname(),
+				user.GetLastname(),
+				user.GetPasswordHash(),
+			)
+		}
 		return err
 	})
 }
