@@ -23,3 +23,10 @@ func (u *DefaultUser) GetUsername() string     { return u.Username }
 func (u *DefaultUser) GetFirstname() string    { return u.Firstname }
 func (u *DefaultUser) GetLastname() string     { return u.Lastname }
 func (u *DefaultUser) GetName() string         { return fmt.Sprintf("%s %s", u.Firstname, u.Lastname) }
+
+func (u *DefaultUser) FromUserInfo(userInfo UserInfo) {
+	u.Email = userInfo.Email
+	u.Username = userInfo.Email
+	u.Firstname = userInfo.FirstName
+	u.Lastname = userInfo.LastName
+}

@@ -3,15 +3,13 @@ package behemoth
 import (
 	"time"
 
-	// "github.com/MastewalB/behemoth/storage"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/oauth2"
 )
 
 type Config[T User] struct {
 	Password       *PasswordConfig
-	OAuth          *OAuthConfig
+	OAuthProviders []Provider
 	JWT            *JWTConfig
 	UseDefaultUser bool
 	UserModel      User
@@ -27,18 +25,6 @@ type JWTConfig struct {
 	Expiry        time.Duration
 	SigningMethod jwt.SigningMethod
 	Claims        jwt.Claims
-}
-
-type OAuthConfig struct {
-	ClientID     string
-	ClientSecret string
-	RedirectURL  string
-	Scopes       []string
-}
-
-var GoogleEndpoint = oauth2.Endpoint{
-	AuthURL:  "https://accounts.google.com/o/oauth2/auth",
-	TokenURL: "https://accounts.google.com/o/oauth2/token",
 }
 
 var DefaultJWTConfig = JWTConfig{
