@@ -13,6 +13,7 @@ import (
 )
 
 // GoogleProvider implements the Provider interface for Google OAuth.
+// It handles Google-specific OAuth flows, including user info retrieval.
 type Google struct {
 	ProviderName string
 	Config       *oauth2.Config

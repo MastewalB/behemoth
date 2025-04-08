@@ -11,6 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// OAuthAuth manages OAuth-based authentication for multiple providers.
+// It supports generic user types and handles authentication flows for providers like Google and Facebook.
 type OAuthAuth[T behemoth.User] struct {
 	providers      map[string]behemoth.Provider
 	jwtSvc         *JWTService
@@ -39,6 +41,9 @@ func NewOAuthAuth[T behemoth.User](
 	}
 }
 
+// Authenticate performs OAuth authentication for the specified provider using the given credentials.
+// It exchanges the OAuth code for a token, fetches user info, and saves the user to the database.
+// Returns the authenticated user or an error if authentication fails.
 func (o *OAuthAuth[T]) Authenticate(providerName string, creds any) (behemoth.User, error) {
 
 	provider, exists := o.providers[providerName]

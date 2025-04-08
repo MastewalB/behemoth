@@ -12,6 +12,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// FacebookProvider implements the Provider interface for Facebook OAuth.
+// It handles Facebook-specific OAuth flows, including user info retrieval.
 type Facebook struct {
 	ProviderName string
 	Config       *oauth2.Config
@@ -50,6 +52,9 @@ func (f *Facebook) GetScopes() []string {
 	return f.Config.Scopes
 }
 
+// FetchUserInfo retrieves user information from Facebook using the provided OAuth client and token.
+// It maps the Facebook user data to a UserInfo struct, including fields like ID, email, and name.
+// Returns the UserInfo or an error if the request or parsing fails.
 func (f *Facebook) FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (behemoth.UserInfo, error) {
 
 	reqUrl := fmt.Sprintf(
