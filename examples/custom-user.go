@@ -14,5 +14,3 @@ func (u *CustomUser) GetID() string           { return u.ID }
 func (u *CustomUser) GetPasswordHash() string { return u.PasswordHash }
 func (u *CustomUser) GetEmail() string        { return u.Email }
 func (u *CustomUser) GetUsername() string     { return u.Username }
-func (u *CustomUser) GetFirstname() string    { return u.Firstname }
-func (u *CustomUser) GetLastname() string     { return u.Lastname }
