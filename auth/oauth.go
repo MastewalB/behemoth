@@ -2,101 +2,125 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
+	"log"
+	"net/http"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/utils"
-	"golang.org/x/oauth2"
+	"github.com/go-chi/chi/v5"
 )
 
+// OAuthAuth manages OAuth-based authentication for multiple providers.
+// It supports generic user types and handles authentication flows for providers like Google and Facebook.
 type OAuthAuth[T behemoth.User] struct {
-	config         oauth2.Config
+	providers      map[string]behemoth.Provider
 	jwtSvc         *JWTService
 	useDefaultUser bool
 	db             behemoth.Database[T]
 }
 
-func NewOAuthAuth[T behemoth.User](cfg behemoth.OAuthConfig,
+func NewOAuthAuth[T behemoth.User](
+	oAuthProviders []behemoth.Provider,
 	jwtSvc *JWTService,
 	useDefaultUser bool,
 	user behemoth.User,
 	db behemoth.Database[T],
 ) *OAuthAuth[T] {
+
+	providers := make(map[string]behemoth.Provider)
+	for _, provider := range oAuthProviders {
+		providers[provider.Name()] = provider
+	}
+
 	return &OAuthAuth[T]{
-		config: oauth2.Config{
-			ClientID:     cfg.ClientID,
-			ClientSecret: cfg.ClientSecret,
-			RedirectURL:  cfg.RedirectURL,
-			Scopes:       cfg.Scopes,
-			Endpoint:     behemoth.GoogleEndpoint,
-		},
+		providers:      providers,
 		db:             db,
 		jwtSvc:         jwtSvc,
 		useDefaultUser: useDefaultUser,
 	}
 }
 
-func (o *OAuthAuth[T]) Authenticate(creds any) (behemoth.User, error) {
+// Authenticate performs OAuth authentication for the specified provider using the given credentials.
+// It exchanges the OAuth code for a token, fetches user info, and saves the user to the database.
+// Returns the authenticated user or an error if authentication fails.
+func (o *OAuthAuth[T]) Authenticate(providerName string, creds any) (behemoth.User, error) {
+
+	provider, exists := o.providers[providerName]
+	if !exists {
+		return nil, errors.New("provider not found: " + providerName)
+	}
+
 	code, ok := creds.(string) // OAuth code from redirect
 	if !ok {
 		return nil, errors.New("invalid OAuth code")
 	}
-	token, err := o.config.Exchange(context.Background(), code)
+
+	config := provider.GetConfig()
+	token, err := config.Exchange(context.Background(), code)
 	if err != nil {
 		return nil, err
 	}
 	// Fetch user info (provider-specific, e.g., Google API)
-	client := o.config.Client(context.Background(), token)
-	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+	client := config.Client(context.Background(), token)
+	userInfo, err := provider.FetchUserInfo(client, context.Background(), token)
 	if err != nil {
 		return nil, errors.New("failed to get user info: " + err.Error())
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errors.New("failed to read user info: " + err.Error())
-	}
-
-	var userInfo struct {
-		ID    string `json:"id"`
-		Email string `json:"email"`
-		Name  string `json:"name"`
-	}
-	if err := json.Unmarshal(body, &userInfo); err != nil {
-		return nil, errors.New("failed to parse user info: " + err.Error())
-	}
+	log.Println(userInfo)
 
 	// Create or update user
 	var user *behemoth.DefaultUser
 	if o.useDefaultUser {
-		user = &behemoth.DefaultUser{
-			ID:    userInfo.ID,
-			Email: userInfo.Email,
-			// PasswordHash not needed for OAuth
-		}
-	} else {
-		// For custom models, assume the developer handles this in their DatabaseProvider
-		user = &behemoth.DefaultUser{ID: userInfo.ID, Email: userInfo.Email} // Placeholder
-	}
+		user = &behemoth.DefaultUser{}
+		user.FromUserInfo(userInfo)
 
-	// Save or update user in DB
-	if err := o.db.SaveUser(user); err != nil {
-		return nil, errors.New("failed to save user: " + err.Error())
+		if err := o.db.SaveUser(user); err != nil {
+			return nil, errors.New("failed to save user: " + err.Error())
+		}
 	}
 
 	return user, nil
 }
 
-func (o *OAuthAuth[T]) Register(creds any) (behemoth.User, error) {
-	return o.Authenticate(creds) // OAuth often combines auth/register
+func (o *OAuthAuth[T]) Register(providerName string, creds any) (behemoth.User, error) {
+	return o.Authenticate(providerName, creds) // OAuth often combines auth/register
 }
 
-func (o *OAuthAuth[T]) AuthURL(state string) string {
+func (o *OAuthAuth[T]) AuthURL(req *http.Request, state string) (string, error) {
+	providerName, err := getProviderName(req)
+	if err != nil {
+		return "", err
+	}
+	provider, exists := o.providers[providerName]
+	if !exists {
+		return "", errors.New("unknown OAuth provider: " + providerName)
+	}
 	if state == "" {
 		state = utils.GenerateState()
 	}
-	return o.config.AuthCodeURL(state)
+	return provider.GetConfig().AuthCodeURL(state), nil
+}
+
+func getProviderName(req *http.Request) (string, error) {
+	// from the url param "provider"
+	if p := req.URL.Query().Get("provider"); p != "" {
+		return p, nil
+	}
+
+	// from the url param ":provider"
+	if p := req.URL.Query().Get(":provider"); p != "" {
+		return p, nil
+	}
+
+	if p := chi.URLParam(req, "provider"); p != "" {
+		return p, nil
+	}
+
+	//  try to get it from the go-context's value of "provider" key
+	if p, ok := req.Context().Value("provider").(string); ok {
+		return p, nil
+	}
+
+	return "", errors.New("no provider selected")
 }

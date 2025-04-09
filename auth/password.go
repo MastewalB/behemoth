@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/utils"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -62,7 +61,6 @@ func (p *PasswordAuth[T]) Create(
 		return nil, err
 	}
 	user := &behemoth.DefaultUser{
-		ID:           utils.GenerateUUID(),
 		Email:        email,
 		Username:     username,
 		Firstname:    firstname,

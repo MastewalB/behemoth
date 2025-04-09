@@ -38,8 +38,8 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) *Behemoth[T] {
 		jwtSvc = NewJWTService(*cfg.JWT)
 	}
 
-	if cfg.OAuth != nil {
-		oauth = NewOAuthAuth(*cfg.OAuth, jwtSvc, cfg.UseDefaultUser, userModel, cfg.DB)
+	if len(cfg.OAuthProviders) > 0 {
+		oauth = NewOAuthAuth(cfg.OAuthProviders, jwtSvc, cfg.UseDefaultUser, userModel, cfg.DB)
 	}
 
 	return &Behemoth[T]{

@@ -23,26 +23,25 @@ func TestDefaultUserFlow(t *testing.T) {
 	cfg := &behemoth.Config[*behemoth.DefaultUser]{
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-		DB:             &storage.SQLlite[*behemoth.DefaultUser]{DB: db, PK: "id", Table: "users"},
+		DB:             &storage.SQLlite[*behemoth.DefaultUser]{DB: db, PK: "email", Table: "users"},
 		UseDefaultUser: true,
 		UserModel:      &behemoth.DefaultUser{},
 	}
 	b := auth.New(cfg)
 
 	// Register handler
-	registerHandler := func(w http.ResponseWriter, _ *http.Request) string {
+	registerHandler := func(w http.ResponseWriter, _ *http.Request) {
 		user, err := b.Password.Create("test@example.com", "username", "firstname", "lastname", "password123")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-			return ""
+			return
 		}
-		w.Write([]byte(user.GetID()))
-		return user.GetID()
+		w.Write([]byte(user.Email))
 	}
 
 	// Login handler
-	loginHandler := func(w http.ResponseWriter, _ *http.Request, userID string) {
-		creds := auth.PasswordCredentials{PK: userID, Password: "password123"}
+	loginHandler := func(w http.ResponseWriter, _ *http.Request, userEmail string) {
+		creds := auth.PasswordCredentials{PK: userEmail, Password: "password123"}
 		user, err := b.Password.Authenticate(creds)
 		if err != nil {
 			t.Log(err)
@@ -56,18 +55,17 @@ func TestDefaultUserFlow(t *testing.T) {
 	// Test Register
 	req, _ := http.NewRequest("POST", "/register", nil)
 	rr := httptest.NewRecorder()
-	id := registerHandler(rr, req)
+	registerHandler(rr, req)
 	assert.Equal(t, http.StatusOK, rr.Code, "Register should succeed")
 	assert.NotEmpty(t, rr.Body.String(), "Register should return a non-empty ID")
 
-	t.Log(id)
 	// Test Login
 	req, _ = http.NewRequest("POST", "/login", nil)
-	rr = httptest.NewRecorder()
-	loginHandler(rr, req, id)
-	t.Log(rr.Body)
-	assert.Equal(t, http.StatusOK, rr.Code, "Login should succeed")
-	assert.NotEmpty(t, rr.Body.String(), "Login should return a non-empty token")
+	lr := httptest.NewRecorder()
+	loginHandler(lr, req, rr.Body.String())
+	t.Log(lr.Body)
+	assert.Equal(t, http.StatusOK, lr.Code, "Login should succeed")
+	assert.NotEmpty(t, lr.Body.String(), "Login should return a non-empty token")
 }
 
 func TestCustomUserLogin(t *testing.T) {

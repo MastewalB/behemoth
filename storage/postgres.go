@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/utils"
 	_ "github.com/lib/pq"
 )
 
@@ -32,17 +33,34 @@ func (pg *Postgres[T]) FindByPK(val any) (T, error) {
 
 func (p *Postgres[T]) SaveUser(user *behemoth.DefaultUser) error {
 	return p.WithTransaction(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
-		INSERT INTO users 
-		(id, email, username, firstname, lastname, password_hash)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT ON CONSTRAINT users_email_key DO NOTHING
-	`, user.GetID(),
-			user.GetEmail(),
-			user.GetUsername(),
-			user.GetFirstname(),
-			user.GetLastname(),
-			user.GetPasswordHash())
+		var emailExists, usernameExists bool
+
+		err := tx.QueryRow(`
+		SELECT 
+                EXISTS(SELECT 1 FROM users WHERE email = $1),
+                EXISTS(SELECT 1 FROM users WHERE username = $2)
+		`, user.Email, user.Username).Scan(&emailExists, &usernameExists)
+
+		if err != nil {
+			return err
+		}
+
+		if !emailExists && !usernameExists {
+			uuidStr := utils.GenerateUUID()
+
+			_, err = tx.Exec(`
+			INSERT INTO users 
+			(id, email, username, firstname, lastname, password_hash)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT ON CONSTRAINT users_email_key DO NOTHING
+			`,
+				uuidStr,
+				user.GetEmail(),
+				user.GetUsername(),
+				user.GetFirstname(),
+				user.GetLastname(),
+				user.GetPasswordHash())
+		}
 		return err
 	})
 }
