@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/go-chi/chi/v5"
 )
@@ -70,12 +71,12 @@ func (o *OAuthAuth[T]) Authenticate(providerName string, creds any) (behemoth.Us
 	log.Println(userInfo)
 
 	// Create or update user
-	var user *behemoth.DefaultUser
+	var user *models.User
 	if o.useDefaultUser {
-		user = &behemoth.DefaultUser{}
+		user = &models.User{}
 		user.FromUserInfo(userInfo)
 
-		if err := o.db.SaveUser(user); err != nil {
+		if user, err = o.db.SaveUser(user); err != nil {
 			return nil, errors.New("failed to save user: " + err.Error())
 		}
 	}

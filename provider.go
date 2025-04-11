@@ -3,8 +3,8 @@ package behemoth
 import (
 	"context"
 	"net/http"
-	"time"
 
+	"github.com/MastewalB/behemoth/models"
 	"golang.org/x/oauth2"
 )
 
@@ -24,29 +24,5 @@ type Provider interface {
 	GetConfig() *oauth2.Config
 
 	// FetchUserInfo retrieves user information from the OAuth provider and returns UserInfo type.
-	FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (UserInfo, error)
-}
-
-type UserInfo struct {
-	Provider          string
-	Email             string
-	Name              string
-	FirstName         string
-	LastName          string
-	ID                string
-	AvatarURL         string
-	Location          string
-	AccessToken       string
-	AccessTokenSecret string
-	RefreshToken      string
-	ExpiresAt         time.Time
-	IDToken           string
-}
-
-func (ui *UserInfo) GetID() string {
-	return ui.ID
-}
-
-func (ui *UserInfo) GetPasswordHash() string {
-	return ""
+	FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (models.UserInfo, error)
 }
