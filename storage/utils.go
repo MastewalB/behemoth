@@ -3,8 +3,11 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"reflect"
 	"strings"
+
+	"github.com/MastewalB/behemoth"
 )
 
 // Helper function to get column names from the table
@@ -121,4 +124,21 @@ func mapRowToStruct[T any](row *sql.Row, entity T, columns []string) (T, error) 
 
 	// fmt.Println("Entity:", entity, "Error:", err)
 	return entity, nil
+}
+
+// serializeSession converts a Session to JSON for storage.
+func serializeSession(session behemoth.Session) ([]byte, error) {
+	return session.MarshalJSON()
+}
+
+// deserializeSession reconstructs a Session from JSON data.
+func deserializeSession(sessionID string, data []byte, factory behemoth.SessionFactory) (behemoth.Session, error) {
+	session := factory(sessionID)
+	if err := session.UnmarshalJSON(data); err != nil {
+		return nil, err
+	}
+
+	log.Println("Deserialize", session)
+
+	return session, nil
 }
