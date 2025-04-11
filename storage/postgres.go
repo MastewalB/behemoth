@@ -2,17 +2,64 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/utils"
 	_ "github.com/lib/pq"
 )
 
-type Postgres[T any] struct {
-	DB    *sql.DB
-	Table string
-	PK    string
+type Postgres[T behemoth.User] struct {
+	DB             *sql.DB
+	Table          string
+	PK             string
+	sessionFactory behemoth.SessionFactory
+}
+
+func NewPostgres[T behemoth.User](
+	db *sql.DB,
+	userTable, primaryKey string,
+	factory behemoth.SessionFactory,
+) (*Postgres[T], error) {
+
+	if userTable == "" {
+		_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+				id TEXT PRIMARY KEY,
+				email TEXT UNIQUE,
+				username TEXT UNIQUE,
+				firstname TEXT,
+				lastname TEXT,
+				password_hash TEXT
+			)
+		`)
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Create sessions table
+	_, err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            data JSONB NOT NULL,
+            expires_at TIMESTAMP NOT NULL
+        )
+    `)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Postgres[T]{
+		DB:             db,
+		Table:          userTable,
+		PK:             primaryKey,
+		sessionFactory: factory,
+	}, nil
 }
 
 func (pg *Postgres[T]) FindByPK(val any) (T, error) {
@@ -31,8 +78,11 @@ func (pg *Postgres[T]) FindByPK(val any) (T, error) {
 	return entity, err
 }
 
-func (p *Postgres[T]) SaveUser(user *behemoth.DefaultUser) error {
-	return p.WithTransaction(func(tx *sql.Tx) error {
+func (p *Postgres[T]) SaveUser(user *models.User) (*models.User, error) {
+	uuidStr := utils.GenerateUUID()
+	user.ID = uuidStr
+
+	err := p.WithTransaction(func(tx *sql.Tx) error {
 		var emailExists, usernameExists bool
 
 		err := tx.QueryRow(`
@@ -46,7 +96,6 @@ func (p *Postgres[T]) SaveUser(user *behemoth.DefaultUser) error {
 		}
 
 		if !emailExists && !usernameExists {
-			uuidStr := utils.GenerateUUID()
 
 			_, err = tx.Exec(`
 			INSERT INTO users 
@@ -54,7 +103,7 @@ func (p *Postgres[T]) SaveUser(user *behemoth.DefaultUser) error {
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT ON CONSTRAINT users_email_key DO NOTHING
 			`,
-				uuidStr,
+				user.GetID(),
 				user.GetEmail(),
 				user.GetUsername(),
 				user.GetFirstname(),
@@ -63,6 +112,61 @@ func (p *Postgres[T]) SaveUser(user *behemoth.DefaultUser) error {
 		}
 		return err
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return user, nil
+}
+
+// SaveSession stores a session in the database with its expiration time.
+func (p *Postgres[T]) SaveSession(session behemoth.Session, expiresAt time.Time) error {
+	// Serialize the session data (we'll use a wrapper to capture the data)
+	data, err := serializeSession(session)
+	if err != nil {
+		return err
+	}
+
+	_, err = p.DB.Exec(`
+		INSERT INTO sessions (id, data, expires_at) VALUES ($1, $2, $3)
+	`, session.SessionID(), data, expiresAt)
+
+	return err
+}
+
+// GetSession retrieves a session by ID, returning an error if not found or expired.
+func (p *Postgres[T]) GetSession(sessionID string) (behemoth.Session, error) {
+	var data []byte
+	var expiresAt time.Time
+
+	err := p.DB.QueryRow(`
+		SELECT data, expires_at FROM sessions WHERE id = $1
+	`, sessionID).Scan(&data, &expiresAt)
+
+	if err == sql.ErrNoRows {
+		return nil, errors.New("session not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Check expiration
+	if time.Now().After(expiresAt) {
+		// Delete expired session
+		p.DeleteSession(sessionID)
+		return nil, errors.New("session expired")
+	}
+
+	// Deserialize the session
+	return deserializeSession(sessionID, data, p.sessionFactory)
+
+}
+
+// DeleteSession removes a session by ID.
+func (p *Postgres[T]) DeleteSession(sessionID string) error {
+	_, err := p.DB.Exec("DELETE FROM sessions WHERE id = $1", sessionID)
+	return err
 }
 
 func (p *Postgres[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
@@ -91,10 +195,10 @@ func (p *Postgres[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
 	return nil
 }
 
-func (p *Postgres[T]) Update(user behemoth.DefaultUser) error {
+func (p *Postgres[T]) Update(user models.User) error {
 	return nil
 }
 
-func (p *Postgres[T]) Delete(user behemoth.DefaultUser) error {
+func (p *Postgres[T]) Delete(user models.User) error {
 	return nil
 }

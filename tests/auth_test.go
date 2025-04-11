@@ -9,6 +9,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage"
 	"github.com/stretchr/testify/assert"
 	// _ "github.com/mattn/go-sqlite3"
@@ -20,12 +21,12 @@ func TestDefaultUserFlow(t *testing.T) {
 	_, err = db.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
 	assert.NoError(t, err, "Failed to create users table")
 
-	cfg := &behemoth.Config[*behemoth.DefaultUser]{
+	cfg := &behemoth.Config[*models.User]{
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-		DB:             &storage.SQLlite[*behemoth.DefaultUser]{DB: db, PK: "email", Table: "users"},
+		DB:             &storage.SQLlite[*models.User]{DB: db, PK: "email", Table: "users"},
 		UseDefaultUser: true,
-		UserModel:      &behemoth.DefaultUser{},
+		UserModel:      &models.User{},
 	}
 	b := auth.New(cfg)
 
@@ -73,18 +74,18 @@ func TestCustomUserLogin(t *testing.T) {
 	// db, err := sql.Open("sqlite3", ":memory:")
 	// assert.NoError(t, err, "Failed to initialize SQLite db")
 
-	// customCfg := &behemoth.Config[*behemoth.DefaultUser]{
-	// 	DB:             &storage.SQLlite[*behemoth.DefaultUser]{DB: db, PK: "ID", Table: "users"},
+	// customCfg := &behemoth.Config[*models.User]{
+	// 	DB:             &storage.SQLlite[*models.User]{DB: db, PK: "ID", Table: "users"},
 	// 	Password:       nil,
 	// 	JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
 	// 	UseDefaultUser: false,
-	// 	UserModel: &behemoth.DefaultUser{},
+	// 	UserModel: &models.User{},
 	// }
 	// b := auth.New(customCfg)
 
 	// // Prepopulate (mimic custom provider logic)
 	// hash, _ := utils.GeneratePasswordHash("password123")
-	// err = .SaveUser(&behemoth.DefaultUser{
+	// err = .SaveUser(&models.User{
 	// 	Email:        "custom@example.com",
 	// 	PasswordHash: hash,
 	// })
@@ -117,12 +118,12 @@ func TestCustomUserLogin(t *testing.T) {
 // 	_, err = db.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
 // 	assert.NoError(t, err, "Failed to initialize SQLite db")
 
-// 	cfg := &behemoth.Config[*behemoth.DefaultUser]{
+// 	cfg := &behemoth.Config[*models.User]{
 // 		Password:       &behemoth.PasswordConfig{HashCost: 20},
 // 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
 // 		UseDefaultUser: true,
-// 		DB:             &storage.SQLlite[*behemoth.DefaultUser]{DB: db, PK: "id", Table: "users"},
-// 		UserModel:      &behemoth.DefaultUser{},
+// 		DB:             &storage.SQLlite[*models.User]{DB: db, PK: "id", Table: "users"},
+// 		UserModel:      &models.User{},
 // 	}
 // 	b := auth.New(cfg)
 

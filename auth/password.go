@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/models"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -42,6 +43,15 @@ func (p *PasswordAuth[T]) Authenticate(credentials any) (behemoth.User, error) {
 	if bcrypt.CompareHashAndPassword([]byte(user.GetPasswordHash()), []byte(pc.Password)) != nil {
 		return nil, errors.New("invalid email or password")
 	}
+
+	if p.useDefaultUser {
+		defaultUser, ok := any(user).(*models.User)
+		if !ok {
+			return nil, errors.New("expected DefaultUser when UseDefaultUser is true")
+		}
+		return defaultUser, nil
+	}
+
 	return user, nil
 }
 
@@ -51,7 +61,7 @@ func (p *PasswordAuth[T]) Create(
 	firstname string,
 	lastname string,
 	password string,
-) (*behemoth.DefaultUser, error) {
+) (*models.User, error) {
 	if !p.useDefaultUser {
 		return nil, errors.New("registration not supported for custom models")
 	}
@@ -60,14 +70,14 @@ func (p *PasswordAuth[T]) Create(
 	if err != nil {
 		return nil, err
 	}
-	user := &behemoth.DefaultUser{
+	user := &models.User{
 		Email:        email,
 		Username:     username,
 		Firstname:    firstname,
 		Lastname:     lastname,
 		PasswordHash: string(hash),
 	}
-	return user, p.db.SaveUser(user)
+	return p.db.SaveUser(user)
 }
 
 type PasswordCredentials struct {

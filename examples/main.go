@@ -10,6 +10,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/providers"
 	"github.com/MastewalB/behemoth/storage"
 	"github.com/MastewalB/behemoth/utils"
@@ -79,30 +80,38 @@ func main() {
 		// Add more providers later, e.g., "facebook"
 	}
 
-	pgCfg := &behemoth.Config[*behemoth.DefaultUser]{
+	pgCfg := &behemoth.Config[*models.User]{
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		OAuthProviders: oauthProviders,
 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
 		UseDefaultUser: true,
-		DB:             &storage.Postgres[*behemoth.DefaultUser]{DB: pg, PK: "id", Table: "users"},
-		UserModel:      &behemoth.DefaultUser{},
+		DB:             &storage.Postgres[*models.User]{DB: pg, PK: "id", Table: "users"},
+		UserModel:      &models.User{},
 	}
 	bpg := auth.New(pgCfg)
 
-	cfg := &behemoth.Config[*behemoth.DefaultUser]{
+	sqliteProvider, err := storage.NewSQLite[*models.User](db, "users", "id", func(id string) behemoth.Session {
+		return behemoth.NewDefaultSession(id, time.Hour)
+	})
+	if err != nil {
+		log.Fatalf("Failed to init SQLite: %v", err)
+	}
+
+	cfg := &behemoth.Config[*models.User]{
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		OAuthProviders: oauthProviders,
 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
 		UseDefaultUser: true,
-		DB:             &storage.SQLlite[*behemoth.DefaultUser]{DB: db, PK: "id", Table: "users"},
-		UserModel:      &behemoth.DefaultUser{},
+		DB:             sqliteProvider,
+		UserModel:      &models.User{},
+		UseSessions:    true,
 	}
 	bsql := auth.New(cfg)
 
 	router := chi.NewRouter()
 
 	// Password endpoints
-	var user *behemoth.DefaultUser
+	var user *models.User
 	router.Get("/register", func(w http.ResponseWriter, r *http.Request) {
 		user, err = bsql.Password.Create("newuser@example.com", "username", "firstname", "lastname", "password123")
 		if err != nil {
@@ -114,8 +123,11 @@ func main() {
 
 	router.Get("/login", func(w http.ResponseWriter, r *http.Request) {
 		if user == nil {
-			http.Error(w, "Please register first", http.StatusBadRequest)
-			return
+			user, err = bsql.DB.FindByPK("a797fd46-7ff5-411a-b8bf-843092ee6e68")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		user, err := bsql.Password.Authenticate(auth.PasswordCredentials{
 			PK:       user.GetID(),
@@ -126,11 +138,66 @@ func main() {
 			http.Error(w, "login failed", http.StatusUnauthorized)
 			return
 		}
-		token, _ := bsql.JWT.GenerateToken(user)
-		w.Write([]byte("Token: " + token))
+
+		if bsql.UseSessions {
+			session, err := bsql.Session.CreateSession()
+			if err != nil {
+				log.Println("Failed to create session:", err.Error())
+				http.Error(w, "Failed to create session", http.StatusInternalServerError)
+				return
+			}
+
+			if err := session.Set("user_id", user.GetID()); err != nil {
+				log.Println("Failed to set user_id in session:", err.Error())
+				http.Error(w, "Failed to set session data", http.StatusInternalServerError)
+				return
+			}
+
+			// Access email by casting to DefaultUser if UseDefaultUser is true
+
+			defaultUser, ok := user.(*models.User)
+			if !ok {
+				log.Println("Expected DefaultUser when UseDefaultUser is true")
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			} else {
+				if err := session.Set("email", defaultUser.Email); err != nil {
+					log.Println("Failed to set email in session:", err.Error())
+					http.Error(w, "Failed to set session data", http.StatusInternalServerError)
+					return
+				}
+			}
+
+			if _, err := bsql.Session.UpdateSession(session); err != nil {
+				log.Println("Failed to save session:", err.Error())
+				http.Error(w, "Failed to save session", http.StatusInternalServerError)
+				return
+			}
+
+			http.SetCookie(w, &http.Cookie{
+				Name:     "session_id", // Matches SessionManager's cookieName
+				Value:    session.SessionID(),
+				Path:     "/",
+				HttpOnly: true,                                 // Prevents JavaScript access
+				Secure:   true,                                 // Requires HTTPS
+				SameSite: http.SameSiteStrictMode,              // Mitigates CSRF
+				MaxAge:   int(bsql.Session.Expiry().Seconds()), // Matches session expiry
+			})
+
+			w.Write([]byte("Login successful, session created"))
+		} else {
+			// Fallback to JWT if sessions are not enabled
+			token, err := bsql.JWT.GenerateToken(user)
+			if err != nil {
+				log.Println("Failed to generate token:", err.Error())
+				http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+				return
+			}
+			w.Write([]byte("Token: " + token))
+		}
 	})
 
-	var pguser *behemoth.DefaultUser
+	var pguser *models.User
 	router.Get("/pg/register", func(w http.ResponseWriter, r *http.Request) {
 		if pgerr != nil {
 			http.Error(w, "Couldn't connect to PG database", http.StatusBadRequest)
@@ -224,6 +291,60 @@ func main() {
 			return
 		}
 		w.Write([]byte("OAuth Token: " + token))
+	})
+
+	router.Group(func(r chi.Router) {
+		r.Use(bsql.Session.Middleware)
+
+		r.Get("/profile", func(w http.ResponseWriter, r *http.Request) {
+			session, ok := auth.GetSessionFromContext(r.Context())
+			if !ok {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Retrieve user data from the session
+			userID, ok := session.Get("user_id").(string)
+			if !ok {
+				http.Error(w, "User ID not found in session", http.StatusUnauthorized)
+				return
+			}
+
+			email, _ := session.Get("email").(string)
+			w.Write(fmt.Appendf(nil, "User ID: %s, Email: %s", userID, email))
+		})
+
+		r.Get("/logout", func(w http.ResponseWriter, r *http.Request) {
+			if !bsql.UseSessions {
+				w.Write([]byte("Logout not applicable for JWT"))
+				return
+			}
+
+			cookie, err := r.Cookie("session_id")
+			if err != nil {
+				http.Error(w, "No session found", http.StatusBadRequest)
+				return
+			}
+
+			if err := bsql.Session.DeleteSession(cookie.Value); err != nil {
+				log.Println("Failed to delete session:", err.Error())
+				http.Error(w, "Failed to logout", http.StatusInternalServerError)
+				return
+			}
+
+			// Clear the session cookie
+			http.SetCookie(w, &http.Cookie{
+				Name:     "session_id",
+				Value:    "",
+				Path:     "/",
+				HttpOnly: true,
+				Secure:   true,
+				SameSite: http.SameSiteStrictMode,
+				MaxAge:   -1, // Deletes the cookie
+			})
+
+			w.Write([]byte("Logout successful"))
+		})
 	})
 
 	func(routes []chi.Route) {

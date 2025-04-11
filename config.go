@@ -8,12 +8,14 @@ import (
 )
 
 type Config[T User] struct {
+	DB             Database[T]
+	UserModel      User
+	JWT            *JWTConfig
+	Session        *SessionConfig
 	Password       *PasswordConfig
 	OAuthProviders []Provider
-	JWT            *JWTConfig
 	UseDefaultUser bool
-	UserModel      User
-	DB             Database[T]
+	UseSessions    bool
 }
 
 type PasswordConfig struct {
@@ -27,6 +29,12 @@ type JWTConfig struct {
 	Claims        jwt.Claims
 }
 
+type SessionConfig struct {
+	CookieName string
+	Expiry     time.Duration
+	Factory    SessionFactory
+}
+
 var DefaultJWTConfig = JWTConfig{
 	Secret:        utils.GenerateRandomString(64), // Use a secure random string for the secret
 	Expiry:        24 * time.Hour,
@@ -35,4 +43,10 @@ var DefaultJWTConfig = JWTConfig{
 
 var DefaultPasswordConfig = PasswordConfig{
 	HashCost: 10,
+}
+
+var DefalultSessionConfig = SessionConfig{
+	CookieName: "session_id",
+	Expiry:     2 * time.Hour,
+	Factory:    nil,
 }
