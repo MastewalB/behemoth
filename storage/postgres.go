@@ -145,19 +145,6 @@ func (p *Postgres[T]) GetAllUsers() ([]T, error) {
 	return users, nil
 }
 
-func (p *Postgres[T]) UserExists(user *models.User) (bool, error) {
-	var exists bool
-	err := p.DB.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM users WHERE email = $1 OR username = $2)
-	`, user.Email, user.Username).Scan(&exists)
-
-	if err != nil {
-		return false, err
-	}
-
-	return exists, nil
-}
-
 func (p *Postgres[T]) UpdateUser(user *models.User) (*models.User, error) {
 	err := p.WithTransaction(func(tx *sql.Tx) error {
 		var emailExists, usernameExists bool
@@ -294,4 +281,17 @@ func (p *Postgres[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
+}
+
+func (p *Postgres[T]) UserExists(user *models.User) (bool, error) {
+	var exists bool
+	err := p.DB.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM users WHERE email = $1 OR username = $2)
+	`, user.Email, user.Username).Scan(&exists)
+
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
 }
