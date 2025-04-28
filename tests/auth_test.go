@@ -24,7 +24,7 @@ func TestDefaultUserFlow(t *testing.T) {
 	cfg := &behemoth.Config[*models.User]{
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-		DB:             &storage.SQLlite[*models.User]{DB: db, PK: "email", Table: "users"},
+		DB:             &storage.SQLite[*models.User]{DB: db, PK: "email", Table: "users"},
 		UseDefaultUser: true,
 		UserModel:      &models.User{},
 	}
