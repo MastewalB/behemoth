@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>{{ .Title }}</title>
+    <style>
+        /* Basic styling */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+            background-color: #f8f9fa;
+            color: #212529;
+            line-height: 1.6;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        h1 {
+            color: #007bff;
+            border-bottom: 2px solid #dee2e6;
+            padding-bottom: 10px;
+        }
+
+        form {
+            background-color: #ffffff;
+            padding: 100px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-top: 15px;
+        }
+
+        label {
+            display: block;
+            margin-top: 12px;
+            font-weight: bold;
+            color: #495057;
+        }
+
+        input[type=text],
+        input[type=email],
+        input[type=password] {
+            width: 100%;
+            /* Adjust width considering padding */
+            padding: 10px;
+            margin-top: 5px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            box-sizing: border-box;
+            /* Include padding in width calculation */
+        }
+
+        button {
+            padding: 10px 20px;
+            margin-top: 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.2s;
+        }
+
+        .update:hover {
+            background-color: #0056b3;
+        }
+
+        .delete-account {
+            background-color: #dc3545;
+            /* Bootstrap danger color */
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 10px 20px;
+            margin-top: 20px;
+        }
+
+        .delete-account:hover {
+            background-color: #c82333;
+        }
+
+        .error {
+            color: #dc3545;
+            /* Bootstrap danger color */
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 10px;
+            border-radius: 10px;
+            margin-top: 15px;
+            width: 100%;
+        }
+
+        .message {
+            color: #06220d;
+            background-color: #9dcba8;
+            border: 1px solid #c3e6cb;
+            padding: 10px;
+            border-radius: 10px;
+            margin-top: 15px;
+            width: 100%;
+        }
+
+        p {
+            margin-top: 15px;
+        }
+
+        a {
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+
+<body>
+    <div
+        style="display: flex; justify-content: center; align-items: center; min-height: 100vh; flex-direction: column; width: 100%; max-width: 600px; margin: auto;">
+        <h1>{{ .Title }}</h1>
+        {{ if .Error }}
+        <p class="error">Error: {{ .Error }}</p>
+        {{ end }}
+        {{ if .Message }}
+        <p class="message">{{ .Message }}</p>
+        {{ end }}
+        <form method="POST" action="/{{ .DB }}/update" style="width: 100%;">
+            <div>
+                <label for="id">ID:</label>
+                <input type="text" id="id" name="id" value="{{ .FormData.id }}" readonly>
+            </div>
+            <div>
+                <label for="email">Email:</label>
+                <input type="email" id="email" name="email" required value="{{ .FormData.email }}">
+            </div>
+            <div>
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required value="{{ .FormData.username }}">
+            </div>
+            <div>
+                <label for="firstname">First Name:</label>
+                <input type="text" id="firstname" name="firstname" value="{{ .FormData.firstname }}">
+            </div>
+            <div>
+                <label for="lastname">Last Name:</label>
+                <input type="text" id="lastname" name="lastname" value="{{ .FormData.lastname }}">
+            </div>
+            <div>
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <button class="update" type="submit">Update</button>
+                <button class="delete-account" type="submit" formaction="/{{ .DB }}/delete" formmethod="POST">Delete
+                    Account</button>
+            </div>
+        </form>
+        <p>
+            <a href="/{{ .DB }}/logout">
+                <button class="logout-button" type="button">Logout</button>
+            </a>
+        </p>
+        <p><a href="/">Home</a></p>
+    </div>
+</body>
+
+</html>
