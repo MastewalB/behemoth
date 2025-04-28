@@ -3,13 +3,14 @@ package storage
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"reflect"
 	"strings"
 
 	"github.com/MastewalB/behemoth"
 )
-
+type ScannableRow interface {
+    Scan(dest ...any) error
+}
 // Helper function to get column names from the table
 func getSQLiteColumnNames(db *sql.DB, table string) ([]string, error) {
 	query := fmt.Sprintf(`PRAGMA table_info(%s)`, table)
@@ -62,7 +63,7 @@ func getPGColumnNames(db *sql.DB, table string) ([]string, error) {
 	return columns, nil
 }
 
-func mapRowToStruct[T any](row *sql.Row, entity T, columns []string) (T, error) {
+func mapRowToStruct[T any](row ScannableRow, entity T, columns []string) (T, error) {
 
 	// Check if T is a struct or a pointer to a struct
 	entityType := reflect.TypeOf(entity)
@@ -137,8 +138,6 @@ func deserializeSession(sessionID string, data []byte, factory behemoth.SessionF
 	if err := session.UnmarshalJSON(data); err != nil {
 		return nil, err
 	}
-
-	log.Println("Deserialize", session)
 
 	return session, nil
 }
