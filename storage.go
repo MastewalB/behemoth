@@ -14,6 +14,15 @@ type Database[T User] interface {
 	// SaveUser persists a user object to the database
 	SaveUser(user *models.User) (*models.User, error)
 
+	// UpdateUser updates a user object in the database. User should be instance of models.User.
+	UpdateUser(user *models.User) (*models.User, error)
+
+	// DeleteUser removes a user object from the database. User should be instance of models.User.
+	DeleteUser(user *models.User) error
+
+	// GetAllUsers retrieves all users from the database.
+	GetAllUsers() ([]T, error)
+
 	// SaveSession stores a session in the database with its expiration time.
 	SaveSession(session Session, expiresAt time.Time) error
 
