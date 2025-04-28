@@ -73,7 +73,6 @@ func (pg *Postgres[T]) FindByPK(val any) (T, error) {
 		return entity, err
 	}
 
-	fmt.Println("Columns from DB:", columns)
 	entity, err = mapRowToStruct(row, entity, columns)
 	return entity, err
 }
@@ -101,14 +100,14 @@ func (p *Postgres[T]) SaveUser(user *models.User) (*models.User, error) {
 			INSERT INTO users 
 			(id, email, username, firstname, lastname, password_hash)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT ON CONSTRAINT users_email_key DO NOTHING
 			`,
 				user.GetID(),
 				user.GetEmail(),
 				user.GetUsername(),
 				user.GetFirstname(),
 				user.GetLastname(),
-				user.GetPasswordHash())
+				user.GetPasswordHash(),
+			)
 		}
 		return err
 	})
@@ -119,6 +118,105 @@ func (p *Postgres[T]) SaveUser(user *models.User) (*models.User, error) {
 
 	return user, nil
 }
+
+func (p *Postgres[T]) GetAllUsers() ([]T, error) {
+	var users []T
+
+	rows, err := p.DB.Query(fmt.Sprintf("SELECT * FROM %s", p.Table))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns, err := getPGColumnNames(p.DB, p.Table)
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		var user T
+		user, err = mapRowToStruct(rows, user, columns)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+
+	return users, nil
+}
+
+func (p *Postgres[T]) UserExists(user *models.User) (bool, error) {
+	var exists bool
+	err := p.DB.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM users WHERE email = $1 OR username = $2)
+	`, user.Email, user.Username).Scan(&exists)
+
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
+}
+
+func (p *Postgres[T]) UpdateUser(user *models.User) (*models.User, error) {
+	err := p.WithTransaction(func(tx *sql.Tx) error {
+		var emailExists, usernameExists bool
+
+		err := tx.QueryRow(`
+		SELECT 
+                EXISTS(SELECT 1 FROM users WHERE email = $1),
+                EXISTS(SELECT 1 FROM users WHERE username = $2)
+		`, user.Email, user.Username).Scan(&emailExists, &usernameExists)
+
+		if err != nil {
+			return err
+		}
+
+		if emailExists || usernameExists {
+			_, err = tx.Exec(`
+			UPDATE users
+			SET email = $1, username = $2, firstname = $3, lastname = $4, password_hash = $5
+			WHERE id = $6
+			RETURNING *
+			`,
+				user.GetEmail(),
+				user.GetUsername(),
+				user.GetFirstname(),
+				user.GetLastname(),
+				user.GetPasswordHash(),
+				user.GetID(),
+			)
+		}
+
+		return err
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return user, nil
+}
+
+func (p *Postgres[T]) DeleteUser(user *models.User) error {
+	err := p.WithTransaction(func(tx *sql.Tx) error {
+		exists, err := p.UserExists(user)
+		if err != nil {
+			return err
+		}
+
+		if exists {
+			_, err = tx.Exec(`
+			DELETE FROM users WHERE id = $1
+			`, user.GetID())
+		}
+
+		return err
+	})
+
+	return err
+}
+
 
 // SaveSession stores a session in the database with its expiration time.
 func (p *Postgres[T]) SaveSession(session behemoth.Session, expiresAt time.Time) error {
@@ -195,13 +293,5 @@ func (p *Postgres[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
-	return nil
-}
-
-func (p *Postgres[T]) Update(user models.User) error {
-	return nil
-}
-
-func (p *Postgres[T]) Delete(user models.User) error {
 	return nil
 }
