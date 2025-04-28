@@ -129,7 +129,10 @@ func (p *Postgres[T]) SaveSession(session behemoth.Session, expiresAt time.Time)
 	}
 
 	_, err = p.DB.Exec(`
-		INSERT INTO sessions (id, data, expires_at) VALUES ($1, $2, $3)
+		INSERT INTO sessions (id, data, expires_at) 
+		VALUES ($1, $2, $3)
+		ON CONFLICT (id) 
+		DO UPDATE SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at
 	`, session.SessionID(), data, expiresAt)
 
 	return err
