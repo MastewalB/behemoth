@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Behemoth Demo Home</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+            margin: 20px;
+            background-color: #f8f9fa;
+            color: #212529;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #343a40;
+            border-bottom: 2px solid #dee2e6;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #495057;
+            margin-top: 30px;
+            border-bottom: 1px solid #e9ecef;
+            padding-bottom: 5px;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 20px 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            max-width: 800px;
+            margin: 20px auto;
+        }
+        ul {
+            list-style: none;
+            padding-left: 0;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+        a {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        a:hover {
+            text-decoration: underline;
+            color: #0056b3;
+        }
+        .user-info {
+            background-color: #e9ecef;
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 0.95em;
+            color: #495057;
+        }
+        .provider-list li {
+            display: inline-block; /* Make providers horizontal */
+            margin-right: 15px;
+        }
+        .provider-list a {
+            display: inline-block;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+        .provider-list a:hover {
+            background-color: #e2e6ea;
+            border-color: #adb5bd;
+            text-decoration: none; /* Remove underline for buttons */
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Behemoth Example</h1>
+
+        <p class="user-info">Login by selecting a database</strong></p>
+
+        <div style="display: flex; justify-content: space-between; gap: 20px;">
+            <div style="flex: 1;">
+                <h2>Password Auth (SQLite)</h2>
+                <ul>
+                    <li><a href="/sqlite/register">Register</a></li>
+                    <li><a href="/sqlite/login">Login</a></li>
+                    <li><a href="/sqlite/users">View Users</a></li>
+                    <li><a href="/sqlite/profile">My Profile (Requires Login)</a></li>
+                    <li><a href="/sqlite/logout">Logout</a></li>
+                </ul>
+            </div>
+
+            {{ if .PostgresEnabled }}
+            <div style="flex: 1;">
+                <h2>Password Auth (Postgres)</h2>
+                <ul>
+                    <li><a href="/pg/register">Register (PG - Simple Demo)</a></li>
+                    <li><a href="/pg/login">Login (PG - Simple Demo)</a></li>
+                    <li><a href="/pg/users">View Users</a></li>
+                    <li><a href="/pg/profile">My Profile (Requires Login)</a></li>
+                    <li><a href="/pg/logout">Logout</a></li>
+                </ul>
+            </div>
+            {{ end }}
+        </div>
+
+        {{ if .OAuthProviders }}
+            <h2>OAuth Login (SQLite + Sessions)</h2>
+            <ul class="provider-list">
+                {{ range .OAuthProviders }}
+                    <li><a href="/login/{{ . }}">Login with {{ . }}</a></li>
+                {{ end }}
+            </ul>
+        {{ end }}
+
+
+    </div>
+</body>
+</html>

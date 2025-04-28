@@ -55,6 +55,7 @@ func (sm *SessionManager) CreateSession() (behemoth.Session, error) {
 	session := sm.sessionFactory(id)
 
 	expiresAt := time.Now().Add(sm.expiry)
+
 	if err := sm.store.SaveSession(session, expiresAt); err != nil {
 		return nil, err
 	}
@@ -105,6 +106,10 @@ func (sm *SessionManager) Expiry() time.Duration {
 // Middleware checks for a session in incoming requests and adds it to the context.
 func (sm *SessionManager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sm == nil {
+			panic("SessionManager is nil. Set UseSessions to true in Behemoth config to use SessionManager Middleware.")
+		}
+
 		cookie, err := r.Cookie(sm.cookieName)
 		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)

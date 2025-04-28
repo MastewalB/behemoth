@@ -119,6 +119,18 @@ func (sqlt *SQLlite[T]) SaveUser(user *models.User) (*models.User, error) {
 	return user, nil
 }
 
+func (sqlt *SQLlite[T]) UpdateUser(user *models.User) (*models.User, error) {
+	return nil, nil
+}
+
+func (sqlt *SQLlite[T]) DeleteUser(user *models.User) error {
+	return nil
+}
+
+func (sqlt *SQLlite[T]) GetAllUsers() ([]T, error) {
+	return nil, nil
+}
+
 // SaveSession stores a session in the database with its expiration time.
 func (sqlt *SQLlite[T]) SaveSession(session behemoth.Session, expiresAt time.Time) error {
 	// Serialize the session data (we'll use a wrapper to capture the data)
