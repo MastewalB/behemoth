@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/MastewalB/behemoth"
@@ -13,7 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type SQLlite[T behemoth.User] struct {
+type SQLite[T behemoth.User] struct {
 	DB             *sql.DB
 	Table          string
 	PK             string
@@ -24,7 +23,7 @@ func NewSQLite[T behemoth.User](
 	db *sql.DB,
 	userTable, primaryKey string,
 	sessionFactory behemoth.SessionFactory,
-) (*SQLlite[T], error) {
+) (*SQLite[T], error) {
 	if userTable == "" {
 		_, err := db.Exec(`
 			CREATE TABLE IF NOT EXISTS users (
@@ -54,7 +53,7 @@ func NewSQLite[T behemoth.User](
 		return nil, err
 	}
 
-	return &SQLlite[T]{
+	return &SQLite[T]{
 		DB:             db,
 		Table:          userTable,
 		PK:             primaryKey,
@@ -63,7 +62,7 @@ func NewSQLite[T behemoth.User](
 
 }
 
-func (sqlt *SQLlite[T]) FindByPK(val any) (T, error) {
+func (sqlt *SQLite[T]) FindByPK(val any) (T, error) {
 	var entity T
 
 	query := fmt.Sprintf(`SELECT * FROM %s WHERE %s = ?`, sqlt.Table, sqlt.PK)
@@ -74,12 +73,11 @@ func (sqlt *SQLlite[T]) FindByPK(val any) (T, error) {
 		return entity, err
 	}
 
-	fmt.Println("Columns from DB:", columns)
 	entity, err = mapRowToStruct(row, entity, columns)
 	return entity, err
 }
 
-func (sqlt *SQLlite[T]) SaveUser(user *models.User) (*models.User, error) {
+func (sqlt *SQLite[T]) SaveUser(user *models.User) (*models.User, error) {
 	uuidStr := utils.GenerateUUID()
 	user.ID = uuidStr
 	err := sqlt.WithTransaction(func(tx *sql.Tx) error {
@@ -119,23 +117,99 @@ func (sqlt *SQLlite[T]) SaveUser(user *models.User) (*models.User, error) {
 	return user, nil
 }
 
-func (sqlt *SQLlite[T]) UpdateUser(user *models.User) (*models.User, error) {
-	return nil, nil
+func (sqlt *SQLite[T]) UpdateUser(user *models.User) (*models.User, error) {
+	err := sqlt.WithTransaction(func(tx *sql.Tx) error {
+		var emailExists, usernameExists bool
+
+		err := tx.QueryRow(`
+			SELECT 
+				EXISTS(SELECT 1 FROM users WHERE email = ?),
+				EXISTS(SELECT 1 FROM users WHERE username = ?)
+		`, user.Email, user.Username).Scan(&emailExists, &usernameExists)
+
+		if err != nil {
+			return err
+		}
+
+		if emailExists || usernameExists {
+			_, err = tx.Exec(`
+				UPDATE users
+				SET email = ?, username = ?, firstname = ?, lastname = ?, password_hash = ?
+				WHERE id = ?
+			`,
+				user.GetEmail(),
+				user.GetUsername(),
+				user.GetFirstname(),
+				user.GetLastname(),
+				user.GetPasswordHash(),
+				user.GetID(),
+			)
+		}
+
+		return err
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return user, nil
 }
 
-func (sqlt *SQLlite[T]) DeleteUser(user *models.User) error {
-	return nil
+func (sqlt *SQLite[T]) DeleteUser(user *models.User) error {
+	err := sqlt.WithTransaction(func(tx *sql.Tx) error {
+		exists, err := sqlt.UserExists(user)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(`
+			DELETE FROM sessions WHERE id = ?`,
+		)
+
+		if exists {
+			_, err = tx.Exec(`
+				DELETE FROM users WHERE id = ?
+			`, user.GetID())
+		}
+
+		return err
+	})
+
+	return err
 }
 
-func (sqlt *SQLlite[T]) GetAllUsers() ([]T, error) {
-	return nil, nil
+func (sqlt *SQLite[T]) GetAllUsers() ([]T, error) {
+	var users []T
+
+	rows, err := sqlt.DB.Query(fmt.Sprintf("SELECT * FROM %s", sqlt.Table))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns, err := getSQLiteColumnNames(sqlt.DB, sqlt.Table)
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		var user T
+		user, err = mapRowToStruct(rows, user, columns)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+
+	return users, nil
 }
 
 // SaveSession stores a session in the database with its expiration time.
-func (sqlt *SQLlite[T]) SaveSession(session behemoth.Session, expiresAt time.Time) error {
+func (sqlt *SQLite[T]) SaveSession(session behemoth.Session, expiresAt time.Time) error {
 	// Serialize the session data (we'll use a wrapper to capture the data)
 	data, err := serializeSession(session)
-	log.Println("Serialized", data)
+
 	if err != nil {
 		return err
 	}
@@ -148,7 +222,7 @@ func (sqlt *SQLlite[T]) SaveSession(session behemoth.Session, expiresAt time.Tim
 }
 
 // GetSession retrieves a session by ID, returning an error if not found or expired.
-func (sqlt *SQLlite[T]) GetSession(sessionID string) (behemoth.Session, error) {
+func (sqlt *SQLite[T]) GetSession(sessionID string) (behemoth.Session, error) {
 	var data []byte
 	var expiresAt time.Time
 
@@ -173,12 +247,12 @@ func (sqlt *SQLlite[T]) GetSession(sessionID string) (behemoth.Session, error) {
 }
 
 // DeleteSession removes a session by ID.
-func (sqlt *SQLlite[T]) DeleteSession(sessionID string) error {
+func (sqlt *SQLite[T]) DeleteSession(sessionID string) error {
 	_, err := sqlt.DB.Exec("DELETE FROM sessions WHERE id = ?", sessionID)
 	return err
 }
 
-func (sqlt *SQLlite[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
+func (sqlt *SQLite[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
 	tx, err := sqlt.DB.Begin()
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -202,4 +276,17 @@ func (sqlt *SQLlite[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
+}
+
+func (sqlt *SQLite[T]) UserExists(user *models.User) (bool, error) {
+	var exists bool
+	err := sqlt.DB.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM users WHERE email = ? OR username = ?)
+	`, user.Email, user.Username).Scan(&exists)
+
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
 }

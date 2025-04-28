@@ -149,8 +149,20 @@ func main() {
 
 	router.Get("/{db}/users", handleUsersGet)
 
+	dbRouterMiddleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			dbParam := chi.URLParam(r, "db")
+			if dbParam == "sqlite" && bsql.Session != nil {
+				bsql.Session.Middleware(next).ServeHTTP(w, r) // Call the SQLite session middleware
+			} else if dbParam == "pg" && bpg.Session != nil {
+				bpg.Session.Middleware(next).ServeHTTP(w, r) // Call the Postgres session middleware
+			} else {
+				next.ServeHTTP(w, r)
+			}
+		})
+	}
 	router.Group(func(r chi.Router) {
-		r.Use(bpg.Session.Middleware)
+		r.Use(dbRouterMiddleware)
 
 		r.Get("/{db}/profile", handleProfile)
 
@@ -363,8 +375,8 @@ func handleRegisterPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf(
-		"Registering user: %v, %v, %v, %v, %v, %v",
-		email, username, firstname, lastname, dbMap, dbParam,
+		"Registering user: %v, %v, %v, %v, %v",
+		email, username, firstname, lastname, dbParam,
 	)
 
 	_, err := db.Password.Create(email, username, firstname, lastname, password)
@@ -490,21 +502,23 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleProfile(w http.ResponseWriter, r *http.Request) {
-	session, ok := auth.GetSessionFromContext(r.Context())
-	if !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther) // Redirect to login if no session
-		return
-	}
-
-	// userID, _ := session.Get("user_id").(string)
-
-	email, _ := session.Get("email").(string)
 	dbParam := chi.URLParam(r, "db")
 	db, exists := dbMap[dbParam]
 	if !exists {
 		http.Error(w, "Invalid database selection", http.StatusBadRequest)
 		return
 	}
+
+	session, ok := auth.GetSessionFromContext(r.Context())
+	if !ok {
+		http.Redirect(w, r, fmt.Sprintf("/{%s}/login", dbParam), http.StatusSeeOther) // Redirect to login if no session
+		return
+	}
+
+	// userID, _ := session.Get("user_id").(string)
+	
+
+	email, _ := session.Get("email").(string)
 
 	user, err := db.DB.FindByPK(email)
 	if err != nil {
@@ -599,6 +613,12 @@ func handleDelete(w http.ResponseWriter, r *http.Request) {
 	db := dbMap[dbParam]
 	email := r.FormValue("email")
 
+	session, ok := auth.GetSessionFromContext(r.Context())
+	if !ok {
+		http.Redirect(w, r, fmt.Sprintf("/{%s}/login", dbParam), http.StatusSeeOther) // Redirect to login if no session
+		return
+	}
+
 	user, err := db.DB.FindByPK(email)
 	if err != nil {
 		log.Printf("Error fetching user data: %v", err)
@@ -606,6 +626,24 @@ func handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Delete the session from storage
+	if err := db.Session.DeleteSession(session.SessionID()); err != nil {
+		log.Printf("Failed to delete session %s from storage: %v", session.SessionID(), err)
+		renderMessage(w, "Error", "Couldn't logout.", "", nil)
+		return
+	}
+
+	// Clear the session cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_id",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1, // Deletes the cookie
+	})
+	
 	err = db.DB.DeleteUser(user)
 	if err != nil {
 		log.Printf("Delete failed for email %s: %v", email, err)
@@ -641,7 +679,8 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Delete the session from storage
 	if err := db.Session.DeleteSession(session.SessionID()); err != nil {
 		log.Printf("Failed to delete session %s from storage: %v", session.SessionID(), err)
-		// Log error but proceed to clear cookie anyway
+		renderMessage(w, "Error", "Couldn't logout.", "", nil)
+		return
 	}
 
 	// Clear the session cookie
