@@ -32,3 +32,7 @@ type Database[T User] interface {
 	// DeleteSession removes a session by ID.
 	DeleteSession(sessionID string) error
 }
+
+// FindUser is a customized function type that takes a value of any type and returns a User type
+// The database interface will use this function if provided, instead of retrieving the user by type reflection.
+type FindUserFn[T User] func(val any) (T, error)

@@ -21,10 +21,19 @@ func TestDefaultUserFlow(t *testing.T) {
 	_, err = db.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
 	assert.NoError(t, err, "Failed to create users table")
 
+	sqliteProvider, err := storage.NewSQLite[*models.User](
+		db,
+		"users",
+		"id",
+		nil,
+		nil,
+	)
+
+	assert.NoError(t, err, "Failed to create SQLite provider")
 	cfg := &behemoth.Config[*models.User]{
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-		DB:             &storage.SQLite[*models.User]{DB: db, PK: "email", Table: "users"},
+		DB:             sqliteProvider,
 		UseDefaultUser: true,
 		UserModel:      &models.User{},
 	}
