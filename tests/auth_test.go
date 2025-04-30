@@ -51,7 +51,7 @@ func TestDefaultUserFlow(t *testing.T) {
 
 	// Login handler
 	loginHandler := func(w http.ResponseWriter, _ *http.Request, userEmail string) {
-		creds := auth.PasswordCredentials{PK: userEmail, Password: "password123"}
+		creds := auth.PasswordCredentials{PrimaryKey: userEmail, Password: "password123"}
 		user, err := b.Password.Authenticate(creds)
 		if err != nil {
 			t.Log(err)

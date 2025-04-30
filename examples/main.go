@@ -423,7 +423,7 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 
 	// Attempt password authentication
 	user, err := db.Password.Authenticate(auth.PasswordCredentials{
-		PK:       email,
+		PrimaryKey:       email,
 		Password: password,
 	})
 
