@@ -1,6 +1,7 @@
 package behemoth
 
 import (
+	"database/sql"
 	"time"
 
 	"github.com/MastewalB/behemoth/utils"
@@ -8,14 +9,23 @@ import (
 )
 
 type Config[T User] struct {
-	DB             Database[T]
-	UserModel      User
+	DatabaseConfig DatabaseConfig[T]
 	JWT            *JWTConfig
 	Session        *SessionConfig
 	Password       *PasswordConfig
 	OAuthProviders []Provider
-	UseDefaultUser bool
 	UseSessions    bool
+}
+
+// DatabaseConfig defines configuration for database connection and user model/table.
+type DatabaseConfig[T User] struct {
+	Name           DatabaseName
+	DB             *sql.DB
+	UserTable      string
+	PrimaryKey     string
+	FindUserFn     FindUserFn
+	UserModel      User
+	UseDefaultUser bool
 }
 
 type PasswordConfig struct {
@@ -48,5 +58,7 @@ var DefaultPasswordConfig = PasswordConfig{
 var DefalultSessionConfig = SessionConfig{
 	CookieName: "session_id",
 	Expiry:     2 * time.Hour,
-	Factory:    nil,
+	Factory: func(id string) Session {
+		return NewDefaultSession(id, 2*time.Hour)
+	},
 }

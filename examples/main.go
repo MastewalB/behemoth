@@ -14,7 +14,6 @@ import (
 	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/providers"
-	"github.com/MastewalB/behemoth/storage"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -52,13 +51,29 @@ func main() {
 
 	// Connection string format:
 	// "postgres://username:password@host:port/database?sslmode=disable"
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", PG_USER, PG_PASSWORD, PG_HOST, PG_PORT, PG_DATABASE)
+	connStr := fmt.Sprintf(
+		"postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		PG_USER,
+		PG_PASSWORD,
+		PG_HOST,
+		PG_PORT,
+		PG_DATABASE,
+	)
 	pg, pgerr := sql.Open("postgres", connStr)
 	if pgerr != nil {
 		log.Printf("Failed to initialize Postgres db: %v", err)
 	}
 
-	_, err = pg.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
+	_, err = pg.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			email TEXT UNIQUE,
+			username TEXT UNIQUE, 
+			firstname TEXT,
+			lastname TEXT, 
+			password_hash TEXT
+		)
+	`)
 	if err != nil {
 		log.Fatalf("Failed to initialize Postgres db: %v", err)
 	}
@@ -69,7 +84,16 @@ func main() {
 		log.Fatalf("Failed to initialize SQLite db: %v", err)
 	}
 
-	_, err = sqlt.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
+	_, err = sqlt.Exec(`
+			CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			email TEXT UNIQUE,
+			username TEXT UNIQUE,
+			firstname TEXT,
+			lastname TEXT,
+			password_hash TEXT
+		)
+	`)
 	if err != nil {
 		log.Fatalf("Failed to initialize SQLite db: %v", err)
 	}
@@ -93,41 +117,53 @@ func main() {
 		),
 	}
 
-	pgProvider, err := storage.NewPostgres[*models.User](pg, "users", "email", func(id string) behemoth.Session {
-		return behemoth.NewDefaultSession(id, time.Hour)
-	})
-	if err != nil {
-		log.Fatalf("Failed to init Postgres: %v", err)
-	}
-
 	pgCfg := &behemoth.Config[*models.User]{
+		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
+			Name:           behemoth.Postgres,
+			DB:             pg,
+			UseDefaultUser: true,
+		},
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		OAuthProviders: oauthProviders,
 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-		UseDefaultUser: true,
-		DB:             pgProvider,
-		UserModel:      &models.User{},
 		UseSessions:    true,
+		Session: &behemoth.SessionConfig{
+			CookieName: "session_id",
+			Expiry:     2 * time.Hour,
+			Factory: func(id string) behemoth.Session {
+				return behemoth.NewDefaultSession(id, time.Hour)
+			},
+		},
 	}
-	bpg = auth.New(pgCfg)
+	bpg, err = auth.New(pgCfg)
 
-	sqliteProvider, err := storage.NewSQLite[*models.User](sqlt, "users", "email", func(id string) behemoth.Session {
-		return behemoth.NewDefaultSession(id, time.Hour)
-	})
 	if err != nil {
-		log.Fatalf("Failed to init SQLite: %v", err)
+		log.Printf("Failed to initialize Behemoth with Postgres: %v", err)
 	}
 
 	cfg := &behemoth.Config[*models.User]{
+		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
+			Name:           behemoth.SQLite,
+			DB:             sqlt,
+			UseDefaultUser: true,
+		},
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		OAuthProviders: oauthProviders,
 		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-		UseDefaultUser: true,
-		DB:             sqliteProvider,
-		UserModel:      &models.User{},
 		UseSessions:    true,
+		Session: &behemoth.SessionConfig{
+			CookieName: "session_id",
+			Expiry:     2 * time.Hour,
+			Factory: func(id string) behemoth.Session {
+				return behemoth.NewDefaultSession(id, time.Hour)
+			},
+		},
 	}
-	bsql = auth.New(cfg)
+	bsql, err = auth.New(cfg)
+
+	if err != nil {
+		log.Fatalf("Failed to initialize Behemoth: %v", err)
+	}
 
 	dbMap = map[string]*auth.Behemoth[*models.User]{
 		"sqlite": bsql,
@@ -423,8 +459,8 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 
 	// Attempt password authentication
 	user, err := db.Password.Authenticate(auth.PasswordCredentials{
-		PK:       email,
-		Password: password,
+		PrimaryKey: email,
+		Password:   password,
 	})
 
 	if err != nil {
@@ -516,7 +552,6 @@ func handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// userID, _ := session.Get("user_id").(string)
-	
 
 	email, _ := session.Get("email").(string)
 
@@ -643,7 +678,7 @@ func handleDelete(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1, // Deletes the cookie
 	})
-	
+
 	err = db.DB.DeleteUser(user)
 	if err != nil {
 		log.Printf("Delete failed for email %s: %v", email, err)

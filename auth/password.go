@@ -34,7 +34,7 @@ func (p *PasswordAuth[T]) Authenticate(credentials any) (behemoth.User, error) {
 	if !ok {
 		return nil, errors.New("invalid credentials")
 	}
-	user, err := p.db.FindByPK(pc.PK)
+	user, err := p.db.FindByPK(pc.PrimaryKey)
 
 	if err != nil {
 		return nil, err
@@ -81,6 +81,6 @@ func (p *PasswordAuth[T]) Create(
 }
 
 type PasswordCredentials struct {
-	PK       string
+	PrimaryKey       string
 	Password string
 }

@@ -13,16 +13,18 @@ import (
 )
 
 type SQLite[T behemoth.User] struct {
-	DB             *sql.DB
-	Table          string
-	PK             string
+	db             *sql.DB
+	userTable          string
+	primaryKey             string
 	sessionFactory behemoth.SessionFactory
+	findUserFn behemoth.FindUserFn
 }
 
 func NewSQLite[T behemoth.User](
 	db *sql.DB,
 	userTable, primaryKey string,
 	sessionFactory behemoth.SessionFactory,
+	findUserFn behemoth.FindUserFn,
 ) (*SQLite[T], error) {
 	if userTable == "" {
 		_, err := db.Exec(`
@@ -54,21 +56,34 @@ func NewSQLite[T behemoth.User](
 	}
 
 	return &SQLite[T]{
-		DB:             db,
-		Table:          userTable,
-		PK:             primaryKey,
+		db:             db,
+		userTable:          userTable,
+		primaryKey:             primaryKey,
 		sessionFactory: sessionFactory,
 	}, nil
 
 }
 
 func (sqlt *SQLite[T]) FindByPK(val any) (T, error) {
+
+	// Check if a custom findUser function is provided and call it if available
+	if sqlt.findUserFn != nil {
+		var zero T
+		user, err := sqlt.findUserFn(sqlt.db, val)
+		if err != nil {
+			return zero, err
+		}
+
+		return user.(T), nil 
+	}
+
+	// If no custom findUser function is provided, use the default implementation
 	var entity T
 
-	query := fmt.Sprintf(`SELECT * FROM %s WHERE %s = ?`, sqlt.Table, sqlt.PK)
-	row := sqlt.DB.QueryRow(query, val)
+	query := fmt.Sprintf(`SELECT * FROM %s WHERE %s = ?`, sqlt.userTable, sqlt.primaryKey)
+	row := sqlt.db.QueryRow(query, val)
 
-	columns, err := getSQLiteColumnNames(sqlt.DB, sqlt.Table)
+	columns, err := getSQLiteColumnNames(sqlt.db, sqlt.userTable)
 	if err != nil {
 		return entity, err
 	}
@@ -182,13 +197,13 @@ func (sqlt *SQLite[T]) DeleteUser(user *models.User) error {
 func (sqlt *SQLite[T]) GetAllUsers() ([]T, error) {
 	var users []T
 
-	rows, err := sqlt.DB.Query(fmt.Sprintf("SELECT * FROM %s", sqlt.Table))
+	rows, err := sqlt.db.Query(fmt.Sprintf("SELECT * FROM %s", sqlt.userTable))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	columns, err := getSQLiteColumnNames(sqlt.DB, sqlt.Table)
+	columns, err := getSQLiteColumnNames(sqlt.db, sqlt.userTable)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +229,7 @@ func (sqlt *SQLite[T]) SaveSession(session behemoth.Session, expiresAt time.Time
 		return err
 	}
 
-	_, err = sqlt.DB.Exec(
+	_, err = sqlt.db.Exec(
 		"INSERT OR REPLACE INTO sessions (id, data, expires_at) VALUES (?, ?, ?)",
 		session.SessionID(), data, expiresAt,
 	)
@@ -226,7 +241,7 @@ func (sqlt *SQLite[T]) GetSession(sessionID string) (behemoth.Session, error) {
 	var data []byte
 	var expiresAt time.Time
 
-	err := sqlt.DB.QueryRow(
+	err := sqlt.db.QueryRow(
 		"SELECT data, expires_at FROM sessions WHERE id = ?",
 		sessionID,
 	).Scan(&data, &expiresAt)
@@ -248,12 +263,12 @@ func (sqlt *SQLite[T]) GetSession(sessionID string) (behemoth.Session, error) {
 
 // DeleteSession removes a session by ID.
 func (sqlt *SQLite[T]) DeleteSession(sessionID string) error {
-	_, err := sqlt.DB.Exec("DELETE FROM sessions WHERE id = ?", sessionID)
+	_, err := sqlt.db.Exec("DELETE FROM sessions WHERE id = ?", sessionID)
 	return err
 }
 
 func (sqlt *SQLite[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
-	tx, err := sqlt.DB.Begin()
+	tx, err := sqlt.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -280,7 +295,7 @@ func (sqlt *SQLite[T]) WithTransaction(fn func(tx *sql.Tx) error) error {
 
 func (sqlt *SQLite[T]) UserExists(user *models.User) (bool, error) {
 	var exists bool
-	err := sqlt.DB.QueryRow(`
+	err := sqlt.db.QueryRow(`
 		SELECT EXISTS(SELECT 1 FROM users WHERE email = ? OR username = ?)
 	`, user.Email, user.Username).Scan(&exists)
 
