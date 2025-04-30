@@ -35,4 +35,10 @@ type Database[T User] interface {
 
 // FindUser is a customized function type that takes a value of any type and returns a User type
 // The database interface will use this function if provided, instead of retrieving the user by type reflection.
-type FindUserFn[T User] func(val any) (T, error)
+// DatabaseName is a string type that represents the name of the database.
+type DatabaseName string
+
+const (
+	SQLite   DatabaseName = "sqlite"
+	Postgres DatabaseName = "postgres"
+)
