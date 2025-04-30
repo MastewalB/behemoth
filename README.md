@@ -89,6 +89,23 @@ Open http://localhost:8080 in your browser.
 Custom providers can be added by implementing the `Provider` interface.
 
 ## User Models
+Behemoth accepts any User model which implements the `User` interface. It also provides a built-in lightweight user model.
+
+The User Model is configured together with the database using the `DatabaseConfig` type:
+```go
+type DatabaseConfig[T User] struct {
+	Name           DatabaseName
+	DB             *sql.DB
+	UserTable      string
+	PrimaryKey     string
+	FindUserFn     FindUserFn
+	UserModel      User
+	UseDefaultUser bool
+}
+```
+
+A `UserModel` type should be provided if the `UseDefaultUser` flag is not set to `true`. Either a Database connection(`DB`) or a User Finder Function(`FindUserFn`) must be provided to retrieve users. To retrieve a user from the database, the `FindUserFn` is called if present, otherwise type reflection will be used to construct the user entity.
+
 
 ## JWT 
 The JWTService type is responsible for handling JSON Web Token operations. It uses the `golang-jwt` package to sign and validate tokens. Tokens can be configured through the `JWTConfig` struct
@@ -105,7 +122,19 @@ type JWTConfig struct {
 ```
 
 By default tokens are signed with `jwt.SigningMethodHS256`. JWT tokens will be used as default authentication method if Sessions are not configured explicitly. Claims can be customized as long as they implement the `jwt.Claims` interface.
+
 ## Session
+Sessions can be enabled using the `UseSession` flag in the config struct. A default Config will be used if no custom `SessionConfig` is provided.
+
+```go
+type SessionConfig struct {
+	CookieName string
+	Expiry     time.Duration
+	Factory    SessionFactory
+}
+```
+
+A custom session type should implement the `Session` interface and provide a `SessionFactory` function.
 
 ## Upcoming Features
 

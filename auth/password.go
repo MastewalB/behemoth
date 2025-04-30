@@ -81,6 +81,6 @@ func (p *PasswordAuth[T]) Create(
 }
 
 type PasswordCredentials struct {
-	PrimaryKey       string
-	Password string
+	PrimaryKey string
+	Password   string
 }

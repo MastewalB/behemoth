@@ -106,7 +106,7 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 func InitDatabase[T behemoth.User](
 	cfg *behemoth.DatabaseConfig[T],
 	sessionFactory behemoth.SessionFactory,
-	) (behemoth.Database[T], error) {
+) (behemoth.Database[T], error) {
 	switch cfg.Name {
 	case behemoth.SQLite:
 		return storage.NewSQLite[T](

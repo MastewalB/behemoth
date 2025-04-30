@@ -10,8 +10,8 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/models"
-	"github.com/stretchr/testify/assert"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestDefaultUserFlow(t *testing.T) {
@@ -29,18 +29,17 @@ func TestDefaultUserFlow(t *testing.T) {
 	`)
 	assert.NoError(t, err, "Failed to create users table")
 
-
 	assert.NoError(t, err, "Failed to create SQLite provider")
 	cfg := &behemoth.Config[*models.User]{
-		Password:       &behemoth.PasswordConfig{HashCost: 10},
-		JWT:            &behemoth.JWTConfig{
-			Secret: "mysecret", 
+		Password: &behemoth.PasswordConfig{HashCost: 10},
+		JWT: &behemoth.JWTConfig{
+			Secret: "mysecret",
 			Expiry: 24 * time.Hour,
 		},
 		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
-			Name:       behemoth.SQLite,
-			DB:         db,
-			FindUserFn: nil,
+			Name:           behemoth.SQLite,
+			DB:             db,
+			FindUserFn:     nil,
 			UseDefaultUser: true,
 		},
 	}
