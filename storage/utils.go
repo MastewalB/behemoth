@@ -8,9 +8,11 @@ import (
 
 	"github.com/MastewalB/behemoth"
 )
+
 type ScannableRow interface {
-    Scan(dest ...any) error
+	Scan(dest ...any) error
 }
+
 // Helper function to get column names from the table
 func getSQLiteColumnNames(db *sql.DB, table string) ([]string, error) {
 	query := fmt.Sprintf(`PRAGMA table_info(%s)`, table)

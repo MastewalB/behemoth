@@ -14,10 +14,10 @@ import (
 
 type SQLite[T behemoth.User] struct {
 	db             *sql.DB
-	userTable          string
-	primaryKey             string
+	userTable      string
+	primaryKey     string
 	sessionFactory behemoth.SessionFactory
-	findUserFn behemoth.FindUserFn
+	findUserFn     behemoth.FindUserFn
 }
 
 func NewSQLite[T behemoth.User](
@@ -57,8 +57,8 @@ func NewSQLite[T behemoth.User](
 
 	return &SQLite[T]{
 		db:             db,
-		userTable:          userTable,
-		primaryKey:             primaryKey,
+		userTable:      userTable,
+		primaryKey:     primaryKey,
 		sessionFactory: sessionFactory,
 	}, nil
 
@@ -74,7 +74,7 @@ func (sqlt *SQLite[T]) FindByPK(val any) (T, error) {
 			return zero, err
 		}
 
-		return user.(T), nil 
+		return user.(T), nil
 	}
 
 	// If no custom findUser function is provided, use the default implementation
