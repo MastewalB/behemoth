@@ -58,5 +58,7 @@ var DefaultPasswordConfig = PasswordConfig{
 var DefalultSessionConfig = SessionConfig{
 	CookieName: "session_id",
 	Expiry:     2 * time.Hour,
-	Factory:    nil,
+	Factory: func(id string) Session {
+		return NewDefaultSession(id, 2*time.Hour)
+	},
 }
