@@ -10,34 +10,42 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/storage"
 	"github.com/stretchr/testify/assert"
-	// _ "github.com/mattn/go-sqlite3"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestDefaultUserFlow(t *testing.T) {
 	db, err := sql.Open("sqlite3", "file:test?mode=memory&cache=shared")
 	assert.NoError(t, err, "Failed to initialize SQLite db")
-	_, err = db.Exec("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE, username TEXT UNIQUE, firstname TEXT, lastname TEXT, password_hash TEXT)")
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+				id TEXT PRIMARY KEY, 
+				email TEXT UNIQUE, 
+				username TEXT UNIQUE,
+				firstname TEXT, 
+				lastname TEXT, 
+				password_hash TEXT
+			)
+	`)
 	assert.NoError(t, err, "Failed to create users table")
 
-	sqliteProvider, err := storage.NewSQLite[*models.User](
-		db,
-		"users",
-		"id",
-		nil,
-		nil,
-	)
 
 	assert.NoError(t, err, "Failed to create SQLite provider")
 	cfg := &behemoth.Config[*models.User]{
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
-		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-		DB:             sqliteProvider,
-		UseDefaultUser: true,
-		UserModel:      &models.User{},
+		JWT:            &behemoth.JWTConfig{
+			Secret: "mysecret", 
+			Expiry: 24 * time.Hour,
+		},
+		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
+			Name:       behemoth.SQLite,
+			DB:         db,
+			FindUserFn: nil,
+			UseDefaultUser: true,
+		},
 	}
-	b := auth.New(cfg)
+	b, err := auth.New(cfg)
+	assert.NoError(t, err, "Failed to create Behemoth instance")
 
 	// Register handler
 	registerHandler := func(w http.ResponseWriter, _ *http.Request) {
