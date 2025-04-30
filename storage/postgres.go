@@ -17,14 +17,14 @@ type Postgres[T behemoth.User] struct {
 	userTable      string
 	primaryKey     string
 	sessionFactory behemoth.SessionFactory
-	findUserFn     behemoth.FindUserFn[T]
+	findUserFn     behemoth.FindUserFn
 }
 
 func NewPostgres[T behemoth.User](
 	db *sql.DB,
 	userTable, primaryKey string,
 	factory behemoth.SessionFactory,
-	findUserFn behemoth.FindUserFn[T],
+	findUserFn behemoth.FindUserFn,
 ) (*Postgres[T], error) {
 
 	if userTable == "" {
@@ -69,7 +69,13 @@ func (pg *Postgres[T]) FindByPK(val any) (T, error) {
 
 	// Check if a custom findUser function is provided and call it if available
 	if pg.findUserFn != nil {
-		return pg.findUserFn(val)
+		var zero T
+		user, err := pg.findUserFn(pg.db, val)
+		if err != nil {
+			return zero, err
+		}
+
+		return user.(T), nil
 	}
 
 	// If no custom findUser function is provided, use the default implementation

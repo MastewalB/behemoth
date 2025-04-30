@@ -17,14 +17,14 @@ type SQLite[T behemoth.User] struct {
 	userTable          string
 	primaryKey             string
 	sessionFactory behemoth.SessionFactory
-	findUserFn behemoth.FindUserFn[T]
+	findUserFn behemoth.FindUserFn
 }
 
 func NewSQLite[T behemoth.User](
 	db *sql.DB,
 	userTable, primaryKey string,
 	sessionFactory behemoth.SessionFactory,
-	findUserFn behemoth.FindUserFn[T],
+	findUserFn behemoth.FindUserFn,
 ) (*SQLite[T], error) {
 	if userTable == "" {
 		_, err := db.Exec(`
@@ -68,7 +68,13 @@ func (sqlt *SQLite[T]) FindByPK(val any) (T, error) {
 
 	// Check if a custom findUser function is provided and call it if available
 	if sqlt.findUserFn != nil {
-		return sqlt.findUserFn(val)
+		var zero T
+		user, err := sqlt.findUserFn(sqlt.db, val)
+		if err != nil {
+			return zero, err
+		}
+
+		return user.(T), nil 
 	}
 
 	// If no custom findUser function is provided, use the default implementation
