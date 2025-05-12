@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/models"
@@ -45,12 +46,6 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 			sessionConfig = &behemoth.DefalultSessionConfig
 			cfg.Session = sessionConfig
 		}
-		sessionMgr = NewSessionManager(
-			database,
-			sessionConfig.Expiry,
-			sessionConfig.CookieName,
-			sessionConfig.Factory,
-		)
 	}
 
 	if cfg.DatabaseConfig.DB == nil {
@@ -60,13 +55,23 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	} else {
 		var err error
 		var sessionFactory behemoth.SessionFactory
-		if sessionMgr != nil {
-			sessionFactory = sessionMgr.sessionFactory
+		if cfg.Session != nil {
+			sessionFactory = cfg.Session.Factory
 		}
 		database, err = InitDatabase(&cfg.DatabaseConfig, sessionFactory)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if cfg.Session != nil {
+		sessionMgr = NewSessionManager(
+			database,
+			cfg.Session.Expiry,
+			cfg.Session.CookieName,
+			cfg.Session.Factory,
+		)
+		log.Println("Session manager initialized" , sessionMgr.cookieName)
 	}
 
 	if cfg.JWT != nil {
