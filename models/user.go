@@ -6,12 +6,16 @@ import (
 )
 
 type User struct {
-	ID           string `db:"id"`
-	Email        string `db:"email"`
-	Username     string `db:"username"`
-	Firstname    string `db:"firstname"`
-	Lastname     string `db:"lastname"`
-	PasswordHash string `db:"password_hash"`
+	ID            string `db:"id"`
+	Email         string `db:"email"`
+	Username      string `db:"username"`
+	Firstname     string `db:"firstname"`
+	Lastname      string `db:"lastname"`
+	PasswordHash  string `db:"password_hash"`
+	EmailVerified string `db:"email_verified"`
+	ImageUrl      string `db:"image_url"`
+	CreatedAt     string `db:"created_at"`
+	UpdatedAt     string `db:"updated_at"`
 }
 
 func (u *User) GetID() string           { return u.ID }
