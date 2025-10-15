@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 
 	"github.com/MastewalB/behemoth"
@@ -8,33 +9,36 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-type PasswordAuth[T behemoth.User] struct {
-	db             behemoth.Database[T]
+type PasswordAuth struct {
+	db             behemoth.Database
 	jwtSvc         *JWTService
 	cost           int
 	useDefaultUser bool
+	user           behemoth.User
 }
 
-func NewPasswordAuth[T behemoth.User](cfg behemoth.PasswordConfig,
+func NewPasswordAuth(cfg behemoth.PasswordConfig,
 	jwtSvc *JWTService,
 	useDefaultUser bool,
 	user behemoth.User,
-	db behemoth.Database[T],
-) *PasswordAuth[T] {
-	return &PasswordAuth[T]{
+	db behemoth.Database,
+) *PasswordAuth {
+	return &PasswordAuth{
 		db:             db,
 		jwtSvc:         jwtSvc,
 		cost:           cfg.HashCost,
 		useDefaultUser: useDefaultUser,
+		user:           user,
 	}
 }
 
-func (p *PasswordAuth[T]) Authenticate(credentials any) (behemoth.User, error) {
+func (p *PasswordAuth) Authenticate(credentials any) (behemoth.User, error) {
+	ctx := context.Background()
 	pc, ok := credentials.(PasswordCredentials)
 	if !ok {
 		return nil, errors.New("invalid credentials")
 	}
-	user, err := p.db.FindByPK(pc.PrimaryKey)
+	user, err := models.FindUserByID(ctx, p.db, p.user, pc.PrimaryKey)
 
 	if err != nil {
 		return nil, err
@@ -44,18 +48,18 @@ func (p *PasswordAuth[T]) Authenticate(credentials any) (behemoth.User, error) {
 		return nil, errors.New("invalid email or password")
 	}
 
-	if p.useDefaultUser {
-		defaultUser, ok := any(user).(*models.User)
-		if !ok {
-			return nil, errors.New("expected DefaultUser when UseDefaultUser is true")
-		}
-		return defaultUser, nil
-	}
+	// if p.useDefaultUser {
+	// 	defaultUser, ok := any(user).(*models.User)
+	// 	if !ok {
+	// 		return nil, errors.New("expected DefaultUser when UseDefaultUser is true")
+	// 	}
+	// 	return defaultUser, nil
+	// }
 
 	return user, nil
 }
 
-func (p *PasswordAuth[T]) Create(
+func (p *PasswordAuth) Create(
 	email string,
 	username string,
 	firstname string,
@@ -77,7 +81,13 @@ func (p *PasswordAuth[T]) Create(
 		Lastname:     lastname,
 		PasswordHash: string(hash),
 	}
-	return p.db.SaveUser(user)
+
+	created, err := models.CreateUser(context.Background(), p.db, user)
+	if err != nil {
+		return nil, err
+	}
+
+	return created.(*models.User), nil
 }
 
 type PasswordCredentials struct {

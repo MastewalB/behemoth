@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -31,7 +32,7 @@ func getSQLiteColumnNames(db *sql.DB, table string) ([]string, error) {
 		var dfltValue sql.NullString
 		var pk int
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err != nil {
-			return nil, err
+			return nil, errors.New("in getSQLiteColumnNames: " + err.Error())
 		}
 		columns = append(columns, name)
 	}
@@ -74,7 +75,7 @@ func mapRowToStruct[T any](row ScannableRow, entity T, columns []string) (T, err
 	}
 
 	// Handle pointer types
-	isPointer := entityType.Kind() == reflect.Ptr
+	isPointer := entityType.Kind() == reflect.Pointer
 	structType := entityType
 	if isPointer {
 		structType = entityType.Elem()
@@ -107,14 +108,18 @@ func mapRowToStruct[T any](row ScannableRow, entity T, columns []string) (T, err
 		fields[colName] = entityValue.Field(i)
 	}
 	// Match columns to struct fields
+
+	errorList := []string{}
 	for i, col := range columns {
 		if field, ok := fields[col]; ok && field.CanSet() {
 			dest[i] = field.Addr().Interface()
 			// fmt.Println("Mapping column", col, "to field", col)
+			errorList = append(errorList, "Matched "+col)
 		} else {
 			var dummy any
 			dest[i] = &dummy
 			fmt.Println("No matching field for column", col)
+			errorList = append(errorList, "In else")
 		}
 	}
 
@@ -122,7 +127,14 @@ func mapRowToStruct[T any](row ScannableRow, entity T, columns []string) (T, err
 	err := row.Scan(dest...)
 	if err != nil {
 		fmt.Println("Scan error:", err)
-		return entity, err
+		return entity, errors.New(
+			"Scan error: " +
+				err.Error() +
+				fmt.Sprintf(" Dest: %+v", dest) +
+				fmt.Sprintf(" Fields: %+v", fields) +
+				fmt.Sprintf(" Columns: %+v", len(columns)) +
+				" Unmatched columns: " + strings.Join(errorList, ", "),
+		)
 	}
 
 	// fmt.Println("Entity:", entity, "Error:", err)

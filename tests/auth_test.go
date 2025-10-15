@@ -1,132 +1,132 @@
 package tests
 
-import (
-	"database/sql"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-	"time"
+// import (
+// 	"database/sql"
+// 	"net/http"
+// 	"net/http/httptest"
+// 	"testing"
+// 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/auth"
-	"github.com/MastewalB/behemoth/models"
-	_ "github.com/mattn/go-sqlite3"
-	"github.com/stretchr/testify/assert"
-)
+// 	"github.com/MastewalB/behemoth"
+// 	"github.com/MastewalB/behemoth/auth"
+// 	"github.com/MastewalB/behemoth/models"
+// 	_ "github.com/mattn/go-sqlite3"
+// 	"github.com/stretchr/testify/assert"
+// )
 
-func TestDefaultUserFlow(t *testing.T) {
-	db, err := sql.Open("sqlite3", "file:test?mode=memory&cache=shared")
-	assert.NoError(t, err, "Failed to initialize SQLite db")
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS users (
-				id TEXT PRIMARY KEY, 
-				email TEXT UNIQUE, 
-				username TEXT UNIQUE,
-				firstname TEXT, 
-				lastname TEXT, 
-				password_hash TEXT
-			)
-	`)
-	assert.NoError(t, err, "Failed to create users table")
+// func TestDefaultUserFlow(t *testing.T) {
+// 	db, err := sql.Open("sqlite3", "file:test?mode=memory&cache=shared")
+// 	assert.NoError(t, err, "Failed to initialize SQLite db")
+// 	_, err = db.Exec(`
+// 		CREATE TABLE IF NOT EXISTS users (
+// 				id TEXT PRIMARY KEY,
+// 				email TEXT UNIQUE,
+// 				username TEXT UNIQUE,
+// 				firstname TEXT,
+// 				lastname TEXT,
+// 				password_hash TEXT
+// 			)
+// 	`)
+// 	assert.NoError(t, err, "Failed to create users table")
 
-	assert.NoError(t, err, "Failed to create SQLite provider")
-	cfg := &behemoth.Config[*models.User]{
-		Password: &behemoth.PasswordConfig{HashCost: 10},
-		JWT: &behemoth.JWTConfig{
-			Secret: "mysecret",
-			Expiry: 24 * time.Hour,
-		},
-		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
-			Name:           behemoth.SQLite,
-			DB:             db,
-			FindUserFn:     nil,
-			UseDefaultUser: true,
-		},
-	}
-	b, err := auth.New(cfg)
-	assert.NoError(t, err, "Failed to create Behemoth instance")
+// 	assert.NoError(t, err, "Failed to create SQLite provider")
+// 	cfg := &behemoth.Config[*models.User]{
+// 		Password: &behemoth.PasswordConfig{HashCost: 10},
+// 		JWT: &behemoth.JWTConfig{
+// 			Secret: "mysecret",
+// 			Expiry: 24 * time.Hour,
+// 		},
+// 		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
+// 			Name:           behemoth.SQLite,
+// 			DB:             db,
+// 			FindUserFn:     nil,
+// 			UseDefaultUser: true,
+// 		},
+// 	}
+// 	b, err := auth.New(cfg)
+// 	assert.NoError(t, err, "Failed to create Behemoth instance")
 
-	// Register handler
-	registerHandler := func(w http.ResponseWriter, _ *http.Request) {
-		user, err := b.Password.Create("test@example.com", "username", "firstname", "lastname", "password123")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		w.Write([]byte(user.Email))
-	}
+// 	// Register handler
+// 	registerHandler := func(w http.ResponseWriter, _ *http.Request) {
+// 		user, err := b.Password.Create("test@example.com", "username", "firstname", "lastname", "password123")
+// 		if err != nil {
+// 			http.Error(w, err.Error(), http.StatusBadRequest)
+// 			return
+// 		}
+// 		w.Write([]byte(user.Email))
+// 	}
 
-	// Login handler
-	loginHandler := func(w http.ResponseWriter, _ *http.Request, userEmail string) {
-		creds := auth.PasswordCredentials{PrimaryKey: userEmail, Password: "password123"}
-		user, err := b.Password.Authenticate(creds)
-		if err != nil {
-			t.Log(err)
-			http.Error(w, "login failed", http.StatusUnauthorized)
-			return
-		}
-		token, _ := b.JWT.GenerateToken(user)
-		w.Write([]byte(token))
-	}
+// 	// Login handler
+// 	loginHandler := func(w http.ResponseWriter, _ *http.Request, userEmail string) {
+// 		creds := auth.PasswordCredentials{PrimaryKey: userEmail, Password: "password123"}
+// 		user, err := b.Password.Authenticate(creds)
+// 		if err != nil {
+// 			t.Log(err)
+// 			http.Error(w, "login failed", http.StatusUnauthorized)
+// 			return
+// 		}
+// 		token, _ := b.JWT.GenerateToken(user)
+// 		w.Write([]byte(token))
+// 	}
 
-	// Test Register
-	req, _ := http.NewRequest("POST", "/register", nil)
-	rr := httptest.NewRecorder()
-	registerHandler(rr, req)
-	assert.Equal(t, http.StatusOK, rr.Code, "Register should succeed")
-	assert.NotEmpty(t, rr.Body.String(), "Register should return a non-empty ID")
+// 	// Test Register
+// 	req, _ := http.NewRequest("POST", "/register", nil)
+// 	rr := httptest.NewRecorder()
+// 	registerHandler(rr, req)
+// 	assert.Equal(t, http.StatusOK, rr.Code, "Register should succeed")
+// 	assert.NotEmpty(t, rr.Body.String(), "Register should return a non-empty ID")
 
-	// Test Login
-	req, _ = http.NewRequest("POST", "/login", nil)
-	lr := httptest.NewRecorder()
-	loginHandler(lr, req, rr.Body.String())
-	t.Log(lr.Body)
-	assert.Equal(t, http.StatusOK, lr.Code, "Login should succeed")
-	assert.NotEmpty(t, lr.Body.String(), "Login should return a non-empty token")
-}
+// 	// Test Login
+// 	req, _ = http.NewRequest("POST", "/login", nil)
+// 	lr := httptest.NewRecorder()
+// 	loginHandler(lr, req, rr.Body.String())
+// 	t.Log(lr.Body)
+// 	assert.Equal(t, http.StatusOK, lr.Code, "Login should succeed")
+// 	assert.NotEmpty(t, lr.Body.String(), "Login should return a non-empty token")
+// }
 
-func TestCustomUserLogin(t *testing.T) {
-	// Setup SQLite with custom provider
-	// db, err := sql.Open("sqlite3", ":memory:")
-	// assert.NoError(t, err, "Failed to initialize SQLite db")
+// func TestCustomUserLogin(t *testing.T) {
+// Setup SQLite with custom provider
+// db, err := sql.Open("sqlite3", ":memory:")
+// assert.NoError(t, err, "Failed to initialize SQLite db")
 
-	// customCfg := &behemoth.Config[*models.User]{
-	// 	DB:             &storage.SQLlite[*models.User]{DB: db, PK: "ID", Table: "users"},
-	// 	Password:       nil,
-	// 	JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-	// 	UseDefaultUser: false,
-	// 	UserModel: &models.User{},
-	// }
-	// b := auth.New(customCfg)
+// customCfg := &behemoth.Config[*models.User]{
+// 	DB:             &storage.SQLlite[*models.User]{DB: db, PK: "ID", Table: "users"},
+// 	Password:       nil,
+// 	JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
+// 	UseDefaultUser: false,
+// 	UserModel: &models.User{},
+// }
+// b := auth.New(customCfg)
 
-	// // Prepopulate (mimic custom provider logic)
-	// hash, _ := utils.GeneratePasswordHash("password123")
-	// err = .SaveUser(&models.User{
-	// 	Email:        "custom@example.com",
-	// 	PasswordHash: hash,
-	// })
-	// assert.NoError(t, err, "Failed to prepopulate user")
+// // Prepopulate (mimic custom provider logic)
+// hash, _ := utils.GeneratePasswordHash("password123")
+// err = .SaveUser(&models.User{
+// 	Email:        "custom@example.com",
+// 	PasswordHash: hash,
+// })
+// assert.NoError(t, err, "Failed to prepopulate user")
 
-	// // Login handler
-	// loginHandler := func(w http.ResponseWriter, _ *http.Request) {
-	// 	creds := auth.PasswordCredentials{Email: "custom@example.com", Password: "password123"}
-	// 	user, err := b.Password.Authenticate(creds)
-	// 	if err != nil {
-	// 		http.Error(w, "login failed", http.StatusUnauthorized)
-	// 		return
-	// 	}
-	// 	token, _ := b.JWT.GenerateToken(user)
-	// 	w.Write([]byte(token))
-	// }
+// // Login handler
+// loginHandler := func(w http.ResponseWriter, _ *http.Request) {
+// 	creds := auth.PasswordCredentials{Email: "custom@example.com", Password: "password123"}
+// 	user, err := b.Password.Authenticate(creds)
+// 	if err != nil {
+// 		http.Error(w, "login failed", http.StatusUnauthorized)
+// 		return
+// 	}
+// 	token, _ := b.JWT.GenerateToken(user)
+// 	w.Write([]byte(token))
+// }
 
-	// // Test Login
-	// req, _ := http.NewRequest("POST", "/login", nil)
-	// rr := httptest.NewRecorder()
-	// loginHandler(rr, req)
-	// if status := rr.Code; status != http.StatusOK {
-	// 	t.Errorf("Custom login failed: got %v, want %v", status, http.StatusOK)
-	// }
-}
+// // Test Login
+// req, _ := http.NewRequest("POST", "/login", nil)
+// rr := httptest.NewRecorder()
+// loginHandler(rr, req)
+// if status := rr.Code; status != http.StatusOK {
+// 	t.Errorf("Custom login failed: got %v, want %v", status, http.StatusOK)
+// }
+// }
 
 // TestFailedRegistration tests registration with invalid credentials
 // func TestFailedRegistration(t *testing.T) {

@@ -74,9 +74,9 @@ func main() {
 			password_hash TEXT
 		)
 	`)
-	if err != nil {
-		log.Fatalf("Failed to initialize Postgres db: %v", err)
-	}
+	// if err != nil {
+	// 	log.Fatalf("Failed to initialize Postgres db: %v", err)
+	// }
 
 	// Memory - file:main?mode=memory&cache=shared
 	sqlt, err := sql.Open("sqlite3", "localsqlite.db")

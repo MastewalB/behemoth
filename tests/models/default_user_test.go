@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -26,16 +27,6 @@ CREATE TABLE users (
 	updated_at TEXT
 );
 `
-
-func setupTestDB(t *testing.T) *sql.DB {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("failed to open sqlite database: %v", err)
-	}
-
-	db.Exec(schema)
-	return db
-}
 
 func newTestUser(id string) *models.User {
 	return &models.User{
@@ -75,7 +66,7 @@ func insertUser(t *testing.T, db *sql.DB, u *models.User) {
 }
 
 func TestCreateUser(t *testing.T) {
-	db := setupTestDB(t)
+	db := testutils.SetupTestDB(t, schema)
 
 	user := newTestUser("1")
 	insertUser(t, db, user)
@@ -101,7 +92,7 @@ func TestCreateUser(t *testing.T) {
 }
 
 func TestReadUser(t *testing.T) {
-	db := setupTestDB(t)
+	db := testutils.SetupTestDB(t, schema)
 
 	user := newTestUser("2")
 	insertUser(t, db, user)
@@ -127,7 +118,7 @@ func TestReadUser(t *testing.T) {
 }
 
 func TestUpdateUser(t *testing.T) {
-	db := setupTestDB(t)
+	db := testutils.SetupTestDB(t, schema)
 
 	user := newTestUser("3")
 	insertUser(t, db, user)
@@ -160,8 +151,8 @@ func TestUpdateUser(t *testing.T) {
 }
 
 func TestDeleteUser(t *testing.T) {
-	db := setupTestDB(t)
 
+	db := testutils.SetupTestDB(t, schema)
 	user := newTestUser("4")
 	insertUser(t, db, user)
 
@@ -178,8 +169,8 @@ func TestDeleteUser(t *testing.T) {
 }
 
 func TestDuplicateEmailFails(t *testing.T) {
-	db := setupTestDB(t)
 
+	db := testutils.SetupTestDB(t, schema)
 	user1 := newTestUser("5")
 	user2 := newTestUser("6")
 	user2.Email = user1.Email // duplicate email
@@ -204,7 +195,7 @@ func TestDuplicateEmailFails(t *testing.T) {
 }
 
 func TestDuplicateUsernameFails(t *testing.T) {
-	db := setupTestDB(t)
+	db := testutils.SetupTestDB(t, schema)
 
 	user1 := newTestUser("7")
 	user2 := newTestUser("8")

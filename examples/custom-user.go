@@ -12,13 +12,13 @@ import (
 )
 
 type CustomUser struct {
-	ID           string
-	Email        string
-	PasswordHash string
-	Role         string
-	Username     string
-	Firstname    string
-	Lastname     string
+	ID           string `db:"id"`
+	Email        string `db:"email"`
+	PasswordHash string `db:"password_hash"`
+	Role         string `db:"role"`
+	Username     string `db:"username"`
+	Firstname    string `db:"firstname"`
+	Lastname     string `db:"lastname"`
 }
 
 func (u *CustomUser) GetID() string           { return u.ID }
@@ -82,7 +82,7 @@ func SetUpCustomUserAuth(db *sql.DB) (*auth.Behemoth[*CustomUser], error) {
 				}
 
 				var user *CustomUser = &CustomUser{}
-				err := sqlt.QueryRow(`SELECT * FROM users WHERE email = ?`, email).Scan(
+				err := sqlt.QueryRow(`SELECT * FROM custom_users WHERE email = ?`, email).Scan(
 					&user.ID, &user.Email, &user.Username, &user.Firstname, &user.Lastname, &user.PasswordHash, &user.Role,
 				)
 				return user, err

@@ -3,6 +3,8 @@ package utils
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -38,4 +40,36 @@ func GenerateState() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+func GenerateSqlitePlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("(")
+	for i := 1; i <= n; i++ {
+		b.WriteString(fmt.Sprintf("$%d", i))
+		if i < n {
+			b.WriteString(", ")
+		}
+	}
+	b.WriteString(")")
+	return b.String()
+}
+
+func GenerateSQLiteSETClause(fields []string) string {
+
+	var b strings.Builder
+	for i, field := range fields {
+		b.WriteString(fmt.Sprintf("%s = ?", field))
+		if i < len(fields)-1 {
+			b.WriteString(", ")
+		} else {
+			b.WriteString(" ")
+		}
+	}
+
+	return b.String()
 }
