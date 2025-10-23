@@ -13,18 +13,14 @@ type Config[T User] struct {
 	JWT            *JWTConfig
 	Session        *SessionConfig
 	Password       *PasswordConfig
-	// OAuthProviders []Provider
-	UseSessions bool
+	OAuthProviders []Provider
+	UseSessions    bool
 }
 
 // DatabaseConfig defines configuration for database connection and user model/table.
 type DatabaseConfig struct {
-	Name DatabaseName
-	DB   *sql.DB
-	// UserTable      string
-	// PrimaryKey     string
-	// FindUserFn     FindUserFn
-	// UserModel      User
+	Name           DatabaseName
+	DB             *sql.DB
 	UserModel      User
 	UseDefaultUser bool
 }
@@ -54,12 +50,4 @@ var DefaultJWTConfig = JWTConfig{
 
 var DefaultPasswordConfig = PasswordConfig{
 	HashCost: 10,
-}
-
-var DefalultSessionConfig = SessionConfig{
-	CookieName: "session_id",
-	Expiry:     2 * time.Hour,
-	Factory: func(id string) Session {
-		return NewDefaultSession(id, 2*time.Hour)
-	},
 }

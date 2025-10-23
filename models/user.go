@@ -58,7 +58,18 @@ func (u *User) PrimaryValue() any {
 }
 
 func (u *User) ScanDestinations() []any {
-	return []any{&u.ID, &u.Email, &u.Username, &u.Firstname, &u.Lastname, &u.PasswordHash, &u.EmailVerified, &u.ImageUrl, &u.CreatedAt, &u.UpdatedAt}
+	return []any{
+		&u.ID,
+		&u.Email,
+		&u.Username,
+		&u.Firstname,
+		&u.Lastname,
+		&u.PasswordHash,
+		&u.EmailVerified,
+		&u.ImageUrl,
+		&u.CreatedAt,
+		&u.UpdatedAt,
+	}
 }
 
 func (u *User) New() behemoth.User {
@@ -94,4 +105,56 @@ func (ui *UserInfo) GetID() string {
 
 func (ui *UserInfo) GetPasswordHash() string {
 	return ""
+}
+
+func (ui *UserInfo) New() behemoth.User {
+	return &UserInfo{}
+}
+
+func (ui *UserInfo) TableName() string {
+	return "user_info"
+}
+
+func (ui *UserInfo) PrimaryKey() string {
+	return "id"
+}
+
+func (ui *UserInfo) Fields() []string {
+	return []string{
+		"provider",
+		"email",
+		"name",
+		"first_name",
+		"last_name",
+		"id",
+		"avatar_url",
+		"location",
+		"access_token",
+		"access_token_secret",
+		"refresh_token",
+		"expires_at",
+		"id_token",
+	}
+}
+
+func (ui *UserInfo) PrimaryValue() any {
+	return ui.ID
+}
+
+func (ui *UserInfo) ScanDestinations() []any {
+	return []any{
+		&ui.Provider,
+		&ui.Email,
+		&ui.Name,
+		&ui.FirstName,
+		&ui.LastName,
+		&ui.ID,
+		&ui.AvatarURL,
+		&ui.Location,
+		&ui.AccessToken,
+		&ui.AccessTokenSecret,
+		&ui.RefreshToken,
+		&ui.ExpiresAt,
+		&ui.IDToken,
+	}
 }

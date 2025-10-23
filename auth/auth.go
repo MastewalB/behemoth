@@ -3,6 +3,8 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/models"
@@ -10,11 +12,11 @@ import (
 )
 
 type Behemoth[T behemoth.User] struct {
-	DB       behemoth.Database
-	Password *PasswordAuth
-	// OAuth       *OAuthAuth[T]
-	JWT *JWTService
-	// Session     *SessionManager
+	DB          behemoth.Database
+	Password    *PasswordAuth
+	OAuth       *OAuthAuth
+	JWT         *JWTService
+	Session     *SessionManager
 	UseSessions bool
 }
 
@@ -24,15 +26,12 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	var userModel behemoth.User
 	var passwordAuth *PasswordAuth
 	var jwtSvc *JWTService
-	// var oauth *OAuthAuth[T]
-	// var sessionMgr *SessionManager
+	var oauth *OAuthAuth
+	var sessionMgr *SessionManager
 
 	if cfg.DatabaseConfig.UseDefaultUser {
 		userModel = &models.User{}
 		cfg.DatabaseConfig.UserModel = userModel
-		// cfg.DatabaseConfig.UserTable = "users"
-		// cfg.DatabaseConfig.PrimaryKey = "email"
-		// cfg.DatabaseConfig.FindUserFn = getFinderFn(cfg.DatabaseConfig.Name)
 	} else {
 		if cfg.DatabaseConfig.UserModel == nil {
 			return nil, errors.New("user model is required. Set useDefaultUser to true to use the default user model")
@@ -43,15 +42,13 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	if cfg.UseSessions {
 		var sessionConfig *behemoth.SessionConfig = cfg.Session
 		if sessionConfig == nil {
-			sessionConfig = &behemoth.DefalultSessionConfig
+			sessionConfig = &DefalultSessionConfig
 			cfg.Session = sessionConfig
 		}
 	}
 
 	if cfg.DatabaseConfig.DB == nil {
 		return nil, errors.New("a database connection or a FindUserFn is required")
-		// if cfg.DatabaseConfig.FindUserFn == nil {
-		// }
 	} else {
 		var err error
 		var sessionFactory behemoth.SessionFactory
@@ -65,15 +62,15 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 		}
 	}
 
-	// if cfg.Session != nil {
-	// 	sessionMgr = NewSessionManager(
-	// 		database,
-	// 		cfg.Session.Expiry,
-	// 		cfg.Session.CookieName,
-	// 		cfg.Session.Factory,
-	// 	)
-	// 	log.Println("Session manager initialized", sessionMgr.cookieName)
-	// }
+	if cfg.Session != nil {
+		sessionMgr = NewSessionManager(
+			database,
+			cfg.Session.Expiry,
+			cfg.Session.CookieName,
+			cfg.Session.Factory,
+		)
+		log.Println("Session manager initialized", sessionMgr.cookieName)
+	}
 
 	if cfg.JWT != nil {
 		jwtSvc = NewJWTService(*cfg.JWT)
@@ -89,21 +86,21 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 		)
 	}
 
-	// if len(cfg.OAuthProviders) > 0 {
-	// 	oauth = NewOAuthAuth(
-	// 		cfg.OAuthProviders,
-	// 		jwtSvc,
-	// 		cfg.DatabaseConfig.UseDefaultUser,
-	// 		userModel,
-	// 		database,
-	// 	)
-	// }
+	if len(cfg.OAuthProviders) > 0 {
+		oauth = NewOAuthAuth(
+			cfg.OAuthProviders,
+			jwtSvc,
+			cfg.DatabaseConfig.UseDefaultUser,
+			userModel,
+			database,
+		)
+	}
 
 	return &Behemoth[T]{
 		DB:       database,
 		Password: passwordAuth,
-		// OAuth:       oauth,
-		JWT: jwtSvc,
+		OAuth:    oauth,
+		JWT:      jwtSvc,
 		// Session:     sessionMgr,
 		UseSessions: cfg.UseSessions,
 	}, nil
@@ -129,6 +126,14 @@ func InitDatabase(
 	default:
 		return nil, nil
 	}
+}
+
+var DefalultSessionConfig = behemoth.SessionConfig{
+	CookieName: "session_id",
+	Expiry:     2 * time.Hour,
+	Factory: func(ctx behemoth.SessionContext) behemoth.Session {
+		return models.NewDefaultSession(ctx)
+	},
 }
 
 // func getFinderFn(dbName behemoth.DatabaseName) behemoth.FindUserFn {

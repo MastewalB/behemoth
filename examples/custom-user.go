@@ -64,7 +64,7 @@ func SetUpCustomUserRouter(bmth *auth.Behemoth[*CustomUser]) *chi.Mux {
 
 func SetUpCustomUserAuth(db *sql.DB) (*auth.Behemoth[*CustomUser], error) {
 	customConf := &behemoth.Config[*CustomUser]{
-		DatabaseConfig: behemoth.DatabaseConfig[*CustomUser]{
+		DatabaseConfig: behemoth.DatabaseConfig{
 			Name:           behemoth.SQLite,
 			DB:             db,
 			UseDefaultUser: false,

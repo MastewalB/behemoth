@@ -118,7 +118,7 @@ func main() {
 	}
 
 	pgCfg := &behemoth.Config[*models.User]{
-		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
+		DatabaseConfig: behemoth.DatabaseConfig{
 			Name:           behemoth.Postgres,
 			DB:             pg,
 			UseDefaultUser: true,
@@ -142,7 +142,7 @@ func main() {
 	}
 
 	cfg := &behemoth.Config[*models.User]{
-		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
+		DatabaseConfig: behemoth.DatabaseConfig{
 			Name:           behemoth.SQLite,
 			DB:             sqlt,
 			UseDefaultUser: true,

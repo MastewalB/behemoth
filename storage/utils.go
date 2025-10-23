@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-
-	"github.com/MastewalB/behemoth"
 )
 
 type ScannableRow interface {
@@ -141,17 +139,17 @@ func mapRowToStruct[T any](row ScannableRow, entity T, columns []string) (T, err
 	return entity, nil
 }
 
-// serializeSession converts a Session to JSON for storage.
-func serializeSession(session behemoth.Session) ([]byte, error) {
-	return session.MarshalJSON()
-}
+// // serializeSession converts a Session to JSON for storage.
+// func serializeSession(session behemoth.Session) ([]byte, error) {
+// 	return session.MarshalJSON()
+// }
 
-// deserializeSession reconstructs a Session from JSON data.
-func deserializeSession(sessionID string, data []byte, factory behemoth.SessionFactory) (behemoth.Session, error) {
-	session := factory(sessionID)
-	if err := session.UnmarshalJSON(data); err != nil {
-		return nil, err
-	}
+// // deserializeSession reconstructs a Session from JSON data.
+// func deserializeSession(sessionID string, data []byte, factory behemoth.SessionFactory) (behemoth.Session, error) {
+// 	session := factory(sessionID)
+// 	if err := session.UnmarshalJSON(data); err != nil {
+// 		return nil, err
+// 	}
 
-	return session, nil
-}
+// 	return session, nil
+// }
