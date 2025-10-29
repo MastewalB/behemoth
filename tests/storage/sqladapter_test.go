@@ -5,6 +5,7 @@ import (
 
 	"testing"
 
+	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
@@ -86,4 +87,54 @@ func TestDelete(t *testing.T) {
 	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, "id = ?", "4")
 	assert.Error(t, err)
 	assert.Nil(t, found)
+}
+
+func TestBuildSQLiteWhereClause(t *testing.T) {
+	tests := []struct {
+		name           string
+		expr           *clause.Expression
+		expectedClause string
+		expectedArgs   []any
+	}{
+		{
+			name: "Simple equality condition",
+			expr: &clause.Expression{
+				Logic: clause.OpAnd,
+				Conditions: []clause.Condition{
+					{Field: "name", Operator: clause.OpEqual, Value: "Alice"},
+				},
+			},
+			expectedClause: "(name = ?)",
+			expectedArgs:   []any{"Alice"},
+		},
+		{
+			name: "Multiple conditions with AND",
+			expr: &clause.Expression{
+				Logic: clause.OpAnd,
+				Conditions: []clause.Condition{
+					{Field: "age", Operator: clause.OpGreaterThan, Value: 30},
+					{Field: "name", Operator: clause.OpStartsWith, Value: "J"},
+				},
+				Children: []*clause.Expression{
+					{
+						Logic: clause.OpOr,
+						Conditions: []clause.Condition{
+							{Field: "status", Operator: clause.OpEqual, Value: "active"},
+							{Field: "status", Operator: clause.OpEqual, Value: "pending"},
+						},
+					},
+				},
+			},
+			expectedClause: "((status = ?) OR (status = ?)) AND (age > ?) AND (name LIKE ?)",
+			expectedArgs:   []any{"active", "pending", 30, "J%"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			whereClause, args := adapters.BuildSQLiteWhereClause(tc.expr)
+			assert.Equal(t, tc.expectedClause, whereClause)
+			assert.Equal(t, tc.expectedArgs, args)
+		})
+	}
 }
