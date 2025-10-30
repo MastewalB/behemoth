@@ -42,7 +42,7 @@ func GenerateState() string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-func GenerateSqlitePlaceholders(n int) string {
+func GenerateSQLPlaceholders(n int) string {
 	if n <= 0 {
 		return ""
 	}
@@ -59,11 +59,11 @@ func GenerateSqlitePlaceholders(n int) string {
 	return b.String()
 }
 
-func GenerateSQLiteSETClause(fields []string) string {
+func GenerateSQLSETClause(fields []string) string {
 
 	var b strings.Builder
 	for i, field := range fields {
-		b.WriteString(fmt.Sprintf("%s = ?", field))
+		b.WriteString(fmt.Sprintf("%s = $%d", field, i+1))
 		if i < len(fields)-1 {
 			b.WriteString(", ")
 		} else {

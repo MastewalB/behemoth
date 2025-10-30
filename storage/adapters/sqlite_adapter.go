@@ -22,7 +22,7 @@ func NewSQLiteAdapter(db *sql.DB) *SQLiteAdapter {
 func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	query := `INSERT INTO ` + m.TableName() + ` (` +
 		strings.Join(m.Fields(), ", ") + `) VALUES ` +
-		utils.GenerateSqlitePlaceholders(len(m.Fields()))
+		utils.GenerateSQLPlaceholders(len(m.Fields()))
 
 	fmt.Println("Executing query:", query, "with values:", m.ScanDestinations())
 	_, err := sqlt.DB.ExecContext(ctx, query, m.ScanDestinations()...)
@@ -44,7 +44,7 @@ func (sqlt *SQLiteAdapter) Find(ctx context.Context, m behemoth.Model, where str
 
 func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	query := `UPDATE ` + m.TableName() +
-		` SET ` + utils.GenerateSQLiteSETClause(m.Fields()) +
+		` SET ` + utils.GenerateSQLSETClause(m.Fields()) +
 		` WHERE ` + m.PrimaryKey() + ` = ?`
 
 	_, err := sqlt.DB.ExecContext(ctx, query, append(m.ScanDestinations(), m.PrimaryValue())...)
@@ -102,11 +102,11 @@ func buildConditionSQL(cond clause.Condition) (string, []any) {
 		return fmt.Sprintf("(%s <= ?)", cond.Field), []any{cond.Value}
 
 	case clause.OpIn:
-		placeholders := utils.GenerateSqlitePlaceholders(len(cond.Value.([]any)))
+		placeholders := utils.GenerateSQLPlaceholders(len(cond.Value.([]any)))
 		return fmt.Sprintf("(%s IN %s)", cond.Field, placeholders), cond.Value.([]any)
 
 	case clause.OpNotIn:
-		placeholders := utils.GenerateSqlitePlaceholders(len(cond.Value.([]any)))
+		placeholders := utils.GenerateSQLPlaceholders(len(cond.Value.([]any)))
 		return fmt.Sprintf("(%s NOT IN %s)", cond.Field, placeholders), cond.Value.([]any)
 
 	case clause.OpStartsWith:
