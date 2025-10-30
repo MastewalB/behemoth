@@ -17,6 +17,15 @@ import (
 Tests for the SQLLiteAdapter implementing the behemoth.Database interface.
 */
 
+func getWhereExpr(field string, operator clause.Operator, value any) clause.Expression {
+	return clause.Expression{
+		Logic: clause.OpAnd,
+		Conditions: []clause.Condition{
+			{Field: field, Operator: operator, Value: value},
+		},
+	}
+}
+
 func TestCreate(t *testing.T) {
 	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
 	adapter := &adapters.SQLiteAdapter{DB: db}
@@ -25,7 +34,7 @@ func TestCreate(t *testing.T) {
 	err := adapter.Create(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, "id = ?", "1")
+	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
@@ -43,7 +52,7 @@ func TestFind(t *testing.T) {
 	err := adapter.Create(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, "id = ?", "2")
+	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "2"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
@@ -65,7 +74,7 @@ func TestUpdate(t *testing.T) {
 	err = adapter.Update(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, "id = ?", "3")
+	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "3"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
@@ -84,7 +93,7 @@ func TestDelete(t *testing.T) {
 	err = adapter.Delete(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, "id = ?", "4")
+	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
 	assert.Error(t, err)
 	assert.Nil(t, found)
 }

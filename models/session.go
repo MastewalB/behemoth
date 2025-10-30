@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -55,7 +56,13 @@ func (s *SessionStore) SaveSession(ctx context.Context, session behemoth.Model) 
 }
 
 func (s *SessionStore) GetSession(ctx context.Context, sessionModel behemoth.Session) (behemoth.Session, error) {
-	found, err := s.DB.Find(ctx, sessionModel, sessionModel.PrimaryKey()+" = ?", sessionModel.PrimaryValue())
+	whereClause := clause.Expression{
+		Logic: clause.OpAnd,
+		Conditions: []clause.Condition{
+			{Field: sessionModel.PrimaryKey(), Operator: clause.OpEqual, Value: sessionModel.PrimaryValue()},
+		},
+	}
+	found, err := s.DB.Find(ctx, sessionModel, whereClause)
 	if err != nil {
 		return nil, err
 	}

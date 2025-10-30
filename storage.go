@@ -2,6 +2,8 @@ package behemoth
 
 import (
 	"context"
+
+	"github.com/MastewalB/behemoth/clause"
 )
 
 type Model interface {
@@ -14,7 +16,7 @@ type Model interface {
 
 type Database interface {
 	Create(ctx context.Context, m Model) error
-	Find(ctx context.Context, m Model, where string, args ...any) (Model, error)
+	Find(ctx context.Context, m Model, whereExpression clause.Expression) (Model, error)
 	Update(ctx context.Context, m Model) error
 	Delete(ctx context.Context, m Model) error
 }

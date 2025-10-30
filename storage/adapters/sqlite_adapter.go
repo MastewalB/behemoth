@@ -29,8 +29,9 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	return err
 }
 
-func (sqlt *SQLiteAdapter) Find(ctx context.Context, m behemoth.Model, where string, args ...any) (behemoth.Model, error) {
-	query := `SELECT * FROM ` + m.TableName() + ` WHERE ` + where + ` LIMIT 1`
+func (sqlt *SQLiteAdapter) Find(ctx context.Context, m behemoth.Model, whereExpression clause.Expression) (behemoth.Model, error) {
+	whereClause, args := BuildSQLiteWhereClause(&whereExpression)
+	query := `SELECT * FROM ` + m.TableName() + ` WHERE ` + whereClause + ` LIMIT 1`
 	fmt.Println("Executing query:", query, "with args:", args)
 	row := sqlt.DB.QueryRowContext(ctx, query, args...)
 

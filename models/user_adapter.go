@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/clause"
 )
 
 func CreateUser(ctx context.Context, db behemoth.Database, userModel behemoth.Model) (behemoth.User, error) {
@@ -16,7 +17,13 @@ func CreateUser(ctx context.Context, db behemoth.Database, userModel behemoth.Mo
 }
 
 func FindUserByID(ctx context.Context, db behemoth.Database, userModel behemoth.Model, id any) (behemoth.User, error) {
-	found, err := db.Find(ctx, userModel, userModel.PrimaryKey()+" = ?", id)
+	whereClause := clause.Expression{
+		Logic: clause.OpAnd,
+		Conditions: []clause.Condition{
+			{Field: userModel.PrimaryKey(), Operator: clause.OpEqual, Value: id},
+		},
+	}
+	found, err := db.Find(ctx, userModel, whereClause)
 	if err != nil {
 		return nil, err
 	}

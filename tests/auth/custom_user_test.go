@@ -7,6 +7,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
+	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/utils"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -144,7 +145,14 @@ func TestCreateCustomUser(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, bmth)
 
-	found, err := bmth.DB.Find(ctx, &CustomUser{}, "id = ?", user.ID)
+	whereClause := clause.Expression{
+		Logic: clause.OpAnd,
+		Conditions: []clause.Condition{
+			{Field: "id", Operator: clause.OpEqual, Value: user.ID},
+		},
+	}
+
+	found, err := bmth.DB.Find(ctx, &CustomUser{}, whereClause)
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
