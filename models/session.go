@@ -51,15 +51,15 @@ type SessionStore struct {
 	DB behemoth.Database
 }
 
-func (s *SessionStore) SaveSession(ctx context.Context, session behemoth.Model) error {
+func (s *SessionStore) SaveSession(ctx context.Context, session behemoth.Session) error {
 	return s.DB.Create(ctx, session)
 }
 
-func (s *SessionStore) GetSession(ctx context.Context, sessionModel behemoth.Session) (behemoth.Session, error) {
+func (s *SessionStore) GetSession(ctx context.Context, sessionModel behemoth.Session, id any) (behemoth.Session, error) {
 	whereClause := clause.Expression{
 		Logic: clause.OpAnd,
 		Conditions: []clause.Condition{
-			{Field: sessionModel.PrimaryKey(), Operator: clause.OpEqual, Value: sessionModel.PrimaryValue()},
+			{Field: sessionModel.PrimaryKey(), Operator: clause.OpEqual, Value: id},
 		},
 	}
 	found, err := s.DB.Find(ctx, sessionModel, whereClause)

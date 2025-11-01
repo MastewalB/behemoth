@@ -22,7 +22,7 @@ type SessionManager struct {
 	cookieName     string                  // Name of the session cookie (e.g., "session_id")
 	sessionFactory behemoth.SessionFactory // Factory to create new sessions
 	lock           sync.Mutex              // Ensures thread-safety
-	sessionModel   behemoth.Session
+	// sessionModel   behemoth.Session
 }
 
 // NewSessionManager creates a new SessionManager with the given database and configuration.
@@ -40,6 +40,7 @@ func NewSessionManager(
 			return models.NewDefaultSession(ctx)
 		}
 	}
+
 	store := models.SessionStore{
 		DB: db,
 	}
@@ -48,6 +49,7 @@ func NewSessionManager(
 		expiry:         expiry,
 		cookieName:     cookieName,
 		sessionFactory: factory,
+		// sessionModel:   sessionModel,
 	}
 }
 
@@ -74,7 +76,8 @@ func (sm *SessionManager) GetSession(ctx context.Context, sessionID string) (beh
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
 
-	session, err := sm.store.GetSession(ctx, sm.sessionModel)
+	sessionModel := sm.sessionFactory(behemoth.SessionContext{})
+	session, err := sm.store.GetSession(ctx, sessionModel, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +104,8 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
 
-	return sm.store.DeleteSession(ctx, sm.sessionModel)
+	sessionModel := sm.sessionFactory(behemoth.SessionContext{})
+	return sm.store.DeleteSession(ctx, sessionModel)
 }
 
 func (sm *SessionManager) Expiry() time.Duration {
