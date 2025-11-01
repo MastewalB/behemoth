@@ -28,7 +28,7 @@ func getWhereExpr(field string, operator clause.Operator, value any) clause.Expr
 
 func TestCreate(t *testing.T) {
 	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
-	adapter := &adapters.SQLiteAdapter{DB: db}
+	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
 	user := testutils.NewTestUser("1")
 	err := adapter.Create(context.Background(), user)
@@ -46,7 +46,7 @@ func TestCreate(t *testing.T) {
 
 func TestFind(t *testing.T) {
 	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
-	adapter := &adapters.SQLiteAdapter{DB: db}
+	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
 	user := testutils.NewTestUser("2")
 	err := adapter.Create(context.Background(), user)
@@ -64,7 +64,7 @@ func TestFind(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
-	adapter := &adapters.SQLiteAdapter{DB: db}
+	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
 	user := testutils.NewTestUser("3")
 	err := adapter.Create(context.Background(), user)
@@ -84,7 +84,7 @@ func TestUpdate(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
-	adapter := &adapters.SQLiteAdapter{DB: db}
+	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
 	user := testutils.NewTestUser("4")
 	err := adapter.Create(context.Background(), user)
@@ -113,7 +113,7 @@ func TestBuildSQLiteWhereClause(t *testing.T) {
 					{Field: "name", Operator: clause.OpEqual, Value: "Alice"},
 				},
 			},
-			expectedClause: "(name = ?)",
+			expectedClause: "(name = $1)",
 			expectedArgs:   []any{"Alice"},
 		},
 		{
@@ -134,14 +134,14 @@ func TestBuildSQLiteWhereClause(t *testing.T) {
 					},
 				},
 			},
-			expectedClause: "((status = ?) OR (status = ?)) AND (age > ?) AND (name LIKE ?)",
+			expectedClause: "((status = $1) OR (status = $2)) AND (age > $3) AND (name LIKE $4)",
 			expectedArgs:   []any{"active", "pending", 30, "J%"},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			whereClause, args := adapters.BuildSQLiteWhereClause(tc.expr)
+			whereClause, args := adapters.BuildSQLiteWhereClause(tc.expr, 1)
 			assert.Equal(t, tc.expectedClause, whereClause)
 			assert.Equal(t, tc.expectedArgs, args)
 		})

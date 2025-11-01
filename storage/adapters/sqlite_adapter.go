@@ -30,7 +30,7 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 }
 
 func (sqlt *SQLiteAdapter) Find(ctx context.Context, m behemoth.Model, whereExpression clause.Expression) (behemoth.Model, error) {
-	whereClause, args := BuildSQLiteWhereClause(&whereExpression)
+	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
 	query := `SELECT * FROM ` + m.TableName() + ` WHERE ` + whereClause + ` LIMIT 1`
 	fmt.Println("Executing query:", query, "with args:", args)
 	row := sqlt.DB.QueryRowContext(ctx, query, args...)
@@ -58,7 +58,7 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	return err
 }
 
-func BuildSQLiteWhereClause(expr *clause.Expression) (string, []any) {
+func BuildSQLiteWhereClause(expr *clause.Expression, N int) (string, []any) {
 	if expr == nil {
 		return "", nil
 	}
@@ -68,39 +68,41 @@ func BuildSQLiteWhereClause(expr *clause.Expression) (string, []any) {
 
 	if len(expr.Children) > 0 {
 		for _, child := range expr.Children {
-			subQuery, subArgs := BuildSQLiteWhereClause(child)
+			subQuery, subArgs := BuildSQLiteWhereClause(child, N)
 			queryParts = append(queryParts, fmt.Sprintf("(%s)", subQuery))
 			args = append(args, subArgs...)
+			N += len(subArgs)
 		}
 	}
 	for _, cond := range expr.Conditions {
-		subQuery, subArgs := buildConditionSQL(cond)
+		subQuery, subArgs := buildConditionSQL(cond, N)
 		queryParts = append(queryParts, subQuery)
 		args = append(args, subArgs...)
+		N += len(subArgs)
 	}
 
 	return strings.Join(queryParts, fmt.Sprintf(" %s ", expr.Logic)), args
 }
 
-func buildConditionSQL(cond clause.Condition) (string, []any) {
+func buildConditionSQL(cond clause.Condition, N int) (string, []any) {
 	switch cond.Operator {
 	case clause.OpEqual:
-		return fmt.Sprintf("(%s = ?)", cond.Field), []any{cond.Value}
+		return fmt.Sprintf("(%s = $%d)", cond.Field, N), []any{cond.Value}
 
 	case clause.OpNotEqual:
-		return fmt.Sprintf("(%s != ?)", cond.Field), []any{cond.Value}
+		return fmt.Sprintf("(%s != $%d)", cond.Field, N), []any{cond.Value}
 
 	case clause.OpGreaterThan:
-		return fmt.Sprintf("(%s > ?)", cond.Field), []any{cond.Value}
+		return fmt.Sprintf("(%s > $%d)", cond.Field, N), []any{cond.Value}
 
 	case clause.OpGreaterEq:
-		return fmt.Sprintf("(%s >= ?)", cond.Field), []any{cond.Value}
+		return fmt.Sprintf("(%s >= $%d)", cond.Field, N), []any{cond.Value}
 
 	case clause.OpLessThan:
-		return fmt.Sprintf("(%s < ?)", cond.Field), []any{cond.Value}
+		return fmt.Sprintf("(%s < $%d)", cond.Field, N), []any{cond.Value}
 
 	case clause.OpLessEq:
-		return fmt.Sprintf("(%s <= ?)", cond.Field), []any{cond.Value}
+		return fmt.Sprintf("(%s <= $%d)", cond.Field, N), []any{cond.Value}
 
 	case clause.OpIn:
 		placeholders := utils.GenerateSQLPlaceholders(len(cond.Value.([]any)))
@@ -111,13 +113,13 @@ func buildConditionSQL(cond clause.Condition) (string, []any) {
 		return fmt.Sprintf("(%s NOT IN %s)", cond.Field, placeholders), cond.Value.([]any)
 
 	case clause.OpStartsWith:
-		return fmt.Sprintf("(%s LIKE ?)", cond.Field), []any{fmt.Sprintf("%s%%", cond.Value)}
+		return fmt.Sprintf("(%s LIKE $%d)", cond.Field, N), []any{fmt.Sprintf("%s%%", cond.Value)}
 
 	case clause.OpEndsWith:
-		return fmt.Sprintf("(%s LIKE ?)", cond.Field), []any{fmt.Sprintf("%%%s", cond.Value)}
+		return fmt.Sprintf("(%s LIKE $%d)", cond.Field, N), []any{fmt.Sprintf("%%%s", cond.Value)}
 
 	case clause.OpContains:
-		return fmt.Sprintf("(%s LIKE ?)", cond.Field), []any{fmt.Sprintf("%%%s%%", cond.Value)}
+		return fmt.Sprintf("(%s LIKE $%d)", cond.Field, N), []any{fmt.Sprintf("%%%s%%", cond.Value)}
 
 	case clause.OpIsNull:
 		return fmt.Sprintf("(%s IS NULL)", cond.Field), nil
