@@ -27,7 +27,7 @@ func getWhereExpr(field string, operator clause.Operator, value any) clause.Expr
 }
 
 func TestCreate(t *testing.T) {
-	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
 	user := testutils.NewTestUser("1")
@@ -45,7 +45,7 @@ func TestCreate(t *testing.T) {
 }
 
 func TestFind(t *testing.T) {
-	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
 	user := testutils.NewTestUser("2")
@@ -63,7 +63,7 @@ func TestFind(t *testing.T) {
 }
 
 func TestUpdate(t *testing.T) {
-	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
 	user := testutils.NewTestUser("3")
@@ -83,7 +83,7 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
 	user := testutils.NewTestUser("4")

@@ -39,7 +39,6 @@ type JWTConfig struct {
 type SessionConfig struct {
 	CookieName string
 	Expiry     time.Duration
-	Factory    SessionFactory
 }
 
 var DefaultJWTConfig = JWTConfig{

@@ -7,15 +7,17 @@ import (
 	"github.com/MastewalB/behemoth/storage/adapters"
 )
 
-func SetupTestDB(t *testing.T, schema string) *sql.DB {
+func SetupTestDB(t *testing.T, schema *string) *sql.DB {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("failed to open sqlite database: %v", err)
 	}
 
-	_, err = db.Exec(schema)
-	if err != nil {
-		t.Fatalf("failed to create table: %v", err)
+	if schema != nil {
+		_, err = db.Exec(*schema)
+		if err != nil {
+			t.Fatalf("failed to create table: %v", err)
+		}
 	}
 	return db
 }

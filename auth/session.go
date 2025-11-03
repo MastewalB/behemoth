@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -17,39 +18,31 @@ const sessionKey sessionContextKey = "session"
 
 // SessionManager handles session creation, retrieval, and deletion.
 type SessionManager struct {
-	store          models.SessionStore     // Database for session storage
-	expiry         time.Duration           // Session duration (e.g., 24h)
-	cookieName     string                  // Name of the session cookie (e.g., "session_id")
-	sessionFactory behemoth.SessionFactory // Factory to create new sessions
-	lock           sync.Mutex              // Ensures thread-safety
-	// sessionModel   behemoth.Session
+	store      models.SessionStore // Database for session storage
+	expiry     time.Duration       // Session duration (e.g., 24h)
+	cookieName string              // Name of the session cookie (e.g., "session_id")
+	lock       sync.Mutex          // Ensures thread-safety
 }
 
 // NewSessionManager creates a new SessionManager with the given database and configuration.
 func NewSessionManager(
-	// store models.SessionStore,
 	db behemoth.Database,
 	expiry time.Duration,
 	cookieName string,
-	factory behemoth.SessionFactory,
 ) *SessionManager {
-
-	// TODO - Move this factory setting to behemoth initialization code
-	if factory == nil {
-		factory = func(ctx behemoth.SessionContext) behemoth.Session {
-			return models.NewDefaultSession(ctx)
-		}
-	}
 
 	store := models.SessionStore{
 		DB: db,
 	}
+
+	if err := store.CreateSessionTable(context.Background()); err != nil {
+		panic("failed to create sessions table: " + err.Error())
+	}
+
 	return &SessionManager{
-		store:          store,
-		expiry:         expiry,
-		cookieName:     cookieName,
-		sessionFactory: factory,
-		// sessionModel:   sessionModel,
+		store:      store,
+		expiry:     expiry,
+		cookieName: cookieName,
 	}
 }
 
@@ -58,8 +51,7 @@ func (sm *SessionManager) CreateSession(ctx context.Context, sctx behemoth.Sessi
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
 
-	// id := utils.GenerateState()
-	session := sm.sessionFactory(sctx)
+	session := models.NewDefaultSession(sctx)
 
 	expiresAt := time.Now().Add(sm.expiry)
 	session.SetExpiresAt(expiresAt)
@@ -76,10 +68,16 @@ func (sm *SessionManager) GetSession(ctx context.Context, sessionID string) (beh
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
 
-	sessionModel := sm.sessionFactory(behemoth.SessionContext{})
+	sessionModel := &models.Session{}
 	session, err := sm.store.GetSession(ctx, sessionModel, sessionID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validate expiration
+	if session.IsExpired() {
+		_ = sm.store.DeleteSession(ctx, sessionModel)
+		return nil, errors.New("session expired")
 	}
 
 	return session, nil
@@ -91,7 +89,7 @@ func (sm *SessionManager) UpdateSession(ctx context.Context, session behemoth.Se
 
 	expiresAt := time.Now().Add(sm.expiry)
 	session.SetExpiresAt(expiresAt)
-	if err := sm.store.SaveSession(ctx, session); err != nil {
+	if err := sm.store.UpdateSession(ctx, session); err != nil {
 		return nil, err
 	}
 
@@ -100,12 +98,11 @@ func (sm *SessionManager) UpdateSession(ctx context.Context, session behemoth.Se
 }
 
 // DeleteSession removes a session by ID from the backend.
-func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) error {
+func (sm *SessionManager) DeleteSession(ctx context.Context, session behemoth.Session) error {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
 
-	sessionModel := sm.sessionFactory(behemoth.SessionContext{})
-	return sm.store.DeleteSession(ctx, sessionModel)
+	return sm.store.DeleteSession(ctx, session)
 }
 
 func (sm *SessionManager) Expiry() time.Duration {

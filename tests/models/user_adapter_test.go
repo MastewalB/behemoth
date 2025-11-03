@@ -15,7 +15,7 @@ Tests for the User model adapter functions.
 */
 
 func TestCreateUserAdapter(t *testing.T) {
-	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	user := testutils.NewTestUser("1")
 	adapter := testutils.SetupSQLiteAdapter(t, db)
 
@@ -28,7 +28,7 @@ func TestCreateUserAdapter(t *testing.T) {
 }
 
 func TestFindUserAdapter(t *testing.T) {
-	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	user := testutils.NewTestUser("2")
 	adapter := testutils.SetupSQLiteAdapter(t, db)
 
@@ -44,7 +44,7 @@ func TestFindUserAdapter(t *testing.T) {
 }
 
 func TestUpdateUserAdapter(t *testing.T) {
-	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	user := testutils.NewTestUser("3")
 	adapter := testutils.SetupSQLiteAdapter(t, db)
 
@@ -63,7 +63,7 @@ func TestUpdateUserAdapter(t *testing.T) {
 }
 
 func TestDeleteUserAdapter(t *testing.T) {
-	db := testutils.SetupTestDB(t, testutils.TestUserSchema)
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	user := testutils.NewTestUser("4")
 	adapter := testutils.SetupSQLiteAdapter(t, db)
 

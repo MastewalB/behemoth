@@ -16,7 +16,8 @@ type Session interface {
 type SessionFactory = func(ctx SessionContext) Session
 
 type SessionContext struct {
-	UserID  any
-	Request *http.Request
-	Meta    map[string]any
+	UserID    any
+	IpAddress string
+	UserAgent string
+	Request   *http.Request
 }

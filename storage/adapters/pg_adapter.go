@@ -19,6 +19,11 @@ func NewPostgresAdapter(db *sql.DB) *PostgresAdapter {
 	return &PostgresAdapter{DB: db}
 }
 
+func (pg *PostgresAdapter) CreateTable(ctx context.Context, schema string) error {
+	_, err := pg.DB.ExecContext(ctx, schema)
+	return err
+}
+
 func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	query := `INSERT INTO ` + m.TableName() + ` (` +
 		strings.Join(m.Fields(), ", ") + `) VALUES ` +

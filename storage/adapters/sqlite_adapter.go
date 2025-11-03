@@ -19,6 +19,11 @@ func NewSQLiteAdapter(db *sql.DB) *SQLiteAdapter {
 	return &SQLiteAdapter{DB: db}
 }
 
+func (sqlt *SQLiteAdapter) CreateTable(ctx context.Context, schema string) error {
+	_, err := sqlt.DB.ExecContext(ctx, schema)
+	return err
+}
+
 func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	query := `INSERT INTO ` + m.TableName() + ` (` +
 		strings.Join(m.Fields(), ", ") + `) VALUES ` +

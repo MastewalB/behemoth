@@ -51,12 +51,8 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 		return nil, errors.New("a database connection or a FindUserFn is required")
 	} else {
 		var err error
-		var sessionFactory behemoth.SessionFactory
-		if cfg.Session != nil {
-			sessionFactory = cfg.Session.Factory
-		}
 		fmt.Println("Initializing Database with config:", cfg.DatabaseConfig)
-		database, err = InitDatabase(&cfg.DatabaseConfig, sessionFactory)
+		database, err = InitDatabase(&cfg.DatabaseConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -67,7 +63,6 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 			database,
 			cfg.Session.Expiry,
 			cfg.Session.CookieName,
-			cfg.Session.Factory,
 		)
 		log.Println("Session manager initialized", sessionMgr.cookieName)
 	}
@@ -108,7 +103,6 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 
 func InitDatabase(
 	cfg *behemoth.DatabaseConfig,
-	sessionFactory behemoth.SessionFactory,
 ) (behemoth.Database, error) {
 	switch cfg.Name {
 	case behemoth.SQLite:
@@ -131,18 +125,4 @@ func InitDatabase(
 var DefalultSessionConfig = behemoth.SessionConfig{
 	CookieName: "session_id",
 	Expiry:     2 * time.Hour,
-	Factory: func(ctx behemoth.SessionContext) behemoth.Session {
-		return models.NewDefaultSession(ctx)
-	},
 }
-
-// func getFinderFn(dbName behemoth.DatabaseName) behemoth.FindUserFn {
-// 	switch dbName {
-// 	case behemoth.SQLite:
-// 		return behemoth.FindUserByEmailSQLite
-// 	case behemoth.Postgres:
-// 		return behemoth.FindUserByEmailPG
-// 	default:
-// 		return nil
-// 	}
-// }

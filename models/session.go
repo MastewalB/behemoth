@@ -11,8 +11,12 @@ import (
 
 type Session struct {
 	ID        string
-	CreatedAt time.Time
+	UserID    any
 	ExpiresAt time.Time
+	IpAddress string
+	UserAgent string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 func (s *Session) TableName() string {
@@ -24,7 +28,7 @@ func (s *Session) PrimaryKey() string {
 }
 
 func (s *Session) Fields() []string {
-	return []string{"id", "created_at", "expires_at"}
+	return []string{"id", "user_id", "expires_at", "ip_address", "user_agent", "created_at", "updated_at"}
 }
 
 func (s *Session) PrimaryValue() any {
@@ -32,7 +36,7 @@ func (s *Session) PrimaryValue() any {
 }
 
 func (s *Session) ScanDestinations() []any {
-	return []any{&s.ID, &s.CreatedAt, &s.ExpiresAt}
+	return []any{&s.ID, &s.UserID, &s.ExpiresAt, &s.IpAddress, &s.UserAgent, &s.CreatedAt, &s.UpdatedAt}
 }
 
 func (s *Session) GetID() string {
@@ -49,6 +53,10 @@ func (s *Session) IsExpired() bool {
 
 type SessionStore struct {
 	DB behemoth.Database
+}
+
+func (s *SessionStore) CreateSessionTable(ctx context.Context) error {
+	return s.DB.CreateTable(ctx, SessionTableSchema)
 }
 
 func (s *SessionStore) SaveSession(ctx context.Context, session behemoth.Session) error {
@@ -70,14 +78,33 @@ func (s *SessionStore) GetSession(ctx context.Context, sessionModel behemoth.Ses
 	return found.(behemoth.Session), nil
 }
 
+func (s *SessionStore) UpdateSession(ctx context.Context, sessionModel behemoth.Session) error {
+	return s.DB.Update(ctx, sessionModel)
+}
+
 func (s *SessionStore) DeleteSession(ctx context.Context, sessionModel behemoth.Session) error {
 	return s.DB.Delete(ctx, sessionModel)
 }
 
-// NewDefaultSession creates a new DefaultSession with the given ID.
-func NewDefaultSession(ctx behemoth.SessionContext) *Session {
+// NewDefaultSession creates a new DefaultSession.
+func NewDefaultSession(sessionContext behemoth.SessionContext) *Session {
 	return &Session{
 		ID:        utils.GenerateUUID(),
+		UserID:    sessionContext.UserID,
+		IpAddress: sessionContext.IpAddress,
+		UserAgent: sessionContext.UserAgent,
 		CreatedAt: time.Now(),
 	}
 }
+
+const SessionTableSchema = `
+CREATE TABLE IF NOT EXISTS sessions (
+	id TEXT PRIMARY KEY,
+	user_id TEXT NOT NULL,
+	expires_at DATETIME NOT NULL,
+	ip_address TEXT,
+	user_agent TEXT,
+	created_at DATETIME NOT NULL,
+	updated_at DATETIME NOT NULL
+);
+`

@@ -19,6 +19,8 @@ type Database interface {
 	Find(ctx context.Context, m Model, whereExpression clause.Expression) (Model, error)
 	Update(ctx context.Context, m Model) error
 	Delete(ctx context.Context, m Model) error
+
+	CreateTable(ctx context.Context, schema string) error
 }
 
 // DatabaseName is a string type that represents the name of the database.
