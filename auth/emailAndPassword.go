@@ -10,20 +10,20 @@ import (
 	"github.com/MastewalB/behemoth/utils"
 )
 
-type PasswordAuth struct {
+type EmailAndPasswordAuth struct {
 	db          behemoth.Database
 	cost        int
 	user        behemoth.User
 	userFactory func(map[string]any) behemoth.User
 }
 
-func NewPasswordAuth(
+func NewEmailAndPasswordAuth(
 	cfg behemoth.PasswordConfig,
 	user behemoth.User,
 	db behemoth.Database,
 	userFactory func(map[string]any) behemoth.User,
-) *PasswordAuth {
-	return &PasswordAuth{
+) *EmailAndPasswordAuth {
+	return &EmailAndPasswordAuth{
 		db:          db,
 		cost:        cfg.HashCost,
 		user:        user,
@@ -31,14 +31,18 @@ func NewPasswordAuth(
 	}
 }
 
-func (p *PasswordAuth) Login(credentials PasswordCredentials) (behemoth.User, error) {
+func (e *EmailAndPasswordAuth) Login(credentials EmailAndPasswordCredentials) (behemoth.User, error) {
 	ctx := context.Background()
 
-	user, err := models.FindUserByID(ctx, p.db, p.user, credentials.PrimaryKey)
+	if !utils.IsValidEmail(credentials.Email) {
+		return nil, errors.New("invalid email format")
+	}
+
+	user, err := models.FindUser(ctx, e.db, e.user, "email", credentials.Email)
 
 	if err != nil {
 		// Compare hash with a password to mitigate timing attacks
-		authutils.HashPassword(credentials.Password, p.cost)
+		authutils.HashPassword(credentials.Password, e.cost)
 		return nil, err
 	}
 
@@ -49,10 +53,14 @@ func (p *PasswordAuth) Login(credentials PasswordCredentials) (behemoth.User, er
 	return user, nil
 }
 
-func (p *PasswordAuth) Register(data map[string]any) (behemoth.User, error) {
+func (e *EmailAndPasswordAuth) Register(data map[string]any) (behemoth.User, error) {
+	email := data["email"].(string)
+	if !utils.IsValidEmail(email) {
+		return nil, errors.New("invalid email format")
+	}
 
 	password := data["password"].(string)
-	hashedPassword, err := authutils.HashPassword(password, p.cost)
+	hashedPassword, err := authutils.HashPassword(password, e.cost)
 	if err != nil {
 		return nil, err
 	}
@@ -63,9 +71,10 @@ func (p *PasswordAuth) Register(data map[string]any) (behemoth.User, error) {
 	data["email_verified"] = "false"
 	data["created_at"] = utils.CurrentTimestamp()
 	data["updated_at"] = utils.CurrentTimestamp()
-	user := p.userFactory(data)
 
-	created, err := models.CreateUser(context.Background(), p.db, user)
+	user := e.userFactory(data)
+
+	created, err := models.CreateUser(context.Background(), e.db, user)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +82,7 @@ func (p *PasswordAuth) Register(data map[string]any) (behemoth.User, error) {
 	return created, nil
 }
 
-type PasswordCredentials struct {
-	PrimaryKey string
-	Password   string
+type EmailAndPasswordCredentials struct {
+	Email    string
+	Password string
 }

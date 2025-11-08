@@ -12,12 +12,13 @@ import (
 )
 
 type Behemoth[T behemoth.User] struct {
-	DB          behemoth.Database
-	Password    *PasswordAuth
-	OAuth       *OAuthAuth
-	JWT         *JWTService
-	Session     *SessionManager
-	UseSessions bool
+	DB               behemoth.Database
+	Password         *PasswordAuth
+	EmailAndPassword *EmailAndPasswordAuth
+	OAuth            *OAuthAuth
+	JWT              *JWTService
+	Session          *SessionManager
+	UseSessions      bool
 }
 
 // New creates a new Behemoth instance with the given config.
@@ -25,6 +26,7 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	var database behemoth.Database
 	var userModel behemoth.User
 	var passwordAuth *PasswordAuth
+	var emailAndPasswordAuth *EmailAndPasswordAuth
 	var jwtSvc *JWTService
 	var oauth *OAuthAuth
 	var sessionMgr *SessionManager
@@ -32,6 +34,7 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	if cfg.DatabaseConfig.UseDefaultUser {
 		userModel = &models.User{}
 		cfg.DatabaseConfig.UserModel = userModel
+		cfg.DatabaseConfig.UserFactory = models.UserFactory
 	} else {
 		if cfg.DatabaseConfig.UserModel == nil {
 			return nil, errors.New("user model is required. Set useDefaultUser to true to use the default user model")
@@ -74,10 +77,18 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	if cfg.Password != nil {
 		passwordAuth = NewPasswordAuth(
 			*cfg.Password,
-			jwtSvc,
-			cfg.DatabaseConfig.UseDefaultUser,
 			userModel,
 			database,
+			cfg.DatabaseConfig.UserFactory,
+		)
+	}
+
+	if cfg.UseEmailAndPasswordAuth {
+		emailAndPasswordAuth = NewEmailAndPasswordAuth(
+			*cfg.Password,
+			userModel,
+			database,
+			cfg.DatabaseConfig.UserFactory,
 		)
 	}
 
@@ -92,10 +103,11 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	}
 
 	return &Behemoth[T]{
-		DB:       database,
-		Password: passwordAuth,
-		OAuth:    oauth,
-		JWT:      jwtSvc,
+		DB:               database,
+		Password:         passwordAuth,
+		EmailAndPassword: emailAndPasswordAuth,
+		OAuth:            oauth,
+		JWT:              jwtSvc,
 		// Session:     sessionMgr,
 		UseSessions: cfg.UseSessions,
 	}, nil
