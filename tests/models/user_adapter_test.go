@@ -27,7 +27,7 @@ func TestCreateUserAdapter(t *testing.T) {
 
 }
 
-func TestFindUserAdapter(t *testing.T) {
+func TestFindUserbyIDAdapter(t *testing.T) {
 	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	user := testutils.NewTestUser("2")
 	adapter := testutils.SetupSQLiteAdapter(t, db)
@@ -36,6 +36,22 @@ func TestFindUserAdapter(t *testing.T) {
 	assert.NoError(t, err)
 
 	found, err := models.FindUserByID(context.Background(), adapter, user, "2")
+	assert.NoError(t, err)
+	assert.NotNil(t, found)
+
+	foundUser := found.(*testutils.TestUser)
+	assert.Equal(t, "2", foundUser.ID)
+}
+
+func TestFindUserAdapter(t *testing.T) {
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+	user := testutils.NewTestUser("2")
+	adapter := testutils.SetupSQLiteAdapter(t, db)
+
+	_, err := models.CreateUser(context.Background(), adapter, user)
+	assert.NoError(t, err)
+
+	found, err := models.FindUser(context.Background(), adapter, user, "email", user.Email)
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 

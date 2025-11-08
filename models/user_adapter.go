@@ -31,6 +31,21 @@ func FindUserByID(ctx context.Context, db behemoth.Database, userModel behemoth.
 	return found.(behemoth.User), nil
 }
 
+func FindUser(ctx context.Context, db behemoth.Database, userModel behemoth.Model, key string, value any) (behemoth.User, error) {
+	whereClause := clause.Expression{
+		Logic: clause.OpAnd,
+		Conditions: []clause.Condition{
+			{Field: key, Operator: clause.OpEqual, Value: value},
+		},
+	}
+	found, err := db.Find(ctx, userModel, whereClause)
+	if err != nil {
+		return nil, err
+	}
+
+	return found.(behemoth.User), nil
+}
+
 func UpdateUser(ctx context.Context, db behemoth.Database, userModel behemoth.Model) (behemoth.User, error) {
 	err := db.Update(ctx, userModel)
 	if err != nil {
