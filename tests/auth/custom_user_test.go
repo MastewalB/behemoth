@@ -53,6 +53,16 @@ func (u *CustomUser) ScanDestinations() []any {
 	return []any{&u.ID, &u.Name, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt}
 }
 
+func customUserFactory(data map[string]any) behemoth.User {
+	return &CustomUser{
+		ID:           data["id"].(string),
+		Name:         data["name"].(string),
+		PasswordHash: data["password_hash"].(string),
+		CreatedAt:    data["created_at"].(string),
+		UpdatedAt:    data["updated_at"].(string),
+	}
+}
+
 var schema = `
 CREATE TABLE users (
 	id TEXT PRIMARY KEY,
@@ -106,6 +116,7 @@ func getBehemothInstance(db *sql.DB) (*auth.Behemoth[*CustomUser], error) {
 			DB:             db,
 			UseDefaultUser: false,
 			UserModel:      &CustomUser{},
+			UserFactory:    customUserFactory,
 		},
 		Password: &behemoth.PasswordConfig{HashCost: 10},
 		// OAuthProviders: []behemoth.Provider{},
@@ -183,10 +194,60 @@ func TestAuthenticateCustomUser(t *testing.T) {
 		Password:   password,
 	}
 
-	authenticatedUser, err := bmth.Password.Authenticate(credentials)
+	authenticatedUser, err := bmth.Password.Login(credentials)
 	assert.NoError(t, err)
 	assert.NotNil(t, authenticatedUser)
 	assert.Equal(t, user.ID, authenticatedUser.GetID())
 	assert.Equal(t, user.Name, authenticatedUser.(*CustomUser).Name)
+
+}
+func TestLoginCustomUserIncorrectCredential(t *testing.T) {
+	db := setUpCustomUserTable(t)
+	defer db.Close()
+
+	password := "securepassword"
+	hashedPassword, err := utils.GeneratePasswordHash(password)
+	assert.NoError(t, err)
+
+	user := newTestUser()
+	user.PasswordHash = hashedPassword
+	insertCustomUser(t, db, user)
+
+	bmth, err := getBehemothInstance(db)
+	assert.NoError(t, err)
+	assert.NotNil(t, bmth)
+
+	credentials := auth.PasswordCredentials{
+		PrimaryKey: user.ID,
+		Password:   "wrongpassword",
+	}
+
+	authenticatedUser, err := bmth.Password.Login(credentials)
+	assert.Error(t, err)
+	assert.Nil(t, authenticatedUser)
+}
+
+func TestRegisterCustomUser(t *testing.T) {
+	db := setUpCustomUserTable(t)
+
+	bmth, err := getBehemothInstance(db)
+	assert.NoError(t, err)
+	assert.NotNil(t, bmth)
+
+	registrationData := map[string]any{
+		"id":       "custom_user_1",
+		"name":     "Custom User One",
+		"password": "newsecurepassword",
+	}
+
+	created, err := bmth.Password.Register(registrationData)
+	assert.NoError(t, err)
+	assert.NotNil(t, created)
+
+	registeredUser, ok := created.(*CustomUser)
+	assert.True(t, ok)
+
+	assert.Equal(t, registrationData["name"], registeredUser.Name)
+	assert.NotEmpty(t, registeredUser.PasswordHash)
 
 }
