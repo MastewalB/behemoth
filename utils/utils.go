@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -72,4 +74,13 @@ func GenerateSQLSETClause(fields []string) string {
 	}
 
 	return b.String()
+}
+
+func CurrentTimestamp() string {
+	return fmt.Sprintf("%d", (int64)(time.Now().Unix()))
+}
+
+func IsValidEmail(email string) bool {
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$`)
+	return emailRegex.MatchString(email)
 }

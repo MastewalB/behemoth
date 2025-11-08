@@ -45,3 +45,29 @@ func TestGenerateSqliteSETClause(t *testing.T) {
 		})
 	}
 }
+
+func TestIsValidEmail(t *testing.T) {
+	emailTests := []struct {
+		email    string
+		expected bool
+	}{
+		{"valid@valid.com", true},
+		{"validmail@email.com", true},
+		{"invalid.com", false},
+		{"@nouser.com", false},
+		{"noat.com", false},
+		{"user@.com", false},
+		{"user@domain", false},
+		{"user@domain.c", false},
+		{"user@domain..com", false},
+		{"user@.domain.com", false},
+		{"", false},
+	}
+
+	for _, tt := range emailTests {
+		t.Run(tt.email, func(t *testing.T) {
+			result := IsValidEmail(tt.email)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
