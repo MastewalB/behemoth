@@ -76,6 +76,19 @@ func (u *User) New() behemoth.User {
 	return &User{}
 }
 
+func UserFactory(data map[string]any) behemoth.User {
+	return &User{
+		ID:            data["id"].(string),
+		Email:         data["email"].(string),
+		Username:      data["username"].(string),
+		Firstname:     data["firstname"].(string),
+		Lastname:      data["lastname"].(string),
+		PasswordHash:  data["password_hash"].(string),
+		ImageUrl:      data["image_url"].(string),
+		EmailVerified: data["email_verified"].(string),
+	}
+}
+
 func (u *User) FromUserInfo(userInfo UserInfo) {
 	u.Email = userInfo.Email
 	u.Username = userInfo.Email
