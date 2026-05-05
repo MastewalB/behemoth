@@ -34,7 +34,12 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	return err
 }
 
-func (sqlt *SQLiteAdapter) Find(ctx context.Context, m behemoth.Model, whereExpression clause.Expression) (behemoth.Model, error) {
+func (sqlt *SQLiteAdapter) Find(
+	ctx context.Context,
+	m behemoth.Model,
+	whereExpression clause.Expression,
+) (behemoth.Model, error) {
+
 	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
 	query := `SELECT * FROM ` + m.TableName() + ` WHERE ` + whereClause + ` LIMIT 1`
 	fmt.Println("Executing query:", query, "with args:", args)
@@ -46,6 +51,33 @@ func (sqlt *SQLiteAdapter) Find(ctx context.Context, m behemoth.Model, whereExpr
 	}
 
 	return m, nil
+}
+
+func (sqlt *SQLiteAdapter) FindMany(
+	ctx context.Context,
+	m behemoth.Model,
+	whereExpression clause.Expression,
+) ([]behemoth.Model, error) {
+	
+	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
+	query := `SELECT * FROM ` + m.TableName() + ` WHERE ` + whereClause
+	fmt.Println("Executing query:", query, "with args:", args)
+	rows, err := sqlt.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []behemoth.Model
+	for rows.Next() {
+		err := rows.Scan(m.ScanDestinations()...)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, m)
+	}
+
+	return results, nil
 }
 
 func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {

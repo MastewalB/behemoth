@@ -62,6 +62,22 @@ func TestFind(t *testing.T) {
 	assert.Equal(t, user.Username, foundUser.Username)
 }
 
+func TestFindMany(t *testing.T) {
+	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+	adapter := *testutils.SetupSQLiteAdapter(t, db)
+
+	user1 := testutils.NewTestUser("5")
+	user2 := testutils.NewTestUser("6")
+	err := adapter.Create(context.Background(), user1)
+	assert.NoError(t, err)
+	err = adapter.Create(context.Background(), user2)
+	assert.NoError(t, err)
+
+	found, err := adapter.FindMany(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpGreaterThan, "4"))
+	assert.NoError(t, err)
+	assert.Len(t, found, 2)
+}
+
 func TestUpdate(t *testing.T) {
 	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
 	adapter := *testutils.SetupSQLiteAdapter(t, db)
