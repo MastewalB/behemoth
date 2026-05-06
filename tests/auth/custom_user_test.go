@@ -23,7 +23,7 @@ type CustomUser struct {
 
 func (u *CustomUser) GetID() string           { return u.ID }
 func (u *CustomUser) GetPasswordHash() string { return u.PasswordHash }
-func (u *CustomUser) New() behemoth.User {
+func (u *CustomUser) New() behemoth.Model {
 	return &CustomUser{}
 }
 
@@ -33,6 +33,18 @@ func (u *CustomUser) TableName() string {
 
 func (u *CustomUser) PrimaryKey() string {
 	return "id"
+}
+
+func (u *CustomUser) PrimaryKeyName() string {
+	return "id"
+}
+
+func (u *CustomUser) PrimaryKeyField() any {
+	return u.ID
+}
+
+func (u *CustomUser) SchemaName() string {
+	return "users"
 }
 
 func (u *CustomUser) Fields() []string {
@@ -163,7 +175,7 @@ func TestCreateCustomUser(t *testing.T) {
 		},
 	}
 
-	found, err := bmth.DB.Find(ctx, &CustomUser{}, whereClause)
+	found, err := bmth.DB.FindOne(ctx, &CustomUser{}, whereClause)
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 

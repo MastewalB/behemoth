@@ -84,3 +84,8 @@ func IsValidEmail(email string) bool {
 	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$`)
 	return emailRegex.MatchString(email)
 }
+
+
+func NewTypeAssertionError(expectedType string, actualValue any) error {
+	return fmt.Errorf("type assertion failed: expected %s, got %T", expectedType, actualValue)
+}

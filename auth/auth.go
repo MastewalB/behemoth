@@ -16,9 +16,10 @@ type Behemoth[T behemoth.User] struct {
 	Password         *PasswordAuth
 	EmailAndPassword *EmailAndPasswordAuth
 	OAuth            *OAuthAuth
-	JWT              *JWTService
+	JWT              *JWTManager
 	Session          *SessionManager
 	UseSessions      bool
+	authManager      behemoth.AuthTransportManager
 }
 
 // New creates a new Behemoth instance with the given config.
@@ -27,9 +28,10 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	var userModel behemoth.User
 	var passwordAuth *PasswordAuth
 	var emailAndPasswordAuth *EmailAndPasswordAuth
-	var jwtSvc *JWTService
+	var jwtSvc *JWTManager
 	var oauth *OAuthAuth
 	var sessionMgr *SessionManager
+	var authManager behemoth.AuthTransportManager
 
 	if cfg.DatabaseConfig.UseDefaultUser {
 		userModel = &models.User{}
@@ -71,7 +73,7 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	}
 
 	if cfg.JWT != nil {
-		jwtSvc = NewJWTService(*cfg.JWT)
+		jwtSvc = NewJWTManager(*cfg.JWT)
 	}
 
 	if cfg.Password != nil {
@@ -95,12 +97,16 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	if len(cfg.OAuthProviders) > 0 {
 		oauth = NewOAuthAuth(
 			cfg.OAuthProviders,
-			jwtSvc,
+			// jwtSvc,
 			cfg.DatabaseConfig.UseDefaultUser,
 			userModel,
 			database,
 		)
 	}
+
+	// Just use JWT as auth manager
+	// Going to configure to use session manager as well
+	authManager = jwtSvc
 
 	return &Behemoth[T]{
 		DB:               database,
@@ -110,6 +116,7 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 		JWT:              jwtSvc,
 		// Session:     sessionMgr,
 		UseSessions: cfg.UseSessions,
+		authManager: authManager,
 	}, nil
 }
 

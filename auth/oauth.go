@@ -15,15 +15,15 @@ import (
 // OAuthAuth manages OAuth-based authentication for multiple providers.
 // It supports generic user types and handles authentication flows for providers like Google and Facebook.
 type OAuthAuth struct {
-	providers      map[string]behemoth.Provider
-	jwtSvc         *JWTService
+	providers map[string]behemoth.Provider
+	// jwtSvc         *JWTService
 	useDefaultUser bool
 	db             behemoth.Database
 }
 
 func NewOAuthAuth(
 	oAuthProviders []behemoth.Provider,
-	jwtSvc *JWTService,
+	// jwtSvc *JWTService,
 	useDefaultUser bool,
 	user behemoth.User,
 	db behemoth.Database,
@@ -35,9 +35,9 @@ func NewOAuthAuth(
 	}
 
 	return &OAuthAuth{
-		providers:      providers,
-		db:             db,
-		jwtSvc:         jwtSvc,
+		providers: providers,
+		db:        db,
+		// jwtSvc:         jwtSvc,
 		useDefaultUser: useDefaultUser,
 	}
 }

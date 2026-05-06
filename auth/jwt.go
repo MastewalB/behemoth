@@ -1,23 +1,25 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	authutils "github.com/MastewalB/behemoth/auth-utils"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type JWTService struct {
+type JWTManager struct {
 	secret        string
 	expiry        time.Duration
 	signingMethod jwt.SigningMethod
 	jwtClaim      jwt.Claims
 }
 
-func NewJWTService(cfg behemoth.JWTConfig) *JWTService {
+func NewJWTManager(cfg behemoth.JWTConfig) *JWTManager {
 	var claim jwt.Claims = &DefaultJWTClaims{}
 	var signingMethod jwt.SigningMethod = jwt.SigningMethodHS256
 
@@ -27,7 +29,7 @@ func NewJWTService(cfg behemoth.JWTConfig) *JWTService {
 	if cfg.Claims != nil {
 		claim = cfg.Claims
 	}
-	return &JWTService{
+	return &JWTManager{
 		secret:        cfg.Secret,
 		expiry:        cfg.Expiry,
 		signingMethod: signingMethod,
@@ -35,7 +37,7 @@ func NewJWTService(cfg behemoth.JWTConfig) *JWTService {
 	}
 }
 
-func (j *JWTService) GenerateToken(user behemoth.User) (string, error) {
+func (j *JWTManager) Create(ctx context.Context, userID string) (string, error) {
 	claims := reflect.New(
 		reflect.TypeOf(j.jwtClaim).Elem(),
 	).Interface().(jwt.Claims)
@@ -44,52 +46,34 @@ func (j *JWTService) GenerateToken(user behemoth.User) (string, error) {
 		return "", errors.New("claims cannot be nil")
 	}
 
-	switch c := claims.(type) {
-	case *DefaultJWTClaims:
-		c.ID = user.GetID()
-		c.RegisteredClaims = jwt.RegisteredClaims{
-			Issuer:    user.GetID(),
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(j.expiry)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		}
-	case jwt.MapClaims:
-		c["id"] = user.GetID()
-		c["exp"] = time.Now().Add(j.expiry).Unix()
-	}
+	claim := claims.(*DefaultJWTClaims)
+	claim.ID = userID
 
-	token := jwt.NewWithClaims(j.signingMethod, claims)
-	signedToken, err := token.SignedString([]byte(j.secret))
+	signedToken, err := authutils.GenerateToken(claim, j.signingMethod, j.secret)
 	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %w", err)
+		return "", err
 	}
 
 	return signedToken, nil
 }
 
-func (j *JWTService) ValidateToken(tokenStr string) (jwt.Claims, error) {
+func (j *JWTManager) Validate(ctx context.Context, tokenStr string) (any, error) {
 	claims := reflect.New(
 		reflect.TypeOf(j.jwtClaim).Elem(),
 	).Interface().(jwt.Claims)
 
-	token, err := jwt.ParseWithClaims(
-		tokenStr,
-		claims,
-		func(token *jwt.Token) (any, error) {
-			if token.Method.Alg() != j.signingMethod.Alg() {
-				return nil, fmt.Errorf("unexpected signing method: \nwant: %v\ngot: %v",
-					j.signingMethod.Alg(), token.Header["alg"])
-			}
-			return []byte(j.secret), nil
-		})
+	claim := claims.(*DefaultJWTClaims)
+	tokenClaim, err := authutils.VerifyToken(tokenStr, claim, j.secret, j.signingMethod)
 
 	if err != nil {
 		return nil, fmt.Errorf("token validation failed: %w", err)
 	}
-	if !token.Valid {
-		return nil, errors.New("invalid token")
-	}
 
-	return token.Claims, nil
+	return tokenClaim, nil
+}
+
+func (j *JWTManager) Revoke(ctx context.Context, tokenStr string) error {
+	return errors.New("token revocation not available")
 }
 
 type DefaultJWTClaims struct {

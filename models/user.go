@@ -72,8 +72,65 @@ func (u *User) ScanDestinations() []any {
 	}
 }
 
-func (u *User) New() behemoth.User {
+func (u *User) SchemaName() string {
+	return "users"
+}
+
+func (u *User) PrimaryKeyName() string {
+	return "id"
+}
+
+func (u *User) PrimaryKeyField() any {
+	return u.ID
+}
+
+func (u *User) New() behemoth.Model {
 	return &User{}
+}
+
+func (u *User) ToMap() (map[string]any, error) {
+	return map[string]any{
+		"id":             u.ID,
+		"email":          u.Email,
+		"username":       u.Username,
+		"firstname":      u.Firstname,
+		"lastname":       u.Lastname,
+		"password_hash":  u.PasswordHash,
+		"email_verified": u.EmailVerified,
+		"image_url":      u.ImageUrl,
+		"created_at":     u.CreatedAt,
+		"updated_at":     u.UpdatedAt,
+	}, nil
+}
+
+func (u *User) FromMap(data map[string]any) error {
+	u.ID = data["id"].(string)
+	u.Email = data["email"].(string)
+	u.Username = data["username"].(string)
+	u.Firstname = data["firstname"].(string)
+	u.Lastname = data["lastname"].(string)
+	u.PasswordHash = data["password_hash"].(string)
+	u.EmailVerified = data["email_verified"].(string)
+	u.ImageUrl = data["image_url"].(string)
+	u.CreatedAt = data["created_at"].(string)
+	u.UpdatedAt = data["updated_at"].(string)
+	return nil
+}
+
+func GenerateColumnValuePairs(m behemoth.Model) (columns []string, values []any, valuePtrs []any) {
+	if serializable, ok := m.(behemoth.Serializable); ok {
+		data, err := serializable.ToMap()
+		if err != nil {
+			return nil, nil, nil
+		}
+
+		for k, v := range data {
+			columns = append(columns, k)
+			values = append(values, v)
+			valuePtrs = append(valuePtrs, &values[len(values)-1])
+		}
+	}
+	return columns, values, valuePtrs
 }
 
 func UserFactory(data map[string]any) behemoth.User {
@@ -120,7 +177,7 @@ func (ui *UserInfo) GetPasswordHash() string {
 	return ""
 }
 
-func (ui *UserInfo) New() behemoth.User {
+func (ui *UserInfo) New() behemoth.Model {
 	return &UserInfo{}
 }
 
@@ -130,6 +187,18 @@ func (ui *UserInfo) TableName() string {
 
 func (ui *UserInfo) PrimaryKey() string {
 	return "id"
+}
+
+func (ui *UserInfo) SchemaName() string {
+	return "user_info"
+}
+
+func (ui *UserInfo) PrimaryKeyName() string {
+	return "id"
+}
+
+func (ui *UserInfo) PrimaryKeyField() any {
+	return ui.ID
 }
 
 func (ui *UserInfo) Fields() []string {

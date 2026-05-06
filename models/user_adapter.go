@@ -20,10 +20,10 @@ func FindUserByID(ctx context.Context, db behemoth.Database, userModel behemoth.
 	whereClause := clause.Expression{
 		Logic: clause.OpAnd,
 		Conditions: []clause.Condition{
-			{Field: userModel.PrimaryKey(), Operator: clause.OpEqual, Value: id},
+			{Field: userModel.PrimaryKeyName(), Operator: clause.OpEqual, Value: id},
 		},
 	}
-	found, err := db.Find(ctx, userModel, whereClause)
+	found, err := db.FindOne(ctx, userModel, whereClause)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func FindUser(ctx context.Context, db behemoth.Database, userModel behemoth.Mode
 			{Field: key, Operator: clause.OpEqual, Value: value},
 		},
 	}
-	found, err := db.Find(ctx, userModel, whereClause)
+	found, err := db.FindOne(ctx, userModel, whereClause)
 	if err != nil {
 		return nil, err
 	}

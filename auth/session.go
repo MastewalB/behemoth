@@ -35,9 +35,9 @@ func NewSessionManager(
 		DB: db,
 	}
 
-	if err := store.CreateSessionTable(context.Background()); err != nil {
-		panic("failed to create sessions table: " + err.Error())
-	}
+	// if err := store.CreateSessionTable(context.Background()); err != nil {
+	// 	panic("failed to create sessions table: " + err.Error())
+	// }
 
 	return &SessionManager{
 		store:      store,
@@ -142,4 +142,21 @@ func (sm *SessionManager) Middleware(next http.Handler) http.Handler {
 func GetSessionFromContext(ctx context.Context) (behemoth.Session, bool) {
 	session, ok := ctx.Value(sessionKey).(behemoth.Session)
 	return session, ok
+}
+
+type AuthSessionManager struct {
+}
+
+func (sm *AuthSessionManager) Create(ctx context.Context, userID string) (string, error) {
+
+	return "", nil
+}
+
+func (sm *AuthSessionManager) Validate(ctx context.Context, sessionID string) (any, error) {
+
+	return nil, nil
+}
+
+func (sm *AuthSessionManager) Revoke(ctx context.Context, sessionID string) error {
+	return nil
 }
