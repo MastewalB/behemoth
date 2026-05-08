@@ -20,11 +20,19 @@ CREATE TABLE users (
 );
 `
 
-func (u *TestUser) TableName() string {
+func (u *TestUser) SchemaName() string {
 	return "users"
 }
 
 func (u *TestUser) PrimaryKey() string {
+	return "id"
+}
+
+func (u *TestUser) PrimaryKeyField() any {
+	return u.ID
+}
+
+func (u *TestUser) PrimaryKeyName() string {
 	return "id"
 }
 
@@ -48,8 +56,36 @@ func (u *TestUser) GetPasswordHash() string {
 	return ""
 }
 
-func (u *TestUser) New() behemoth.User {
+func (u *TestUser) New() behemoth.Model {
 	return &TestUser{}
+}
+
+func (u *TestUser) ToMap() (map[string]any, error) {
+	return map[string]any{
+		"id":       u.ID,
+		"email":    u.Email,
+		"username": u.Username,
+	}, nil
+}
+
+func (u *TestUser) FromMap(data map[string]any) error {
+	id, ok := data["id"].(string)
+	if !ok {
+		return fmt.Errorf("invalid type for id")
+	}
+	email, ok := data["email"].(string)
+	if !ok {
+		return fmt.Errorf("invalid type for email")
+	}
+	username, ok := data["username"].(string)
+	if !ok {
+		return fmt.Errorf("invalid type for username")
+	}
+
+	u.ID = id
+	u.Email = email
+	u.Username = username
+	return nil
 }
 
 func NewTestUser(id string) *TestUser {

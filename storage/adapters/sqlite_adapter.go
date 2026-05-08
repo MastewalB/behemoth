@@ -26,36 +26,22 @@ func (sqlt *SQLiteAdapter) CreateTable(ctx context.Context, schema string) error
 }
 
 func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
-	// query := `INSERT INTO ` + m.TableName() + ` (` +
-	// 	strings.Join(m.Fields(), ", ") + `) VALUES ` +
-	// 	utils.GenerateSQLPlaceholders(len(m.Fields()))
-
-	// fmt.Println("Executing query:", query, "with values:", m.ScanDestinations())
-	// _, err := sqlt.DB.ExecContext(ctx, query, m.ScanDestinations()...)
-
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
 		return fmt.Errorf("model does not implement Serializable interface")
 	}
-	data, err := ser.ToMap()
+
+	_, err := ser.ToMap()
 	if err != nil {
 		return err
 	}
 
-	columns := []string{}
-	values := []any{}
-	placeholders := utils.GenerateSQLPlaceholders(len(data))
+	columns, values, _ := models.GenerateColumnValuePairs(m)
+	placeholders := utils.GenerateSQLPlaceholders(len(columns))
 
-	i := 1
-	for k, v := range data {
-		columns = append(columns, k)
-		values = append(values, v)
-		// placeholders = append(placeholders, fmt.Sprintf("$%d", i))
-		i++
-	}
 
 	query := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s)",
+		"INSERT INTO %s (%s) VALUES %s",
 		m.SchemaName(),
 		strings.Join(columns, ", "),
 		placeholders,
@@ -71,31 +57,18 @@ func (sqlt *SQLiteAdapter) FindOne(
 	whereExpression clause.Expression,
 ) (behemoth.Model, error) {
 
+	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
+
 	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
-	query := `SELECT * FROM ` + m.SchemaName() + ` WHERE ` + whereClause + ` LIMIT 1`
+	query := `SELECT ` + strings.Join(columns, ", ") + ` FROM ` + m.SchemaName() + ` WHERE ` + whereClause + ` LIMIT 1`
 	fmt.Println("Executing query:", query, "with args:", args)
 	row := sqlt.DB.QueryRowContext(ctx, query, args...)
-
-	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
 	if err := row.Scan(valuePtrs...); err != nil {
 		return nil, err
 	}
 
-	resultMap := map[string]any{}
-	for i, col := range columns {
-		resultMap[col] = values[i]
-	}
-
-	newModel := m.New()
-	if serializable, ok := newModel.(behemoth.Serializable); ok {
-		if err := serializable.FromMap(resultMap); err != nil {
-			return nil, err
-		}
-
-		return newModel, nil
-	}
-	return nil, fmt.Errorf("model does not implement Serializable interface")
+	return models.GenerateModelFromRows(m, columns, values)
 }
 
 func (sqlt *SQLiteAdapter) FindMany(
@@ -103,9 +76,10 @@ func (sqlt *SQLiteAdapter) FindMany(
 	m behemoth.Model,
 	whereExpression clause.Expression,
 ) ([]behemoth.Model, error) {
+	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
 	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
-	query := `SELECT * FROM ` + m.SchemaName() + ` WHERE ` + whereClause
+	query := `SELECT ` + strings.Join(columns, ", ") + ` FROM ` + m.SchemaName() + ` WHERE ` + whereClause
 	fmt.Println("Executing query:", query, "with args:", args)
 	rows, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -113,15 +87,17 @@ func (sqlt *SQLiteAdapter) FindMany(
 	}
 	defer rows.Close()
 
-	_, values, _ := models.GenerateColumnValuePairs(m)
-
 	var results []behemoth.Model
 	for rows.Next() {
-		err := rows.Scan(values...)
+		err := rows.Scan(valuePtrs...)
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, m)
+		result, err := models.GenerateModelFromRows(m, columns, values)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
 	}
 
 	return results, nil

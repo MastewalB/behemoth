@@ -30,47 +30,47 @@ func (u *User) GetName() string         { return fmt.Sprintf("%s %s", u.Firstnam
 
 // Functions required to satisfy the Model interface
 
-func (u *User) TableName() string {
-	return "users"
-}
+// func (u *User) TableName() string {
+// 	return "users"
+// }
 
-func (u *User) PrimaryKey() string {
-	return "id"
-}
+// func (u *User) PrimaryKey() string {
+// 	return "id"
+// }
 
-func (u *User) Fields() []string {
-	return []string{
-		"id",
-		"email",
-		"username",
-		"firstname",
-		"lastname",
-		"password_hash",
-		"email_verified",
-		"image_url",
-		"created_at",
-		"updated_at",
-	}
-}
+// func (u *User) Fields() []string {
+// 	return []string{
+// 		"id",
+// 		"email",
+// 		"username",
+// 		"firstname",
+// 		"lastname",
+// 		"password_hash",
+// 		"email_verified",
+// 		"image_url",
+// 		"created_at",
+// 		"updated_at",
+// 	}
+// }
 
-func (u *User) PrimaryValue() any {
-	return u.ID
-}
+// func (u *User) PrimaryValue() any {
+// 	return u.ID
+// }
 
-func (u *User) ScanDestinations() []any {
-	return []any{
-		&u.ID,
-		&u.Email,
-		&u.Username,
-		&u.Firstname,
-		&u.Lastname,
-		&u.PasswordHash,
-		&u.EmailVerified,
-		&u.ImageUrl,
-		&u.CreatedAt,
-		&u.UpdatedAt,
-	}
-}
+// func (u *User) ScanDestinations() []any {
+// 	return []any{
+// 		&u.ID,
+// 		&u.Email,
+// 		&u.Username,
+// 		&u.Firstname,
+// 		&u.Lastname,
+// 		&u.PasswordHash,
+// 		&u.EmailVerified,
+// 		&u.ImageUrl,
+// 		&u.CreatedAt,
+// 		&u.UpdatedAt,
+// 	}
+// }
 
 func (u *User) SchemaName() string {
 	return "users"
@@ -124,13 +124,37 @@ func GenerateColumnValuePairs(m behemoth.Model) (columns []string, values []any,
 			return nil, nil, nil
 		}
 
-		for k, v := range data {
+		for k := range data {
 			columns = append(columns, k)
-			values = append(values, v)
-			valuePtrs = append(valuePtrs, &values[len(values)-1])
+		}
+
+		// Allocate fixed-size slices
+		values = make([]any, len(columns))
+		valuePtrs = make([]any, len(columns))
+
+		for i, col := range columns {
+			values[i] = data[col]
+			valuePtrs[i] = &values[i]
 		}
 	}
 	return columns, values, valuePtrs
+}
+
+func GenerateModelFromRows(m behemoth.Model, columns []string, values []any) (behemoth.Model, error) {
+	resultMap := map[string]any{}
+	for i, col := range columns {
+		resultMap[col] = values[i]
+	}
+
+	newModel := m.New()
+	if serialized, ok := newModel.(behemoth.Serializable); ok {
+		if err := serialized.FromMap(resultMap); err != nil {
+			return nil, err
+		}
+
+		return newModel, nil
+	}
+	return nil, fmt.Errorf("model does not implement Serializable interface")
 }
 
 func UserFactory(data map[string]any) behemoth.User {

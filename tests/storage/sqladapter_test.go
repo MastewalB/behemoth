@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"fmt"
 
 	"testing"
 
@@ -32,12 +33,14 @@ func TestCreate(t *testing.T) {
 
 	user := testutils.NewTestUser("1")
 	err := adapter.Create(context.Background(), user)
+	fmt.Println("TO Create ", user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
+	fmt.Println(found)
 	foundUser := found.(*testutils.TestUser)
 	assert.Equal(t, user.ID, foundUser.ID)
 	assert.Equal(t, user.Email, foundUser.Email)
@@ -52,7 +55,7 @@ func TestFind(t *testing.T) {
 	err := adapter.Create(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "2"))
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "2"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
@@ -76,6 +79,12 @@ func TestFindMany(t *testing.T) {
 	found, err := adapter.FindMany(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpGreaterThan, "4"))
 	assert.NoError(t, err)
 	assert.Len(t, found, 2)
+
+	foundUser1 := found[0].(*testutils.TestUser)
+	foundUser2 := found[1].(*testutils.TestUser)
+
+	assert.Greater(t, foundUser1.ID, "4")
+	assert.Greater(t, foundUser2.ID, "4")
 }
 
 func TestUpdate(t *testing.T) {
@@ -90,7 +99,7 @@ func TestUpdate(t *testing.T) {
 	err = adapter.Update(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "3"))
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "3"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
@@ -109,7 +118,7 @@ func TestDelete(t *testing.T) {
 	err = adapter.Delete(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
 	assert.Error(t, err)
 	assert.Nil(t, found)
 }
