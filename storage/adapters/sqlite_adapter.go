@@ -20,25 +20,19 @@ func NewSQLiteAdapter(db *sql.DB) *SQLiteAdapter {
 	return &SQLiteAdapter{DB: db}
 }
 
-func (sqlt *SQLiteAdapter) CreateTable(ctx context.Context, schema string) error {
-	_, err := sqlt.DB.ExecContext(ctx, schema)
-	return err
-}
+// func (sqlt *SQLiteAdapter) CreateTable(ctx context.Context, schema string) error {
+// 	_, err := sqlt.DB.ExecContext(ctx, schema)
+// 	return err
+// }
 
 func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
-	ser, ok := m.(behemoth.Serializable)
+	_, ok := m.(behemoth.Serializable)
 	if !ok {
 		return fmt.Errorf("model does not implement Serializable interface")
 	}
 
-	_, err := ser.ToMap()
-	if err != nil {
-		return err
-	}
-
 	columns, values, _ := models.GenerateColumnValuePairs(m)
 	placeholders := utils.GenerateSQLPlaceholders(len(columns))
-
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES %s",
@@ -47,7 +41,7 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 		placeholders,
 	)
 
-	_, err = sqlt.DB.ExecContext(ctx, query, values...)
+	_, err := sqlt.DB.ExecContext(ctx, query, values...)
 	return err
 }
 
@@ -60,7 +54,13 @@ func (sqlt *SQLiteAdapter) FindOne(
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
 	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
-	query := `SELECT ` + strings.Join(columns, ", ") + ` FROM ` + m.SchemaName() + ` WHERE ` + whereClause + ` LIMIT 1`
+	query := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s LIMIT 1",
+		strings.Join(columns, ", "),
+		m.SchemaName(),
+		whereClause,
+	)
+
 	fmt.Println("Executing query:", query, "with args:", args)
 	row := sqlt.DB.QueryRowContext(ctx, query, args...)
 
@@ -79,12 +79,19 @@ func (sqlt *SQLiteAdapter) FindMany(
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
 	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
-	query := `SELECT ` + strings.Join(columns, ", ") + ` FROM ` + m.SchemaName() + ` WHERE ` + whereClause
+	query := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s",
+		strings.Join(columns, ", "),
+		m.SchemaName(),
+		whereClause,
+	)
+
 	fmt.Println("Executing query:", query, "with args:", args)
 	rows, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
+
 	defer rows.Close()
 
 	var results []behemoth.Model
@@ -106,16 +113,23 @@ func (sqlt *SQLiteAdapter) FindMany(
 func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	columns, values, _ := models.GenerateColumnValuePairs(m)
 
-	query := `UPDATE ` + m.SchemaName() +
-		` SET ` + utils.GenerateSQLSETClause(columns) +
-		` WHERE ` + m.PrimaryKeyName() + ` = ?`
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s = ?",
+		m.SchemaName(),
+		utils.GenerateSQLSETClause(columns),
+		m.PrimaryKeyName(),
+	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	return err
 }
 
 func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
-	query := `DELETE FROM ` + m.SchemaName() + ` WHERE ` + m.PrimaryKeyName() + ` = ?`
+	query := fmt.Sprintf(
+		"DELETE FROM %s WHERE %s = ?",
+		m.SchemaName(),
+		m.PrimaryKeyName(),
+	)
 	_, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
 	return err
 }
