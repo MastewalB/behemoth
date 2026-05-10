@@ -65,7 +65,7 @@ func TestCreatePG(t *testing.T) {
 	err := adapter.Create(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
@@ -84,7 +84,7 @@ func TestFindPG(t *testing.T) {
 	err := adapter.Create(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "2"))
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "2"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
@@ -107,7 +107,7 @@ func TestUpdatePG(t *testing.T) {
 	err = adapter.Update(context.Background(), user)
 	assert.NoError(t, err)
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "3"))
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "3"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
@@ -127,7 +127,7 @@ func TestDeletePG(t *testing.T) {
 	err = adapter.Delete(context.Background(), user)
 	assert.NoError(t, err, "failed to delete user")
 
-	found, err := adapter.Find(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
 	assert.Error(t, err)
 	assert.Nil(t, found, "expected no user found after delete")
 }

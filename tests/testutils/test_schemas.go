@@ -24,9 +24,9 @@ func (u *TestUser) SchemaName() string {
 	return "users"
 }
 
-func (u *TestUser) PrimaryKey() string {
-	return "id"
-}
+// func (u *TestUser) PrimaryKey() string {
+// 	return "id"
+// }
 
 func (u *TestUser) PrimaryKeyField() any {
 	return u.ID
@@ -36,17 +36,17 @@ func (u *TestUser) PrimaryKeyName() string {
 	return "id"
 }
 
-func (u *TestUser) Fields() []string {
-	return []string{"id", "email", "username"}
-}
+// func (u *TestUser) Fields() []string {
+// 	return []string{"id", "email", "username"}
+// }
 
-func (u *TestUser) PrimaryValue() any {
-	return u.ID
-}
+// func (u *TestUser) PrimaryValue() any {
+// 	return u.ID
+// }
 
-func (u *TestUser) ScanDestinations() []any {
-	return []any{&u.ID, &u.Email, &u.Username}
-}
+// func (u *TestUser) ScanDestinations() []any {
+// 	return []any{&u.ID, &u.Email, &u.Username}
+// }
 
 func (u *TestUser) GetID() string {
 	return u.ID

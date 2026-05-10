@@ -3,9 +3,13 @@ package adapters
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/utils"
 )
 
 type PostgresAdapter struct {
@@ -16,45 +20,113 @@ func NewPostgresAdapter(db *sql.DB) *PostgresAdapter {
 	return &PostgresAdapter{DB: db}
 }
 
-func (pg *PostgresAdapter) CreateTable(ctx context.Context, schema string) error {
-	_, err := pg.DB.ExecContext(ctx, schema)
+func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
+	_, ok := m.(behemoth.Serializable)
+	if !ok {
+		return fmt.Errorf("model does not implement Serializable interface")
+	}
+
+	columns, values, _ := models.GenerateColumnValuePairs(m)
+	placeholders := utils.GenerateSQLPlaceholders(len(columns))
+
+	query := fmt.Sprintf(
+		"INSERT INTO %s (%s) VALUES %s",
+		m.SchemaName(),
+		strings.Join(columns, ", "),
+		placeholders,
+	)
+	_, err := pg.DB.ExecContext(ctx, query, values...)
 	return err
 }
 
-func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
-	// query := `INSERT INTO ` + m.TableName() + ` (` +
-	// 	strings.Join(m.Fields(), ", ") + `) VALUES ` +
-	// 	utils.GenerateSQLPlaceholders(len(m.Fields()))
+func (pg *PostgresAdapter) FindOne(
+	ctx context.Context,
+	m behemoth.Model,
+	whereExpression clause.Expression,
+) (behemoth.Model, error) {
 
-	// _, err := pg.DB.ExecContext(ctx, query, m.ScanDestinations()...)
-	return nil
+	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
+
+	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
+	query := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s LIMIT 1",
+		strings.Join(columns, ", "),
+		m.SchemaName(),
+		whereClause,
+	)
+
+	fmt.Println("Executing query:", query, "with args:", args)
+	row := pg.DB.QueryRowContext(ctx, query, args...)
+
+	if err := row.Scan(valuePtrs...); err != nil {
+		return nil, err
+	}
+
+	return models.GenerateModelFromRows(m, columns, values)
 }
 
-func (pg *PostgresAdapter) Find(ctx context.Context, m behemoth.Model, whereExpression clause.Expression) (behemoth.Model, error) {
-	// whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
-	// query := `SELECT * FROM ` + m.TableName() + ` WHERE ` + whereClause + ` LIMIT 1`
-	// fmt.Println("Executing query:", query, "with args:", args)
-	// row := pg.DB.QueryRowContext(ctx, query, args...)
+func (pg *PostgresAdapter) FindMany(
+	ctx context.Context,
+	m behemoth.Model,
+	whereExpression clause.Expression,
+) ([]behemoth.Model, error) {
+	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
-	// err := row.Scan(m.ScanDestinations()...)
-	// if err != nil {
-	// 	return nil, err
-	// }
+	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
+	query := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s",
+		strings.Join(columns, ", "),
+		m.SchemaName(),
+		whereClause,
+	)
 
-	return m, nil
+	fmt.Println("Executing query:", query, "with args:", args)
+
+	rows, err := pg.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	var results []behemoth.Model
+	for rows.Next() {
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, err
+		}
+		result, err := models.GenerateModelFromRows(m, columns, values)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
 }
 
 func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
-	// query := `UPDATE ` + m.TableName() +
-	// 	` SET ` + utils.GenerateSQLSETClause(m.Fields()) +
-	// 	` WHERE ` + m.PrimaryKey() + ` = $` + fmt.Sprint(len(m.Fields())+1)
+	columns, values, _ := models.GenerateColumnValuePairs(m)
 
-	// _, err := pg.DB.ExecContext(ctx, query, append(m.ScanDestinations(), m.PrimaryValue())...)
-	return nil
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s = $%d",
+		m.SchemaName(),
+		utils.GenerateSQLSETClause(columns),
+		m.PrimaryKeyName(),
+		len(values)+1,
+	)
+	fmt.Println(query, values)
+
+	_, err := pg.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	return err
 }
 
 func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
-	// query := `DELETE FROM ` + m.TableName() + ` WHERE ` + m.PrimaryKey() + ` = $1`
-	// _, err := pg.DB.ExecContext(ctx, query, m.PrimaryValue())
-	return nil
+	query := fmt.Sprintf(
+		"DELETE FROM %s WHERE %s = $1",
+		m.SchemaName(),
+		m.PrimaryKeyName(),
+	)
+
+	_, err := pg.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	return err 
 }
