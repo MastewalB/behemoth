@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
@@ -35,6 +36,68 @@ func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	_, err = collection.InsertOne(ctx, doc)
 	return err
 }
+
+func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
+
+	_, ok := m.(behemoth.Serializable)
+	if !ok {
+		return nil, errors.New("model must implement Serializable")
+	}
+
+	filter := BuildMongoFilter(&expr)
+	collection := mdb.db.Collection(m.SchemaName())
+
+	result := collection.FindOne(ctx, filter)
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
+	var raw map[string]any
+	if err := result.Decode(&raw); err != nil {
+		return nil, err
+	}
+
+	model := m.New()
+	if err := model.(behemoth.Serializable).FromMap(raw); err != nil {
+		return nil, err
+	}
+
+	return model, nil
+}
+
+func (mdb *MongoAdapter) FindMany(ctx context.Context, m behemoth.Model, expr clause.Expression) ([]behemoth.Model, error) {
+	_, ok := m.(behemoth.Serializable)
+	if !ok {
+		return nil, errors.New("model must implement Serializable")
+	}
+
+	filter := BuildMongoFilter(&expr)
+	collection := mdb.db.Collection(m.SchemaName())
+
+	cursor, err := collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	defer cursor.Close(ctx)
+
+	var results []behemoth.Model
+	for cursor.Next(ctx) {
+		var raw map[string]any
+		if err := cursor.Decode(&raw); err != nil {
+			return nil, err
+		}
+		model := m.New()
+		if err := model.(behemoth.Serializable).FromMap(raw); err != nil {
+			return nil, err
+		}
+		results = append(results, model)
+	}
+
+	return results, nil
+
+}
+
 func BuildMongoFilter(expr *clause.Expression) bson.M {
 	if expr == nil {
 		return bson.M{}

@@ -47,7 +47,6 @@ func setupMongoTestDB(ctx context.Context, t *testing.T) (*mongo.Client, func())
 	return mongoClient, cleanup
 }
 
-
 func CleanupMongoTestDB(ctx context.Context, t *testing.T, client *mongo.Client) error {
 	collections, err := client.Database(MongoDBName).ListCollectionNames(context.TODO(), bson.M{})
 	if err != nil {
@@ -79,25 +78,43 @@ func TestMain(m *testing.M) {
 
 func TestCreateMongo(t *testing.T) {
 	ctx := context.Background()
+	defer CleanupMongoTestDB(ctx, t, mongoClient)
+
 	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
 
 	user := testutils.NewTestUser("1")
 	err := adapter.Create(ctx, user)
-	if err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
+	assert.NoError(t, err)
 
 	collection := mongoClient.Database(MongoDBName).Collection("users")
 	var result bson.M
 	err = collection.FindOne(ctx, bson.M{"id": "1"}).Decode(&result)
-	if err != nil {
-		t.Fatalf("failed to find user: %v", err)
-	}
+	assert.NoError(t, err)
 
 	if result["email"] != user.Email || result["username"] != user.Username {
 		t.Fatalf("retrieved user does not match created user")
 	}
 }
+
+func TestFindOneMongo(t *testing.T) {
+	ctx := context.Background()
+	defer CleanupMongoTestDB(ctx, t, mongoClient)
+
+	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
+	user := *testutils.NewTestUser("1")
+	err := adapter.Create(ctx, &user)
+	assert.NoError(t, err)
+
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
+	assert.NoError(t, err)
+	assert.NotNil(t, found)
+
+	foundUser := found.(*testutils.TestUser)
+	assert.Equal(t, user.ID, foundUser.ID)
+	assert.Equal(t, user.Email, foundUser.Email)
+	assert.Equal(t, user.Username, foundUser.Username)
+}
+
 func TestFindManyMongo(t *testing.T) {
 	ctx := context.Background()
 	defer CleanupMongoTestDB(ctx, t, mongoClient)
