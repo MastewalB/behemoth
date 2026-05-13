@@ -21,7 +21,7 @@ func TestGenerateSqlitePlaceholders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(rune(tt.numParams)), func(t *testing.T) {
-			result := GenerateSQLPlaceholders(tt.numParams)
+			result := GenerateSQLPlaceholders(1, 1+tt.numParams)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

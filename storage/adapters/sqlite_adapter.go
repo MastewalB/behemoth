@@ -32,7 +32,7 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
-	placeholders := utils.GenerateSQLPlaceholders(len(columns))
+	placeholders := utils.GenerateSQLPlaceholders(1, len(columns))
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES %s",
@@ -50,10 +50,14 @@ func (sqlt *SQLiteAdapter) FindOne(
 	m behemoth.Model,
 	whereExpression clause.Expression,
 ) (behemoth.Model, error) {
+	_, ok := m.(behemoth.Serializable)
+	if !ok {
+		return nil, fmt.Errorf("model does not implement Serializable interface")
+	}
 
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
-	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
+	whereClause, args := BuildSQLWhereClause(&whereExpression)
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
 		strings.Join(columns, ", "),
@@ -76,9 +80,14 @@ func (sqlt *SQLiteAdapter) FindMany(
 	m behemoth.Model,
 	whereExpression clause.Expression,
 ) ([]behemoth.Model, error) {
+	_, ok := m.(behemoth.Serializable)
+	if !ok {
+		return nil, fmt.Errorf("model does not implement Serializable interface")
+	}
+
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
-	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
+	whereClause, args := BuildSQLWhereClause(&whereExpression)
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s",
 		strings.Join(columns, ", "),
@@ -111,8 +120,12 @@ func (sqlt *SQLiteAdapter) FindMany(
 }
 
 func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
+	_, ok := m.(behemoth.Serializable)
+	if !ok {
+		return fmt.Errorf("model does not implement Serializable interface")
+	}
+	
 	columns, values, _ := models.GenerateColumnValuePairs(m)
-
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = ?",
 		m.SchemaName(),
@@ -134,18 +147,35 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	return err
 }
 
-func BuildSQLiteWhereClause(expr *clause.Expression, N int) (string, []any) {
+func BuildSQLWhereClause(expr *clause.Expression) (string, []any) {
+	return buildSQLiteWhereClause(expr, 1)
+}
+
+func buildSQLiteWhereClause(expr *clause.Expression, N int) (string, []any) {
 	if expr == nil {
 		return "", nil
 	}
 
 	var queryParts []string
 	var args []any
+	var formatString string
+	var logicalOp clause.Logic = clause.OpAnd
+
+	totalConditions := len(expr.Conditions) + len(expr.Children)
+	if totalConditions > 1 {
+		formatString = "(%s)"
+	} else {
+		formatString = "%s"
+	}
+
+	if expr.Logic != "" {
+		logicalOp = expr.Logic
+	}
 
 	if len(expr.Children) > 0 {
 		for _, child := range expr.Children {
-			subQuery, subArgs := BuildSQLiteWhereClause(child, N)
-			queryParts = append(queryParts, fmt.Sprintf("(%s)", subQuery))
+			subQuery, subArgs := buildSQLiteWhereClause(child, N)
+			queryParts = append(queryParts, subQuery)
 			args = append(args, subArgs...)
 			N += len(subArgs)
 		}
@@ -157,7 +187,9 @@ func BuildSQLiteWhereClause(expr *clause.Expression, N int) (string, []any) {
 		N += len(subArgs)
 	}
 
-	return strings.Join(queryParts, fmt.Sprintf(" %s ", expr.Logic)), args
+	joinedQuery := strings.Join(queryParts, fmt.Sprintf(" %s ", logicalOp))
+
+	return fmt.Sprintf(formatString, joinedQuery), args
 }
 
 func buildConditionSQL(cond clause.Condition, N int) (string, []any) {
@@ -181,11 +213,11 @@ func buildConditionSQL(cond clause.Condition, N int) (string, []any) {
 		return fmt.Sprintf("(%s <= $%d)", cond.Field, N), []any{cond.Value}
 
 	case clause.OpIn:
-		placeholders := utils.GenerateSQLPlaceholders(len(cond.Value.([]any)))
+		placeholders := utils.GenerateSQLPlaceholders(N, N+len(cond.Value.([]any))-1)
 		return fmt.Sprintf("(%s IN %s)", cond.Field, placeholders), cond.Value.([]any)
 
 	case clause.OpNotIn:
-		placeholders := utils.GenerateSQLPlaceholders(len(cond.Value.([]any)))
+		placeholders := utils.GenerateSQLPlaceholders(N, N+len(cond.Value.([]any))-1)
 		return fmt.Sprintf("(%s NOT IN %s)", cond.Field, placeholders), cond.Value.([]any)
 
 	case clause.OpStartsWith:

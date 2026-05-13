@@ -44,16 +44,16 @@ func GenerateState() string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-func GenerateSQLPlaceholders(n int) string {
-	if n <= 0 {
-		return ""
+func GenerateSQLPlaceholders(begin, end int) string {
+	if end < begin {
+		return "()"
 	}
 
 	var b strings.Builder
 	b.WriteString("(")
-	for i := 1; i <= n; i++ {
+	for i := begin; i <= end; i++ {
 		b.WriteString(fmt.Sprintf("$%d", i))
-		if i < n {
+		if i < end {
 			b.WriteString(", ")
 		}
 	}
