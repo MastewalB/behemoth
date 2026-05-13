@@ -120,9 +120,9 @@ func TestFindManyMongo(t *testing.T) {
 	defer CleanupMongoTestDB(ctx, t, mongoClient)
 
 	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
-	user1 := *testutils.NewTestUser("7")
+	user1 := testutils.NewTestUser("7")
 	user2 := testutils.NewTestUser("6")
-	err := adapter.Create(ctx, &user1)
+	err := adapter.Create(ctx, user1)
 	assert.NoError(t, err)
 	err = adapter.Create(context.Background(), user2)
 	assert.NoError(t, err)
@@ -132,7 +132,7 @@ func TestFindManyMongo(t *testing.T) {
 		clause.Expression{
 			Logic: clause.OpOr,
 			Conditions: []clause.Condition{
-				{Field: "id", Operator: clause.OpIn, Value: []string{"7", "0"}}, // condition true for user1
+				{Field: "id", Operator: clause.OpIn, Value: []string{"7", "0"}},       // condition true for user1
 				{Field: "email", Operator: clause.OpIn, Value: []string{user2.Email}}, // condition true for user2
 			},
 		},
@@ -146,6 +146,44 @@ func TestFindManyMongo(t *testing.T) {
 
 	assert.Greater(t, foundUser1.ID, "4")
 	assert.Greater(t, foundUser2.ID, "4")
+}
+
+func TestUpdateMongo(t *testing.T) {
+	ctx := context.Background()
+	defer CleanupMongoTestDB(ctx, t, mongoClient)
+
+	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
+	user := testutils.NewTestUser("1")
+	err := adapter.Create(ctx, user)
+	assert.NoError(t, err)
+
+	user.Email = "updated@email.com"
+	err = adapter.Update(context.Background(), user)
+	assert.NoError(t, err)
+
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
+	assert.NoError(t, err)
+	assert.NotNil(t, found)
+
+	updatedUser := found.(*testutils.TestUser)
+	assert.Equal(t, user.Email, updatedUser.Email)
+}
+
+func TestDeleteMongo(t *testing.T) {
+	ctx := context.Background()
+	defer CleanupMongoTestDB(ctx, t, mongoClient)
+
+	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
+	user := testutils.NewTestUser("4")
+	err := adapter.Create(context.Background(), user)
+	assert.NoError(t, err, "failed to create user")
+
+	err = adapter.Delete(context.Background(), user)
+	assert.NoError(t, err, "failed to delete user")
+
+	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
+	assert.Error(t, err)
+	assert.Nil(t, found, "expected no user found after delete")
 }
 
 func TestBuildMongoFilter(t *testing.T) {

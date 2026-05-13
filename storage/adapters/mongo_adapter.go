@@ -56,7 +56,7 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 	if err := result.Decode(&raw); err != nil {
 		return nil, err
 	}
-
+	
 	model := m.New()
 	if err := model.(behemoth.Serializable).FromMap(raw); err != nil {
 		return nil, err
@@ -96,6 +96,40 @@ func (mdb *MongoAdapter) FindMany(ctx context.Context, m behemoth.Model, expr cl
 
 	return results, nil
 
+}
+
+func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
+	collection := mdb.db.Collection(m.SchemaName())
+	ser, ok := m.(behemoth.Serializable)
+	if !ok {
+		return fmt.Errorf("model does not implement Serializable")
+	}
+
+	filter := bson.M{
+		m.PrimaryKeyName(): m.PrimaryKeyField(),
+	}
+
+	doc, err := ser.ToMap()
+	if err != nil {
+		return err
+	}
+
+	update := bson.M{
+		"$set": doc,
+	}
+
+	_, err = collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
+	collection := mdb.db.Collection(m.SchemaName())
+	filter := bson.M{
+		m.PrimaryKeyName(): m.PrimaryKeyField(),
+	}
+
+	_, err := collection.DeleteOne(ctx, filter)
+	return err
 }
 
 func BuildMongoFilter(expr *clause.Expression) bson.M {
