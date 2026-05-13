@@ -27,7 +27,7 @@ func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
-	placeholders := utils.GenerateSQLPlaceholders(len(columns))
+	placeholders := utils.GenerateSQLPlaceholders(1, len(columns))
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES %s",
@@ -47,7 +47,7 @@ func (pg *PostgresAdapter) FindOne(
 
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
-	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
+	whereClause, args := BuildSQLWhereClause(&whereExpression)
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
 		strings.Join(columns, ", "),
@@ -72,7 +72,7 @@ func (pg *PostgresAdapter) FindMany(
 ) ([]behemoth.Model, error) {
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
-	whereClause, args := BuildSQLiteWhereClause(&whereExpression, 1)
+	whereClause, args := BuildSQLWhereClause(&whereExpression)
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s",
 		strings.Join(columns, ", "),

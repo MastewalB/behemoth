@@ -26,7 +26,7 @@ CREATE TABLE sessions (
 
 func TestSessionManager_CreateSession(t *testing.T) {
 	// Setup a mock database or use an in-memory database for testing
-	db := testutils.SetupTestDB(t, nil)
+	db := testutils.SetupTestDB(t, &session_schema)
 	defer db.Close()
 
 	// Create a SessionManager
@@ -53,7 +53,7 @@ func TestSessionManager_CreateSession(t *testing.T) {
 
 func TestSessionManager_GetSession(t *testing.T) {
 	// Setup a mock database or use an in-memory database for testing
-	db := testutils.SetupTestDB(t, nil)
+	db := testutils.SetupTestDB(t, &session_schema)
 	defer db.Close()
 
 	// Create a SessionManager
@@ -85,7 +85,7 @@ func TestSessionManager_GetSession(t *testing.T) {
 
 func TestSessionManager_GetSession_Expired(t *testing.T) {
 	// Setup a mock database or use an in-memory database for testing
-	db := testutils.SetupTestDB(t, nil)
+	db := testutils.SetupTestDB(t, &session_schema)
 	defer db.Close()
 
 	// Create a SessionManager with a short expiry time
@@ -163,7 +163,7 @@ func TestSessionManager_UpdateSession(t *testing.T) {
 }
 
 func TestSessionManager_DeleteSession(t *testing.T) {
-	db := testutils.SetupTestDB(t, nil)
+	db := testutils.SetupTestDB(t, &session_schema)
 	defer db.Close()
 
 	sessionManager := auth.NewSessionManager(

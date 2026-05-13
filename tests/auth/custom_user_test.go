@@ -27,14 +27,6 @@ func (u *CustomUser) New() behemoth.Model {
 	return &CustomUser{}
 }
 
-func (u *CustomUser) TableName() string {
-	return "users"
-}
-
-func (u *CustomUser) PrimaryKey() string {
-	return "id"
-}
-
 func (u *CustomUser) PrimaryKeyName() string {
 	return "id"
 }
@@ -47,22 +39,24 @@ func (u *CustomUser) SchemaName() string {
 	return "users"
 }
 
-func (u *CustomUser) Fields() []string {
-	return []string{
-		"id",
-		"name",
-		"password_hash",
-		"created_at",
-		"updated_at",
-	}
+func (u *CustomUser) ToMap() (map[string]any, error) {
+	return map[string]any{
+		"id":            u.ID,
+		"name":          u.Name,
+		"password_hash": u.PasswordHash,
+		"created_at":    u.CreatedAt,
+		"updated_at":    u.UpdatedAt,
+	}, nil
+
 }
 
-func (u *CustomUser) PrimaryValue() any {
-	return u.ID
-}
-
-func (u *CustomUser) ScanDestinations() []any {
-	return []any{&u.ID, &u.Name, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt}
+func (u *CustomUser) FromMap(data map[string]any) error {
+	u.ID = data["id"].(string)
+	u.Name = data["name"].(string)
+	u.PasswordHash = data["password_hash"].(string)
+	u.CreatedAt = data["created_at"].(string)
+	u.UpdatedAt = data["updated_at"].(string)
+	return nil
 }
 
 func customUserFactory(data map[string]any) behemoth.User {
@@ -142,7 +136,7 @@ func getBehemothInstance(db *sql.DB) (*auth.Behemoth[*CustomUser], error) {
 func TestCreateCustomUser(t *testing.T) {
 	ctx := context.Background()
 	db := setUpCustomUserTable(t)
-	// defer db.Close()
+	defer db.Close()
 
 	user := newTestUser()
 	insertCustomUser(t, db, user)
@@ -187,7 +181,7 @@ func TestCreateCustomUser(t *testing.T) {
 func TestAuthenticateCustomUser(t *testing.T) {
 
 	db := setUpCustomUserTable(t)
-	// defer db.Close()
+	defer db.Close()
 
 	password := "securepassword"
 	hashedPassword, err := utils.GeneratePasswordHash(password)
@@ -241,6 +235,7 @@ func TestLoginCustomUserIncorrectCredential(t *testing.T) {
 
 func TestRegisterCustomUser(t *testing.T) {
 	db := setUpCustomUserTable(t)
+	defer db.Close()
 
 	bmth, err := getBehemothInstance(db)
 	assert.NoError(t, err)
