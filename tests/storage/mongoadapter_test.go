@@ -465,3 +465,137 @@ func TestBuildMongoFilter(t *testing.T) {
 	}
 
 }
+
+func TestBuildMongoFilterEdgeCases(t *testing.T) {
+	t.Run("empty values in conditions", func(t *testing.T) {
+		expr := &clause.Expression{
+			Conditions: []clause.Condition{
+				{Field: "name", Operator: clause.OpEqual, Value: ""},
+				{Field: "age", Operator: clause.OpEqual, Value: 0},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{
+			"$and": []bson.M{
+				{"name": ""},
+				{"age": 0},
+			},
+		}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("nil values in conditions", func(t *testing.T) {
+		expr := &clause.Expression{
+			Conditions: []clause.Condition{
+				{Field: "deleted_at", Operator: clause.OpIsNull, Value: nil},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{"deleted_at": nil}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("empty slice in IN operator", func(t *testing.T) {
+		expr := &clause.Expression{
+			Conditions: []clause.Condition{
+				{Field: "ids", Operator: clause.OpIn, Value: []string{}},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{"ids": bson.M{"$in": []string{}}}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("multiple children with same level", func(t *testing.T) {
+		expr := &clause.Expression{
+			Logic: clause.OpOr,
+			Children: []*clause.Expression{
+				{
+					Conditions: []clause.Condition{
+						{Field: "a", Operator: clause.OpEqual, Value: 1},
+					},
+				},
+				{
+					Conditions: []clause.Condition{
+						{Field: "b", Operator: clause.OpEqual, Value: 2},
+					},
+				},
+				{
+					Conditions: []clause.Condition{
+						{Field: "c", Operator: clause.OpEqual, Value: 3},
+					},
+				},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{
+			"$or": []bson.M{
+				{"a": 1},
+				{"b": 2},
+				{"c": 3},
+			},
+		}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("mixed children and conditions", func(t *testing.T) {
+		expr := &clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "active", Operator: clause.OpEqual, Value: true},
+			},
+			Children: []*clause.Expression{
+				{
+					Conditions: []clause.Condition{
+						{Field: "score", Operator: clause.OpGreaterThan, Value: 50},
+					},
+				},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{
+			"$and": []bson.M{
+				{"score": bson.M{"$gt": 50}},
+				{"active": true},
+			},
+		}
+		assert.Equal(t, expected, result)
+	})
+}
+
+func TestBuildMongoFilterUnsupportedOperator(t *testing.T) {
+	t.Run("unsupported operator returns empty bson.M", func(t *testing.T) {
+		expr := &clause.Expression{
+			Conditions: []clause.Condition{
+				{Field: "test", Operator: "unsupported", Value: "value"},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{}
+		assert.Equal(t, expected, result)
+	})
+}
+
+func TestBuildMongoFilterNilValueHandling(t *testing.T) {
+	t.Run("condition with nil value for eq", func(t *testing.T) {
+		expr := &clause.Expression{
+			Conditions: []clause.Condition{
+				{Field: "field", Operator: clause.OpEqual, Value: nil},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{"field": nil}
+		assert.Equal(t, expected, result)
+	})
+
+	t.Run("condition with nil value for ne", func(t *testing.T) {
+		expr := &clause.Expression{
+			Conditions: []clause.Condition{
+				{Field: "field", Operator: clause.OpNotEqual, Value: nil},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{"field": bson.M{"$ne": nil}}
+		assert.Equal(t, expected, result)
+	})
+}
