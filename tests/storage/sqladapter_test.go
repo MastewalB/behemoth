@@ -216,6 +216,26 @@ func TestBuildSQLiteWhereClause(t *testing.T) {
 			expectedArgs: []any{1, 2, 3, 4, 5},
 		},
 		{
+			name: "single condition - in with non list value",
+			expr: &clause.Expression{
+				Conditions: []clause.Condition{
+					{Field: "id", Operator: clause.OpIn, Value: 10},
+				},
+			},
+			expectedSQL:  "(id IN ($1))",
+			expectedArgs: []any{10},
+		},
+		{
+			name: "single condition - not in with non list value",
+			expr: &clause.Expression{
+				Conditions: []clause.Condition{
+					{Field: "id", Operator: clause.OpNotIn, Value: 10},
+				},
+			},
+			expectedSQL:  "(id NOT IN ($1))",
+			expectedArgs: []any{10},
+		},
+		{
 			name: "single condition - not in",
 			expr: &clause.Expression{
 				Conditions: []clause.Condition{
@@ -618,12 +638,12 @@ func TestBuildSQLiteWhereClauseParameterNumberingSequence(t *testing.T) {
 				},
 			},
 		}
-		
+
 		sql, args := adapters.BuildSQLWhereClause(expr)
 		// Parameters should be sequential: $1, $2, $3, $4, $5
 		expectedSQL := "(((a = $1) AND (b = $2)) AND (((d = $3) AND (e = $4)) AND (c = $5)))"
 		expectedArgs := []any{1, 2, 4, 5, 3}
-		
+
 		assert.Equal(t, expectedSQL, sql)
 		assert.Equal(t, expectedArgs, args)
 	})
@@ -647,10 +667,8 @@ func BenchmarkBuildSQLiteWhereClause(b *testing.B) {
 			},
 		},
 	}
-	
-	
+
 	for b.Loop() {
 		adapters.BuildSQLWhereClause(expr)
 	}
 }
-

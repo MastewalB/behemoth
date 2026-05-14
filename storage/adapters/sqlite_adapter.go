@@ -213,12 +213,14 @@ func buildConditionSQL(cond clause.Condition, N int) (string, []any) {
 		return fmt.Sprintf("(%s <= $%d)", cond.Field, N), []any{cond.Value}
 
 	case clause.OpIn:
-		placeholders := utils.GenerateSQLPlaceholders(N, N+len(cond.Value.([]any))-1)
-		return fmt.Sprintf("(%s IN %s)", cond.Field, placeholders), cond.Value.([]any)
+		valueSlice := ToSlice(cond.Value)
+		placeholders := utils.GenerateSQLPlaceholders(N, N+len(valueSlice)-1)
+		return fmt.Sprintf("(%s IN %s)", cond.Field, placeholders), valueSlice 
 
 	case clause.OpNotIn:
-		placeholders := utils.GenerateSQLPlaceholders(N, N+len(cond.Value.([]any))-1)
-		return fmt.Sprintf("(%s NOT IN %s)", cond.Field, placeholders), cond.Value.([]any)
+		valueSlice := ToSlice(cond.Value)
+		placeholders := utils.GenerateSQLPlaceholders(N, N+len(valueSlice)-1)
+		return fmt.Sprintf("(%s NOT IN %s)", cond.Field, placeholders), valueSlice
 
 	case clause.OpStartsWith:
 		return fmt.Sprintf("(%s LIKE $%d)", cond.Field, N), []any{fmt.Sprintf("%s%%", cond.Value)}

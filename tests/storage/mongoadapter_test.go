@@ -258,7 +258,7 @@ func TestBuildMongoFilter(t *testing.T) {
 					{Field: "status", Operator: clause.OpIn, Value: []string{"active", "pending"}},
 				},
 			},
-			expected: bson.M{"status": bson.M{"$in": []string{"active", "pending"}}},
+			expected: bson.M{"status": bson.M{"$in": []any{"active", "pending"}}},
 		},
 		{
 			name: "single condition - nin",
@@ -267,7 +267,7 @@ func TestBuildMongoFilter(t *testing.T) {
 					{Field: "status", Operator: clause.OpNotIn, Value: []string{"deleted", "archived"}},
 				},
 			},
-			expected: bson.M{"status": bson.M{"$nin": []string{"deleted", "archived"}}},
+			expected: bson.M{"status": bson.M{"$nin": []any{"deleted", "archived"}}},
 		},
 		{
 			name: "single condition - contains",
@@ -450,7 +450,7 @@ func TestBuildMongoFilter(t *testing.T) {
 			expected: bson.M{
 				"$and": []bson.M{
 					{"age": bson.M{"$gte": 18}},
-					{"tags": bson.M{"$in": []string{"premium", "vip"}}},
+					{"tags": bson.M{"$in": []any{"premium", "vip"}}},
 					{"name": bson.M{"$regex": "john"}},
 				},
 			},
@@ -502,10 +502,29 @@ func TestBuildMongoFilterEdgeCases(t *testing.T) {
 			},
 		}
 		result := adapters.BuildMongoFilter(expr)
-		expected := bson.M{"ids": bson.M{"$in": []string{}}}
+		expected := bson.M{"ids": bson.M{"$in": []any{}}}
 		assert.Equal(t, expected, result)
 	})
-
+	t.Run("non-slice in IN operator", func(t *testing.T) {
+		expr := &clause.Expression{
+			Conditions: []clause.Condition{
+				{Field: "ids", Operator: clause.OpIn, Value: 1},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{"ids": bson.M{"$in": []any{1}}}
+		assert.Equal(t, expected, result)
+	})
+	t.Run("non-slice in NOT-IN operator", func(t *testing.T) {
+		expr := &clause.Expression{
+			Conditions: []clause.Condition{
+				{Field: "ids", Operator: clause.OpNotIn, Value: 1},
+			},
+		}
+		result := adapters.BuildMongoFilter(expr)
+		expected := bson.M{"ids": bson.M{"$nin": []any{1}}}
+		assert.Equal(t, expected, result)
+	})
 	t.Run("multiple children with same level", func(t *testing.T) {
 		expr := &clause.Expression{
 			Logic: clause.OpOr,

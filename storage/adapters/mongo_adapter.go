@@ -56,7 +56,7 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 	if err := result.Decode(&raw); err != nil {
 		return nil, err
 	}
-	
+
 	model := m.New()
 	if err := model.(behemoth.Serializable).FromMap(raw); err != nil {
 		return nil, err
@@ -147,14 +147,15 @@ func BuildMongoFilter(expr *clause.Expression) bson.M {
 		conditions = append(conditions, buildMongoCondition(cond))
 	}
 
-	if len(conditions) > 1 {
+	if len(conditions) == 1 {
+		return conditions[0]
+	} else if len(conditions) > 1 {
 		return bson.M{
 			mapLogicalOperator(expr.Logic): conditions,
 		}
-	} else if len(conditions) == 0 {
-		return bson.M{}
 	}
-	return conditions[0]
+
+	return bson.M{}
 }
 
 func buildMongoCondition(cond clause.Condition) bson.M {
@@ -176,11 +177,14 @@ func buildMongoCondition(cond clause.Condition) bson.M {
 	case clause.OpLessEq:
 		return bson.M{cond.Field: bson.M{"$lte": cond.Value}}
 
+	// MongoDB requires the value for $in and $nin to be an array, so we use the ToSlice helper to ensure it's always a slice, even if a single value is provided.
 	case clause.OpIn:
-		return bson.M{cond.Field: bson.M{"$in": cond.Value}}
+		valueSlice := ToSlice(cond.Value)
+		return bson.M{cond.Field: bson.M{"$in": valueSlice}}
 
 	case clause.OpNotIn:
-		return bson.M{cond.Field: bson.M{"$nin": cond.Value}}
+		valueSlice := ToSlice(cond.Value)
+		return bson.M{cond.Field: bson.M{"$nin": valueSlice}}
 
 	case clause.OpStartsWith:
 		return bson.M{cond.Field: bson.M{"$regex": fmt.Sprintf("^%s", cond.Value)}}
