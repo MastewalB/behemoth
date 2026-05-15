@@ -24,10 +24,6 @@ func (u *TestUser) SchemaName() string {
 	return "users"
 }
 
-// func (u *TestUser) PrimaryKey() string {
-// 	return "id"
-// }
-
 func (u *TestUser) PrimaryKeyField() any {
 	return u.ID
 }
@@ -35,18 +31,6 @@ func (u *TestUser) PrimaryKeyField() any {
 func (u *TestUser) PrimaryKeyName() string {
 	return "id"
 }
-
-// func (u *TestUser) Fields() []string {
-// 	return []string{"id", "email", "username"}
-// }
-
-// func (u *TestUser) PrimaryValue() any {
-// 	return u.ID
-// }
-
-// func (u *TestUser) ScanDestinations() []any {
-// 	return []any{&u.ID, &u.Email, &u.Username}
-// }
 
 func (u *TestUser) GetID() string {
 	return u.ID
@@ -90,6 +74,77 @@ func (u *TestUser) FromMap(data map[string]any) error {
 
 func NewTestUser(id string) *TestUser {
 	return &TestUser{
+		ID:       id,
+		Email:    fmt.Sprintf("user%s@example.com", id),
+		Username: fmt.Sprintf("user%s", id),
+	}
+}
+
+type GormTestUser struct {
+	ID       string `gorm:"primaryKey"`
+	Email    string `gorm:"unique;not null"`
+	Username string `gorm:"unique;not null"`
+}
+
+
+func (u *GormTestUser) SchemaName() string {
+	return "users"
+}
+
+func (u *GormTestUser) TableName() string {
+	return "users"
+}
+
+func (u *GormTestUser) PrimaryKeyField() any {
+	return u.ID
+}
+
+func (u *GormTestUser) PrimaryKeyName() string {
+	return "id"
+}
+
+func (u *GormTestUser) GetID() string {
+	return u.ID
+}
+
+func (u *GormTestUser) GetPasswordHash() string {
+	return ""
+}
+
+func (u *GormTestUser) New() behemoth.Model {
+	return &GormTestUser{}
+}
+
+func (u *GormTestUser) ToMap() (map[string]any, error) {
+	return map[string]any{
+		"id":       u.ID,
+		"email":    u.Email,
+		"username": u.Username,
+	}, nil
+}
+
+func (u *GormTestUser) FromMap(data map[string]any) error {
+	id, ok := data["id"].(string)
+	if !ok {
+		return fmt.Errorf("invalid type for id")
+	}
+	email, ok := data["email"].(string)
+	if !ok {
+		return fmt.Errorf("invalid type for email")
+	}
+	username, ok := data["username"].(string)
+	if !ok {
+		return fmt.Errorf("invalid type for username")
+	}
+
+	u.ID = id
+	u.Email = email
+	u.Username = username
+	return nil
+}
+
+func NewGormTestUser(id string) *GormTestUser {
+	return &GormTestUser{
 		ID:       id,
 		Email:    fmt.Sprintf("user%s@example.com", id),
 		Username: fmt.Sprintf("user%s", id),
