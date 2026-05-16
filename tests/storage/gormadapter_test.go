@@ -89,3 +89,20 @@ func TestGormAdapter_Update(t *testing.T) {
 	assert.Equal(t, user.Email, updatedUser.Email)
 	assert.Equal(t, user.Username, updatedUser.Username)
 }
+
+func TestGormAdapter_Delete(t *testing.T) {
+	db := SetupGormTestDB(t, &testutils.GormTestUser{})
+	adapter := SetupGormAdapter(t, db)
+
+	user := testutils.NewGormTestUser("4")
+	err := adapter.Create(context.Background(), user)
+	assert.NoError(t, err)
+
+	err = adapter.Delete(context.Background(), user)
+	assert.NoError(t, err)
+
+	_, err = adapter.FindOne(context.Background(), &testutils.GormTestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
+	assert.Error(t, err)
+	// assert.Nil(t, found)
+
+}

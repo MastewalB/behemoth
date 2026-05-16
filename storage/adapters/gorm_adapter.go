@@ -61,3 +61,7 @@ func (ga *GormAdapter) FindMany(ctx context.Context, m behemoth.Model, expr clau
 func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return ga.db.WithContext(ctx).Save(m).Error
 }
+
+func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
+	return ga.db.WithContext(ctx).Delete(m).Error
+}
