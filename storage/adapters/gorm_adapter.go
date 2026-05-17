@@ -28,7 +28,10 @@ func (ga *GormAdapter) Create(ctx context.Context, m behemoth.Model) error {
 func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
 	query, args := BuildSQLWhereClause(&expr)
 	err := ga.db.WithContext(ctx).Where(query, args...).First(m).Error
-	return m, err
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (ga *GormAdapter) FindMany(ctx context.Context, m behemoth.Model, expr clause.Expression) ([]behemoth.Model, error) {

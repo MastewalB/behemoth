@@ -46,6 +46,11 @@ func TestGormAdapter_CreateAndFindOne(t *testing.T) {
 	assert.Equal(t, user.ID, foundUser.ID)
 	assert.Equal(t, user.Email, foundUser.Email)
 	assert.Equal(t, user.Username, foundUser.Username)
+
+	non_existent, err := adapter.FindOne(ctx, &testutils.GormTestUser{}, getWhereExpr("id", clause.OpEqual, "999"))
+	assert.Error(t, err)
+	assert.Nil(t, non_existent)
+
 }
 
 func TestGormAdapter_FindMany(t *testing.T) {
@@ -101,8 +106,8 @@ func TestGormAdapter_Delete(t *testing.T) {
 	err = adapter.Delete(context.Background(), user)
 	assert.NoError(t, err)
 
-	_, err = adapter.FindOne(context.Background(), &testutils.GormTestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
+	found, err := adapter.FindOne(context.Background(), &testutils.GormTestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
 	assert.Error(t, err)
-	// assert.Nil(t, found)
+	assert.Nil(t, found)
 
 }
