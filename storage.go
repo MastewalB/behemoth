@@ -14,6 +14,8 @@ const (
 	Postgres DatabaseName = "postgres"
 )
 
+type M map[string]any
+
 type Model interface {
 	SchemaName() string
 	PrimaryKeyName() string

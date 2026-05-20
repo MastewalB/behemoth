@@ -2,7 +2,6 @@ package models
 
 import (
 	"context"
-	"fmt"
 
 	"testing"
 
@@ -39,7 +38,6 @@ func TestCreate(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
-	fmt.Println(found)
 	foundUser := found.(*testutils.TestUser)
 	assert.Equal(t, user.ID, foundUser.ID)
 	assert.Equal(t, user.Email, foundUser.Email)

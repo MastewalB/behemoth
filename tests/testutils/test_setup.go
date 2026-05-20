@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/storage/adapters"
 )
 
@@ -25,4 +26,10 @@ func SetupTestDB(t *testing.T, schema *string) *sql.DB {
 func SetupSQLiteAdapter(t *testing.T, db *sql.DB) *adapters.SQLiteAdapter {
 	adapter := &adapters.SQLiteAdapter{DB: db}
 	return adapter
+}
+
+func SetupInternalAdapter(t *testing.T, db behemoth.Database) *adapters.InternalAdapter {
+	return &adapters.InternalAdapter{
+		DB: db,
+	}
 }

@@ -28,49 +28,6 @@ func (u *User) GetFirstname() string    { return u.Firstname }
 func (u *User) GetLastname() string     { return u.Lastname }
 func (u *User) GetName() string         { return fmt.Sprintf("%s %s", u.Firstname, u.Lastname) }
 
-// Functions required to satisfy the Model interface
-
-// func (u *User) TableName() string {
-// 	return "users"
-// }
-
-// func (u *User) PrimaryKey() string {
-// 	return "id"
-// }
-
-// func (u *User) Fields() []string {
-// 	return []string{
-// 		"id",
-// 		"email",
-// 		"username",
-// 		"firstname",
-// 		"lastname",
-// 		"password_hash",
-// 		"email_verified",
-// 		"image_url",
-// 		"created_at",
-// 		"updated_at",
-// 	}
-// }
-
-// func (u *User) PrimaryValue() any {
-// 	return u.ID
-// }
-
-// func (u *User) ScanDestinations() []any {
-// 	return []any{
-// 		&u.ID,
-// 		&u.Email,
-// 		&u.Username,
-// 		&u.Firstname,
-// 		&u.Lastname,
-// 		&u.PasswordHash,
-// 		&u.EmailVerified,
-// 		&u.ImageUrl,
-// 		&u.CreatedAt,
-// 		&u.UpdatedAt,
-// 	}
-// }
 
 func (u *User) SchemaName() string {
 	return "users"

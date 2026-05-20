@@ -2,6 +2,7 @@ package testutils
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/MastewalB/behemoth"
 )
@@ -80,12 +81,19 @@ func NewTestUser(id string) *TestUser {
 	}
 }
 
+func NewTestUserMap(id int) behemoth.M {
+	return behemoth.M{
+		"id":       strconv.Itoa(id),
+		"email":    fmt.Sprintf("user%d@example.com", id),
+		"username": fmt.Sprintf("user%d", id),
+	}
+}
+
 type GormTestUser struct {
 	ID       string `gorm:"primaryKey"`
 	Email    string `gorm:"unique;not null"`
 	Username string `gorm:"unique;not null"`
 }
-
 
 func (u *GormTestUser) SchemaName() string {
 	return "users"
