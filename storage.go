@@ -36,6 +36,19 @@ type Database interface {
 	// DeleteMany(ctx context.Context, model Model, expr clause.Expression) error
 }
 
+type KeyValueStorage interface {
+	Get(ctx context.Context, key string) (string, error)
+
+	Set(
+		ctx context.Context,
+		key string,
+		value string,
+		ttl int,
+	) error
+
+	Delete(ctx context.Context, key string) error
+}
+
 type Serializable interface {
 	ToMap() (map[string]any, error)
 	FromMap(map[string]any) error
