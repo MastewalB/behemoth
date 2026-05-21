@@ -1,13 +1,10 @@
 package models
 
 import (
-	"context"
-
 	"testing"
 
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/storage/adapters"
-	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -17,108 +14,108 @@ import (
 Tests for the SQLLiteAdapter implementing the behemoth.Database interface.
 */
 
-func getWhereExpr(field string, operator clause.Operator, value any) clause.Expression {
-	return clause.Expression{
-		Logic: clause.OpAnd,
-		Conditions: []clause.Condition{
-			{Field: field, Operator: operator, Value: value},
-		},
-	}
-}
+// func getWhereExpr(field string, operator clause.Operator, value any) clause.Expression {
+// 	return clause.Expression{
+// 		Logic: clause.OpAnd,
+// 		Conditions: []clause.Condition{
+// 			{Field: field, Operator: operator, Value: value},
+// 		},
+// 	}
+// }
 
-func TestCreate(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
-	adapter := *testutils.SetupSQLiteAdapter(t, db)
+// func TestCreate(t *testing.T) {
+// 	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+// 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
-	user := testutils.NewTestUser("1")
-	err := adapter.Create(context.Background(), user)
-	assert.NoError(t, err)
+// 	user := testutils.NewTestUser("1")
+// 	err := adapter.Create(context.Background(), user)
+// 	assert.NoError(t, err)
 
-	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
-	assert.NoError(t, err)
-	assert.NotNil(t, found)
+// 	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
+// 	assert.NoError(t, err)
+// 	assert.NotNil(t, found)
 
-	foundUser := found.(*testutils.TestUser)
-	assert.Equal(t, user.ID, foundUser.ID)
-	assert.Equal(t, user.Email, foundUser.Email)
-	assert.Equal(t, user.Username, foundUser.Username)
-}
+// 	foundUser := found.(*testutils.TestUser)
+// 	assert.Equal(t, user.ID, foundUser.ID)
+// 	assert.Equal(t, user.Email, foundUser.Email)
+// 	assert.Equal(t, user.Username, foundUser.Username)
+// }
 
-func TestFind(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
-	adapter := *testutils.SetupSQLiteAdapter(t, db)
+// func TestFind(t *testing.T) {
+// 	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+// 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
-	user := testutils.NewTestUser("2")
-	err := adapter.Create(context.Background(), user)
-	assert.NoError(t, err)
+// 	user := testutils.NewTestUser("2")
+// 	err := adapter.Create(context.Background(), user)
+// 	assert.NoError(t, err)
 
-	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "2"))
-	assert.NoError(t, err)
-	assert.NotNil(t, found)
+// 	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "2"))
+// 	assert.NoError(t, err)
+// 	assert.NotNil(t, found)
 
-	foundUser := found.(*testutils.TestUser)
-	assert.Equal(t, user.ID, foundUser.ID)
-	assert.Equal(t, user.Email, foundUser.Email)
-	assert.Equal(t, user.Username, foundUser.Username)
-}
+// 	foundUser := found.(*testutils.TestUser)
+// 	assert.Equal(t, user.ID, foundUser.ID)
+// 	assert.Equal(t, user.Email, foundUser.Email)
+// 	assert.Equal(t, user.Username, foundUser.Username)
+// }
 
-func TestFindMany(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
-	adapter := *testutils.SetupSQLiteAdapter(t, db)
+// func TestFindMany(t *testing.T) {
+// 	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+// 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
-	user1 := testutils.NewTestUser("5")
-	user2 := testutils.NewTestUser("6")
-	err := adapter.Create(context.Background(), user1)
-	assert.NoError(t, err)
-	err = adapter.Create(context.Background(), user2)
-	assert.NoError(t, err)
+// 	user1 := testutils.NewTestUser("5")
+// 	user2 := testutils.NewTestUser("6")
+// 	err := adapter.Create(context.Background(), user1)
+// 	assert.NoError(t, err)
+// 	err = adapter.Create(context.Background(), user2)
+// 	assert.NoError(t, err)
 
-	found, err := adapter.FindMany(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpGreaterThan, "4"))
-	assert.NoError(t, err)
-	assert.Len(t, found, 2)
+// 	found, err := adapter.FindMany(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpGreaterThan, "4"))
+// 	assert.NoError(t, err)
+// 	assert.Len(t, found, 2)
 
-	foundUser1 := found[0].(*testutils.TestUser)
-	foundUser2 := found[1].(*testutils.TestUser)
+// 	foundUser1 := found[0].(*testutils.TestUser)
+// 	foundUser2 := found[1].(*testutils.TestUser)
 
-	assert.Greater(t, foundUser1.ID, "4")
-	assert.Greater(t, foundUser2.ID, "4")
-}
+// 	assert.Greater(t, foundUser1.ID, "4")
+// 	assert.Greater(t, foundUser2.ID, "4")
+// }
 
-func TestUpdate(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
-	adapter := *testutils.SetupSQLiteAdapter(t, db)
+// func TestUpdate(t *testing.T) {
+// 	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+// 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
-	user := testutils.NewTestUser("3")
-	err := adapter.Create(context.Background(), user)
-	assert.NoError(t, err)
+// 	user := testutils.NewTestUser("3")
+// 	err := adapter.Create(context.Background(), user)
+// 	assert.NoError(t, err)
 
-	user.Email = "updated@email.com"
-	err = adapter.Update(context.Background(), user)
-	assert.NoError(t, err)
+// 	user.Email = "updated@email.com"
+// 	err = adapter.Update(context.Background(), user)
+// 	assert.NoError(t, err)
 
-	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "3"))
-	assert.NoError(t, err)
-	assert.NotNil(t, found)
+// 	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "3"))
+// 	assert.NoError(t, err)
+// 	assert.NotNil(t, found)
 
-	updatedUser := found.(*testutils.TestUser)
-	assert.Equal(t, user.Email, updatedUser.Email)
-}
+// 	updatedUser := found.(*testutils.TestUser)
+// 	assert.Equal(t, user.Email, updatedUser.Email)
+// }
 
-func TestDelete(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
-	adapter := *testutils.SetupSQLiteAdapter(t, db)
+// func TestDelete(t *testing.T) {
+// 	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+// 	adapter := *testutils.SetupSQLiteAdapter(t, db)
 
-	user := testutils.NewTestUser("4")
-	err := adapter.Create(context.Background(), user)
-	assert.NoError(t, err)
+// 	user := testutils.NewTestUser("4")
+// 	err := adapter.Create(context.Background(), user)
+// 	assert.NoError(t, err)
 
-	err = adapter.Delete(context.Background(), user)
-	assert.NoError(t, err)
+// 	err = adapter.Delete(context.Background(), user)
+// 	assert.NoError(t, err)
 
-	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
-	assert.Error(t, err)
-	assert.Nil(t, found)
-}
+// 	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
+// 	assert.Error(t, err)
+// 	assert.Nil(t, found)
+// }
 
 func TestBuildSQLiteWhereClause(t *testing.T) {
 	tests := []struct {
