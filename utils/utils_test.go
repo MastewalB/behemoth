@@ -11,7 +11,7 @@ func TestGenerateSqlitePlaceholders(t *testing.T) {
 		numParams int
 		expected  string
 	}{
-		{0, ""},
+		{-1, "()"},
 		{1, "($1)"},
 		{2, "($1, $2)"},
 		{3, "($1, $2, $3)"},
@@ -21,7 +21,7 @@ func TestGenerateSqlitePlaceholders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(rune(tt.numParams)), func(t *testing.T) {
-			result := GenerateSQLPlaceholders(1, 1+tt.numParams)
+			result := GenerateSQLPlaceholders(1, 1+tt.numParams-1)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
