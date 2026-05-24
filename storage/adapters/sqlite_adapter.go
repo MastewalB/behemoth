@@ -8,6 +8,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/utils"
 )
@@ -42,7 +43,7 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, values...)
-	return err
+	return mapSQLErrors("Create", m.SchemaName(), err)
 }
 
 func (sqlt *SQLiteAdapter) FindOne(
@@ -69,7 +70,7 @@ func (sqlt *SQLiteAdapter) FindOne(
 	row := sqlt.DB.QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, err
+		return nil, mapSQLErrors("FindOne", m.SchemaName(), err)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -98,7 +99,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	fmt.Println("Executing query:", query, "with args:", args)
 	rows, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, mapSQLErrors("FindMany", m.SchemaName(), err)
 	}
 
 	defer rows.Close()
@@ -107,7 +108,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	for rows.Next() {
 		err := rows.Scan(valuePtrs...)
 		if err != nil {
-			return nil, err
+			return nil, mapSQLErrors("FindMany", m.SchemaName(), err)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -122,9 +123,9 @@ func (sqlt *SQLiteAdapter) FindMany(
 func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return fmt.Errorf("model does not implement Serializable interface")
+		return behemotherr.SerializableNotImplemented()
 	}
-	
+
 	columns, values, _ := models.GenerateColumnValuePairs(m)
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = ?",
@@ -134,7 +135,7 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return err
+	return mapSQLErrors("Update", m.SchemaName(), err)
 }
 
 func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
@@ -144,7 +145,7 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		m.PrimaryKeyName(),
 	)
 	_, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return err
+	return mapSQLErrors("Delete", m.SchemaName(), err)
 }
 
 func BuildSQLWhereClause(expr *clause.Expression) (string, []any) {
@@ -215,7 +216,7 @@ func buildConditionSQL(cond clause.Condition, N int) (string, []any) {
 	case clause.OpIn:
 		valueSlice := ToSlice(cond.Value)
 		placeholders := utils.GenerateSQLPlaceholders(N, N+len(valueSlice)-1)
-		return fmt.Sprintf("(%s IN %s)", cond.Field, placeholders), valueSlice 
+		return fmt.Sprintf("(%s IN %s)", cond.Field, placeholders), valueSlice
 
 	case clause.OpNotIn:
 		valueSlice := ToSlice(cond.Value)
@@ -240,4 +241,21 @@ func buildConditionSQL(cond clause.Condition, N int) (string, []any) {
 	default:
 		return "", []any{cond.Value}
 	}
+}
+
+func mapSQLErrors(op, entity string, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	switch err {
+	case sql.ErrNoRows:
+		return behemotherr.NewNotFound(op, entity, err)
+	case sql.ErrTxDone:
+		return behemotherr.NewTransactionError(op, err)
+
+	default:
+		return behemotherr.NewInternal(op, err)
+	}
+
 }
