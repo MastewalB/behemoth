@@ -34,6 +34,7 @@ func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 
 	collection := mdb.db.Collection(m.SchemaName())
 	_, err = collection.InsertOne(ctx, doc)
+
 	return err
 }
 
@@ -214,4 +215,8 @@ func mapLogicalOperator(logic clause.Logic) string {
 	default:
 		return "$and"
 	}
+}
+
+func mapMongoErrors(err error) error {
+	return nil
 }
