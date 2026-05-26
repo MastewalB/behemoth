@@ -43,7 +43,7 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, values...)
-	return mapSQLErrors("Create", m.SchemaName(), err)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
 func (sqlt *SQLiteAdapter) FindOne(
@@ -70,7 +70,7 @@ func (sqlt *SQLiteAdapter) FindOne(
 	row := sqlt.DB.QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, mapSQLErrors("FindOne", m.SchemaName(), err)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -99,7 +99,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	fmt.Println("Executing query:", query, "with args:", args)
 	rows, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, mapSQLErrors("FindMany", m.SchemaName(), err)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 	}
 
 	defer rows.Close()
@@ -108,7 +108,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	for rows.Next() {
 		err := rows.Scan(valuePtrs...)
 		if err != nil {
-			return nil, mapSQLErrors("FindMany", m.SchemaName(), err)
+			return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -135,7 +135,7 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return mapSQLErrors("Update", m.SchemaName(), err)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
 func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
@@ -145,7 +145,7 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		m.PrimaryKeyName(),
 	)
 	_, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return mapSQLErrors("Delete", m.SchemaName(), err)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
 func BuildSQLWhereClause(expr *clause.Expression) (string, []any) {

@@ -20,22 +20,15 @@ func NewGormAdapter(db *gorm.DB) *GormAdapter {
 }
 
 func (ga *GormAdapter) Create(ctx context.Context, m behemoth.Model) error {
-	return withErrorHandling(func() error {
-		return ga.db.
-			WithContext(ctx).
-			Table(m.SchemaName()).
-			Create(m).
-			Error
-	},
-		"Create",
-		m.SchemaName())
+	err := ga.db.WithContext(ctx).Table(m.SchemaName()).Create(m).Error
+	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
 func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
 	query, args := BuildSQLWhereClause(&expr)
 	err := ga.db.WithContext(ctx).Where(query, args...).First(m).Error
 	if err != nil {
-		return nil, mapGormError("FindOne", m.SchemaName(), err)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapGormError)
 	}
 	return m, nil
 }
@@ -54,7 +47,7 @@ func (ga *GormAdapter) FindMany(ctx context.Context, m behemoth.Model, expr clau
 		Find(slicePtr.Interface()).Error
 
 	if err != nil {
-		return nil, mapGormError("FindMany", m.SchemaName(), err)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapGormError)
 	}
 
 	sliceValue := slicePtr.Elem()
@@ -68,18 +61,20 @@ func (ga *GormAdapter) FindMany(ctx context.Context, m behemoth.Model, expr clau
 }
 
 func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
-	return withErrorHandling(func() error { return ga.db.WithContext(ctx).Save(m).Error }, "Update", m.SchemaName())
+	err := ga.db.WithContext(ctx).Save(m).Error
+	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
 func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
-	// return ga.db.WithContext(ctx).Delete(m).Error
-	return withErrorHandling(func() error { return ga.db.WithContext(ctx).Delete(m).Error }, "Delete", m.SchemaName())
+	err := ga.db.WithContext(ctx).Delete(m).Error
+	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
 func mapGormError(op, entity string, err error) error {
 	if err == nil {
 		return nil
 	}
+
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return behemotherr.NewNotFound(op, entity, err)
@@ -101,11 +96,4 @@ func mapGormError(op, entity string, err error) error {
 	}
 
 	return behemotherr.NewInternal(op, err)
-}
-
-func withErrorHandling(fn func() error, op, entity string) error {
-	if err := fn(); err != nil {
-		return mapGormError(op, entity, err)
-	}
-	return nil
 }

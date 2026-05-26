@@ -7,6 +7,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -35,7 +36,7 @@ func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	collection := mdb.db.Collection(m.SchemaName())
 	_, err = collection.InsertOne(ctx, doc)
 
-	return err
+	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
@@ -50,12 +51,12 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 
 	result := collection.FindOne(ctx, filter)
 	if result.Err() != nil {
-		return nil, result.Err()
+		return nil, WrapWithCaller(result.Err(), m.SchemaName(), mapMongoErrors)
 	}
 
 	var raw map[string]any
 	if err := result.Decode(&raw); err != nil {
-		return nil, err
+		return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
 
 	model := m.New()
@@ -77,7 +78,7 @@ func (mdb *MongoAdapter) FindMany(ctx context.Context, m behemoth.Model, expr cl
 
 	cursor, err := collection.Find(ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
 
 	defer cursor.Close(ctx)
@@ -86,7 +87,7 @@ func (mdb *MongoAdapter) FindMany(ctx context.Context, m behemoth.Model, expr cl
 	for cursor.Next(ctx) {
 		var raw map[string]any
 		if err := cursor.Decode(&raw); err != nil {
-			return nil, err
+			return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 		}
 		model := m.New()
 		if err := model.(behemoth.Serializable).FromMap(raw); err != nil {
@@ -120,7 +121,7 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	}
 
 	_, err = collection.UpdateOne(ctx, filter, update)
-	return err
+	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
@@ -130,7 +131,7 @@ func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	}
 
 	_, err := collection.DeleteOne(ctx, filter)
-	return err
+	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func BuildMongoFilter(expr *clause.Expression) bson.M {
@@ -217,6 +218,17 @@ func mapLogicalOperator(logic clause.Logic) string {
 	}
 }
 
-func mapMongoErrors(err error) error {
-	return nil
+func mapMongoErrors(op, entity string, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	switch {
+	case errors.Is(err, mongo.ErrNoDocuments):
+		return behemotherr.NewNotFound(op, entity, err)
+	case errors.Is(err, mongo.ErrEmptySlice) || errors.Is(err, mongo.ErrNilValue) || errors.Is(err, mongo.ErrNilDocument):
+		return behemotherr.NewValidationError(op, entity, err)
+	default:
+		return behemotherr.NewInternal(op, err)
+	}
 }

@@ -37,7 +37,7 @@ func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	)
 	_, err := pg.DB.ExecContext(ctx, query, values...)
 
-	return mapSQLErrors("Create", m.SchemaName(), err)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
 func (pg *PostgresAdapter) FindOne(
@@ -60,7 +60,7 @@ func (pg *PostgresAdapter) FindOne(
 	row := pg.DB.QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, mapSQLErrors("FindOne", m.SchemaName(), err)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -85,7 +85,7 @@ func (pg *PostgresAdapter) FindMany(
 
 	rows, err := pg.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, mapSQLErrors("FindMany", m.SchemaName(), err)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 	}
 
 	defer rows.Close()
@@ -93,7 +93,7 @@ func (pg *PostgresAdapter) FindMany(
 	var results []behemoth.Model
 	for rows.Next() {
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, mapSQLErrors("FindMany", m.SchemaName(), err)
+			return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -118,7 +118,7 @@ func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	fmt.Println(query, values)
 
 	_, err := pg.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return mapSQLErrors("Update", m.SchemaName(), err)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
 func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
@@ -129,5 +129,5 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := pg.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return mapSQLErrors("Delete", m.SchemaName(), err)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }

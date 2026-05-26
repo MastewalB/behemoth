@@ -7,10 +7,11 @@ import (
 type ErrorType string
 
 var (
-	ErrNotFound     = &DomainError{Type: NotFound}
-	ErrDuplicateKey = &DomainError{Type: DuplicateKey}
-	ErrValidation   = &DomainError{Type: Validation}
-	ErrInternal     = &DomainError{Type: Internal}
+	ErrNotFound       = &DomainError{Type: NotFound}
+	ErrDuplicateKey   = &DomainError{Type: DuplicateKey}
+	ErrValidation     = &DomainError{Type: Validation}
+	ErrInternal       = &DomainError{Type: Internal}
+	ErrNotImplemented = &DomainError{Type: NotImplemented}
 	// Add more: PermissionDenied, ConstraintViolation, etc.
 )
 
@@ -20,6 +21,7 @@ const (
 	ForeignKeyViolation ErrorType = "FOREIGN_KEY_VIOLATION"
 	Validation          ErrorType = "VALIDATION_ERROR"
 	TransactionError    ErrorType = "TRANSACTION_ERROR"
+	NotImplemented      ErrorType = "NOT_IMPLEMENTED"
 	Internal            ErrorType = "INTERNAL_ERROR"
 )
 
@@ -91,4 +93,15 @@ func NewValidationError(op, entity string, original error) error {
 		Entity:   entity,
 		Original: original,
 	}
+}
+
+func NewNotImplemented(msg string) error {
+	return &DomainError{
+		Type:    NotImplemented,
+		Message: msg,
+	}
+}
+
+func SerializableNotImplemented() error {
+	return NewNotImplemented("model does not implement Serializable interface")
 }
