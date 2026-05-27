@@ -28,7 +28,6 @@ func (u *User) GetFirstname() string    { return u.Firstname }
 func (u *User) GetLastname() string     { return u.Lastname }
 func (u *User) GetName() string         { return fmt.Sprintf("%s %s", u.Firstname, u.Lastname) }
 
-
 func (u *User) SchemaName() string {
 	return "users"
 }
@@ -74,6 +73,22 @@ func (u *User) FromMap(data map[string]any) error {
 	return nil
 }
 
+// GenerateColumnValuePairs constructs three parallel slices from a behemoth.Model:
+//   - columns:   names of columns extracted from m.ToMap()
+//   - values:    concrete values corresponding to each column
+//   - valuePtrs: pointers to each element in values (useful for database scans)
+//
+// Behavior:
+//   - If m implements behemoth.Serializable, ToMap() is called to obtain a map[string]any.
+//   - Columns are collected from the map's keys (map iteration order is not deterministic).
+//   - values and valuePtrs are allocated to match the number of columns.
+//   - If m does not implement behemoth.Serializable or ToMap() returns an error,
+//     the function returns nil, nil, nil.
+//
+// Note:
+//   - The columns slice order is determined by the iteration order of the map returned by ToMap().
+//
+
 func GenerateColumnValuePairs(m behemoth.Model) (columns []string, values []any, valuePtrs []any) {
 	if serializable, ok := m.(behemoth.Serializable); ok {
 		data, err := serializable.ToMap()
@@ -97,6 +112,25 @@ func GenerateColumnValuePairs(m behemoth.Model) (columns []string, values []any,
 	return columns, values, valuePtrs
 }
 
+// GenerateModelFromRows constructs a new behemoth.Model instance populated from
+// parallel slices of column names and values.
+//
+// Parameters:
+//   - m: a prototype model used to create a new instance via m.New().
+//   - columns: slice of column names.
+//   - values: slice of values; values[i] corresponds to columns[i].
+//
+// Behavior:
+//   - Builds a map[string]any from columns and values (assumes len(values) >= len(columns)).
+//   - Calls m.New() to obtain a fresh model instance.
+//   - If the new instance implements behemoth.Serializable, calls FromMap(resultMap)
+//     to populate the model and returns it.
+//   - Returns an error if the new model does not implement behemoth.Serializable
+//     or if FromMap returns an error.
+//
+// Notes:
+//   - The order and alignment of columns and values must match the source rows.
+//   - Database driver types (e.g., []uint8 for blobs) are passed through as-is.
 func GenerateModelFromRows(m behemoth.Model, columns []string, values []any) (behemoth.Model, error) {
 	resultMap := map[string]any{}
 	for i, col := range columns {
