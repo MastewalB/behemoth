@@ -33,8 +33,12 @@ type Database interface {
 	Update(ctx context.Context, m Model) error
 	Delete(ctx context.Context, m Model) error
 
+	Transaction(ctx context.Context, fn TransactionFunc) error
+
 	// DeleteMany(ctx context.Context, model Model, expr clause.Expression) error
 }
+
+type TransactionFunc func(ctx context.Context, tx Database) (any, error)
 
 type KeyValueStorage interface {
 	Get(ctx context.Context, key string) (string, error)

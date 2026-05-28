@@ -22,7 +22,9 @@ var mongoClient *mongo.Client
 var cleanupMongo func()
 
 func setupMongoTestDB(ctx context.Context, t *testing.T) (*mongo.Client, func()) {
-	mongodbContainer, err := mongodb.Run(ctx, "mongo:6")
+	// Create a new MongoDB container.
+	// Use ReplicaSet for transactions support.
+	mongodbContainer, err := mongodb.Run(ctx, "mongo:6", mongodb.WithReplicaSet("rs0"))
 
 	if err != nil {
 		t.Fatalf("failed to start container: %s", err)

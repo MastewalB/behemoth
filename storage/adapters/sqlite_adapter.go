@@ -14,17 +14,12 @@ import (
 )
 
 type SQLiteAdapter struct {
-	DB *sql.DB
+	DB Querier
 }
 
-func NewSQLiteAdapter(db *sql.DB) *SQLiteAdapter {
+func NewSQLiteAdapter(db Querier) *SQLiteAdapter {
 	return &SQLiteAdapter{DB: db}
 }
-
-// func (sqlt *SQLiteAdapter) CreateTable(ctx context.Context, schema string) error {
-// 	_, err := sqlt.DB.ExecContext(ctx, schema)
-// 	return err
-// }
 
 func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	_, ok := m.(behemoth.Serializable)
@@ -146,6 +141,32 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	)
 	_, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
+func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
+	tx, err := sqlt.DB.(*sql.DB).BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	txAdapter := NewSQLiteAdapter(tx)
+	_, err = fn(ctx, txAdapter)
+
+	if err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return behemotherr.NewTransactionError("Transaction", rollbackErr)
+		}
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func BuildSQLWhereClause(expr *clause.Expression) (string, []any) {

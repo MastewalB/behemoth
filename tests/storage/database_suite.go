@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/MastewalB/behemoth"
@@ -47,6 +48,7 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("FindMany", s.TestFindMany)
 	s.t.Run("Update", s.TestUpdate)
 	s.t.Run("Delete", s.TestDelete)
+	s.t.Run("Transaction", s.TestTransaction)
 
 	s.cleanupDatabase()
 }
@@ -124,6 +126,40 @@ func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, "1"))
 	assert.Error(t, err)
 	assert.Nil(t, found)
+}
+
+func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
+	defer s.cleanupTables()
+
+	// Rollback scenario: create inside transaction but return error to force rollback
+	rollbackModel := s.modelManager.Create("tx_rollback")
+	err := s.adapter.Transaction(context.Background(), func(ctx context.Context, tx behemoth.Database) (any, error) {
+		if err := tx.Create(ctx, rollbackModel); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("force rollback")
+	})
+	assert.Error(t, err)
+	
+	found, err := s.adapter.FindOne(s.ctx, rollbackModel, getWhereExpr("id", clause.OpEqual, "tx_rollback"))
+	assert.Error(t, err)
+	assert.Nil(t, found)
+
+	// Commit scenario: create inside transaction and return nil to commit
+	commitModel := s.modelManager.Create("tx_commit")
+	err = s.adapter.Transaction(context.Background(), func(ctx context.Context, tx behemoth.Database) (any, error) {
+		if err := tx.Create(ctx, commitModel); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	assert.NoError(t, err)
+
+	found, err = s.adapter.FindOne(s.ctx, commitModel, getWhereExpr("id", clause.OpEqual, "tx_commit"))
+	assert.NoError(t, err)
+	assert.NotNil(t, found)
+	assert.True(t, s.modelManager.Compare(commitModel, found))
+
 }
 
 func getWhereExpr(field string, operator clause.Operator, value any) clause.Expression {

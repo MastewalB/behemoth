@@ -8,15 +8,23 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/utils"
 )
 
-type PostgresAdapter struct {
-	DB *sql.DB
+// Querier is implemented by both *sql.DB and *sql.Tx
+type Querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func NewPostgresAdapter(db *sql.DB) *PostgresAdapter {
+type PostgresAdapter struct {
+	DB Querier
+}
+
+func NewPostgresAdapter(db Querier) *PostgresAdapter {
 	return &PostgresAdapter{DB: db}
 }
 
@@ -130,4 +138,30 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 
 	_, err := pg.DB.ExecContext(ctx, query, m.PrimaryKeyField())
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
+func (pg *PostgresAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
+	tx, err := pg.DB.(*sql.DB).BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	txAdapter := NewPostgresAdapter(tx)
+	_, err = fn(ctx, txAdapter)
+
+	if err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return behemotherr.NewTransactionError("Transaction", rollbackErr)
+		}
+		return err
+	}
+
+	return tx.Commit()
 }

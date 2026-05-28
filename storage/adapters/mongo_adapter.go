@@ -134,6 +134,26 @@ func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
+func (mdb *MongoAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
+	// Create a new session using the Mongo Client that the database was created from
+	session, err := mdb.db.Client().StartSession()
+	if err != nil {
+		return err
+	}
+
+	defer session.EndSession(ctx)
+
+	_, err = session.WithTransaction(ctx, func(ctx mongo.SessionContext) (any, error) {
+		return fn(ctx, mdb)
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func BuildMongoFilter(expr *clause.Expression) bson.M {
 	if expr == nil {
 		return bson.M{}

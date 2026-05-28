@@ -70,6 +70,15 @@ func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
+func (ga *GormAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
+
+	return ga.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txAdapter := NewGormAdapter(tx)
+		_, err := fn(ctx, txAdapter)
+		return err
+	})
+}
+
 func mapGormError(op, entity string, err error) error {
 	if err == nil {
 		return nil
