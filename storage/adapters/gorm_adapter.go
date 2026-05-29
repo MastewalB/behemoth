@@ -65,6 +65,11 @@ func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
+func (ga *GormAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
+	err := ga.db.WithContext(ctx).Update(fieldName, value).Error
+	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+}
+
 func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	err := ga.db.WithContext(ctx).Delete(m).Error
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
@@ -104,5 +109,5 @@ func mapGormError(op, entity string, err error) error {
 		return behemotherr.NewValidationError(op, entity, err)
 	}
 
-	return behemotherr.NewInternal(op, err)
+	return behemotherr.NewDatabaseError(op, err)
 }

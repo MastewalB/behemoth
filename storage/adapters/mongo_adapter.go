@@ -124,6 +124,24 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
+func (mdb *MongoAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
+	collection := mdb.db.Collection(m.SchemaName())
+
+	filter := bson.M{
+		m.PrimaryKeyName(): m.PrimaryKeyField(),
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			fieldName: value,
+		},
+	}
+
+	_, err := collection.UpdateOne(ctx, filter, update)
+
+	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+}
+
 func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	collection := mdb.db.Collection(m.SchemaName())
 	filter := bson.M{
@@ -132,6 +150,11 @@ func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 
 	_, err := collection.DeleteOne(ctx, filter)
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+}
+
+func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+
+	return nil
 }
 
 func (mdb *MongoAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
@@ -249,6 +272,6 @@ func mapMongoErrors(op, entity string, err error) error {
 	case errors.Is(err, mongo.ErrEmptySlice) || errors.Is(err, mongo.ErrNilValue) || errors.Is(err, mongo.ErrNilDocument):
 		return behemotherr.NewValidationError(op, entity, err)
 	default:
-		return behemotherr.NewInternal(op, err)
+		return behemotherr.NewDatabaseError(op, err)
 	}
 }

@@ -114,6 +114,11 @@ func (pg *PostgresAdapter) FindMany(
 }
 
 func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
+	_, ok := m.(behemoth.Serializable)
+	if !ok {
+		return behemotherr.SerializableNotImplemented()
+	}
+
 	columns, values, _ := models.GenerateColumnValuePairs(m)
 
 	query := fmt.Sprintf(
@@ -126,6 +131,20 @@ func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	fmt.Println(query, values)
 
 	_, err := pg.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
+func (pg *PostgresAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
+
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s = $%d",
+		m.SchemaName(),
+		utils.GenerateSQLSETClause([]string{fieldName}),
+		m.PrimaryKeyName(),
+		2,
+	)
+
+	_, err := pg.DB.ExecContext(ctx, query, []any{value, m.PrimaryKeyField()}...)
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 

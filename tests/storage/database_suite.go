@@ -47,6 +47,7 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("FindOne", s.TestFindOne)
 	s.t.Run("FindMany", s.TestFindMany)
 	s.t.Run("Update", s.TestUpdate)
+	s.t.Run("UpdateField", s.TestUpdateField)
 	s.t.Run("Delete", s.TestDelete)
 	s.t.Run("Transaction", s.TestTransaction)
 
@@ -113,6 +114,24 @@ func (s *DatabaseTestSuite) TestUpdate(t *testing.T) {
 
 }
 
+func (s *DatabaseTestSuite) TestUpdateField(t *testing.T) {
+	defer s.cleanupTables()
+
+	model := s.modelManager.Create("1")
+	err := s.adapter.Create(s.ctx, model)
+	assert.NoError(t, err)
+
+	err = s.adapter.UpdateField(s.ctx, model, "email", "Updated@email.com")
+	// t.Log(err.(*behemotherr.DomainError).Original
+	assert.NoError(t, err)
+
+	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, "1"))
+	assert.NoError(t, err)
+	assert.NotNil(t, found)
+
+	assert.False(t, s.modelManager.Compare(model, found), "Model should have been updated and not match original")
+}
+
 func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 	defer s.cleanupTables()
 
@@ -140,7 +159,7 @@ func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
 		return nil, errors.New("force rollback")
 	})
 	assert.Error(t, err)
-	
+
 	found, err := s.adapter.FindOne(s.ctx, rollbackModel, getWhereExpr("id", clause.OpEqual, "tx_rollback"))
 	assert.Error(t, err)
 	assert.Nil(t, found)

@@ -133,6 +133,18 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
+func (sqlt *SQLiteAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s = ?",
+		m.SchemaName(),
+		utils.GenerateSQLSETClause([]string{fieldName}),
+		m.PrimaryKeyName(),
+	)
+
+	_, err := sqlt.DB.ExecContext(ctx, query, []any{value, m.PrimaryKeyField()}...)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
 func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = ?",
@@ -276,7 +288,7 @@ func mapSQLErrors(op, entity string, err error) error {
 		return behemotherr.NewTransactionError(op, err)
 
 	default:
-		return behemotherr.NewInternal(op, err)
+		return behemotherr.NewDatabaseError(op, err)
 	}
 
 }
