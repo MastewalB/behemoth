@@ -29,11 +29,16 @@ func TestSQLiteAdapter(t *testing.T) {
 			M.ID == N.ID &&
 			M.Username == N.Username
 	}
+	clone := func(M behemoth.Model) behemoth.Model {
+		copy := *M.(*testutils.TestUser)
+		return &copy
+	}
 
 	manager := ModelManager{
 		Create:  factory,
 		Update:  updater,
 		Compare: comparator,
+		Clone:   clone,
 	}
 
 	cleanupTables := func() {
@@ -69,6 +74,10 @@ func TestMongoAdapter(t *testing.T) {
 				M.Username == N.Username
 
 		},
+		Clone: func(M behemoth.Model) behemoth.Model {
+			copy := *M.(*testutils.TestUser)
+			return &copy
+		},
 	}
 
 	suite := NewDatabaseTestSuite(t, adapter, manager, func() {
@@ -96,6 +105,10 @@ func TestPostgresAdapter(t *testing.T) {
 				M.ID == N.ID &&
 				M.Username == N.Username
 
+		},
+		Clone: func(M behemoth.Model) behemoth.Model {
+			copy := *M.(*testutils.TestUser)
+			return &copy
 		},
 	}
 	cleanupTables := func() {
@@ -125,6 +138,10 @@ func TestGormAdapter(t *testing.T) {
 				M.ID == N.ID &&
 				M.Username == N.Username
 
+		},
+		Clone: func(M behemoth.Model) behemoth.Model {
+			copy := *M.(*testutils.GormTestUser)
+			return &copy
 		},
 	}
 

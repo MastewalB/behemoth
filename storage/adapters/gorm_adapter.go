@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 
 	"github.com/MastewalB/behemoth"
@@ -33,18 +34,42 @@ func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr claus
 	return m, nil
 }
 
-func (ga *GormAdapter) FindMany(ctx context.Context, m behemoth.Model, expr clause.Expression) ([]behemoth.Model, error) {
+func (ga *GormAdapter) FindMany(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	options *behemoth.QueryOptions,
+) ([]behemoth.Model, error) {
 	query, args := BuildSQLWhereClause(&expr)
 
 	modelType := reflect.TypeOf(m)
 	sliceType := reflect.SliceOf(modelType)
 	slicePtr := reflect.New(sliceType)
 
-	err := ga.db.
+	db := ga.db.
 		WithContext(ctx).
 		Table(m.SchemaName()).
-		Where(query, args...).
-		Find(slicePtr.Interface()).Error
+		Where(query, args...)
+
+	if options != nil {
+		if len(options.Select) > 0 {
+			db = db.Select(options.Select)
+		}
+		if options.Distinct {
+			db = db.Distinct()
+		}
+		if options.OrderBy.Field != "" {
+			db = db.Order(fmt.Sprintf("%s %s", options.OrderBy.Field, options.OrderBy.Direction))
+		}
+		if options.Limit != 0 {
+			db = db.Limit(options.Limit)
+		}
+		if options.Offset != 0 {
+			db = db.Offset(options.Offset)
+		}
+	}
+
+	err := db.Find(slicePtr.Interface()).Error
 
 	if err != nil {
 		return nil, WrapWithCaller(err, m.SchemaName(), mapGormError)
@@ -66,7 +91,7 @@ func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
 }
 
 func (ga *GormAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
-	err := ga.db.WithContext(ctx).Update(fieldName, value).Error
+	err := ga.db.WithContext(ctx).Model(m).Update(fieldName, value).Error
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 

@@ -28,10 +28,10 @@ type Database interface {
 	Create(ctx context.Context, m Model) error
 
 	FindOne(ctx context.Context, model Model, expr clause.Expression) (Model, error)
-	FindMany(ctx context.Context, model Model, expr clause.Expression) ([]Model, error)
+	FindMany(ctx context.Context, model Model, expr clause.Expression, options *QueryOptions) ([]Model, error)
 
 	Update(ctx context.Context, m Model) error
-	UpdateField(ctx context.Context, m Model, fieldName string, value any) error 
+	UpdateField(ctx context.Context, m Model, fieldName string, value any) error
 
 	Delete(ctx context.Context, m Model) error
 
@@ -41,6 +41,26 @@ type Database interface {
 }
 
 type TransactionFunc func(ctx context.Context, tx Database) (any, error)
+
+type QueryOptions struct {
+	Limit    int
+	Offset   int
+	OrderBy  Order
+	Select   []string
+	Distinct bool
+}
+
+type Order struct {
+	Field     string
+	Direction OrderDirection
+}
+
+type OrderDirection string
+
+const (
+	Asc  OrderDirection = "ASC"
+	Desc OrderDirection = "DESC"
+)
 
 type KeyValueStorage interface {
 	Get(ctx context.Context, key string) (string, error)

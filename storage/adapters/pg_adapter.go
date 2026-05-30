@@ -78,16 +78,60 @@ func (pg *PostgresAdapter) FindMany(
 	ctx context.Context,
 	m behemoth.Model,
 	whereExpression clause.Expression,
+	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
-	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
+	if _, ok := m.(behemoth.Serializable); !ok {
+		return nil, fmt.Errorf("model does not implement Serializable interface")
+	}
+	var (
+		columns        []string
+		values         []any
+		valuePtrs      []any
+		distinctClause string
+		query          string
+	)
+
+	if options != nil && len(options.Select) > 0 {
+		columns, values, valuePtrs = models.GenerateColumnValuePairsWithSelectFilter(m, options.Select)
+	} else {
+		columns, values, valuePtrs = models.GenerateColumnValuePairs(m)
+	}
+
+	if options != nil && options.Distinct {
+		distinctClause = "DISTINCT "
+	}
 
 	whereClause, args := BuildSQLWhereClause(&whereExpression)
-	query := fmt.Sprintf(
-		"SELECT %s FROM %s WHERE %s",
-		strings.Join(columns, ", "),
-		m.SchemaName(),
-		whereClause,
-	)
+
+	if whereClause != "" {
+		query = fmt.Sprintf(
+			"SELECT %s%s FROM %s WHERE %s",
+			distinctClause,
+			strings.Join(columns, ", "),
+			m.SchemaName(),
+			whereClause,
+		)
+	} else {
+		query = fmt.Sprintf(
+			"SELECT %s%s FROM %s",
+			distinctClause,
+			strings.Join(columns, ", "),
+			m.SchemaName(),
+		)
+	}
+
+	if options != nil {
+		if options.OrderBy.Field != "" {
+			query += fmt.Sprintf(" ORDER BY %s %s", options.OrderBy.Field, options.OrderBy.Direction)
+		}
+		if options.Limit != 0 {
+			query += fmt.Sprintf(" LIMIT %d", options.Limit)
+		}
+		if options.Offset != 0 {
+			query += fmt.Sprintf(" OFFSET %d", options.Offset)
+		}
+
+	}
 
 	fmt.Println("Executing query:", query, "with args:", args)
 

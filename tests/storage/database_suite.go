@@ -14,6 +14,10 @@ type ModelManager struct {
 	Create  func(id string) behemoth.Model
 	Update  func(M behemoth.Model) behemoth.Model
 	Compare func(T, U behemoth.Model) bool
+
+	// Create a deepcopy of the model. Some adapters (like GORM) update the original model instance,
+	// so the original state is needed to verify that updates actually occurred.
+	Clone func(M behemoth.Model) behemoth.Model
 }
 
 type DatabaseTestSuite struct {
@@ -50,6 +54,7 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("UpdateField", s.TestUpdateField)
 	s.t.Run("Delete", s.TestDelete)
 	s.t.Run("Transaction", s.TestTransaction)
+	s.t.Run("QueryOptions", s.TestQueryOptions)
 
 	s.cleanupDatabase()
 }
@@ -91,7 +96,7 @@ func (s *DatabaseTestSuite) TestFindMany(t *testing.T) {
 	err = s.adapter.Create(s.ctx, model2)
 	assert.NoError(t, err)
 
-	found, err := s.adapter.FindMany(s.ctx, model1, getWhereExpr("id", clause.OpGreaterThan, "4"))
+	found, err := s.adapter.FindMany(s.ctx, model1, getWhereExpr("id", clause.OpGreaterThan, "4"), nil)
 	assert.NoError(t, err)
 	assert.Len(t, found, 2)
 
@@ -120,16 +125,16 @@ func (s *DatabaseTestSuite) TestUpdateField(t *testing.T) {
 	model := s.modelManager.Create("1")
 	err := s.adapter.Create(s.ctx, model)
 	assert.NoError(t, err)
+	copy := s.modelManager.Clone(model)
 
 	err = s.adapter.UpdateField(s.ctx, model, "email", "Updated@email.com")
 	// t.Log(err.(*behemotherr.DomainError).Original
 	assert.NoError(t, err)
-
 	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, "1"))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
-	assert.False(t, s.modelManager.Compare(model, found), "Model should have been updated and not match original")
+	assert.False(t, s.modelManager.Compare(copy, found), "Model should have been updated and not match original")
 }
 
 func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
@@ -179,6 +184,253 @@ func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
 	assert.NotNil(t, found)
 	assert.True(t, s.modelManager.Compare(commitModel, found))
 
+}
+
+func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
+	defer s.cleanupTables()
+
+	// Create test data with various IDs and emails for sorting/filtering
+	testData := []struct {
+		id    string
+		email string
+	}{
+		{"1", "alpha@test.com"},
+		{"2", "beta@test.com"},
+		{"3", "gamma@test.com"},
+		{"4", "delta@test.com"},
+		{"5", "epsilon@test.com"},
+	}
+
+	populateTable := func() {
+		for _, data := range testData {
+			model := s.modelManager.Create(data.id)
+			err := s.adapter.Create(s.ctx, model)
+			assert.NoError(t, err)
+			// Set email field if the model supports it
+			err = s.adapter.UpdateField(s.ctx, model, "email", data.email)
+			assert.NoError(t, err)
+		}
+	}
+
+	populateTable()
+
+	t.Run("Limit", func(t *testing.T) {
+		model := s.modelManager.Create("1")
+
+		options := &behemoth.QueryOptions{
+			Limit: 2,
+		}
+
+		found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
+		assert.NoError(t, err)
+		assert.Len(t, found, 2, "Should return exactly 2 records due to limit")
+	})
+
+	t.Run("Offset", func(t *testing.T) {
+		model := s.modelManager.Create("1")
+
+		// Get first 3 records
+		options1 := &behemoth.QueryOptions{
+			Limit:   3,
+			OrderBy: behemoth.Order{Field: "id", Direction: behemoth.Asc},
+		}
+		firstBatch, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options1)
+		// t.Log(err.(*behemotherr.DomainError).Original)
+		assert.NoError(t, err)
+		assert.Len(t, firstBatch, 3)
+
+		// Get records with offset 2 (skip first 2)
+		options2 := &behemoth.QueryOptions{
+			Offset:  2,
+			Limit:   3,
+			OrderBy: behemoth.Order{Field: "id", Direction: behemoth.Asc},
+		}
+		secondBatch, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options2)
+		assert.NoError(t, err)
+
+		// Second batch should not include the first 2 records
+		// Compare IDs to verify offset works
+		if len(secondBatch) > 0 {
+			firstID := getModelID(firstBatch[0])
+			secondBatchFirstID := getModelID(secondBatch[0])
+			assert.NotEqual(t, firstID, secondBatchFirstID, "Offset should skip the first record")
+		}
+	})
+
+	t.Run("OrderBy", func(t *testing.T) {
+		model := s.modelManager.Create("1")
+
+		t.Run("Default Ascending", func(t *testing.T) {
+			options := &behemoth.QueryOptions{
+				OrderBy: behemoth.Order{Field: "id"},
+			}
+
+			found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
+			assert.NoError(t, err)
+			assert.Equal(t, len(found), len(testData), "Should have at least 3 records for ordering test")
+
+			// Verify ascending order by ID
+			for i := 1; i < len(found); i++ {
+				prevID := getModelID(found[i-1])
+				currentID := getModelID(found[i])
+				assert.Less(t, prevID, currentID, "Records should be in ascending order by ID")
+			}
+		})
+
+		t.Run("Ascending", func(t *testing.T) {
+			options := &behemoth.QueryOptions{
+				OrderBy: behemoth.Order{Field: "id", Direction: behemoth.Asc},
+			}
+
+			found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
+			assert.NoError(t, err)
+			assert.Equal(t, len(found), len(testData), "Should have at least 3 records for ordering test")
+
+			// Verify ascending order by ID
+			for i := 1; i < len(found); i++ {
+				prevID := getModelID(found[i-1])
+				currentID := getModelID(found[i])
+				assert.Less(t, prevID, currentID, "Records should be in ascending order by ID")
+			}
+		})
+
+		t.Run("Descending", func(t *testing.T) {
+			options := &behemoth.QueryOptions{
+				OrderBy: behemoth.Order{Field: "id", Direction: behemoth.Desc},
+			}
+
+			found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
+			assert.NoError(t, err)
+			assert.Equal(t, len(found), len(testData), "Should have at least 3 records for ordering test")
+
+			// Verify descending order by ID
+			for i := 1; i < len(found); i++ {
+				prevID := getModelID(found[i-1])
+				currentID := getModelID(found[i])
+				assert.Greater(t, prevID, currentID, "Records should be in descending order by ID")
+			}
+		})
+
+		t.Run("OrderByEmail", func(t *testing.T) {
+			options := &behemoth.QueryOptions{
+				OrderBy: behemoth.Order{Field: "email", Direction: behemoth.Asc},
+			}
+
+			found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
+			assert.NoError(t, err)
+			assert.GreaterOrEqual(t, len(found), 3, "Should have at least 3 records for ordering test")
+
+			// Verify ascending order by email (lexicographically)
+			for i := 1; i < len(found); i++ {
+				prevEmail := getModelEmail(found[i-1])
+				currentEmail := getModelEmail(found[i])
+				assert.LessOrEqual(t, prevEmail, currentEmail, "Records should be in ascending order by email")
+			}
+		})
+
+	})
+
+	t.Run("Distinct", func(t *testing.T) {
+		s.cleanupTables()
+		defer populateTable()
+
+		// Create duplicate email records
+		model1 := s.modelManager.Create("dup1")
+		err := s.adapter.Create(s.ctx, model1)
+		assert.NoError(t, err)
+		err = s.adapter.UpdateField(s.ctx, model1, "email", "duplicate@test.com")
+		assert.NoError(t, err)
+
+		model2 := s.modelManager.Create("dup2")
+		err = s.adapter.Create(s.ctx, model2)
+		assert.NoError(t, err)
+		err = s.adapter.UpdateField(s.ctx, model2, "email", "duplicate@test.com")
+		assert.NoError(t, err)
+
+		model3 := s.modelManager.Create("dup3")
+		err = s.adapter.Create(s.ctx, model3)
+		assert.NoError(t, err)
+		err = s.adapter.UpdateField(s.ctx, model3, "email", "unique@test.com")
+		assert.NoError(t, err)
+
+		t.Run("WithoutDistinct", func(t *testing.T) {
+			options := &behemoth.QueryOptions{
+				Select: []string{"email"},
+			}
+
+			found, err := s.adapter.FindMany(s.ctx, model1, clause.Expression{}, options)
+			assert.NoError(t, err)
+
+			// Count emails to verify duplicates exist
+			emailCount := make(map[string]int)
+			for _, m := range found {
+				email := getModelEmail(m)
+				emailCount[email]++
+			}
+
+			// Without distinct, should get duplicate emails
+			assert.Equal(t, emailCount["duplicate@test.com"], 2, "Should have duplicate emails without DISTINCT")
+		})
+
+		t.Run("WithDistinct", func(t *testing.T) {
+			options := &behemoth.QueryOptions{
+				Select:   []string{"email"},
+				Distinct: true,
+			}
+
+			found, err := s.adapter.FindMany(s.ctx, model1, clause.Expression{}, options)
+			assert.NoError(t, err)
+
+			// We have only "duplicate@test.com" and "unique@test.com"
+			assert.Equal(t, len(found), 2, "Should have 2 unique emails")
+		})
+	})
+
+	t.Run("CombinedOptions", func(t *testing.T) {
+		model := s.modelManager.Create("1")
+
+		options := &behemoth.QueryOptions{
+			Limit:   2,
+			Offset:  1,
+			OrderBy: behemoth.Order{Field: "id", Direction: behemoth.Asc},
+		}
+
+		found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
+		assert.NoError(t, err)
+		assert.Len(t, found, 2, "Should respect limit")
+
+		if len(found) >= 2 {
+			// With offset 1 and ascending order, we should get IDs "2" and "3"
+			firstID := getModelID(found[0])
+			secondID := getModelID(found[1])
+			assert.Equal(t, "2", firstID, "First record after offset 1 should be ID 2")
+			assert.Equal(t, "3", secondID, "Second record after offset 1 should be ID 3")
+		}
+	})
+
+}
+
+func getModelID(m behemoth.Model) string {
+	switch v := m.(type) {
+	case interface{ GetID() string }:
+		return v.GetID()
+
+	case interface{ PrimaryKeyField() any }:
+		return v.PrimaryKeyField().(string)
+
+	default:
+		return ""
+	}
+}
+
+func getModelEmail(m behemoth.Model) string {
+	switch v := m.(type) {
+	case interface{ GetEmail() string }:
+		return v.GetEmail()
+
+	default:
+		return ""
+	}
 }
 
 func getWhereExpr(field string, operator clause.Operator, value any) clause.Expression {

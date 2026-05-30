@@ -3,6 +3,7 @@ package testutils
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/MastewalB/behemoth"
 )
@@ -16,7 +17,7 @@ type TestUser struct {
 var TestUserSchema = `
 CREATE TABLE users (
 	id TEXT PRIMARY KEY,
-	email TEXT UNIQUE NOT NULL,
+	email TEXT NOT NULL,
 	username TEXT UNIQUE NOT NULL
 );
 `
@@ -35,6 +36,10 @@ func (u *TestUser) PrimaryKeyName() string {
 
 func (u *TestUser) GetID() string {
 	return u.ID
+}
+
+func (u *TestUser) GetEmail() string {
+	return u.Email
 }
 
 func (u *TestUser) GetPasswordHash() string {
@@ -56,15 +61,18 @@ func (u *TestUser) ToMap() (map[string]any, error) {
 func (u *TestUser) FromMap(data map[string]any) error {
 	id, ok := data["id"].(string)
 	if !ok {
-		return fmt.Errorf("invalid type for id")
+		id = ""
+		// return fmt.Errorf("invalid type for id")
 	}
 	email, ok := data["email"].(string)
 	if !ok {
-		return fmt.Errorf("invalid type for email")
+		email = ""
+		// return fmt.Errorf("invalid type for email")
 	}
 	username, ok := data["username"].(string)
 	if !ok {
-		return fmt.Errorf("invalid type for username")
+		username = ""
+		// return fmt.Errorf("invalid type for username")
 	}
 
 	u.ID = id
@@ -74,10 +82,12 @@ func (u *TestUser) FromMap(data map[string]any) error {
 }
 
 func NewTestUser(id string) *TestUser {
+	t := strconv.FormatInt(time.Now().UnixNano(), 10) 
+
 	return &TestUser{
 		ID:       id,
 		Email:    fmt.Sprintf("user%s@example.com", id),
-		Username: fmt.Sprintf("user%s", id),
+		Username: t,
 	}
 }
 
@@ -91,7 +101,7 @@ func NewTestUserMap(id int) behemoth.M {
 
 type GormTestUser struct {
 	ID       string `gorm:"primaryKey"`
-	Email    string `gorm:"unique;not null"`
+	Email    string `gorm:"not null"`
 	Username string `gorm:"unique;not null"`
 }
 
@@ -113,6 +123,10 @@ func (u *GormTestUser) PrimaryKeyName() string {
 
 func (u *GormTestUser) GetID() string {
 	return u.ID
+}
+
+func (u *GormTestUser) GetEmail() string {
+	return u.Email
 }
 
 func (u *GormTestUser) GetPasswordHash() string {
