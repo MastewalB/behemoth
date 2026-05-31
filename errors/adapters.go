@@ -10,8 +10,9 @@ var (
 	ErrNotFound       = &DomainError{Type: NotFound}
 	ErrDuplicateKey   = &DomainError{Type: DuplicateKey}
 	ErrValidation     = &DomainError{Type: Validation}
-	ErrInternal       = &DomainError{Type: Internal}
+	ErrDatabase       = &DomainError{Type: Database}
 	ErrNotImplemented = &DomainError{Type: NotImplemented}
+
 	// Add more: PermissionDenied, ConstraintViolation, etc.
 )
 
@@ -23,6 +24,7 @@ const (
 	TransactionError    ErrorType = "TRANSACTION_ERROR"
 	NotImplemented      ErrorType = "NOT_IMPLEMENTED"
 	Internal            ErrorType = "INTERNAL_ERROR"
+	Database            ErrorType = "DATABASE_ERROR"
 )
 
 type DomainError struct {
@@ -62,7 +64,7 @@ func NewDuplicateKey(op, entity string, original error) error {
 	}
 }
 
-func NewInternal(op string, original error) error {
+func NewDatabaseError(op string, original error) error {
 	return &DomainError{
 		Type:     Internal,
 		Op:       op,
