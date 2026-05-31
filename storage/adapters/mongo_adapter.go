@@ -10,6 +10,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type MongoAdapter struct {
@@ -67,21 +68,37 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 	return model, nil
 }
 
-func (mdb *MongoAdapter) FindMany(ctx context.Context, m behemoth.Model, expr clause.Expression) ([]behemoth.Model, error) {
+func (mdb *MongoAdapter) FindMany(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	options *behemoth.QueryOptions,
+) ([]behemoth.Model, error) {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
 		return nil, errors.New("model must implement Serializable")
 	}
-
+	var cursor *mongo.Cursor
+	var err error
 	filter := BuildMongoFilter(&expr)
 	collection := mdb.db.Collection(m.SchemaName())
 
-	cursor, err := collection.Find(ctx, filter)
+	defer func() {
+		cursor.Close(ctx)
+	}()
+
+	if options != nil && options.Distinct {
+		pipeline := buildDistinctPipeline(filter, options)
+		cursor, err = collection.Aggregate(ctx, pipeline)
+
+	} else {
+		mongoOpts := optionsToMongoFindOptions(options)
+		cursor, err = collection.Find(ctx, filter, mongoOpts)
+	}
+
 	if err != nil {
 		return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
-
-	defer cursor.Close(ctx)
 
 	var results []behemoth.Model
 	for cursor.Next(ctx) {
@@ -274,4 +291,75 @@ func mapMongoErrors(op, entity string, err error) error {
 	default:
 		return behemotherr.NewDatabaseError(op, err)
 	}
+}
+
+func optionsToMongoFindOptions(queryOptions *behemoth.QueryOptions) *options.FindOptions {
+	if queryOptions == nil {
+		return nil
+	}
+
+	findOptions := &options.FindOptions{}
+
+	if queryOptions.OrderBy.Field != "" {
+		dir := 1
+		if queryOptions.OrderBy.Direction == behemoth.Desc {
+			dir = -1
+		}
+		findOptions.SetSort(bson.D{{Key: queryOptions.OrderBy.Field, Value: dir}})
+	}
+	if queryOptions.Limit != 0 {
+		findOptions.SetLimit(int64(queryOptions.Limit))
+	}
+	if queryOptions.Offset != 0 {
+		findOptions.SetSkip(int64(queryOptions.Offset))
+	}
+	if len(queryOptions.Select) > 0 {
+		projection := bson.M{"_id": 0} // Suppress the default _id field unless it's explicitly included in the select fields
+		for _, field := range queryOptions.Select {
+			projection[field] = 1
+		}
+		findOptions.SetProjection(projection)
+	}
+
+	return findOptions
+}
+
+func buildDistinctPipeline(filter bson.M, options *behemoth.QueryOptions) mongo.Pipeline {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+	}
+
+	// Group by all selected fields to achieve DISTINCT
+	groupID := bson.M{}
+	if len(options.Select) > 0 {
+		for _, field := range options.Select {
+			groupID[field] = "$" + field
+		}
+	} else {
+		// If no select fields, group by the whole document (using _id as fallback)
+		groupID["_id"] = "$_id"
+	}
+
+	pipeline = append(pipeline, bson.D{{Key: "$group", Value: bson.M{
+		"_id": groupID,
+		"doc": bson.M{"$first": "$$ROOT"},
+	}}})
+
+	pipeline = append(pipeline, bson.D{{Key: "$replaceRoot", Value: bson.M{"newRoot": "$doc"}}})
+
+	// Apply sorting, limit, skip after distinct
+	if options.OrderBy.Field != "" {
+		sortDir := 1
+		if options.OrderBy.Direction == behemoth.Desc {
+			sortDir = -1
+		}
+		pipeline = append(pipeline, bson.D{{Key: "$sort", Value: bson.M{options.OrderBy.Field: sortDir}}})
+	}
+	if options.Offset != 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$skip", Value: options.Offset}})
+	}
+	if options.Limit != 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: options.Limit}})
+	}
+	return pipeline
 }
