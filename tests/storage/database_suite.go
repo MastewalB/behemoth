@@ -52,11 +52,43 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("FindMany", s.TestFindMany)
 	s.t.Run("Update", s.TestUpdate)
 	s.t.Run("UpdateField", s.TestUpdateField)
+	s.t.Run("UpdateMany", s.TestUpdateMany)
 	s.t.Run("Delete", s.TestDelete)
 	s.t.Run("Transaction", s.TestTransaction)
 	s.t.Run("QueryOptions", s.TestQueryOptions)
 
 	s.cleanupDatabase()
+}
+
+func (s *DatabaseTestSuite) PopulateTableWithTestData(t *testing.T) []behemoth.Model {
+	var models []behemoth.Model
+	testData := []struct {
+		id       string
+		email    string
+		username string
+	}{
+		{"1", "alpha@test.com", "user1"},
+		{"2", "beta@test.com", "user2"},
+		{"3", "gamma@test.com", "user3"},
+		{"4", "delta@test.com", "user4"},
+		{"5", "epsilon@test.com", "user5"},
+		{"update6", "old1@test.com", "user6"},
+		{"update7", "old2@test.com", "user7"},
+	}
+
+	for _, data := range testData {
+		model := s.modelManager.Create(data.id)
+		err := s.adapter.Create(s.ctx, model)
+		assert.NoError(t, err)
+
+		err = s.adapter.UpdateField(s.ctx, model, "email", data.email)
+		assert.NoError(t, err)
+		err = s.adapter.UpdateField(s.ctx, model, "username", data.username)
+		assert.NoError(t, err)
+		models = append(models, model)
+	}
+
+	return models
 }
 
 func (s *DatabaseTestSuite) TestCreate(t *testing.T) {
@@ -137,6 +169,98 @@ func (s *DatabaseTestSuite) TestUpdateField(t *testing.T) {
 	assert.False(t, s.modelManager.Compare(copy, found), "Model should have been updated and not match original")
 }
 
+func (s *DatabaseTestSuite) TestUpdateMany(t *testing.T) {
+	defer s.cleanupTables()
+
+	models := s.PopulateTableWithTestData(t)
+
+	t.Run("UpdateMultipleRecordsWithCondition", func(t *testing.T) {
+
+		// Update all records with email containing "old" to new email
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "email", Operator: clause.OpContains, Value: "old"},
+			},
+		}
+
+		updates := map[string]any{
+			"email": "updated@newdomain.com",
+		}
+
+		err := s.adapter.UpdateMany(s.ctx, models[0], expr, updates)
+		assert.NoError(t, err)
+
+		// Verify records were updated
+		found, err := s.adapter.FindMany(s.ctx, models[0], clause.Expression{}, nil)
+		assert.NoError(t, err)
+
+		updatedCount := 0
+		for _, m := range found {
+			email := getModelEmail(m)
+			if email == "updated@newdomain.com" {
+				updatedCount++
+			}
+		}
+
+		// Should update 2 records (update1, update2)
+		assert.Equal(t, 2, updatedCount, "Should update 2 records with 'old' in email")
+
+		// Verify the record that shouldn't be updated remains unchanged
+		unchangedFound, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, "1"))
+		assert.NoError(t, err)
+		assert.Equal(t, "alpha@test.com", getModelEmail(unchangedFound))
+		assert.Equal(t, "user1", getModelUsername(unchangedFound))
+	})
+
+	t.Run("UpdateWithMultipleConditions", func(t *testing.T) {
+		// Reset one record for this test
+		resetModel := s.modelManager.Create("reset1")
+
+		// Update records with specific conditions
+		expr := clause.Expression{
+			Logic: clause.OpOr,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpEqual, Value: "1"},
+				{Field: "username", Operator: clause.OpEqual, Value: "user6"},
+			},
+		}
+
+		updates := map[string]any{
+			"email": "specific_update@test.com",
+		}
+
+		err := s.adapter.UpdateMany(s.ctx, resetModel, expr, updates)
+		assert.NoError(t, err)
+
+		// Verify only 2 records were updated
+		found, err := s.adapter.FindMany(
+			s.ctx,
+			resetModel,
+			getWhereExpr("email", clause.OpEqual, "specific_update@test.com"),
+			nil,
+		)
+		assert.NoError(t, err)
+		assert.Len(t, found, 2, "Should update 2 records matching the OR conditions")
+		assert.Equal(t, "specific_update@test.com", getModelEmail(found[0]))
+
+	})
+
+	t.Run("UpdateWithEmptyMap", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpEqual, Value: "update1"},
+			},
+		}
+
+		updates := map[string]any{}
+
+		err := s.adapter.UpdateMany(s.ctx, models[0], expr, updates)
+		assert.NoError(t, err)
+	})
+}
+
 func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 	defer s.cleanupTables()
 
@@ -189,30 +313,7 @@ func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
 func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 	defer s.cleanupTables()
 
-	// Create test data with various IDs and emails for sorting/filtering
-	testData := []struct {
-		id    string
-		email string
-	}{
-		{"1", "alpha@test.com"},
-		{"2", "beta@test.com"},
-		{"3", "gamma@test.com"},
-		{"4", "delta@test.com"},
-		{"5", "epsilon@test.com"},
-	}
-
-	populateTable := func() {
-		for _, data := range testData {
-			model := s.modelManager.Create(data.id)
-			err := s.adapter.Create(s.ctx, model)
-			assert.NoError(t, err)
-			// Set email field if the model supports it
-			err = s.adapter.UpdateField(s.ctx, model, "email", data.email)
-			assert.NoError(t, err)
-		}
-	}
-
-	populateTable()
+	models := s.PopulateTableWithTestData(t)
 
 	t.Run("Limit", func(t *testing.T) {
 		model := s.modelManager.Create("1")
@@ -267,7 +368,7 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 
 			found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
 			assert.NoError(t, err)
-			assert.Equal(t, len(found), len(testData), "Should have at least 3 records for ordering test")
+			assert.Equal(t, len(found), len(models), "Should have all records for ordering test")
 
 			// Verify ascending order by ID
 			for i := 1; i < len(found); i++ {
@@ -284,7 +385,7 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 
 			found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
 			assert.NoError(t, err)
-			assert.Equal(t, len(found), len(testData), "Should have at least 3 records for ordering test")
+			assert.Equal(t, len(found), len(models), "Should have all records for ordering test")
 
 			// Verify ascending order by ID
 			for i := 1; i < len(found); i++ {
@@ -301,7 +402,7 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 
 			found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
 			assert.NoError(t, err)
-			assert.Equal(t, len(found), len(testData), "Should have at least 3 records for ordering test")
+			assert.Equal(t, len(found), len(models), "Should have all records for ordering test")
 
 			// Verify descending order by ID
 			for i := 1; i < len(found); i++ {
@@ -318,7 +419,7 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 
 			found, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options)
 			assert.NoError(t, err)
-			assert.GreaterOrEqual(t, len(found), 3, "Should have at least 3 records for ordering test")
+			assert.Equal(t, len(found), len(models), "Should have all records for ordering test")
 
 			// Verify ascending order by email (lexicographically)
 			for i := 1; i < len(found); i++ {
@@ -332,7 +433,7 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 
 	t.Run("Distinct", func(t *testing.T) {
 		s.cleanupTables()
-		defer populateTable()
+		defer s.PopulateTableWithTestData(t)
 
 		// Create duplicate email records
 		model1 := s.modelManager.Create("dup1")
@@ -427,6 +528,16 @@ func getModelEmail(m behemoth.Model) string {
 	switch v := m.(type) {
 	case interface{ GetEmail() string }:
 		return v.GetEmail()
+
+	default:
+		return ""
+	}
+}
+
+func getModelUsername(m behemoth.Model) string {
+	switch v := m.(type) {
+	case interface{ GetUsername() string }:
+		return v.GetUsername()
 
 	default:
 		return ""

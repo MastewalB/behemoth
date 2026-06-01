@@ -66,7 +66,7 @@ func NewDuplicateKey(op, entity string, original error) error {
 
 func NewDatabaseError(op string, original error) error {
 	return &DomainError{
-		Type:     Internal,
+		Type:     Database,
 		Op:       op,
 		Original: original,
 	}

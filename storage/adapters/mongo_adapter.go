@@ -26,7 +26,7 @@ func NewMongoAdapter(client *mongo.Client, dbName string) *MongoAdapter {
 func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
-		return fmt.Errorf("model does not implement Serializable interface")
+		return behemotherr.SerializableNotImplemented()
 	}
 
 	doc, err := ser.ToMap()
@@ -121,7 +121,7 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	collection := mdb.db.Collection(m.SchemaName())
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
-		return fmt.Errorf("model does not implement Serializable")
+		return behemotherr.SerializableNotImplemented()
 	}
 
 	filter := bson.M{
@@ -159,6 +159,30 @@ func (mdb *MongoAdapter) UpdateField(ctx context.Context, m behemoth.Model, fiel
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
+func (mdb *MongoAdapter) UpdateMany(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	updates map[string]any,
+) error {
+	
+	if len(updates) == 0 {
+		return nil
+	}
+
+	collection := mdb.db.Collection(m.SchemaName())
+	filter := BuildMongoFilter(&expr)
+
+	_, err := collection.UpdateMany(
+		ctx,
+		filter,
+		bson.M{
+			"$set": updates,
+		},
+	)
+	return err
+}
+
 func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	collection := mdb.db.Collection(m.SchemaName())
 	filter := bson.M{
@@ -167,6 +191,10 @@ func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 
 	_, err := collection.DeleteOne(ctx, filter)
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+}
+
+func (mdb *MongoAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	return 0, nil
 }
 
 func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {

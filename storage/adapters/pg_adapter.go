@@ -31,7 +31,7 @@ func NewPostgresAdapter(db Querier) *PostgresAdapter {
 func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return fmt.Errorf("model does not implement Serializable interface")
+		return behemotherr.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -81,7 +81,7 @@ func (pg *PostgresAdapter) FindMany(
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, fmt.Errorf("model does not implement Serializable interface")
+		return nil, behemotherr.SerializableNotImplemented()
 	}
 	var (
 		columns        []string
@@ -192,6 +192,33 @@ func (pg *PostgresAdapter) UpdateField(ctx context.Context, m behemoth.Model, fi
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
+func (pg *PostgresAdapter) UpdateMany(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	updates map[string]any,
+) error {
+
+	if len(updates) == 0 {
+		return nil
+	}
+
+	columns, values := utils.MapToSlice(updates)
+	whereExpression, args := buildSQLiteWhereClause(&expr, len(values)+1)
+
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s",
+		m.SchemaName(),
+		utils.GenerateSQLSETClause(columns),
+		whereExpression,
+	)
+
+	fmt.Println("Executing query ", query)
+	_, err := pg.DB.ExecContext(ctx, query, append(values, args...)...)
+
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
 func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = $1",
@@ -201,6 +228,14 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 
 	_, err := pg.DB.ExecContext(ctx, query, m.PrimaryKeyField())
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
+func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	return 0, nil
+}
+
+func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+	return nil
 }
 
 func (pg *PostgresAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {

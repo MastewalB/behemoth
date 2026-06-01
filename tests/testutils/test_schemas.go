@@ -42,6 +42,10 @@ func (u *TestUser) GetEmail() string {
 	return u.Email
 }
 
+func (u *TestUser) GetUsername() string {
+	return u.Username
+}
+
 func (u *TestUser) GetPasswordHash() string {
 	return ""
 }
@@ -82,7 +86,7 @@ func (u *TestUser) FromMap(data map[string]any) error {
 }
 
 func NewTestUser(id string) *TestUser {
-	t := strconv.FormatInt(time.Now().UnixNano(), 10) 
+	t := strconv.FormatInt(time.Now().UnixNano(), 10)
 
 	return &TestUser{
 		ID:       id,
@@ -127,6 +131,10 @@ func (u *GormTestUser) GetID() string {
 
 func (u *GormTestUser) GetEmail() string {
 	return u.Email
+}
+
+func (u *GormTestUser) GetUsername() string {
+	return u.Username
 }
 
 func (u *GormTestUser) GetPasswordHash() string {

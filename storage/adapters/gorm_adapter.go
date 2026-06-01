@@ -27,7 +27,7 @@ func (ga *GormAdapter) Create(ctx context.Context, m behemoth.Model) error {
 
 func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
 	query, args := BuildSQLWhereClause(&expr)
-	err := ga.db.WithContext(ctx).Where(query, args...).First(m).Error
+	err := ga.db.WithContext(ctx).Table(m.SchemaName()).Where(query, args...).First(m).Error
 	if err != nil {
 		return nil, WrapWithCaller(err, m.SchemaName(), mapGormError)
 	}
@@ -95,9 +95,36 @@ func (ga *GormAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldN
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
+func (ga *GormAdapter) UpdateMany(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	updates map[string]any,
+) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	query, args := BuildSQLWhereClause(&expr)
+	err := ga.db.
+		WithContext(ctx).
+		Table(m.SchemaName()).
+		Where(query, args...).
+		Updates(updates).
+		Error
+	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+}
+
 func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	err := ga.db.WithContext(ctx).Delete(m).Error
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+}
+
+func (ga *GormAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	return 0, nil
+}
+
+func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+	return nil
 }
 
 func (ga *GormAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {

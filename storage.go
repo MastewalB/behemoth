@@ -32,12 +32,14 @@ type Database interface {
 
 	Update(ctx context.Context, m Model) error
 	UpdateField(ctx context.Context, m Model, fieldName string, value any) error
+	UpdateMany(ctx context.Context, m Model, expr clause.Expression, updates map[string]any) error
 
 	Delete(ctx context.Context, m Model) error
+	DeleteMany(ctx context.Context, m Model, expr clause.Expression) error
+
+	Count(ctx context.Context, m Model, expr clause.Expression) (int64, error)
 
 	Transaction(ctx context.Context, fn TransactionFunc) error
-
-	// DeleteMany(ctx context.Context, model Model, expr clause.Expression) error
 }
 
 type TransactionFunc func(ctx context.Context, tx Database) (any, error)

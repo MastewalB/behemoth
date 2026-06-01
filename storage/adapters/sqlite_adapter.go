@@ -24,7 +24,7 @@ func NewSQLiteAdapter(db Querier) *SQLiteAdapter {
 func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return fmt.Errorf("model does not implement Serializable interface")
+		return behemotherr.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -48,7 +48,7 @@ func (sqlt *SQLiteAdapter) FindOne(
 ) (behemoth.Model, error) {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return nil, fmt.Errorf("model does not implement Serializable interface")
+		return nil, behemotherr.SerializableNotImplemented()
 	}
 
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
@@ -78,7 +78,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, fmt.Errorf("model does not implement Serializable interface")
+		return nil, behemotherr.SerializableNotImplemented()
 	}
 	var (
 		columns        []string
@@ -172,7 +172,12 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
-func (sqlt *SQLiteAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
+func (sqlt *SQLiteAdapter) UpdateField(
+	ctx context.Context,
+	m behemoth.Model,
+	fieldName string,
+	value any,
+) error {
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = ?",
 		m.SchemaName(),
@@ -184,6 +189,33 @@ func (sqlt *SQLiteAdapter) UpdateField(ctx context.Context, m behemoth.Model, fi
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
+func (sqlt *SQLiteAdapter) UpdateMany(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	updates map[string]any,
+) error {
+
+	if len(updates) == 0 {
+		return nil
+	}
+	
+	columns, values := utils.MapToSlice(updates)
+	whereExpression, args := buildSQLiteWhereClause(&expr, len(values)+1)
+
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s",
+		m.SchemaName(),
+		utils.GenerateSQLSETClause(columns),
+		whereExpression,
+	)
+
+	fmt.Println("Executing query ", query)
+	_, err := sqlt.DB.ExecContext(ctx, query, append(values, args...)...)
+
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
 func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = ?",
@@ -192,6 +224,14 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	)
 	_, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
+func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+	return nil
+}
+
+func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	return 0, nil
 }
 
 func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
