@@ -199,7 +199,7 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 	if len(updates) == 0 {
 		return nil
 	}
-	
+
 	columns, values := utils.MapToSlice(updates)
 	whereExpression, args := buildSQLiteWhereClause(&expr, len(values)+1)
 
@@ -227,11 +227,44 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 }
 
 func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+
 	return nil
 }
 
 func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
-	return 0, nil
+	var query string
+	whereClause, args := BuildSQLWhereClause(&expr)
+
+	if whereClause != "" {
+
+		query = fmt.Sprintf(
+			"SELECT COUNT(*) FROM %s WHERE %s",
+			m.SchemaName(),
+			whereClause,
+		)
+	} else {
+		query = fmt.Sprintf(
+			"SELECT COUNT(*) FROM %s",
+			m.SchemaName(),
+		)
+	}
+
+	// fmt.Println("Count Query: ", query, args)
+
+	row, err := sqlt.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	}
+
+	defer row.Close()
+	var count int64
+	if row.Next() {
+		if err := row.Scan(&count); err != nil {
+			return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		}
+	}
+
+	return count, nil
 }
 
 func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {

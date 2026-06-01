@@ -119,8 +119,22 @@ func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
-func (ga *GormAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
-	return 0, nil
+func (ga *GormAdapter) Count(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+) (int64, error) {
+	query, args := BuildSQLWhereClause(&expr)
+	var count int64
+
+	err := ga.db.
+		WithContext(ctx).
+		Table(m.SchemaName()).
+		Where(query, args...).
+		Count(&count).
+		Error
+
+	return count, WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
 func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {

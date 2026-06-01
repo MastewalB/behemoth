@@ -230,12 +230,44 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
-func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
-	return 0, nil
-}
-
 func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	return nil
+}
+
+func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	var query string
+	whereClause, args := BuildSQLWhereClause(&expr)
+
+	if whereClause != "" {
+
+		query = fmt.Sprintf(
+			"SELECT COUNT(*) FROM %s WHERE %s",
+			m.SchemaName(),
+			whereClause,
+		)
+	} else {
+		query = fmt.Sprintf(
+			"SELECT COUNT(*) FROM %s",
+			m.SchemaName(),
+		)
+	}
+
+	// fmt.Println("Count Query: ", query, args)
+
+	row, err := pg.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	}
+
+	defer row.Close()
+	var count int64
+	if row.Next() {
+		if err := row.Scan(&count); err != nil {
+			return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		}
+	}
+
+	return count, nil
 }
 
 func (pg *PostgresAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {

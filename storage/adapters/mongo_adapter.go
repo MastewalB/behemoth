@@ -165,7 +165,7 @@ func (mdb *MongoAdapter) UpdateMany(
 	expr clause.Expression,
 	updates map[string]any,
 ) error {
-	
+
 	if len(updates) == 0 {
 		return nil
 	}
@@ -193,13 +193,20 @@ func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
-func (mdb *MongoAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
-	return 0, nil
-}
-
 func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 
 	return nil
+}
+
+func (mdb *MongoAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	collection := mdb.db.Collection(m.SchemaName())
+	filter := BuildMongoFilter(&expr)
+
+	count, err := collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return 0, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	}
+	return count, nil
 }
 
 func (mdb *MongoAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {

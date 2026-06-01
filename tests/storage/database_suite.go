@@ -56,10 +56,15 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("Delete", s.TestDelete)
 	s.t.Run("Transaction", s.TestTransaction)
 	s.t.Run("QueryOptions", s.TestQueryOptions)
+	s.t.Run("Count", s.TestCount)
 
 	s.cleanupDatabase()
 }
 
+// PopulateTableWithTestData creates multiple records in the database for testing Bulk operations and query options.
+// It returns the created models for reference in tests.
+//
+// CAUTION: The returned models will have different email and username fields since they are updated after creation.
 func (s *DatabaseTestSuite) PopulateTableWithTestData(t *testing.T) []behemoth.Model {
 	var models []behemoth.Model
 	testData := []struct {
@@ -121,16 +126,22 @@ func (s *DatabaseTestSuite) TestFindOne(t *testing.T) {
 func (s *DatabaseTestSuite) TestFindMany(t *testing.T) {
 	defer s.cleanupTables()
 
-	model1 := s.modelManager.Create("5")
-	model2 := s.modelManager.Create("6")
-	err := s.adapter.Create(s.ctx, model1)
-	assert.NoError(t, err)
-	err = s.adapter.Create(s.ctx, model2)
-	assert.NoError(t, err)
+	models := s.PopulateTableWithTestData(t)
+	model := models[0]
 
-	found, err := s.adapter.FindMany(s.ctx, model1, getWhereExpr("id", clause.OpGreaterThan, "4"), nil)
+	found, err := s.adapter.FindMany(s.ctx, model, getWhereExpr("id", clause.OpGreaterThan, "4"), nil)
 	assert.NoError(t, err)
-	assert.Len(t, found, 2)
+	assert.Len(t, found, 3, "5, update6, update7 should be returned")
+
+	found, err = s.adapter.FindMany(s.ctx, model, clause.Expression{
+		Logic: clause.OpOr,
+		Conditions: []clause.Condition{
+			{Field: "email", Operator: clause.OpContains, Value: "old"},
+			{Field: "username", Operator: clause.OpEqual, Value: "user5"},
+		},
+	}, nil)
+	assert.NoError(t, err)
+	assert.Len(t, found, 3, "Should find records with 'old' in email or username 'user5'")
 
 }
 
@@ -154,19 +165,20 @@ func (s *DatabaseTestSuite) TestUpdate(t *testing.T) {
 func (s *DatabaseTestSuite) TestUpdateField(t *testing.T) {
 	defer s.cleanupTables()
 
-	model := s.modelManager.Create("1")
-	err := s.adapter.Create(s.ctx, model)
-	assert.NoError(t, err)
-	copy := s.modelManager.Clone(model)
+	models := s.PopulateTableWithTestData(t)
 
-	err = s.adapter.UpdateField(s.ctx, model, "email", "Updated@email.com")
-	// t.Log(err.(*behemotherr.DomainError).Original
+	model := models[0]
+	copy := s.modelManager.Clone(model)
+	id := getModelID(model)
+
+	err := s.adapter.UpdateField(s.ctx, model, "email", "Updated@email.com")
 	assert.NoError(t, err)
-	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, "1"))
+	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, id))
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
 	assert.False(t, s.modelManager.Compare(copy, found), "Model should have been updated and not match original")
+	assert.NotEqual(t, getModelEmail(copy), getModelEmail(found), "Email should be changed")
 }
 
 func (s *DatabaseTestSuite) TestUpdateMany(t *testing.T) {
@@ -509,6 +521,177 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 		}
 	})
 
+}
+
+func (s *DatabaseTestSuite) TestCount(t *testing.T) {
+	defer s.cleanupDatabase()
+
+	models := s.PopulateTableWithTestData(t)
+
+	count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+	assert.NoError(t, err)
+	assert.Equal(t, count, int64(7))
+
+	t.Run("CountAllRecords", func(t *testing.T) {
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(7), count, "Should count all 7 records")
+	})
+
+	t.Run("CountWithEqualCondition", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpEqual, Value: "1"},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), count, "Should count exactly 1 record with ID '1'")
+	})
+
+	t.Run("CountWithLikeCondition", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "email", Operator: clause.OpContains, Value: "@test.com"},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(7), count, "Should count all records with @test.com email")
+	})
+
+	t.Run("CountWithMultipleConditions", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "email", Operator: clause.OpContains, Value: "old"},
+				{Field: "username", Operator: clause.OpContains, Value: "user"},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), count, "Should count 2 records with 'old' in email and 'user' in username")
+	})
+
+	t.Run("CountWithGreaterThanCondition", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpGreaterThan, Value: "3"},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(4), count, "Should count 4 records with ID > 3 (4,5,update6,update7)")
+	})
+
+	t.Run("CountWithLessThanCondition", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpLessThan, Value: "3"},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), count, "Should count 2 records with ID < 3 (1,2)")
+	})
+
+	t.Run("CountWithInCondition", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpIn, Value: []string{"1", "3", "5", "update7"}},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(4), count, "Should count 4 records with IDs in the given list")
+	})
+
+	t.Run("CountWithNotEqualCondition", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "username", Operator: clause.OpNotEqual, Value: "user1"},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(6), count, "Should count 6 records where username is not 'user1'")
+	})
+
+	t.Run("CountWithNoMatchingRecords", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpEqual, Value: "nonexistent"},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count, "Should return 0 when no records match")
+	})
+
+	t.Run("CountWithEmptyTable", func(t *testing.T) {
+		// Clean up all records
+		s.cleanupTables()
+		defer s.PopulateTableWithTestData(t)
+
+		// Create a fresh model instance for the empty table
+		emptyModel := s.modelManager.Create("temp")
+
+		count, err := s.adapter.Count(s.ctx, emptyModel, clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count, "Should return 0 for empty table")
+	})
+
+	t.Run("CountWithOrLogic", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpOr,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpEqual, Value: "1"},
+				{Field: "id", Operator: clause.OpEqual, Value: "3"},
+				{Field: "id", Operator: clause.OpEqual, Value: "5"},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(3), count, "Should count records with ID 1, 3, or 5")
+	})
+
+	t.Run("CountWithComplexAndOrLogic", func(t *testing.T) {
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "username", Operator: clause.OpContains, Value: "user"},
+			},
+			Children: []*clause.Expression{
+				{
+					Logic: clause.OpOr,
+					Conditions: []clause.Condition{
+						{Field: "email", Operator: clause.OpContains, Value: "alpha"},
+						{Field: "email", Operator: clause.OpContains, Value: "beta"},
+					},
+				},
+			},
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), count, "Should count records with email starting with 'alpha' or 'beta' AND username starting with 'user'")
+	})
 }
 
 func getModelID(m behemoth.Model) string {
