@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 )
 
 type User struct {
@@ -145,7 +146,42 @@ func GenerateModelFromRows(m behemoth.Model, columns []string, values []any) (be
 
 		return newModel, nil
 	}
-	return nil, fmt.Errorf("model does not implement Serializable interface")
+	return nil, behemotherr.SerializableNotImplemented()
+}
+
+func GenerateColumnValuePairsWithSelectFilter(m behemoth.Model, selected []string) (columns []string, values []any, valuePtrs []any) {
+	if len(selected) == 0 {
+		return GenerateColumnValuePairs(m)
+	}
+
+	if serializable, ok := m.(behemoth.Serializable); ok {
+		data, err := serializable.ToMap()
+		if err != nil {
+			return nil, nil, nil
+		}
+
+		selectedSet := make(map[string]struct{})
+		for _, col := range selected {
+			selectedSet[col] = struct{}{}
+		}
+		for k := range data {
+			if _, ok := selectedSet[k]; !ok {
+				continue
+			}
+			columns = append(columns, k)
+		}
+
+		// Allocate fixed-size slices
+		values = make([]any, len(columns))
+		valuePtrs = make([]any, len(columns))
+
+		for i, col := range columns {
+			values[i] = data[col]
+			valuePtrs[i] = &values[i]
+		}
+
+	}
+	return columns, values, valuePtrs
 }
 
 func UserFactory(data map[string]any) behemoth.User {
