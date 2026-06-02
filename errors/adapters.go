@@ -25,6 +25,7 @@ const (
 	NotImplemented      ErrorType = "NOT_IMPLEMENTED"
 	Internal            ErrorType = "INTERNAL_ERROR"
 	Database            ErrorType = "DATABASE_ERROR"
+	InvalidInput        ErrorType = "INVALID_INPUT"
 )
 
 type DomainError struct {
@@ -93,6 +94,16 @@ func NewValidationError(op, entity string, original error) error {
 		Type:     Validation,
 		Op:       op,
 		Entity:   entity,
+		Original: original,
+	}
+}
+
+func NewInvalidInputError(op, entity, message string, original error) error {
+	return &DomainError{
+		Type:     InvalidInput,
+		Op:       op,
+		Entity:   entity,
+		Message:  message,
 		Original: original,
 	}
 }

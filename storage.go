@@ -36,6 +36,7 @@ type Database interface {
 
 	Delete(ctx context.Context, m Model) error
 	DeleteMany(ctx context.Context, m Model, expr clause.Expression) error
+	DeleteAll(ctx context.Context, m Model) error
 
 	Count(ctx context.Context, m Model, expr clause.Expression) (int64, error)
 

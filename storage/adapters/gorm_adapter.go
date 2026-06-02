@@ -27,7 +27,7 @@ func (ga *GormAdapter) Create(ctx context.Context, m behemoth.Model) error {
 
 func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
 	query, args := BuildSQLWhereClause(&expr)
-	err := ga.db.WithContext(ctx).Table(m.SchemaName()).Where(query, args...).First(m).Error
+	err := ga.db.WithContext(ctx).Table(m.SchemaName()).Where(query, args...).First(m.New()).Error
 	if err != nil {
 		return nil, WrapWithCaller(err, m.SchemaName(), mapGormError)
 	}
@@ -107,7 +107,7 @@ func (ga *GormAdapter) UpdateMany(
 	query, args := BuildSQLWhereClause(&expr)
 	err := ga.db.
 		WithContext(ctx).
-		Table(m.SchemaName()).
+		Model(m.New()).
 		Where(query, args...).
 		Updates(updates).
 		Error
@@ -116,6 +116,35 @@ func (ga *GormAdapter) UpdateMany(
 
 func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	err := ga.db.WithContext(ctx).Delete(m).Error
+	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+}
+
+func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+	whereClause, args := BuildSQLWhereClause(&expr)
+
+	if whereClause == "" {
+		return &behemotherr.DomainError{
+			Type:    behemotherr.Database,
+			Op:      "DeleteMany",
+			Entity:  m.SchemaName(),
+			Message: "DeleteMany requires a where clause.",
+		}
+	}
+	err := ga.db.
+		WithContext(ctx).
+		Where(whereClause, args...).
+		Delete(m.New()).
+		Error
+
+	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+}
+
+func (ga *GormAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
+	query := fmt.Sprintf("DELETE FROM %s;", m.SchemaName())
+	err := ga.db.
+		WithContext(ctx).
+		Exec(query).Error
+
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
@@ -135,10 +164,6 @@ func (ga *GormAdapter) Count(
 		Error
 
 	return count, WrapWithCaller(err, m.SchemaName(), mapGormError)
-}
-
-func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	return nil
 }
 
 func (ga *GormAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {

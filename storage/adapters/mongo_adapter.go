@@ -194,8 +194,26 @@ func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 }
 
 func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+	collection := mdb.db.Collection(m.SchemaName())
+	filter := BuildMongoFilter(&expr)
 
-	return nil
+	if len(filter) == 0 {
+		return &behemotherr.DomainError{
+			Type:    behemotherr.Database,
+			Op:      "DeleteMany",
+			Entity:  m.SchemaName(),
+			Message: "DeleteMany requires a where clause.",
+		}
+	}
+	_, err := collection.DeleteMany(ctx, filter)
+	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+}
+
+func (mdb *MongoAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
+	collection := mdb.db.Collection(m.SchemaName())
+
+	_, err := collection.DeleteMany(ctx, bson.M{})
+	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {

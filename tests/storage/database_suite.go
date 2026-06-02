@@ -54,6 +54,8 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("UpdateField", s.TestUpdateField)
 	s.t.Run("UpdateMany", s.TestUpdateMany)
 	s.t.Run("Delete", s.TestDelete)
+	s.t.Run("DeleteAll", s.TestDeleteAll)
+	s.t.Run("DeleteMany", s.TestDeleteMany)
 	s.t.Run("Transaction", s.TestTransaction)
 	s.t.Run("QueryOptions", s.TestQueryOptions)
 	s.t.Run("Count", s.TestCount)
@@ -288,6 +290,152 @@ func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 	assert.Nil(t, found)
 }
 
+func (s *DatabaseTestSuite) TestDeleteAll(t *testing.T) {
+	defer s.cleanupTables()
+
+	t.Run("DeleteAllFromPopulatedTable", func(t *testing.T) {
+		models := s.PopulateTableWithTestData(t)
+
+		// Verify records exist
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(7), count, "Should have 7 records before deletion")
+
+		// Delete all records
+		err = s.adapter.DeleteAll(s.ctx, models[0])
+		assert.NoError(t, err)
+
+		// Verify table is empty
+		count, err = s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count, "Table should be empty after DeleteAll")
+
+		// Try to find any record - should return error or empty result
+		_, err = s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, "1"))
+		assert.Error(t, err, "FindOne should return error when no records exist")
+	})
+
+	t.Run("DeleteAllMultipleTimes", func(t *testing.T) {
+		models := s.PopulateTableWithTestData(t)
+
+		// First deletion
+		err := s.adapter.DeleteAll(s.ctx, models[0])
+		assert.NoError(t, err)
+
+		// Second deletion on empty table
+		err = s.adapter.DeleteAll(s.ctx, models[0])
+		assert.NoError(t, err, "Second DeleteAll on empty table should not error")
+
+		// Verify still empty
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count)
+	})
+}
+
+func (s *DatabaseTestSuite) TestDeleteMany(t *testing.T) {
+	defer s.cleanupTables()
+
+	t.Run("DeleteManyWithEqualCondition", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		// Delete single record
+		expr := getWhereExpr("id", clause.OpEqual, "1")
+		err := s.adapter.DeleteMany(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+
+		// Verify record is deleted
+		_, err = s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, "1"))
+		assert.Error(t, err, "Deleted record should not be found")
+
+		// Verify other records remain
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(6), count, "Should have 6 remaining records")
+	})
+
+	t.Run("DeleteManyWithLikeCondition", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		// Delete records with 'old' in email
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "email", Operator: clause.OpContains, Value: "old"},
+			},
+		}
+
+		err := s.adapter.DeleteMany(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+
+		// Verify deleted records are gone
+		for _, id := range []string{"update6", "update7"} {
+			_, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+			assert.Error(t, err, "Record with ID %s should be deleted", id)
+		}
+
+		// Verify remaining count
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(5), count, "Should have 5 remaining records")
+	})
+
+	t.Run("DeleteManyWithInCondition", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpIn, Value: []string{"1", "3", "5", "update7"}},
+			},
+		}
+
+		err := s.adapter.DeleteMany(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+
+		// Verify deleted records
+		for _, id := range []string{"1", "3", "5", "update7"} {
+			_, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+			assert.Error(t, err, "Record with ID %s should be deleted", id)
+		}
+
+		// Verify remaining records
+		remainingIds := []string{"2", "4", "update6"}
+		for _, id := range remainingIds {
+			found, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+			assert.NoError(t, err)
+			assert.NotNil(t, found)
+		}
+
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(3), count)
+	})
+
+	t.Run("DeleteManyWithNoMatchingRecordsOrEmptyExpression", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		expr := getWhereExpr("id", clause.OpEqual, "nonexistent")
+
+		err := s.adapter.DeleteMany(s.ctx, models[0], expr)
+		assert.NoError(t, err, "DeleteMany should not error when no records match")
+
+		// Verify all records still exist
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(7), count, "All records should remain when no match found")
+
+		// Delete with empty expression - should return an error
+		err = s.adapter.DeleteMany(s.ctx, models[0], clause.Expression{})
+		assert.Error(t, err)
+
+	})
+}
+
 func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
 	defer s.cleanupTables()
 
@@ -348,7 +496,6 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 			OrderBy: behemoth.Order{Field: "id", Direction: behemoth.Asc},
 		}
 		firstBatch, err := s.adapter.FindMany(s.ctx, model, clause.Expression{}, options1)
-		// t.Log(err.(*behemotherr.DomainError).Original)
 		assert.NoError(t, err)
 		assert.Len(t, firstBatch, 3)
 

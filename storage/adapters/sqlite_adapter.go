@@ -227,8 +227,35 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 }
 
 func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+	whereClause, args := BuildSQLWhereClause(&expr)
 
-	return nil
+	if whereClause == "" {
+		return &behemotherr.DomainError{
+			Type:    behemotherr.Database,
+			Op:      "DeleteMany",
+			Entity:  m.SchemaName(),
+			Message: "DeleteMany requires a where clause.",
+		}
+	}
+
+	query := fmt.Sprintf(
+		"DELETE FROM %s where %s",
+		m.SchemaName(),
+		whereClause,
+	)
+
+	_, err := sqlt.DB.ExecContext(ctx, query, args...)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
+func (sqlt *SQLiteAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
+	query := fmt.Sprintf(
+		"DELETE FROM %s",
+		m.SchemaName(),
+	)
+
+	_, err := sqlt.DB.ExecContext(ctx, query)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
 func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {

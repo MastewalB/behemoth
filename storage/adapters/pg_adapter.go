@@ -231,7 +231,35 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 }
 
 func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	return nil
+	whereClause, args := BuildSQLWhereClause(&expr)
+
+	if whereClause == "" {
+		return &behemotherr.DomainError{
+			Type:    behemotherr.Database,
+			Op:      "DeleteMany",
+			Entity:  m.SchemaName(),
+			Message: "DeleteMany requires a where clause.",
+		}
+	}
+
+	query := fmt.Sprintf(
+		"DELETE FROM %s where %s",
+		m.SchemaName(),
+		whereClause,
+	)
+
+	_, err := pg.DB.ExecContext(ctx, query, args...)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
+func (pg *PostgresAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
+	query := fmt.Sprintf(
+		"DELETE FROM %s",
+		m.SchemaName(),
+	)
+
+	_, err := pg.DB.ExecContext(ctx, query)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
 func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {

@@ -21,9 +21,6 @@ func ToSlice(value any) []any {
 }
 
 func WrapWithCaller(err error, entity string, wrapperFn func(string, string, error) error) error {
-	if err == nil {
-		return nil
-	}
 
 	pc := make([]uintptr, 1)
 	runtime.Callers(2, pc)
