@@ -23,8 +23,8 @@ CREATE TABLE users (
 	password_hash TEXT NOT NULL,
 	email_verified TEXT,
 	image_url TEXT,
-	created_at TEXT,
-	updated_at TEXT
+	created_at datetime,
+	updated_at datetime
 );
 `
 
@@ -38,8 +38,8 @@ func newTestUser(id string) *models.User {
 		PasswordHash:  "hashedpassword",
 		EmailVerified: "false",
 		ImageUrl:      "http://example.com/avatar.png",
-		CreatedAt:     time.Now().Format(time.RFC3339),
-		UpdatedAt:     time.Now().Format(time.RFC3339),
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 }
 

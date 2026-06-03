@@ -9,16 +9,16 @@ import (
 )
 
 type User struct {
-	ID            string `db:"id"`
-	Email         string `db:"email"`
-	Username      string `db:"username"`
-	Firstname     string `db:"firstname"`
-	Lastname      string `db:"lastname"`
-	PasswordHash  string `db:"password_hash"`
-	EmailVerified string `db:"email_verified"`
-	ImageUrl      string `db:"image_url"`
-	CreatedAt     string `db:"created_at"`
-	UpdatedAt     string `db:"updated_at"`
+	ID            string    `db:"id"`
+	Email         string    `db:"email"`
+	Username      string    `db:"username"`
+	Firstname     string    `db:"firstname"`
+	Lastname      string    `db:"lastname"`
+	PasswordHash  string    `db:"password_hash"`
+	EmailVerified string    `db:"email_verified"`
+	ImageUrl      string    `db:"image_url"`
+	CreatedAt     time.Time `db:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at"`
 }
 
 func (u *User) GetID() string           { return u.ID }
@@ -61,16 +61,57 @@ func (u *User) ToMap() (map[string]any, error) {
 }
 
 func (u *User) FromMap(data map[string]any) error {
-	u.ID = data["id"].(string)
-	u.Email = data["email"].(string)
-	u.Username = data["username"].(string)
-	u.Firstname = data["firstname"].(string)
-	u.Lastname = data["lastname"].(string)
-	u.PasswordHash = data["password_hash"].(string)
-	u.EmailVerified = data["email_verified"].(string)
-	u.ImageUrl = data["image_url"].(string)
-	u.CreatedAt = data["created_at"].(string)
-	u.UpdatedAt = data["updated_at"].(string)
+	id, ok := data["id"].(string)
+	if !ok {
+		id = ""
+	}
+	email, ok := data["email"].(string)
+	if !ok {
+		email = ""
+	}
+	username, ok := data["username"].(string)
+	if !ok {
+		username = ""
+	}
+	firstname, ok := data["firstname"].(string)
+	if !ok {
+		firstname = ""
+	}
+	lastname, ok := data["lastname"].(string)
+	if !ok {
+		lastname = ""
+	}
+	passwordHash, ok := data["password_hash"].(string)
+	if !ok {
+		passwordHash = ""
+	}
+	emailVerified, ok := data["email_verified"].(string)
+	if !ok {
+		emailVerified = ""
+	}
+	imageUrl, ok := data["image_url"].(string)
+	if !ok {
+		imageUrl = ""
+	}
+	createdAt, ok := data["created_at"].(time.Time)
+	if !ok {
+		createdAt = time.Time{}
+	}
+	updatedAt, ok := data["updated_at"].(time.Time)
+	if !ok {
+		updatedAt = time.Time{}
+	}
+
+	u.ID = id
+	u.Email = email
+	u.Username = username
+	u.Firstname = firstname
+	u.Lastname = lastname
+	u.PasswordHash = passwordHash
+	u.EmailVerified = emailVerified
+	u.ImageUrl = imageUrl
+	u.CreatedAt = createdAt
+	u.UpdatedAt = updatedAt
 	return nil
 }
 
@@ -252,42 +293,42 @@ func (ui *UserInfo) PrimaryKeyField() any {
 	return ui.ID
 }
 
-func (ui *UserInfo) Fields() []string {
-	return []string{
-		"provider",
-		"email",
-		"name",
-		"first_name",
-		"last_name",
-		"id",
-		"avatar_url",
-		"location",
-		"access_token",
-		"access_token_secret",
-		"refresh_token",
-		"expires_at",
-		"id_token",
-	}
-}
+// func (ui *UserInfo) Fields() []string {
+// 	return []string{
+// 		"provider",
+// 		"email",
+// 		"name",
+// 		"first_name",
+// 		"last_name",
+// 		"id",
+// 		"avatar_url",
+// 		"location",
+// 		"access_token",
+// 		"access_token_secret",
+// 		"refresh_token",
+// 		"expires_at",
+// 		"id_token",
+// 	}
+// }
 
-func (ui *UserInfo) PrimaryValue() any {
-	return ui.ID
-}
+// func (ui *UserInfo) PrimaryValue() any {
+// 	return ui.ID
+// }
 
-func (ui *UserInfo) ScanDestinations() []any {
-	return []any{
-		&ui.Provider,
-		&ui.Email,
-		&ui.Name,
-		&ui.FirstName,
-		&ui.LastName,
-		&ui.ID,
-		&ui.AvatarURL,
-		&ui.Location,
-		&ui.AccessToken,
-		&ui.AccessTokenSecret,
-		&ui.RefreshToken,
-		&ui.ExpiresAt,
-		&ui.IDToken,
-	}
-}
+// func (ui *UserInfo) ScanDestinations() []any {
+// 	return []any{
+// 		&ui.Provider,
+// 		&ui.Email,
+// 		&ui.Name,
+// 		&ui.FirstName,
+// 		&ui.LastName,
+// 		&ui.ID,
+// 		&ui.AvatarURL,
+// 		&ui.Location,
+// 		&ui.AccessToken,
+// 		&ui.AccessTokenSecret,
+// 		&ui.RefreshToken,
+// 		&ui.ExpiresAt,
+// 		&ui.IDToken,
+// 	}
+// }

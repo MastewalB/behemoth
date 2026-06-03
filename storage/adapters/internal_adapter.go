@@ -52,6 +52,26 @@ func (adapter *InternalAdapter) FindUserByID(ctx context.Context, model behemoth
 	return found.(behemoth.User), nil
 }
 
+func (adapter *InternalAdapter) FindUserByEmail(ctx context.Context, model behemoth.Model, email string) (behemoth.User, error) {
+	whereClause := clause.Expression{
+		Conditions: []clause.Condition{
+			{
+				Field:    model.PrimaryKeyName(),
+				Operator: clause.OpEqual,
+				Value:    email,
+			},
+		},
+	}
+
+	found, err := adapter.DB.FindOne(ctx, model, whereClause)
+	if err != nil {
+		return nil, err
+	}
+
+	return found.(behemoth.User), nil
+
+}
+
 func (adapter *InternalAdapter) UpdateUser(ctx context.Context, user behemoth.Model) (behemoth.User, error) {
 	err := adapter.DB.Update(ctx, user)
 	if err != nil {
