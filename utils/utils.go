@@ -85,10 +85,6 @@ func IsValidEmail(email string) bool {
 	return emailRegex.MatchString(email)
 }
 
-func NewTypeAssertionError(expectedType string, actualValue any) error {
-	return fmt.Errorf("type assertion failed: expected %s, got %T", expectedType, actualValue)
-}
-
 func MapToSlice[T comparable, U any](m map[T]U) ([]T, []U) {
 	keys := make([]T, 0, len(m))
 	values := make([]U, 0, len(m))

@@ -12,31 +12,12 @@ import (
 type Session struct {
 	ID        string
 	UserID    any
+	Token     string
 	ExpiresAt time.Time
 	IpAddress string
 	UserAgent string
 	CreatedAt time.Time
 	UpdatedAt time.Time
-}
-
-func (s *Session) TableName() string {
-	return "sessions"
-}
-
-func (s *Session) PrimaryKey() string {
-	return "id"
-}
-
-func (s *Session) Fields() []string {
-	return []string{"id", "user_id", "expires_at", "ip_address", "user_agent", "created_at", "updated_at"}
-}
-
-func (s *Session) PrimaryValue() any {
-	return s.ID
-}
-
-func (s *Session) ScanDestinations() []any {
-	return []any{&s.ID, &s.UserID, &s.ExpiresAt, &s.IpAddress, &s.UserAgent, &s.CreatedAt, &s.UpdatedAt}
 }
 
 func (s *Session) GetID() string {
@@ -68,58 +49,49 @@ func (s *Session) SchemaName() string {
 }
 
 func (s *Session) FromMap(data map[string]any) error {
-	var err error
-	if id, ok := data["id"].(string); ok {
-		s.ID = id
-	} else {
-		return utils.NewTypeAssertionError("id", "string")
+
+	id, ok := data["id"].(string)
+	if !ok {
+		id = ""
 	}
 
-	if userID, ok := data["user_id"]; ok {
-		s.UserID = userID
-	} else {
-		return utils.NewTypeAssertionError("user_id", "any")
-	}
-	
-	if expiresAtStr, ok := data["expires_at"].(string); ok {
-		s.ExpiresAt, err = time.Parse(time.RFC3339, expiresAtStr)
-		if err != nil {
-			return utils.NewTypeAssertionError("expires_at", "time.Time")
-		}
-	} else {
-		return utils.NewTypeAssertionError("expires_at", "string")
+	userID, ok := data["user_id"].(string)
+	if !ok {
+		userID = ""
 	}
 
-	if ipAddress, ok := data["ip_address"].(string); ok {
-		s.IpAddress = ipAddress
-	} else {
-		return utils.NewTypeAssertionError("ip_address", "string")
+	expiresAt, ok := data["expires_at"].(time.Time)
+	if !ok {
+		expiresAt = time.Time{}
 	}
 
-	if userAgent, ok := data["user_agent"].(string); ok {
-		s.UserAgent = userAgent
-	} else {
-		return utils.NewTypeAssertionError("user_agent", "string")
+	ipAddress, ok := data["ip_address"].(string)
+	if !ok {
+		ipAddress = ""
 	}
 
-	if createdAtStr, ok := data["created_at"].(string); ok {
-		s.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
-		if err != nil {
-			return utils.NewTypeAssertionError("created_at", "time.Time")
-		}
-	} else {
-		return utils.NewTypeAssertionError("created_at", "string")
+	userAgent, ok := data["user_agent"].(string)
+	if !ok {
+		userAgent = ""
 	}
 
-	if updatedAtStr, ok := data["updated_at"].(string); ok {
-		s.UpdatedAt, err = time.Parse(time.RFC3339, updatedAtStr)
-		if err != nil {
-			return utils.NewTypeAssertionError("updated_at", "time.Time")
-		}
-	} else {
-		return utils.NewTypeAssertionError("updated_at", "string")
+	createdAt, ok := data["created_at"].(time.Time)
+	if !ok {
+		createdAt = time.Time{}
 	}
 
+	updatedAt, ok := data["updated_at"].(time.Time)
+	if !ok {
+		updatedAt = time.Time{}
+	}
+
+	s.ID = id
+	s.UserID = userID
+	s.ExpiresAt = expiresAt
+	s.IpAddress = ipAddress
+	s.UserAgent = userAgent
+	s.CreatedAt = createdAt
+	s.UpdatedAt = updatedAt
 	return nil
 }
 
@@ -138,10 +110,6 @@ func (s *Session) ToMap() (map[string]any, error) {
 type SessionStore struct {
 	DB behemoth.Database
 }
-
-// func (s *SessionStore) CreateSessionTable(ctx context.Context) error {
-// 	return s.DB.CreateTable(ctx, SessionTableSchema)
-// }
 
 func (s *SessionStore) SaveSession(ctx context.Context, session behemoth.Session) error {
 	return s.DB.Create(ctx, session)

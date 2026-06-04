@@ -15,7 +15,7 @@ type User struct {
 	Firstname     string    `db:"firstname"`
 	Lastname      string    `db:"lastname"`
 	PasswordHash  string    `db:"password_hash"`
-	EmailVerified string    `db:"email_verified"`
+	EmailVerified bool      `db:"email_verified"`
 	ImageUrl      string    `db:"image_url"`
 	CreatedAt     time.Time `db:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at"`
@@ -85,9 +85,9 @@ func (u *User) FromMap(data map[string]any) error {
 	if !ok {
 		passwordHash = ""
 	}
-	emailVerified, ok := data["email_verified"].(string)
+	emailVerified, ok := data["email_verified"].(bool)
 	if !ok {
-		emailVerified = ""
+		emailVerified = false
 	}
 	imageUrl, ok := data["image_url"].(string)
 	if !ok {
@@ -234,7 +234,7 @@ func UserFactory(data map[string]any) behemoth.User {
 		Lastname:      data["lastname"].(string),
 		PasswordHash:  data["password_hash"].(string),
 		ImageUrl:      data["image_url"].(string),
-		EmailVerified: data["email_verified"].(string),
+		EmailVerified: data["email_verified"].(bool),
 	}
 }
 
@@ -292,43 +292,3 @@ func (ui *UserInfo) PrimaryKeyName() string {
 func (ui *UserInfo) PrimaryKeyField() any {
 	return ui.ID
 }
-
-// func (ui *UserInfo) Fields() []string {
-// 	return []string{
-// 		"provider",
-// 		"email",
-// 		"name",
-// 		"first_name",
-// 		"last_name",
-// 		"id",
-// 		"avatar_url",
-// 		"location",
-// 		"access_token",
-// 		"access_token_secret",
-// 		"refresh_token",
-// 		"expires_at",
-// 		"id_token",
-// 	}
-// }
-
-// func (ui *UserInfo) PrimaryValue() any {
-// 	return ui.ID
-// }
-
-// func (ui *UserInfo) ScanDestinations() []any {
-// 	return []any{
-// 		&ui.Provider,
-// 		&ui.Email,
-// 		&ui.Name,
-// 		&ui.FirstName,
-// 		&ui.LastName,
-// 		&ui.ID,
-// 		&ui.AvatarURL,
-// 		&ui.Location,
-// 		&ui.AccessToken,
-// 		&ui.AccessTokenSecret,
-// 		&ui.RefreshToken,
-// 		&ui.ExpiresAt,
-// 		&ui.IDToken,
-// 	}
-// }
