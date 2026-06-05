@@ -172,20 +172,36 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
-func (sqlt *SQLiteAdapter) UpdateField(
+func (sqlt *SQLiteAdapter) UpdateOne(
 	ctx context.Context,
 	m behemoth.Model,
-	fieldName string,
-	value any,
+	expr clause.Expression,
+	updates behemoth.M,
 ) error {
-	query := fmt.Sprintf(
-		"UPDATE %s SET %s WHERE %s = ?",
-		m.SchemaName(),
-		utils.GenerateSQLSETClause([]string{fieldName}),
+	if len(updates) == 0 {
+		return nil
+	}
+
+	columns, values := utils.MapToSlice(updates)
+	whereClause, args := buildSQLiteWhereClause(&expr, len(values)+1)
+
+	selectQuery := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s LIMIT 1",
 		m.PrimaryKeyName(),
+		m.SchemaName(),
+		whereClause,
 	)
 
-	_, err := sqlt.DB.ExecContext(ctx, query, []any{value, m.PrimaryKeyField()}...)
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s = (%s)",
+		m.SchemaName(),
+		utils.GenerateSQLSETClause(columns),
+		m.PrimaryKeyName(),
+		selectQuery,
+	)
+
+
+	_, err := sqlt.DB.ExecContext(ctx, query, append(values, args...)...)
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
@@ -193,7 +209,7 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 	ctx context.Context,
 	m behemoth.Model,
 	expr clause.Expression,
-	updates map[string]any,
+	updates behemoth.M,
 ) error {
 
 	if len(updates) == 0 {

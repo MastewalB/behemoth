@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
@@ -27,11 +28,17 @@ func (ga *GormAdapter) Create(ctx context.Context, m behemoth.Model) error {
 
 func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
 	query, args := BuildSQLWhereClause(&expr)
-	err := ga.db.WithContext(ctx).Table(m.SchemaName()).Where(query, args...).First(m.New()).Error
+	newModel := m.New()
+	err := ga.db.
+		WithContext(ctx).
+		Table(m.SchemaName()).
+		Where(query, args...).
+		First(newModel).
+		Error
 	if err != nil {
 		return nil, WrapWithCaller(err, m.SchemaName(), mapGormError)
 	}
-	return m, nil
+	return newModel, nil
 }
 
 func (ga *GormAdapter) FindMany(
@@ -90,8 +97,41 @@ func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
-func (ga *GormAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
-	err := ga.db.WithContext(ctx).Model(m).Update(fieldName, value).Error
+func replaceParams(s string) string {
+	return regexp.MustCompile(`\$\d+`).ReplaceAllString(s, "?")
+}
+
+func (ga *GormAdapter) UpdateOne(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	updates behemoth.M,
+) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	query, args := BuildSQLWhereClause(&expr)
+	query = replaceParams(query)
+
+	fmt.Println(query, args, updates)
+	op := ga.db.Debug().
+		WithContext(ctx).
+		Table(m.SchemaName()).
+		Where(
+			fmt.Sprintf("%s = (?)", m.PrimaryKeyName()),
+			ga.db.
+				Table(m.SchemaName()).
+				Select(m.PrimaryKeyName()).
+				Where(query, args...).
+				Find(m.New()).
+				Limit(1),
+		).
+		Updates(map[string]any(updates))
+
+	err := op.Error
+
+	fmt.Println(op.RowsAffected)
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
@@ -99,17 +139,18 @@ func (ga *GormAdapter) UpdateMany(
 	ctx context.Context,
 	m behemoth.Model,
 	expr clause.Expression,
-	updates map[string]any,
+	updates behemoth.M,
 ) error {
 	if len(updates) == 0 {
 		return nil
 	}
+
 	query, args := BuildSQLWhereClause(&expr)
 	err := ga.db.
 		WithContext(ctx).
 		Model(m.New()).
 		Where(query, args...).
-		Updates(updates).
+		Updates(map[string]any(updates)).
 		Error
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
@@ -140,10 +181,11 @@ func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr cl
 }
 
 func (ga *GormAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
-	query := fmt.Sprintf("DELETE FROM %s;", m.SchemaName())
 	err := ga.db.
 		WithContext(ctx).
-		Exec(query).Error
+		Session(&gorm.Session{AllowGlobalUpdate: true}).
+		Delete(m.New()).
+		Error
 
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }

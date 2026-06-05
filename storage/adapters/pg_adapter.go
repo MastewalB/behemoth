@@ -178,17 +178,36 @@ func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
-func (pg *PostgresAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
+func (pg *PostgresAdapter) UpdateOne(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	updates behemoth.M,
+) error {
 
-	query := fmt.Sprintf(
-		"UPDATE %s SET %s WHERE %s = $%d",
-		m.SchemaName(),
-		utils.GenerateSQLSETClause([]string{fieldName}),
+	if len(updates) == 0 {
+		return nil
+	}
+
+	columns, values := utils.MapToSlice(updates)
+	whereClause, args := buildSQLiteWhereClause(&expr, len(values)+1)
+
+	selectQuery := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s LIMIT 1",
 		m.PrimaryKeyName(),
-		2,
+		m.SchemaName(),
+		whereClause,
 	)
 
-	_, err := pg.DB.ExecContext(ctx, query, []any{value, m.PrimaryKeyField()}...)
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s = (%s)",
+		m.SchemaName(),
+		utils.GenerateSQLSETClause(columns),
+		m.PrimaryKeyName(),
+		selectQuery,
+	)
+
+	_, err := pg.DB.ExecContext(ctx, query, append(values, args...)...)
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
@@ -196,7 +215,7 @@ func (pg *PostgresAdapter) UpdateMany(
 	ctx context.Context,
 	m behemoth.Model,
 	expr clause.Expression,
-	updates map[string]any,
+	updates behemoth.M,
 ) error {
 
 	if len(updates) == 0 {

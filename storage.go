@@ -31,8 +31,8 @@ type Database interface {
 	FindMany(ctx context.Context, model Model, expr clause.Expression, options *QueryOptions) ([]Model, error)
 
 	Update(ctx context.Context, m Model) error
-	UpdateField(ctx context.Context, m Model, fieldName string, value any) error
-	UpdateMany(ctx context.Context, m Model, expr clause.Expression, updates map[string]any) error
+	UpdateOne(ctx context.Context, m Model, expr clause.Expression, updates M) error
+	UpdateMany(ctx context.Context, m Model, expr clause.Expression, updates M) error
 
 	Delete(ctx context.Context, m Model) error
 	DeleteMany(ctx context.Context, m Model, expr clause.Expression) error

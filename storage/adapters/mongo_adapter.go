@@ -141,21 +141,24 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
-func (mdb *MongoAdapter) UpdateField(ctx context.Context, m behemoth.Model, fieldName string, value any) error {
-	collection := mdb.db.Collection(m.SchemaName())
-
-	filter := bson.M{
-		m.PrimaryKeyName(): m.PrimaryKeyField(),
+func (mdb *MongoAdapter) UpdateOne(
+	ctx context.Context,
+	m behemoth.Model,
+	expr clause.Expression,
+	updates behemoth.M,
+) error {
+	if len(updates) == 0 {
+		return nil
 	}
 
+	collection := mdb.db.Collection(m.SchemaName())
+	filter := BuildMongoFilter(&expr)
+
 	update := bson.M{
-		"$set": bson.M{
-			fieldName: value,
-		},
+		"$set": updates,
 	}
 
 	_, err := collection.UpdateOne(ctx, filter, update)
-
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
@@ -163,7 +166,7 @@ func (mdb *MongoAdapter) UpdateMany(
 	ctx context.Context,
 	m behemoth.Model,
 	expr clause.Expression,
-	updates map[string]any,
+	updates behemoth.M,
 ) error {
 
 	if len(updates) == 0 {

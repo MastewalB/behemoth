@@ -51,7 +51,7 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("FindOne", s.TestFindOne)
 	s.t.Run("FindMany", s.TestFindMany)
 	s.t.Run("Update", s.TestUpdate)
-	s.t.Run("UpdateField", s.TestUpdateField)
+	s.t.Run("UpdateField", s.TestUpdateOne)
 	s.t.Run("UpdateMany", s.TestUpdateMany)
 	s.t.Run("Delete", s.TestDelete)
 	s.t.Run("DeleteAll", s.TestDeleteAll)
@@ -88,9 +88,9 @@ func (s *DatabaseTestSuite) PopulateTableWithTestData(t *testing.T) []behemoth.M
 		err := s.adapter.Create(s.ctx, model)
 		assert.NoError(t, err)
 
-		err = s.adapter.UpdateField(s.ctx, model, "email", data.email)
+		err = s.adapter.UpdateOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, data.id), behemoth.M{"email": data.email})
 		assert.NoError(t, err)
-		err = s.adapter.UpdateField(s.ctx, model, "username", data.username)
+		err = s.adapter.UpdateOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, data.id), behemoth.M{"username": data.username})
 		assert.NoError(t, err)
 		models = append(models, model)
 	}
@@ -164,23 +164,40 @@ func (s *DatabaseTestSuite) TestUpdate(t *testing.T) {
 
 }
 
-func (s *DatabaseTestSuite) TestUpdateField(t *testing.T) {
+func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
 	defer s.cleanupTables()
 
-	models := s.PopulateTableWithTestData(t)
+	t.Run("UpdateOneSingleRecordMatchesCondition", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
 
-	model := models[0]
-	copy := s.modelManager.Clone(model)
-	id := getModelID(model)
+		model := models[0]
+		copy := s.modelManager.Clone(model)
+		id := getModelID(model)
 
-	err := s.adapter.UpdateField(s.ctx, model, "email", "Updated@email.com")
-	assert.NoError(t, err)
-	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, id))
-	assert.NoError(t, err)
-	assert.NotNil(t, found)
+		err := s.adapter.UpdateOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, id), behemoth.M{"email": "Updated@email.com"})
+		assert.NoError(t, err)
+		found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, id))
+		assert.NoError(t, err)
+		assert.NotNil(t, found)
 
-	assert.False(t, s.modelManager.Compare(copy, found), "Model should have been updated and not match original")
-	assert.NotEqual(t, getModelEmail(copy), getModelEmail(found), "Email should be changed")
+		t.Log(found)
+		assert.False(t, s.modelManager.Compare(copy, found), "Model should have been updated and not match original")
+		assert.NotEqual(t, getModelEmail(copy), getModelEmail(found), "Email should be changed")
+	})
+
+	t.Run("UpdateOneMultipleRecordsMatchCondition", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		model := models[0]
+		err := s.adapter.UpdateOne(s.ctx, model, getWhereExpr("username", clause.OpStartsWith, "user"), behemoth.M{"username": "singleUpdatedUsername"})
+		assert.NoError(t, err)
+
+		found, err := s.adapter.FindMany(s.ctx, model, getWhereExpr("username", clause.OpEqual, "singleUpdatedUsername"), nil)
+		assert.NoError(t, err)
+		assert.Len(t, found, 1, "Only one record should be updated even if multiple match the condition")
+	})
 }
 
 func (s *DatabaseTestSuite) TestUpdateMany(t *testing.T) {
@@ -598,19 +615,19 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 		model1 := s.modelManager.Create("dup1")
 		err := s.adapter.Create(s.ctx, model1)
 		assert.NoError(t, err)
-		err = s.adapter.UpdateField(s.ctx, model1, "email", "duplicate@test.com")
+		err = s.adapter.UpdateOne(s.ctx, model1, getWhereExpr("id", clause.OpEqual, "dup1"), behemoth.M{"email": "duplicate@test.com"})
 		assert.NoError(t, err)
 
 		model2 := s.modelManager.Create("dup2")
 		err = s.adapter.Create(s.ctx, model2)
 		assert.NoError(t, err)
-		err = s.adapter.UpdateField(s.ctx, model2, "email", "duplicate@test.com")
+		err = s.adapter.UpdateOne(s.ctx, model2, getWhereExpr("id", clause.OpEqual, "dup2"), behemoth.M{"email": "duplicate@test.com"})
 		assert.NoError(t, err)
 
 		model3 := s.modelManager.Create("dup3")
 		err = s.adapter.Create(s.ctx, model3)
 		assert.NoError(t, err)
-		err = s.adapter.UpdateField(s.ctx, model3, "email", "unique@test.com")
+		err = s.adapter.UpdateOne(s.ctx, model3, getWhereExpr("id", clause.OpEqual, "dup3"), behemoth.M{"email": "unique@test.com"})
 		assert.NoError(t, err)
 
 		t.Run("WithoutDistinct", func(t *testing.T) {
