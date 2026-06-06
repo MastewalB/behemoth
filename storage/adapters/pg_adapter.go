@@ -249,6 +249,36 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
 }
 
+func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+
+	whereClause, args := BuildSQLWhereClause(&expr)
+	if whereClause == "" {
+		return &behemotherr.DomainError{
+			Type:    behemotherr.Database,
+			Op:      "DeleteOne",
+			Entity:  m.SchemaName(),
+			Message: "DeleteOne requires a where clause.",
+		}
+	}
+
+	selectQuery := fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s LIMIT 1",
+		m.PrimaryKeyName(),
+		m.SchemaName(),
+		whereClause,
+	)
+
+	query := fmt.Sprintf(
+		"DELETE FROM %s WHERE %s = (%s)",
+		m.SchemaName(),
+		m.PrimaryKeyName(),
+		selectQuery,
+	)
+
+	_, err := pg.DB.ExecContext(ctx, query, args...)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+}
+
 func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	whereClause, args := BuildSQLWhereClause(&expr)
 
@@ -262,7 +292,7 @@ func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 	}
 
 	query := fmt.Sprintf(
-		"DELETE FROM %s where %s",
+		"DELETE FROM %s WHERE %s",
 		m.SchemaName(),
 		whereClause,
 	)

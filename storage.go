@@ -35,6 +35,7 @@ type Database interface {
 	UpdateMany(ctx context.Context, m Model, expr clause.Expression, updates M) error
 
 	Delete(ctx context.Context, m Model) error
+	DeleteOne(ctx context.Context, m Model, expr clause.Expression) error
 	DeleteMany(ctx context.Context, m Model, expr clause.Expression) error
 	DeleteAll(ctx context.Context, m Model) error
 

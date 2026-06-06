@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"regexp"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
@@ -97,9 +96,9 @@ func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
-func replaceParams(s string) string {
-	return regexp.MustCompile(`\$\d+`).ReplaceAllString(s, "?")
-}
+// func replaceParams(s string) string {
+// 	return regexp.MustCompile(`\$\d+`).ReplaceAllString(s, "?")
+// }
 
 func (ga *GormAdapter) UpdateOne(
 	ctx context.Context,
@@ -112,26 +111,21 @@ func (ga *GormAdapter) UpdateOne(
 	}
 
 	query, args := BuildSQLWhereClause(&expr)
-	query = replaceParams(query)
 
-	fmt.Println(query, args, updates)
-	op := ga.db.Debug().
+	err := ga.db.
 		WithContext(ctx).
 		Table(m.SchemaName()).
 		Where(
 			fmt.Sprintf("%s = (?)", m.PrimaryKeyName()),
 			ga.db.
-				Table(m.SchemaName()).
 				Select(m.PrimaryKeyName()).
 				Where(query, args...).
 				Find(m.New()).
 				Limit(1),
 		).
-		Updates(map[string]any(updates))
+		Updates(map[string]any(updates)).
+		Error
 
-	err := op.Error
-
-	fmt.Println(op.RowsAffected)
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
@@ -157,6 +151,35 @@ func (ga *GormAdapter) UpdateMany(
 
 func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	err := ga.db.WithContext(ctx).Delete(m).Error
+	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+}
+
+func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
+	whereClause, args := BuildSQLWhereClause(&expr)
+	if whereClause == "" {
+		return &behemotherr.DomainError{
+			Type:    behemotherr.Database,
+			Op:      "DeleteOne",
+			Entity:  m.SchemaName(),
+			Message: "DeleteOne requires a where clause.",
+		}
+	}
+
+	query, args := BuildSQLWhereClause(&expr)
+
+	err := ga.db.
+		WithContext(ctx).
+		Table(m.SchemaName()).
+		Where(
+			fmt.Sprintf("%s = (?)", m.PrimaryKeyName()),
+			ga.db.
+				Select(m.PrimaryKeyName()).
+				Where(query, args...).
+				Find(m.New()).
+				Limit(1)).
+		Delete(m.New()).
+		Error
+
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 

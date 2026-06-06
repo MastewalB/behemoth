@@ -54,6 +54,7 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("UpdateField", s.TestUpdateOne)
 	s.t.Run("UpdateMany", s.TestUpdateMany)
 	s.t.Run("Delete", s.TestDelete)
+	s.t.Run("DeleteOne", s.TestDeleteOne)
 	s.t.Run("DeleteAll", s.TestDeleteAll)
 	s.t.Run("DeleteMany", s.TestDeleteMany)
 	s.t.Run("Transaction", s.TestTransaction)
@@ -305,6 +306,99 @@ func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, "1"))
 	assert.Error(t, err)
 	assert.Nil(t, found)
+}
+
+func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
+	defer s.cleanupTables()
+
+	t.Run("DeleteOneWithEqualCondition", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		expr := getWhereExpr("id", clause.OpEqual, "1")
+		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+
+		// Verify record is deleted
+		_, err = s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, "1"))
+		assert.Error(t, err, "Deleted record should not be found")
+
+		// Verify other records remain
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(6), count, "Should have 6 remaining records")
+
+		// Verify specific other records still exist
+		for _, id := range []string{"2", "3", "4", "5", "update6", "update7"} {
+			found, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+			assert.NoError(t, err)
+			assert.NotNil(t, found)
+		}
+	})
+
+	t.Run("DeleteOneWithMultipleMatchingRecords", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		expr := clause.Expression{
+			Logic: clause.OpAnd,
+			Conditions: []clause.Condition{
+				{Field: "email", Operator: clause.OpContains, Value: "old"},
+			},
+		}
+
+		// Should delete only ONE record even though multiple match
+		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+
+		// Count remaining records with 'old' email
+		count, err := s.adapter.Count(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), count, "Should have only 1 record with 'old' email remaining (one was deleted)")
+
+		// Total records should be 6
+		totalCount, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(6), totalCount, "Total records should be 6 after deleting one")
+	})
+
+	t.Run("DeleteOneWithNoMatchingRecords", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		expr := getWhereExpr("id", clause.OpEqual, "nonexistent")
+
+		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
+		// assert.Error(t, err, "DeleteOne should return error when no records match")
+
+		// Verify all records still exist
+		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(7), count, "All records should remain when no match found")
+	})
+
+	t.Run("DeleteOneWithOrLogic", func(t *testing.T) {
+		defer s.cleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		expr := clause.Expression{
+			Logic: clause.OpOr,
+			Conditions: []clause.Condition{
+				{Field: "id", Operator: clause.OpEqual, Value: "1"},
+				{Field: "id", Operator: clause.OpEqual, Value: "2"},
+				{Field: "email", Operator: clause.OpEqual, Value: "old1@test.com"},
+			},
+		}
+
+		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
+		assert.NoError(t, err)
+
+
+		// Total records should be 6
+		totalCount, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(6), totalCount)
+	})
 }
 
 func (s *DatabaseTestSuite) TestDeleteAll(t *testing.T) {
