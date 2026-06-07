@@ -119,6 +119,40 @@ func TestPostgresAdapter(t *testing.T) {
 	suite.Run()
 }
 
+func TestMySQLAdapter(t *testing.T) {
+	db, cleanupDatabase := setupMySQLTestDB(t, testutils.TestMySQLUserSchema)
+	adapter := &adapters.MySQLAdapter{DB: db}
+
+	manager := ModelManager{
+		Create: func(id string) behemoth.Model {
+			return testutils.NewTestUser(id)
+		},
+		Update: func(M behemoth.Model) behemoth.Model {
+			user := M.(*testutils.TestUser)
+			user.Email = "updated@emailupdater.com"
+			return user
+		},
+		Compare: func(T, U behemoth.Model) bool {
+			M, N := T.(*testutils.TestUser), U.(*testutils.TestUser)
+			return M.Email == N.Email &&
+				M.ID == N.ID &&
+				M.Username == N.Username
+
+		},
+		Clone: func(M behemoth.Model) behemoth.Model {
+			copy := *M.(*testutils.TestUser)
+			return &copy
+		},
+	}
+	cleanupTables := func() {
+		db.ExecContext(context.Background(), "DELETE FROM users;")
+	}
+
+	suite := NewDatabaseTestSuite(t, adapter, manager, cleanupTables, cleanupDatabase)
+	suite.Run()
+
+}
+
 func TestGormAdapter(t *testing.T) {
 	db := SetupGormTestDB(t, &testutils.GormTestUser{})
 	adapter := SetupGormAdapter(t, db)

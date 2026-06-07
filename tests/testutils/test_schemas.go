@@ -22,6 +22,14 @@ CREATE TABLE users (
 );
 `
 
+var TestMySQLUserSchema = `
+CREATE TABLE users (
+    id CHAR(36) PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL UNIQUE
+);
+`
+
 func (u *TestUser) SchemaName() string {
 	return "users"
 }
@@ -63,25 +71,21 @@ func (u *TestUser) ToMap() (map[string]any, error) {
 }
 
 func (u *TestUser) FromMap(data map[string]any) error {
-	id, ok := data["id"].(string)
-	if !ok {
-		id = ""
-		// return fmt.Errorf("invalid type for id")
-	}
-	email, ok := data["email"].(string)
-	if !ok {
-		email = ""
-		// return fmt.Errorf("invalid type for email")
-	}
-	username, ok := data["username"].(string)
-	if !ok {
-		username = ""
-		// return fmt.Errorf("invalid type for username")
+	toString := func(v any) string {
+		switch x := v.(type) {
+		case string:
+			return x
+		case []byte:
+			return string(x)
+		default:
+			return ""
+		}
 	}
 
-	u.ID = id
-	u.Email = email
-	u.Username = username
+	u.ID = toString(data["id"])
+	u.Email = toString(data["email"])
+	u.Username = toString(data["username"])
+
 	return nil
 }
 
