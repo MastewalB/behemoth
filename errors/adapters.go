@@ -12,6 +12,8 @@ var (
 	ErrValidation     = &DomainError{Type: Validation}
 	ErrDatabase       = &DomainError{Type: Database}
 	ErrNotImplemented = &DomainError{Type: NotImplemented}
+	ErrEmptyKey       = &DomainError{Type: EmptyKey}
+	ErrInvalidTTL     = &DomainError{Type: InvalidTTL}
 
 	// Add more: PermissionDenied, ConstraintViolation, etc.
 )
@@ -26,6 +28,9 @@ const (
 	Internal            ErrorType = "INTERNAL_ERROR"
 	Database            ErrorType = "DATABASE_ERROR"
 	InvalidInput        ErrorType = "INVALID_INPUT"
+	EmptyKey            ErrorType = "EMPTY_KEY"
+	KeyNotFound         ErrorType = "KEY_NOT_FOUND"
+	InvalidTTL          ErrorType = "INVALID_TTL"
 )
 
 type DomainError struct {
@@ -104,6 +109,22 @@ func NewInvalidInputError(op, entity, message string, original error) error {
 		Op:       op,
 		Entity:   entity,
 		Message:  message,
+		Original: original,
+	}
+}
+
+func NewEmptyKey(op string, original error) error {
+	return &DomainError{
+		Type:     EmptyKey,
+		Op:       op,
+		Original: original,
+	}
+}
+
+func NewKeyNotFound(op string, original error) error {
+	return &DomainError{
+		Type:     KeyNotFound,
+		Op:       op,
 		Original: original,
 	}
 }
