@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/uptrace/bun"
 )
 
 type TestUser struct {
@@ -108,9 +109,11 @@ func NewTestUserMap(id int) behemoth.M {
 }
 
 type GormTestUser struct {
-	ID       string `gorm:"primaryKey"`
-	Email    string `gorm:"not null"`
-	Username string `gorm:"unique;not null"`
+	bun.BaseModel `bun:"table:users"`
+
+	ID       string `gorm:"primaryKey" bun:",pk,unique"`
+	Email    string `gorm:"not null" bun:",notnull"`
+	Username string `gorm:"unique;not null" bun:",unique,notnull"`
 }
 
 func (u *GormTestUser) SchemaName() string {

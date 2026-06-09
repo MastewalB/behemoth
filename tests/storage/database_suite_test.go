@@ -88,7 +88,7 @@ func TestMongoAdapter(t *testing.T) {
 
 func TestPostgresAdapter(t *testing.T) {
 	db, cleanupDatabase := setupPostgresTestDB(t, testutils.TestUserSchema)
-	adapter := &adapters.PostgresAdapter{DB: db}
+	adapter := adapters.NewPostgresAdapter(db)
 
 	manager := ModelManager{
 		Create: func(id string) behemoth.Model {
@@ -121,7 +121,7 @@ func TestPostgresAdapter(t *testing.T) {
 
 func TestMySQLAdapter(t *testing.T) {
 	db, cleanupDatabase := setupMySQLTestDB(t, testutils.TestMySQLUserSchema)
-	adapter := &adapters.MySQLAdapter{DB: db}
+	adapter := adapters.NewMySQLAdapter(db)
 
 	manager := ModelManager{
 		Create: func(id string) behemoth.Model {
@@ -154,7 +154,7 @@ func TestMySQLAdapter(t *testing.T) {
 }
 
 func TestGormAdapter(t *testing.T) {
-	db := SetupGormTestDB(t, &testutils.GormTestUser{})
+	db, cleanup := SetupGormTestDB(t, &testutils.GormTestUser{})
 	adapter := SetupGormAdapter(t, db)
 
 	manager := ModelManager{
@@ -183,10 +183,44 @@ func TestGormAdapter(t *testing.T) {
 		db.Exec("DELETE FROM users;")
 	}
 
-	cleanupDatabase := func() {
-		db.Exec("DROP TABLE users;")
+	suite := NewDatabaseTestSuite(t, adapter, manager, cleanupTables, cleanup)
+	suite.Run()
+}
+
+func TestBunAdapter(t *testing.T) {
+	db, cleanup := SetupBunTestDB(t, &testutils.GormTestUser{})
+	adapter := SetupBunAdapter(t, db)
+
+	manager := ModelManager{
+		Create: func(id string) behemoth.Model {
+			return testutils.NewGormTestUser(id)
+		},
+		Update: func(M behemoth.Model) behemoth.Model {
+			user := M.(*testutils.GormTestUser)
+			user.Email = "updated@emailupdater.com"
+			return user
+		},
+		Compare: func(T, U behemoth.Model) bool {
+			M, N := T.(*testutils.GormTestUser), U.(*testutils.GormTestUser)
+			return M.Email == N.Email &&
+				M.ID == N.ID &&
+				M.Username == N.Username
+
+		},
+		Clone: func(M behemoth.Model) behemoth.Model {
+			copy := *M.(*testutils.GormTestUser)
+			return &copy
+		},
 	}
 
-	suite := NewDatabaseTestSuite(t, adapter, manager, cleanupTables, cleanupDatabase)
+	cleanupTables := func() {
+		db.Exec("DELETE FROM users;")
+	}
+
+	// cleanupDatabase := func() {
+	// 	db.Exec("DROP TABLE users;")
+	// }
+
+	suite := NewDatabaseTestSuite(t, adapter, manager, cleanupTables, cleanup)
 	suite.Run()
 }

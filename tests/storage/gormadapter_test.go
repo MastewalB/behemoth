@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func SetupGormTestDB(t *testing.T, models behemoth.Model) *gorm.DB {
+func SetupGormTestDB(t *testing.T, models behemoth.Model) (*gorm.DB, func()) {
 	dbName := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
 	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 	if err != nil {
@@ -20,7 +20,13 @@ func SetupGormTestDB(t *testing.T, models behemoth.Model) *gorm.DB {
 	db.Exec("PRAGMA foreign_keys = ON;")
 	db.AutoMigrate(models)
 
-	return db
+	cleanup := func() {
+		if sqliteDB, err := db.DB(); err == nil {
+			sqliteDB.Close()
+		}
+	}
+
+	return db, cleanup
 }
 
 func SetupGormAdapter(t *testing.T, db *gorm.DB) *adapters.GormAdapter {

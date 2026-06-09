@@ -92,6 +92,7 @@ func (s *DatabaseTestSuite) PopulateTableWithTestData(t *testing.T) []behemoth.M
 		err = s.adapter.UpdateOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, data.id), behemoth.M{"email": data.email})
 		assert.NoError(t, err)
 		err = s.adapter.UpdateOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, data.id), behemoth.M{"username": data.username})
+		// t.Log(err.(*behemotherr.DomainError).Original)
 		assert.NoError(t, err)
 		models = append(models, model)
 	}
@@ -392,7 +393,6 @@ func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
 
 		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
 		assert.NoError(t, err)
-
 
 		// Total records should be 6
 		totalCount, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
