@@ -153,6 +153,39 @@ func TestMySQLAdapter(t *testing.T) {
 
 }
 
+func TestMSSQLAdapter(t *testing.T) {
+	db, cleanupDatabase := SetupMSSQLServerTestDB(t, testutils.TestMSSQLServerUserSchema)
+	adapter := adapters.NewSQLServerAdapter(db)
+
+	manager := ModelManager{
+		Create: func(id string) behemoth.Model {
+			return testutils.NewTestUser(id)
+		},
+		Update: func(M behemoth.Model) behemoth.Model {
+			user := M.(*testutils.TestUser)
+			user.Email = "updated@emailupdater.com"
+			return user
+		},
+		Compare: func(T, U behemoth.Model) bool {
+			M, N := T.(*testutils.TestUser), U.(*testutils.TestUser)
+			return M.Email == N.Email &&
+				M.ID == N.ID &&
+				M.Username == N.Username
+
+		},
+		Clone: func(M behemoth.Model) behemoth.Model {
+			copy := *M.(*testutils.TestUser)
+			return &copy
+		},
+	}
+	cleanupTables := func() {
+		db.ExecContext(context.Background(), "DELETE FROM users;")
+	}
+
+	suite := NewDatabaseTestSuite(t, adapter, manager, cleanupTables, cleanupDatabase)
+	suite.Run()
+
+}
 func TestGormAdapter(t *testing.T) {
 	db, cleanup := SetupGormTestDB(t, &testutils.GormTestUser{})
 	adapter := SetupGormAdapter(t, db)
@@ -216,10 +249,6 @@ func TestBunAdapter(t *testing.T) {
 	cleanupTables := func() {
 		db.Exec("DELETE FROM users;")
 	}
-
-	// cleanupDatabase := func() {
-	// 	db.Exec("DROP TABLE users;")
-	// }
 
 	suite := NewDatabaseTestSuite(t, adapter, manager, cleanupTables, cleanup)
 	suite.Run()

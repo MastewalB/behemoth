@@ -31,6 +31,14 @@ CREATE TABLE users (
 );
 `
 
+var TestMSSQLServerUserSchema = `
+CREATE TABLE users (
+    id VARCHAR(36) PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL UNIQUE
+);
+`
+
 func (u *TestUser) SchemaName() string {
 	return "users"
 }
