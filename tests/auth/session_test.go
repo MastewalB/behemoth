@@ -9,6 +9,7 @@ import (
 	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/tests/testutils"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
 

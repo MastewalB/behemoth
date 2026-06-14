@@ -36,7 +36,7 @@ func newTestUser(id string) *models.User {
 		Firstname:     "John",
 		Lastname:      "Doe",
 		PasswordHash:  "hashedpassword",
-		EmailVerified: "false",
+		EmailVerified: false,
 		ImageUrl:      "http://example.com/avatar.png",
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
@@ -147,7 +147,7 @@ func TestUpdateUser(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, newUsername, u.Username)
-	assert.Equal(t, "true", u.EmailVerified)
+	assert.True(t, u.EmailVerified)
 }
 
 func TestDeleteUser(t *testing.T) {
