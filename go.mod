@@ -1,6 +1,6 @@
 module github.com/MastewalB/behemoth
 
-go 1.25.7
+go 1.26.4
 
 require (
 	github.com/go-sql-driver/mysql v1.10.0
