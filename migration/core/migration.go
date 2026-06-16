@@ -27,13 +27,18 @@ type Driver interface {
 
 	CreateMigrationTable(ctx context.Context) error
 
+	Open(config map[string]any) (Driver, error)
+
+	// Run executes raw migration string
+	Run(ctx context.Context, migration string) error
+
 	// Version returns the currently active version.
 	// When no migration has been applied, it must return version -1.
 	Version(ctx context.Context) (version int, err error)
 
 	SetVersion(ctx context.Context, version int) error
 
-	Close(ctx context.Context) error
+	Close() error
 	Ping(ctx context.Context) error
 
 	Name() string

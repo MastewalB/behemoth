@@ -13,19 +13,19 @@ var (
 var driversMu sync.RWMutex
 var drivers = make(map[string]Driver)
 
-type PluginRegistry struct {
-	mu      sync.RWMutex
-	drivers map[string]DriverFactory
-}
+// type PluginRegistry struct {
+// 	mu      sync.RWMutex
+// 	drivers map[string]DriverFactory
+// }
 
-type DriverFactory func(config map[string]any) (Driver, error)
+// type DriverFactory func(config map[string]any) (Driver, error)
 
 func Register(name string, driver Driver) {
 	driversMu.Lock()
 	defer driversMu.Unlock()
 
 	if driver == nil {
-		panic("Register driver is nil")
+		panic("driver is nil")
 	}
 
 	if _, dup := drivers[name]; dup {
@@ -44,7 +44,7 @@ func Open(name string, config map[string]any) (Driver, error) {
 		return nil, ErrPluginNotFound
 	}
 
-	return driver, nil
+	return driver.Open(config)
 }
 
 func List() []string {
