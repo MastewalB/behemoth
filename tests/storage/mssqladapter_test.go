@@ -48,9 +48,6 @@ func SetupMSSQLServerTestDB(t *testing.T, schema string) (*sql.DB, func()) {
 		host,
 		port.Port(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	db, err := sql.Open("sqlserver", connStr)
 	if err != nil {

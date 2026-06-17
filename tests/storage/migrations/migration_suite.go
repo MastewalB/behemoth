@@ -96,11 +96,72 @@ func (s *DriverTestSuite) TestCreateTable() {
 
 }
 
+// TestDropTable tests table dropping
+func (s *DriverTestSuite) TestDropTable() {
+	t := s.T()
+
+	// Create table
+	err := s.driver.CreateTable(s.ctx, s.table, s.schema)
+	assert.NoError(t, err)
+
+	// Verify table exists
+	exists, err := s.driverTestManager.TableExists(s.ctx, s.table)
+	assert.NoError(t, err)
+	assert.True(t, exists)
+
+	// Drop table
+	err = s.driver.DropTable(s.ctx, s.table)
+	assert.NoError(t, err)
+
+	// Verify table doesn't exist
+	exists, err = s.driverTestManager.TableExists(s.ctx, s.table)
+	assert.NoError(t, err)
+	assert.False(t, exists, "Table should not exist after drop")
+}
+
+// TestDropTableNonExistent tests dropping non-existent table
+func (s *DriverTestSuite) TestDropTableNonExistent() {
+	t := s.T()
+
+	// Drop non-existent table should not error
+	err := s.driver.DropTable(s.ctx, "non_existent_table")
+	assert.NoError(t, err, "Dropping non-existent table should be safe")
+}
+
+// TestPing tests database connectivity
+func (s *DriverTestSuite) TestPing() {
+	t := s.T()
+
+	err := s.driver.Ping(s.ctx)
+	assert.NoError(t, err, "Should ping successfully")
+}
+
+// TestName tests driver name retrieval
+func (s *DriverTestSuite) TestName() {
+	t := s.T()
+
+	name := s.driver.Name()
+	assert.NotEmpty(t, name, "Driver should have a name")
+}
+
+// TestClose tests closing connection
+// func (s *DriverTestSuite) TestClose() {
+// 	t := s.T()
+
+// 	err := s.driver.Close()
+// 	assert.NoError(t, err, "Should close successfully")
+
+// 	// Should be safe to close again
+// 	err = s.driver.Close()
+// 	assert.NoError(t, err, "Closing twice should be safe")
+// }
+
 // RunDriverTests runs all tests against a driver
 func RunDriverTests(t *testing.T, driver core.Driver, testManager DriverTestManager) {
 	suite.Run(t, NewDriverTestSuite(driver, testManager))
 }
 
+// DriverTestManager provides utility methods that will be used in the tests.
 type DriverTestManager interface {
 	TableExists(ctx context.Context, tableName string) (bool, error)
 	ColumnExists(ctx context.Context, tableName, columnName string) (bool, error)
