@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/MastewalB/behemoth/models"
 	"golang.org/x/oauth2"
 )
 
@@ -24,5 +23,5 @@ type Provider interface {
 	GetConfig() *oauth2.Config
 
 	// FetchUserInfo retrieves user information from the OAuth provider and returns UserInfo type.
-	FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (models.UserInfo, error)
+	FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (User, error)
 }

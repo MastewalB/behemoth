@@ -14,30 +14,30 @@ import (
 
 // OAuthAuth manages OAuth-based authentication for multiple providers.
 // It supports generic user types and handles authentication flows for providers like Google and Facebook.
-type OAuthAuth[T behemoth.User] struct {
-	providers      map[string]behemoth.Provider
-	jwtSvc         *JWTService
+type OAuthAuth struct {
+	providers map[string]behemoth.Provider
+	// jwtSvc         *JWTService
 	useDefaultUser bool
-	db             behemoth.Database[T]
+	db             behemoth.Database
 }
 
-func NewOAuthAuth[T behemoth.User](
+func NewOAuthAuth(
 	oAuthProviders []behemoth.Provider,
-	jwtSvc *JWTService,
+	// jwtSvc *JWTService,
 	useDefaultUser bool,
 	user behemoth.User,
-	db behemoth.Database[T],
-) *OAuthAuth[T] {
+	db behemoth.Database,
+) *OAuthAuth {
 
 	providers := make(map[string]behemoth.Provider)
 	for _, provider := range oAuthProviders {
 		providers[provider.Name()] = provider
 	}
 
-	return &OAuthAuth[T]{
-		providers:      providers,
-		db:             db,
-		jwtSvc:         jwtSvc,
+	return &OAuthAuth{
+		providers: providers,
+		db:        db,
+		// jwtSvc:         jwtSvc,
 		useDefaultUser: useDefaultUser,
 	}
 }
@@ -45,7 +45,7 @@ func NewOAuthAuth[T behemoth.User](
 // Authenticate performs OAuth authentication for the specified provider using the given credentials.
 // It exchanges the OAuth code for a token, fetches user info, and saves the user to the database.
 // Returns the authenticated user or an error if authentication fails.
-func (o *OAuthAuth[T]) Authenticate(providerName string, creds any) (behemoth.User, error) {
+func (o *OAuthAuth) Authenticate(providerName string, creds any) (behemoth.User, error) {
 
 	provider, exists := o.providers[providerName]
 	if !exists {
@@ -64,31 +64,34 @@ func (o *OAuthAuth[T]) Authenticate(providerName string, creds any) (behemoth.Us
 	}
 	// Fetch user info (provider-specific, e.g., Google API)
 	client := config.Client(context.Background(), token)
-	userInfo, err := provider.FetchUserInfo(client, context.Background(), token)
+	fetchedUserInfo, err := provider.FetchUserInfo(client, context.Background(), token)
 	if err != nil {
 		return nil, errors.New("failed to get user info: " + err.Error())
 	}
+	userInfo := fetchedUserInfo.(*models.UserInfo)
 	log.Println(userInfo)
 
 	// Create or update user
 	var user *models.User
 	if o.useDefaultUser {
 		user = &models.User{}
-		user.FromUserInfo(userInfo)
+		user.FromUserInfo(*userInfo)
 
-		if user, err = o.db.SaveUser(user); err != nil {
+		created, err := models.CreateUser(context.Background(), o.db, user)
+		if err != nil {
 			return nil, errors.New("failed to save user: " + err.Error())
 		}
+		user = created.(*models.User)
 	}
 
 	return user, nil
 }
 
-func (o *OAuthAuth[T]) Register(providerName string, creds any) (behemoth.User, error) {
+func (o *OAuthAuth) Register(providerName string, creds any) (behemoth.User, error) {
 	return o.Authenticate(providerName, creds) // OAuth often combines auth/register
 }
 
-func (o *OAuthAuth[T]) AuthURL(req *http.Request, state string) (string, error) {
+func (o *OAuthAuth) AuthURL(req *http.Request, state string) (string, error) {
 	providerName, err := getProviderName(req)
 	if err != nil {
 		return "", err

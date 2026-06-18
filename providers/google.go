@@ -63,10 +63,10 @@ func (g *Google) GetScopes() []string {
 	return g.Config.Scopes
 }
 
-func (g *Google) FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (models.UserInfo, error) {
+func (g *Google) FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (behemoth.User, error) {
 	resp, err := client.Get(GoogleProfileEndpoint)
 	if err != nil {
-		return models.UserInfo{}, err
+		return &models.UserInfo{}, err
 	}
 
 	defer resp.Body.Close()
@@ -74,15 +74,15 @@ func (g *Google) FetchUserInfo(client *http.Client, ctx context.Context, token *
 	body, err := io.ReadAll(resp.Body)
 	log.Println(string(body))
 	if err != nil {
-		return models.UserInfo{}, err
+		return &models.UserInfo{}, err
 	}
 
 	var googleUser googleUser
 	if err := json.Unmarshal(body, &googleUser); err != nil {
-		return models.UserInfo{}, err
+		return &models.UserInfo{}, err
 	}
 
-	return models.UserInfo{
+	return &models.UserInfo{
 		ID:                googleUser.ID,
 		Provider:          g.ProviderName,
 		Email:             googleUser.Email,

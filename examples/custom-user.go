@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"time"
 
 	"github.com/MastewalB/behemoth"
@@ -12,19 +11,43 @@ import (
 )
 
 type CustomUser struct {
-	ID           string
-	Email        string
-	PasswordHash string
-	Role         string
-	Username     string
-	Firstname    string
-	Lastname     string
+	ID           string `db:"id"`
+	Email        string `db:"email"`
+	PasswordHash string `db:"password_hash"`
+	Role         string `db:"role"`
+	Username     string `db:"username"`
+	Firstname    string `db:"firstname"`
+	Lastname     string `db:"lastname"`
 }
 
 func (u *CustomUser) GetID() string           { return u.ID }
 func (u *CustomUser) GetPasswordHash() string { return u.PasswordHash }
 func (u *CustomUser) GetEmail() string        { return u.Email }
 func (u *CustomUser) GetUsername() string     { return u.Username }
+
+func (u *CustomUser) TableName() string {
+	return "custom_users"
+}
+
+func (u *CustomUser) Fields() []string {
+	return []string{"id", "email", "username", "firstname", "lastname", "role", "password_hash"}
+}
+
+func (u *CustomUser) ScanDestinations() []any {
+	return []any{&u.ID, &u.Email, &u.Username, &u.Firstname, &u.Lastname, &u.Role, &u.PasswordHash}
+}
+
+func (u *CustomUser) PrimaryKey() string {
+	return "email"
+}
+
+func (u *CustomUser) PrimaryValue() any {
+	return u.Email
+}
+
+func (u *CustomUser) New() behemoth.User {
+	return &CustomUser{}
+}
 
 const CreateCustomUserQuery = `
 		CREATE TABLE IF NOT EXISTS custom_user (
@@ -64,29 +87,11 @@ func SetUpCustomUserRouter(bmth *auth.Behemoth[*CustomUser]) *chi.Mux {
 
 func SetUpCustomUserAuth(db *sql.DB) (*auth.Behemoth[*CustomUser], error) {
 	customConf := &behemoth.Config[*CustomUser]{
-		DatabaseConfig: behemoth.DatabaseConfig[*CustomUser]{
+		DatabaseConfig: behemoth.DatabaseConfig{
 			Name:           behemoth.SQLite,
 			DB:             db,
 			UseDefaultUser: false,
 			UserModel:      &CustomUser{},
-			UserTable:      "custom_users",
-			PrimaryKey:     "email",
-			FindUserFn: func(db, val any) (behemoth.User, error) {
-				sqlt, ok := db.(*sql.DB)
-				if !ok {
-					return nil, fmt.Errorf("invalid database type")
-				}
-				email, ok := val.(string)
-				if !ok {
-					return nil, fmt.Errorf("invalid email parameter")
-				}
-
-				var user *CustomUser = &CustomUser{}
-				err := sqlt.QueryRow(`SELECT * FROM users WHERE email = ?`, email).Scan(
-					&user.ID, &user.Email, &user.Username, &user.Firstname, &user.Lastname, &user.PasswordHash, &user.Role,
-				)
-				return user, err
-			},
 		},
 		Password:       &behemoth.PasswordConfig{HashCost: 10},
 		OAuthProviders: []behemoth.Provider{},

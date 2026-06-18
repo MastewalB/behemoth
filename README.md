@@ -1,4 +1,4 @@
-# Behemoth: Authentication Library for Golang
+# Behemoth: Authentication Library for Golang ( <img src="./docs/repairing-tools-svgrepo-com.svg" alt="Behemoth is currently under maintenance" width="20"> )
 
 Behemoth is a flexible authentication library for Go applications. It simplifies adding common authentication strategies like password-based login and OAuth 2.0 with JWT or Sessions. It handles user registration, authentication, and management, with various database integrations like Postgres and SQLite through a configurable interface. Behemoth provides a basic User Model with full built in CRUD features. It’s also compatible with custom user models and supports additional OAuth providers.
 
@@ -13,9 +13,17 @@ $ go get github.com/MastewalB/behemoth
 
 
 ## Supported Databases
+Via `database/sql`
 * PostgreSQL
 * SQLite
+* MySQL
+* MS SQL Server
 
+Others
+* MongoDB
+* Bun ORM
+* GORM ORM
+* Redis (For Key-Value Storage)
 
 ## Examples
 Create a Behemoth instance with built-in User Model. 

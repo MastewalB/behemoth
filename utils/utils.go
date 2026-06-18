@@ -3,6 +3,10 @@ package utils
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -38,4 +42,57 @@ func GenerateState() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+func GenerateSQLPlaceholders(begin, end int) string {
+	if end < begin {
+		return "()"
+	}
+
+	var b strings.Builder
+	b.WriteString("(")
+	for i := begin; i <= end; i++ {
+		b.WriteString(fmt.Sprintf("$%d", i))
+		if i < end {
+			b.WriteString(", ")
+		}
+	}
+	b.WriteString(")")
+	return b.String()
+}
+
+func GenerateSQLSETClause(fields []string) string {
+
+	var b strings.Builder
+	for i, field := range fields {
+		b.WriteString(fmt.Sprintf("%s = $%d", field, i+1))
+		if i < len(fields)-1 {
+			b.WriteString(", ")
+		} else {
+			b.WriteString(" ")
+		}
+	}
+
+	return b.String()
+}
+
+func CurrentTimestamp() string {
+	return fmt.Sprintf("%d", (int64)(time.Now().Unix()))
+}
+
+func IsValidEmail(email string) bool {
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$`)
+	return emailRegex.MatchString(email)
+}
+
+func MapToSlice[T comparable, U any](m map[T]U) ([]T, []U) {
+	keys := make([]T, 0, len(m))
+	values := make([]U, 0, len(m))
+
+	for k, v := range m {
+		keys = append(keys, k)
+		values = append(values, v)
+	}
+
+	return keys, values
 }

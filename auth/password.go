@@ -1,83 +1,76 @@
 package auth
 
 import (
+	"context"
 	"errors"
 
 	"github.com/MastewalB/behemoth"
+	authutils "github.com/MastewalB/behemoth/auth-utils"
 	"github.com/MastewalB/behemoth/models"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/MastewalB/behemoth/utils"
 )
 
-type PasswordAuth[T behemoth.User] struct {
-	db             behemoth.Database[T]
-	jwtSvc         *JWTService
-	cost           int
-	useDefaultUser bool
+type PasswordAuth struct {
+	db          behemoth.Database
+	cost        int
+	user        behemoth.User
+	userFactory func(map[string]any) behemoth.User
 }
 
-func NewPasswordAuth[T behemoth.User](cfg behemoth.PasswordConfig,
-	jwtSvc *JWTService,
-	useDefaultUser bool,
+func NewPasswordAuth(
+	cfg behemoth.PasswordConfig,
 	user behemoth.User,
-	db behemoth.Database[T],
-) *PasswordAuth[T] {
-	return &PasswordAuth[T]{
-		db:             db,
-		jwtSvc:         jwtSvc,
-		cost:           cfg.HashCost,
-		useDefaultUser: useDefaultUser,
+	db behemoth.Database,
+	userFactory func(map[string]any) behemoth.User,
+) *PasswordAuth {
+	return &PasswordAuth{
+		db:          db,
+		cost:        cfg.HashCost,
+		user:        user,
+		userFactory: userFactory,
 	}
 }
 
-func (p *PasswordAuth[T]) Authenticate(credentials any) (behemoth.User, error) {
-	pc, ok := credentials.(PasswordCredentials)
-	if !ok {
-		return nil, errors.New("invalid credentials")
-	}
-	user, err := p.db.FindByPK(pc.PrimaryKey)
+func (p *PasswordAuth) Login(credentials PasswordCredentials) (behemoth.User, error) {
+	ctx := context.Background()
+
+	user, err := models.FindUserByID(ctx, p.db, p.user, credentials.PrimaryKey)
 
 	if err != nil {
+		// Compare hash with a password to mitigate timing attacks
+		authutils.HashPassword(credentials.Password, p.cost)
 		return nil, err
 	}
 
-	if bcrypt.CompareHashAndPassword([]byte(user.GetPasswordHash()), []byte(pc.Password)) != nil {
+	if authutils.VerifyPassword(user.GetPasswordHash(), credentials.Password) != nil {
 		return nil, errors.New("invalid email or password")
-	}
-
-	if p.useDefaultUser {
-		defaultUser, ok := any(user).(*models.User)
-		if !ok {
-			return nil, errors.New("expected DefaultUser when UseDefaultUser is true")
-		}
-		return defaultUser, nil
 	}
 
 	return user, nil
 }
 
-func (p *PasswordAuth[T]) Create(
-	email string,
-	username string,
-	firstname string,
-	lastname string,
-	password string,
-) (*models.User, error) {
-	if !p.useDefaultUser {
-		return nil, errors.New("registration not supported for custom models")
-	}
+func (p *PasswordAuth) Register(data map[string]any) (behemoth.User, error) {
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), p.cost)
+	password := data["password"].(string)
+	hashedPassword, err := authutils.HashPassword(password, p.cost)
 	if err != nil {
 		return nil, err
 	}
-	user := &models.User{
-		Email:        email,
-		Username:     username,
-		Firstname:    firstname,
-		Lastname:     lastname,
-		PasswordHash: string(hash),
+	data["password_hash"] = hashedPassword
+	delete(data, "password")
+
+	data["id"] = utils.GenerateUUID()
+	data["email_verified"] = "false"
+	data["created_at"] = utils.CurrentTimestamp()
+	data["updated_at"] = utils.CurrentTimestamp()
+	user := p.userFactory(data)
+
+	created, err := models.CreateUser(context.Background(), p.db, user)
+	if err != nil {
+		return nil, err
 	}
-	return p.db.SaveUser(user)
+
+	return created, nil
 }
 
 type PasswordCredentials struct {
