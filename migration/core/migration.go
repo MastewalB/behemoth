@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Common errors
@@ -19,6 +20,21 @@ type Migration struct {
 	Down        func(ctx context.Context, driver Driver) error
 }
 
+type DataType int
+
+const (
+	Integer DataType = iota
+	Real
+	Numeric
+	BigInt
+	Text
+	Uuid
+	Blob
+	Json
+	DateTime
+	Boolean
+)
+
 type Driver interface {
 	CreateTable(ctx context.Context, name string, schema *TableSchema) error
 	DropTable(ctx context.Context, name string) error
@@ -27,7 +43,7 @@ type Driver interface {
 
 	CreateMigrationTable(ctx context.Context) error
 
-	Open(config map[string]any) (Driver, error)
+	Open(config *Config) (Driver, error)
 
 	// Run executes raw migration string
 	Run(ctx context.Context, migration string) error
@@ -51,11 +67,19 @@ type TableSchema struct {
 }
 
 type Column struct {
-	Name     string
-	Type     string
+	Name string
+	Type DataType
+
 	Nullable bool
 	Unique   bool
 	Primary  bool
+
+	Default string
+	Check   string
+	AutoInc bool
+
+	// optional per-db overrides
+	Overrides map[string]ColumnOverride
 }
 
 type Index struct {
@@ -63,3 +87,27 @@ type Index struct {
 	Columns []string
 	Unique  bool
 }
+
+type Config struct {
+	DB                    any
+	Conn                  any
+	MigrationDatabaseName string
+	DatabaseName          string
+	SchemaName            string
+	StatementDuration     time.Duration
+}
+
+// ColumnOverride is used to override the default column property interpretations for a specific database.
+//
+// For eg. If a column has UUID type, the SQLite interpretation can be overriden to have type Text instead of the default BLOB,
+//
+//	ColumnOverride{
+//		Type: Text,
+//	}
+type ColumnOverride struct {
+	Type    DataType
+	Default string
+	Check   string
+	AutoInc *bool
+}
+
