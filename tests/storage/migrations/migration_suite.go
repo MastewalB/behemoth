@@ -34,12 +34,12 @@ func (s *DriverTestSuite) SetupSuite() {
 	s.schema = &core.TableSchema{
 		Name: s.table,
 		Columns: []core.Column{
-			{Name: "id", Type: "string", Primary: true, Nullable: false},
-			{Name: "email", Type: "string", Unique: true, Nullable: false},
-			{Name: "username", Type: "string", Unique: true, Nullable: false},
-			{Name: "age", Type: "int", Nullable: true},
-			{Name: "active", Type: "bool", Nullable: false},
-			{Name: "created_at", Type: "datetime", Nullable: true},
+			{Name: "id", Type: core.Text, Primary: true, Nullable: false},
+			{Name: "email", Type: core.Text, Unique: true, Nullable: false},
+			{Name: "username", Type: core.Text, Unique: true, Nullable: false},
+			{Name: "age", Type: core.Integer, Nullable: true},
+			{Name: "active", Type: core.Boolean, Nullable: false},
+			{Name: "created_at", Type: core.DateTime, Nullable: true},
 		},
 		Indexes: []core.Index{
 			{Name: "idx_email", Columns: []string{"email"}, Unique: true},
@@ -62,6 +62,7 @@ func (s *DriverTestSuite) TearDownSuite() {
 	if s.driver != nil {
 		s.driverTestManager.DropAllTables(s.ctx)
 		s.driver.Close()
+		s.driverTestManager.CleanupDatabase(s.ctx)
 	}
 }
 
@@ -172,4 +173,6 @@ type DriverTestManager interface {
 	DropAllTables(ctx context.Context) error
 	InsertTestData(ctx context.Context, tableName string, data map[string]any) error
 	QueryTable(ctx context.Context, tableName string, query string) ([]map[string]any, error)
+
+	CleanupDatabase(ctx context.Context)
 }

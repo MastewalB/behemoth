@@ -8,15 +8,15 @@ import (
 )
 
 // SQLiteTestHelpers implements the DriverTestManager interface.
-type SQLiteTestHelpers struct {
+type SQLiteTestManager struct {
 	db *sql.DB
 }
 
-func NewSQLiteTestHelpers(db *sql.DB) *SQLiteTestHelpers {
-	return &SQLiteTestHelpers{db: db}
+func NewSQLiteTestHelpers(db *sql.DB) *SQLiteTestManager {
+	return &SQLiteTestManager{db: db}
 }
 
-func (h *SQLiteTestHelpers) TableExists(ctx context.Context, tableName string) (bool, error) {
+func (h *SQLiteTestManager) TableExists(ctx context.Context, tableName string) (bool, error) {
 	query := `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
 	var name string
 	err := h.db.QueryRowContext(ctx, query, tableName).Scan(&name)
@@ -29,7 +29,7 @@ func (h *SQLiteTestHelpers) TableExists(ctx context.Context, tableName string) (
 	return true, nil
 }
 
-func (h *SQLiteTestHelpers) ColumnExists(ctx context.Context, tableName, columnName string) (bool, error) {
+func (h *SQLiteTestManager) ColumnExists(ctx context.Context, tableName, columnName string) (bool, error) {
 	query := fmt.Sprintf("PRAGMA table_info(%s)", tableName)
 	rows, err := h.db.QueryContext(ctx, query)
 	if err != nil {
@@ -52,7 +52,7 @@ func (h *SQLiteTestHelpers) ColumnExists(ctx context.Context, tableName, columnN
 	return false, nil
 }
 
-func (h *SQLiteTestHelpers) IndexExists(ctx context.Context, tableName, indexName string) (bool, error) {
+func (h *SQLiteTestManager) IndexExists(ctx context.Context, tableName, indexName string) (bool, error) {
 	query := `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND name=?`
 	var name string
 	err := h.db.QueryRowContext(ctx, query, tableName, indexName).Scan(&name)
@@ -65,18 +65,18 @@ func (h *SQLiteTestHelpers) IndexExists(ctx context.Context, tableName, indexNam
 	return true, nil
 }
 
-func (h *SQLiteTestHelpers) TableRowCount(ctx context.Context, tableName string) (int64, error) {
+func (h *SQLiteTestManager) TableRowCount(ctx context.Context, tableName string) (int64, error) {
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
 	var count int64
 	err := h.db.QueryRowContext(ctx, query).Scan(&count)
 	return count, err
 }
 
-func (h *SQLiteTestHelpers) MigrationTableExists(ctx context.Context) (bool, error) {
+func (h *SQLiteTestManager) MigrationTableExists(ctx context.Context) (bool, error) {
 	return h.TableExists(ctx, "schema_migrations")
 }
 
-func (h *SQLiteTestHelpers) GetMigrationVersion(ctx context.Context) (int, error) {
+func (h *SQLiteTestManager) GetMigrationVersion(ctx context.Context) (int, error) {
 	var version int
 	err := h.db.QueryRowContext(ctx, "SELECT version FROM schema_migrations LIMIT 1").Scan(&version)
 	if err == sql.ErrNoRows {
@@ -85,12 +85,18 @@ func (h *SQLiteTestHelpers) GetMigrationVersion(ctx context.Context) (int, error
 	return version, err
 }
 
-func (h *SQLiteTestHelpers) Cleanup(ctx context.Context) error {
+func (h *SQLiteTestManager) Cleanup(ctx context.Context) error {
 	return h.DropAllTables(ctx)
 }
 
-func (h *SQLiteTestHelpers) DropAllTables(ctx context.Context) error {
-	tables, err := h.db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+func (h *SQLiteTestManager) DropAllTables(ctx context.Context) error {
+	tables, err := h.db.QueryContext(ctx, `
+			SELECT name 
+			FROM sqlite_master 
+			WHERE type='table' 
+				AND name NOT LIKE 'sqlite_%'
+	`)
+
 	if err != nil {
 		return err
 	}
@@ -108,7 +114,7 @@ func (h *SQLiteTestHelpers) DropAllTables(ctx context.Context) error {
 	return nil
 }
 
-func (h *SQLiteTestHelpers) InsertTestData(ctx context.Context, tableName string, data map[string]interface{}) error {
+func (h *SQLiteTestManager) InsertTestData(ctx context.Context, tableName string, data map[string]interface{}) error {
 	columns := make([]string, 0, len(data))
 	placeholders := make([]string, 0, len(data))
 	values := make([]any, 0, len(data))
@@ -128,7 +134,7 @@ func (h *SQLiteTestHelpers) InsertTestData(ctx context.Context, tableName string
 	return err
 }
 
-func (h *SQLiteTestHelpers) QueryTable(ctx context.Context, tableName string, query string) ([]map[string]interface{}, error) {
+func (h *SQLiteTestManager) QueryTable(ctx context.Context, tableName string, query string) ([]map[string]interface{}, error) {
 	rows, err := h.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -159,4 +165,8 @@ func (h *SQLiteTestHelpers) QueryTable(ctx context.Context, tableName string, qu
 		results = append(results, row)
 	}
 	return results, nil
+}
+
+func (h *SQLiteTestManager) CleanupDatabase(ctx context.Context) {
+
 }
