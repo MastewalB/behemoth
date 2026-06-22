@@ -9,7 +9,7 @@ import (
 )
 
 func TestCreate_FindByIDIA(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+	db := testutils.SetupSQLiteTestDBWithSchema(t, testutils.TestUserSchema)
 	sqliteAdapter := testutils.SetupSQLiteAdapter(t, db)
 	adapter := testutils.SetupInternalAdapter(t, sqliteAdapter)
 
@@ -26,7 +26,7 @@ func TestCreate_FindByIDIA(t *testing.T) {
 }
 
 func TestUpdateIA(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+	db := testutils.SetupSQLiteTestDBWithSchema(t, testutils.TestUserSchema)
 	sqliteAdapter := testutils.SetupSQLiteAdapter(t, db)
 	adapter := testutils.SetupInternalAdapter(t, sqliteAdapter)
 
@@ -45,7 +45,7 @@ func TestUpdateIA(t *testing.T) {
 }
 
 func TestDeleteIA(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+	db := testutils.SetupSQLiteTestDBWithSchema(t, testutils.TestUserSchema)
 	sqliteAdapter := testutils.SetupSQLiteAdapter(t, db)
 	adapter := testutils.SetupInternalAdapter(t, sqliteAdapter)
 

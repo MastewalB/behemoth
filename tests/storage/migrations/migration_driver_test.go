@@ -32,7 +32,6 @@ func TestSQLiteDriver(t *testing.T) {
 	}
 
 	driverTestManager := NewSQLiteTestHelpers(db)
-
 	RunDriverTests(t, driver, driverTestManager)
 }
 

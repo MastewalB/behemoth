@@ -2,191 +2,30 @@ package models
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"testing"
 
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/mongodb"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
-
-var MongoDBName = "testdb"
-var mongoClient *mongo.Client
-var cleanupMongo func()
-
-func setupMongoTestDB(ctx context.Context, t *testing.T) (*mongo.Client, func()) {
-	// Create a new MongoDB container.
-	// Use ReplicaSet for transactions support.
-	mongodbContainer, err := mongodb.Run(ctx, "mongo:6", mongodb.WithReplicaSet("rs0"))
-
-	if err != nil {
-		t.Fatalf("failed to start container: %s", err)
-	}
-
-	host, _ := mongodbContainer.Host(ctx)
-	port, _ := mongodbContainer.MappedPort(ctx, "27017")
-	mongoURI := fmt.Sprintf("mongodb://%s:%s", host, port.Port())
-
-	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
-
-	if err != nil {
-		t.Fatalf("failed to connect to MongoDB: %v", err)
-	}
-
-	cleanup := func() {
-		if err := testcontainers.TerminateContainer(mongodbContainer); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
-	}
-	return mongoClient, cleanup
-}
-
-func CleanupMongoTestDB(ctx context.Context, t *testing.T, client *mongo.Client) error {
-	collections, err := client.Database(MongoDBName).ListCollectionNames(context.TODO(), bson.M{})
-	if err != nil {
-		return err
-	}
-
-	for _, coll := range collections {
-		err := client.Database(MongoDBName).Collection(coll).Drop(context.TODO())
-		if err != nil {
-			return fmt.Errorf("failed to drop collection %s: %w", coll, err)
-		}
-	}
-	return nil
-}
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
-	mongoClient, cleanupMongo = setupMongoTestDB(ctx, nil)
+	mongoClient, cleanupMongo := testutils.SetupMongoTestDB(ctx, nil)
 
 	code := m.Run()
 
-	if err := CleanupMongoTestDB(ctx, nil, mongoClient); err != nil {
+	if err := testutils.CleanupMongoTestDB(ctx, nil, mongoClient, testutils.MongoDBName); err != nil {
 		log.Fatalf("failed to clean up MongoDB: %v", err)
 	}
 
 	cleanupMongo()
 	os.Exit(code)
 }
-
-// func TestCreateMongo(t *testing.T) {
-// 	ctx := context.Background()
-// 	defer CleanupMongoTestDB(ctx, t, mongoClient)
-
-// 	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
-
-// 	user := testutils.NewTestUser("1")
-// 	err := adapter.Create(ctx, user)
-// 	assert.NoError(t, err)
-
-// 	collection := mongoClient.Database(MongoDBName).Collection("users")
-// 	var result bson.M
-// 	err = collection.FindOne(ctx, bson.M{"id": "1"}).Decode(&result)
-// 	assert.NoError(t, err)
-
-// 	if result["email"] != user.Email || result["username"] != user.Username {
-// 		t.Fatalf("retrieved user does not match created user")
-// 	}
-// }
-
-// func TestFindOneMongo(t *testing.T) {
-// 	ctx := context.Background()
-// 	defer CleanupMongoTestDB(ctx, t, mongoClient)
-
-// 	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
-// 	user := *testutils.NewTestUser("1")
-// 	err := adapter.Create(ctx, &user)
-// 	assert.NoError(t, err)
-
-// 	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
-// 	assert.NoError(t, err)
-// 	assert.NotNil(t, found)
-
-// 	foundUser := found.(*testutils.TestUser)
-// 	assert.Equal(t, user.ID, foundUser.ID)
-// 	assert.Equal(t, user.Email, foundUser.Email)
-// 	assert.Equal(t, user.Username, foundUser.Username)
-// }
-
-// func TestFindManyMongo(t *testing.T) {
-// 	ctx := context.Background()
-// 	defer CleanupMongoTestDB(ctx, t, mongoClient)
-
-// 	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
-// 	user1 := testutils.NewTestUser("7")
-// 	user2 := testutils.NewTestUser("6")
-// 	err := adapter.Create(ctx, user1)
-// 	assert.NoError(t, err)
-// 	err = adapter.Create(context.Background(), user2)
-// 	assert.NoError(t, err)
-
-// 	found, err := adapter.FindMany(context.Background(),
-// 		&testutils.TestUser{},
-// 		clause.Expression{
-// 			Logic: clause.OpOr,
-// 			Conditions: []clause.Condition{
-// 				{Field: "id", Operator: clause.OpIn, Value: []string{"7", "0"}},       // condition true for user1
-// 				{Field: "email", Operator: clause.OpIn, Value: []string{user2.Email}}, // condition true for user2
-// 			},
-// 		},
-// 	)
-// 	assert.NoError(t, err)
-// 	assert.NotNil(t, found)
-// 	assert.Len(t, found, 2)
-
-// 	foundUser1 := found[0].(*testutils.TestUser)
-// 	foundUser2 := found[1].(*testutils.TestUser)
-
-// 	assert.Greater(t, foundUser1.ID, "4")
-// 	assert.Greater(t, foundUser2.ID, "4")
-// }
-
-// func TestUpdateMongo(t *testing.T) {
-// 	ctx := context.Background()
-// 	defer CleanupMongoTestDB(ctx, t, mongoClient)
-
-// 	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
-// 	user := testutils.NewTestUser("1")
-// 	err := adapter.Create(ctx, user)
-// 	assert.NoError(t, err)
-
-// 	user.Email = "updated@email.com"
-// 	err = adapter.Update(context.Background(), user)
-// 	assert.NoError(t, err)
-
-// 	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "1"))
-// 	assert.NoError(t, err)
-// 	assert.NotNil(t, found)
-
-// 	updatedUser := found.(*testutils.TestUser)
-// 	assert.Equal(t, user.Email, updatedUser.Email)
-// }
-
-// func TestDeleteMongo(t *testing.T) {
-// 	ctx := context.Background()
-// 	defer CleanupMongoTestDB(ctx, t, mongoClient)
-
-// 	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
-// 	user := testutils.NewTestUser("4")
-// 	err := adapter.Create(context.Background(), user)
-// 	assert.NoError(t, err, "failed to create user")
-
-// 	err = adapter.Delete(context.Background(), user)
-// 	assert.NoError(t, err, "failed to delete user")
-
-// 	found, err := adapter.FindOne(context.Background(), &testutils.TestUser{}, getWhereExpr("id", clause.OpEqual, "4"))
-// 	assert.Error(t, err)
-// 	assert.Nil(t, found, "expected no user found after delete")
-// }
-
 func TestBuildMongoFilter(t *testing.T) {
 	tests := []struct {
 		name     string

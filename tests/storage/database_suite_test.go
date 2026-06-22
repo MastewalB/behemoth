@@ -10,7 +10,7 @@ import (
 )
 
 func TestSQLiteAdapter(t *testing.T) {
-	db := testutils.SetupTestDB(t, &testutils.TestUserSchema)
+	db := testutils.SetupSQLiteTestDBWithSchema(t, testutils.TestUserSchema)
 	adapter := testutils.SetupSQLiteAdapter(t, db)
 
 	factory := func(id string) behemoth.Model {
@@ -55,8 +55,8 @@ func TestSQLiteAdapter(t *testing.T) {
 }
 
 func TestMongoAdapter(t *testing.T) {
-	mongoClient, cleanupDatabase := setupMongoTestDB(context.Background(), t)
-	adapter := adapters.NewMongoAdapter(mongoClient, MongoDBName)
+	mongoClient, cleanupDatabase := testutils.SetupMongoTestDB(context.Background(), t)
+	adapter := adapters.NewMongoAdapter(mongoClient, testutils.MongoDBName)
 
 	manager := ModelManager{
 		Create: func(id string) behemoth.Model {
@@ -81,13 +81,14 @@ func TestMongoAdapter(t *testing.T) {
 	}
 
 	suite := NewDatabaseTestSuite(t, adapter, manager, func() {
-		CleanupMongoTestDB(context.Background(), t, mongoClient)
+		testutils.CleanupMongoTestDB(context.Background(), t, mongoClient, testutils.MongoDBName)
 	}, cleanupDatabase)
 	suite.Run()
 }
 
 func TestPostgresAdapter(t *testing.T) {
-	db, cleanupDatabase := setupPostgresTestDB(t, testutils.TestUserSchema)
+	ctx := context.Background()
+	db, cleanupDatabase := testutils.SetupPostgresTestDBWithSchema(t, ctx, testutils.TestUserSchema)
 	adapter := adapters.NewPostgresAdapter(db)
 
 	manager := ModelManager{
@@ -120,7 +121,8 @@ func TestPostgresAdapter(t *testing.T) {
 }
 
 func TestMySQLAdapter(t *testing.T) {
-	db, cleanupDatabase := setupMySQLTestDB(t, testutils.TestMySQLUserSchema)
+	ctx := context.Background()
+	db, cleanupDatabase := testutils.SetupMySQLTestDBWithSchema(t, ctx, testutils.TestMySQLUserSchema)
 	adapter := adapters.NewMySQLAdapter(db)
 
 	manager := ModelManager{
@@ -154,7 +156,7 @@ func TestMySQLAdapter(t *testing.T) {
 }
 
 func TestMSSQLAdapter(t *testing.T) {
-	db, cleanupDatabase := SetupMSSQLServerTestDB(t, testutils.TestMSSQLServerUserSchema)
+	db, cleanupDatabase := testutils.SetupMSSQLTestDBWithSchema(t, t.Context(), testutils.TestMSSQLServerUserSchema)
 	adapter := adapters.NewSQLServerAdapter(db)
 
 	manager := ModelManager{
@@ -187,8 +189,8 @@ func TestMSSQLAdapter(t *testing.T) {
 
 }
 func TestGormAdapter(t *testing.T) {
-	db, cleanup := SetupGormTestDB(t, &testutils.GormTestUser{})
-	adapter := SetupGormAdapter(t, db)
+	db, cleanup := testutils.SetupGORMDBWithSchema(t, &testutils.GormTestUser{})
+	adapter := testutils.SetupGormAdapter(t, db)
 
 	manager := ModelManager{
 		Create: func(id string) behemoth.Model {
