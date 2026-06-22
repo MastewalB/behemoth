@@ -11,7 +11,9 @@ import (
 )
 
 func init() {
-	core.Register("postgres", &PostgreSQLDriver{})
+	pgdb := &PostgreSQLDriver{}
+	core.Register("postgres", pgdb)
+	core.Register("postgresql", pgdb)
 }
 
 type PostgreSQLDriver struct {

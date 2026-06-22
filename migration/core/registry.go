@@ -13,13 +13,6 @@ var (
 var driversMu sync.RWMutex
 var drivers = make(map[string]Driver)
 
-// type PluginRegistry struct {
-// 	mu      sync.RWMutex
-// 	drivers map[string]DriverFactory
-// }
-
-// type DriverFactory func(config map[string]any) (Driver, error)
-
 func Register(name string, driver Driver) {
 	driversMu.Lock()
 	defer driversMu.Unlock()
@@ -35,13 +28,13 @@ func Register(name string, driver Driver) {
 	drivers[name] = driver
 }
 
-func Open(name string, config map[string]any) (Driver, error) {
+func Open(name string, config *Config) (Driver, error) {
 	driversMu.RLock()
 	driver, exists := drivers[name]
 	driversMu.RUnlock()
 
 	if !exists {
-		return nil, ErrPluginNotFound
+		return nil, fmt.Errorf("\"%s\" %w (forgotten import?)", name, ErrPluginNotFound)
 	}
 
 	return driver.Open(config)
