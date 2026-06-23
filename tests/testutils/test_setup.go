@@ -10,6 +10,9 @@ import (
 	_ "github.com/MastewalB/behemoth/migration/plugins/postgres"
 	_ "github.com/MastewalB/behemoth/migration/plugins/sqlite"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
+	"github.com/uptrace/bun/driver/sqliteshim"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
@@ -277,6 +280,35 @@ func SetupGORMDBWithSchema(t *testing.T, model behemoth.Model) (db *gorm.DB, cle
 	return db, cleanup
 }
 
+func SetupBunTestDB(t *testing.T) (db *bun.DB, cleanup func()) {
+	dbName := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+
+	sqldb, err := sql.Open(sqliteshim.ShimName, dbName)
+	if err != nil {
+		t.Fatal("failed to connect database")
+	}
+
+	cleanup = func() {
+		sqldb.Close()
+	}
+
+	db = bun.NewDB(sqldb, sqlitedialect.New())
+
+	return db, cleanup
+}
+
+func SetupBunTestDBWithSchema(t *testing.T, model behemoth.Model) (db *bun.DB, cleanup func()) {
+	ctx := context.Background()
+	db, cleanup = SetupBunTestDB(t)
+
+	_, err := db.NewCreateTable().Model(model).IfNotExists().Exec(ctx)
+	if err != nil {
+		t.Fatal("failed to create table, %w", err)
+	}
+
+	return db, cleanup
+}
+
 func SetupRedisClient(t *testing.T, ctx context.Context) (*goredis.Client, func()) {
 
 	redisContainer, err := redis.Run(ctx, "redis:7.4-alpine")
@@ -309,4 +341,8 @@ func SetupInternalAdapter(t *testing.T, db behemoth.Database) *adapters.Internal
 
 func SetupGormAdapter(t *testing.T, db *gorm.DB) *adapters.GormAdapter {
 	return adapters.NewGormAdapter(db)
+}
+
+func SetupBunAdapter(t *testing.T, db *bun.DB) *adapters.BunAdapter {
+	return adapters.NewBunAdapter(db)
 }

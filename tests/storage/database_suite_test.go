@@ -223,8 +223,8 @@ func TestGormAdapter(t *testing.T) {
 }
 
 func TestBunAdapter(t *testing.T) {
-	db, cleanup := SetupBunTestDB(t, &testutils.GormTestUser{})
-	adapter := SetupBunAdapter(t, db)
+	db, cleanup := testutils.SetupBunTestDBWithSchema(t, &testutils.GormTestUser{})
+	adapter := testutils.SetupBunAdapter(t, db)
 
 	manager := ModelManager{
 		Create: func(id string) behemoth.Model {
