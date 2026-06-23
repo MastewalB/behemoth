@@ -3,35 +3,28 @@ package auth
 import (
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/service"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/types"
 )
 
 type Behemoth[T behemoth.User] struct {
 	DB               behemoth.Database
-	Password         *PasswordAuth
-	EmailAndPassword *EmailAndPasswordAuth
-	OAuth            *OAuthAuth
-	JWT              *JWTManager
-	Session          *SessionManager
-	UseSessions      bool
-	authManager      behemoth.AuthTransportManager
+	EmailAndPassword *service.EmailAndPasswordService
+	Transport        *behemoth.AuthTransportManager
 }
 
 // New creates a new Behemoth instance with the given config.
 func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
+	var authContext types.AuthContext
 	var database behemoth.Database
 	var userModel behemoth.User
-	var passwordAuth *PasswordAuth
-	var emailAndPasswordAuth *EmailAndPasswordAuth
-	var jwtSvc *JWTManager
-	var oauth *OAuthAuth
-	var sessionMgr *SessionManager
-	var authManager behemoth.AuthTransportManager
+	var emailAndPasswordAuth *service.EmailAndPasswordService
+	var transportManager *behemoth.AuthTransportManager
 
 	if cfg.DatabaseConfig.UseDefaultUser {
 		userModel = &models.User{}
@@ -42,14 +35,6 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 			return nil, errors.New("user model is required. Set useDefaultUser to true to use the default user model")
 		}
 		userModel = cfg.DatabaseConfig.UserModel
-	}
-
-	if cfg.UseSessions {
-		var sessionConfig *behemoth.SessionConfig = cfg.Session
-		if sessionConfig == nil {
-			sessionConfig = &DefalultSessionConfig
-			cfg.Session = sessionConfig
-		}
 	}
 
 	if cfg.DatabaseConfig.DB == nil {
@@ -63,60 +48,16 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 		}
 	}
 
-	if cfg.Session != nil {
-		sessionMgr = NewSessionManager(
-			database,
-			cfg.Session.Expiry,
-			cfg.Session.CookieName,
-		)
-		log.Println("Session manager initialized", sessionMgr.cookieName)
-	}
-
-	if cfg.JWT != nil {
-		jwtSvc = NewJWTManager(*cfg.JWT)
-	}
-
-	if cfg.Password != nil {
-		passwordAuth = NewPasswordAuth(
-			*cfg.Password,
-			userModel,
-			database,
-			cfg.DatabaseConfig.UserFactory,
-		)
-	}
-
 	if cfg.UseEmailAndPasswordAuth {
-		emailAndPasswordAuth = NewEmailAndPasswordAuth(
-			*cfg.Password,
-			userModel,
-			database,
-			cfg.DatabaseConfig.UserFactory,
+		emailAndPasswordAuth = service.NewEmailAndPasswordService(
+			authContext,
 		)
 	}
-
-	if len(cfg.OAuthProviders) > 0 {
-		oauth = NewOAuthAuth(
-			cfg.OAuthProviders,
-			// jwtSvc,
-			cfg.DatabaseConfig.UseDefaultUser,
-			userModel,
-			database,
-		)
-	}
-
-	// Just use JWT as auth manager
-	// Going to configure to use session manager as well
-	authManager = jwtSvc
 
 	return &Behemoth[T]{
 		DB:               database,
-		Password:         passwordAuth,
 		EmailAndPassword: emailAndPasswordAuth,
-		OAuth:            oauth,
-		JWT:              jwtSvc,
-		// Session:     sessionMgr,
-		UseSessions: cfg.UseSessions,
-		authManager: authManager,
+		Transport:        transportManager,
 	}, nil
 }
 
@@ -128,14 +69,7 @@ func InitDatabase(
 		return adapters.NewSQLiteAdapter(
 			cfg.DB,
 		), nil
-	// case behemoth.Postgres:
-	// 	return storage.NewPostgres(
-	// 		cfg.DB,
-	// 		cfg.UserTable,
-	// 		cfg.PrimaryKey,
-	// 		sessionFactory,
-	// 		cfg.FindUserFn,
-	// 	)
+
 	default:
 		return nil, nil
 	}

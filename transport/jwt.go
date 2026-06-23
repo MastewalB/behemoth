@@ -1,4 +1,4 @@
-package auth
+package transport
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	authutils "github.com/MastewalB/behemoth/auth-utils"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -49,7 +48,7 @@ func (j *JWTManager) Create(ctx context.Context, userID string) (string, error) 
 	claim := claims.(*DefaultJWTClaims)
 	claim.ID = userID
 
-	signedToken, err := authutils.GenerateToken(claim, j.signingMethod, j.secret)
+	signedToken, err := GenerateToken(claim, j.signingMethod, j.secret)
 	if err != nil {
 		return "", err
 	}
@@ -57,13 +56,13 @@ func (j *JWTManager) Create(ctx context.Context, userID string) (string, error) 
 	return signedToken, nil
 }
 
-func (j *JWTManager) Validate(ctx context.Context, tokenStr string) (any, error) {
+func (j *JWTManager) Verify(ctx context.Context, tokenStr string) (any, error) {
 	claims := reflect.New(
 		reflect.TypeOf(j.jwtClaim).Elem(),
 	).Interface().(jwt.Claims)
 
 	claim := claims.(*DefaultJWTClaims)
-	tokenClaim, err := authutils.VerifyToken(tokenStr, claim, j.secret, j.signingMethod)
+	tokenClaim, err := VerifyToken(tokenStr, claim, j.secret, j.signingMethod)
 
 	if err != nil {
 		return nil, fmt.Errorf("token validation failed: %w", err)
@@ -76,7 +75,53 @@ func (j *JWTManager) Revoke(ctx context.Context, tokenStr string) error {
 	return errors.New("token revocation not available")
 }
 
+func (j *JWTManager) TokenType() behemoth.TokenType {
+	return behemoth.TokenTypeBearer
+}
+
 type DefaultJWTClaims struct {
 	ID string `json:"id"`
 	jwt.RegisteredClaims
+}
+
+func GenerateToken(
+	claim jwt.Claims,
+	signingMethod jwt.SigningMethod,
+	secret string) (string, error) {
+
+	token := jwt.NewWithClaims(signingMethod, claim)
+	signedToken, err := token.SignedString([]byte(secret))
+
+	if err != nil {
+		return "", errors.New("failed to sign token: " + err.Error())
+	}
+
+	return signedToken, nil
+}
+
+func VerifyToken(
+	tokenString string,
+	claim jwt.Claims,
+	secret string,
+	signingMethod jwt.SigningMethod,
+) (jwt.Claims, error) {
+	token, err := jwt.ParseWithClaims(
+		tokenString,
+		claim,
+		func(token *jwt.Token) (any, error) {
+			if token.Method.Alg() != signingMethod.Alg() {
+				return nil, errors.New("unexpected signing method: " + token.Header["alg"].(string))
+			}
+			return []byte(secret), nil
+		})
+
+	if err != nil {
+		return nil, errors.New("failed to parse token: " + err.Error())
+	}
+
+	if !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+
+	return token.Claims, nil
 }
