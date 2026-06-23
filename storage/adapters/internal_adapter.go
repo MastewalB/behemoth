@@ -5,11 +5,13 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/utils"
 )
 
 type InternalAdapter struct {
 	DB behemoth.Database
+	KV behemoth.KeyValueStorage
 }
 
 func (adapter *InternalAdapter) CreateUser(ctx context.Context, modelType behemoth.Model, user behemoth.M) (behemoth.User, error) {
@@ -56,7 +58,7 @@ func (adapter *InternalAdapter) FindUserByEmail(ctx context.Context, model behem
 	whereClause := clause.Expression{
 		Conditions: []clause.Condition{
 			{
-				Field:    model.PrimaryKeyName(),
+				Field:    "email",
 				Operator: clause.OpEqual,
 				Value:    email,
 			},
@@ -85,7 +87,69 @@ func (adapter *InternalAdapter) DeleteUser(ctx context.Context, user behemoth.Mo
 	return adapter.DB.Delete(ctx, user)
 }
 
-// CreateSession
-// FindSession
-// UpdateSession
-// DeleteSession
+func (adapter *InternalAdapter) CreateSession(ctx context.Context, session behemoth.M) (*models.Session, error) {
+	model := &models.Session{}
+
+	session["id"] = utils.GenerateUUID()
+	session["created_at"] = utils.CurrentTimestamp()
+	session["updated_at"] = utils.CurrentTimestamp()
+
+	m := model.New()
+	if serialized, ok := m.(behemoth.Serializable); ok {
+		if err := serialized.FromMap(session); err != nil {
+			return nil, err
+		}
+	}
+
+	err := adapter.DB.Create(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+
+	return m.(*models.Session), nil
+
+}
+
+func (adapter *InternalAdapter) FindSession(ctx context.Context, id string) (*models.Session, error) {
+	model := &models.Session{}
+	whereClause := clause.Expression{
+		Conditions: []clause.Condition{
+			{
+				Field:    model.PrimaryKeyName(),
+				Operator: clause.OpEqual,
+				Value:    id,
+			},
+		},
+	}
+
+	found, err := adapter.DB.FindOne(ctx, model, whereClause)
+	if err != nil {
+		return nil, err
+	}
+
+	return found.(*models.Session), nil
+}
+
+func (adapter *InternalAdapter) UpdateSession(ctx context.Context, session behemoth.Model) (behemoth.Model, error) {
+	err := adapter.DB.Update(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+
+	return session.(*models.Session), nil
+}
+
+func (adapter *InternalAdapter) DeleteSession(ctx context.Context, id string) error {
+	model := &models.Session{}
+	whereClause := clause.Expression{
+		Conditions: []clause.Condition{
+			{
+				Field:    model.PrimaryKeyName(),
+				Operator: clause.OpEqual,
+				Value:    id,
+			},
+		},
+	}
+
+	return adapter.DB.DeleteOne(ctx, model, whereClause)
+}
