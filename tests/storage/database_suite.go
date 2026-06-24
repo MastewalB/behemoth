@@ -10,39 +10,41 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type ModelManager struct {
-	Create  func(id string) behemoth.Model
-	Update  func(M behemoth.Model) behemoth.Model
-	Compare func(T, U behemoth.Model) bool
+// ModelManager interface provides control over the concrete type for testing.
+type ModelManager interface {
+	Create(id string) behemoth.Model
+	Update(M behemoth.Model) behemoth.Model
+	Compare(T, U behemoth.Model) bool
 
 	// Create a deepcopy of the model. Some adapters (like GORM) update the original model instance,
 	// so the original state is needed to verify that updates actually occurred.
-	Clone func(M behemoth.Model) behemoth.Model
+	Clone(M behemoth.Model) behemoth.Model
+
+	// Drop all rows from the test tables.
+	CleanupTables()
+
+	// Close and dispose all database connections & containers.
+	// This method will be used after all tests have ran.
+	CleanupDatabase()
 }
 
 type DatabaseTestSuite struct {
-	t               *testing.T
-	adapter         behemoth.Database
-	modelManager    ModelManager
-	ctx             context.Context
-	cleanupTables   func()
-	cleanupDatabase func()
+	t            *testing.T
+	adapter      behemoth.Database
+	modelManager ModelManager
+	ctx          context.Context
 }
 
 func NewDatabaseTestSuite(
 	t *testing.T,
 	adapter behemoth.Database,
 	modelManager ModelManager,
-	cleanupTables func(),
-	cleanupDatabase func(),
 ) *DatabaseTestSuite {
 	return &DatabaseTestSuite{
-		t:               t,
-		adapter:         adapter,
-		modelManager:    modelManager,
-		ctx:             context.Background(),
-		cleanupTables:   cleanupTables,
-		cleanupDatabase: cleanupDatabase,
+		t:            t,
+		adapter:      adapter,
+		modelManager: modelManager,
+		ctx:          context.Background(),
 	}
 }
 
@@ -61,7 +63,7 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("QueryOptions", s.TestQueryOptions)
 	s.t.Run("Count", s.TestCount)
 
-	s.cleanupDatabase()
+	s.modelManager.CleanupDatabase()
 }
 
 // PopulateTableWithTestData creates multiple records in the database for testing Bulk operations and query options.
@@ -92,7 +94,6 @@ func (s *DatabaseTestSuite) PopulateTableWithTestData(t *testing.T) []behemoth.M
 		err = s.adapter.UpdateOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, data.id), behemoth.M{"email": data.email})
 		assert.NoError(t, err)
 		err = s.adapter.UpdateOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, data.id), behemoth.M{"username": data.username})
-		// t.Log(err.(*behemotherr.DomainError).Original)
 		assert.NoError(t, err)
 		models = append(models, model)
 	}
@@ -101,7 +102,7 @@ func (s *DatabaseTestSuite) PopulateTableWithTestData(t *testing.T) []behemoth.M
 }
 
 func (s *DatabaseTestSuite) TestCreate(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	model := s.modelManager.Create("1")
 	err := s.adapter.Create(s.ctx, model)
@@ -114,7 +115,7 @@ func (s *DatabaseTestSuite) TestCreate(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestFindOne(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	model := s.modelManager.Create("1")
 	err := s.adapter.Create(s.ctx, model)
@@ -128,7 +129,7 @@ func (s *DatabaseTestSuite) TestFindOne(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestFindMany(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	models := s.PopulateTableWithTestData(t)
 	model := models[0]
@@ -150,7 +151,7 @@ func (s *DatabaseTestSuite) TestFindMany(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestUpdate(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	model := s.modelManager.Create("1")
 	err := s.adapter.Create(s.ctx, model)
@@ -167,12 +168,12 @@ func (s *DatabaseTestSuite) TestUpdate(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	t.Run("UpdateOneSingleRecordMatchesCondition", func(t *testing.T) {
-		defer s.cleanupTables()
-		models := s.PopulateTableWithTestData(t)
+		defer s.modelManager.CleanupTables()
 
+		models := s.PopulateTableWithTestData(t)
 		model := models[0]
 		copy := s.modelManager.Clone(model)
 		id := getModelID(model)
@@ -189,7 +190,8 @@ func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
 	})
 
 	t.Run("UpdateOneMultipleRecordsMatchCondition", func(t *testing.T) {
-		defer s.cleanupTables()
+		defer s.modelManager.CleanupTables()
+
 		models := s.PopulateTableWithTestData(t)
 
 		model := models[0]
@@ -203,7 +205,7 @@ func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestUpdateMany(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	models := s.PopulateTableWithTestData(t)
 
@@ -295,7 +297,8 @@ func (s *DatabaseTestSuite) TestUpdateMany(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
-	defer s.cleanupTables()
+
+	defer s.modelManager.CleanupTables()
 
 	model := s.modelManager.Create("1")
 	err := s.adapter.Create(s.ctx, model)
@@ -310,10 +313,11 @@ func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	t.Run("DeleteOneWithEqualCondition", func(t *testing.T) {
-		defer s.cleanupTables()
+		defer s.modelManager.CleanupTables()
+
 		models := s.PopulateTableWithTestData(t)
 
 		expr := getWhereExpr("id", clause.OpEqual, "1")
@@ -338,7 +342,8 @@ func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
 	})
 
 	t.Run("DeleteOneWithMultipleMatchingRecords", func(t *testing.T) {
-		defer s.cleanupTables()
+		defer s.modelManager.CleanupTables()
+
 		models := s.PopulateTableWithTestData(t)
 
 		expr := clause.Expression{
@@ -364,9 +369,9 @@ func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
 	})
 
 	t.Run("DeleteOneWithNoMatchingRecords", func(t *testing.T) {
-		defer s.cleanupTables()
-		models := s.PopulateTableWithTestData(t)
+		defer s.modelManager.CleanupTables()
 
+		models := s.PopulateTableWithTestData(t)
 		expr := getWhereExpr("id", clause.OpEqual, "nonexistent")
 
 		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
@@ -379,7 +384,8 @@ func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
 	})
 
 	t.Run("DeleteOneWithOrLogic", func(t *testing.T) {
-		defer s.cleanupTables()
+		defer s.modelManager.CleanupTables()
+
 		models := s.PopulateTableWithTestData(t)
 
 		expr := clause.Expression{
@@ -402,7 +408,7 @@ func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestDeleteAll(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	t.Run("DeleteAllFromPopulatedTable", func(t *testing.T) {
 		models := s.PopulateTableWithTestData(t)
@@ -445,10 +451,10 @@ func (s *DatabaseTestSuite) TestDeleteAll(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestDeleteMany(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	t.Run("DeleteManyWithEqualCondition", func(t *testing.T) {
-		defer s.cleanupTables()
+		defer s.modelManager.CleanupTables()
 		models := s.PopulateTableWithTestData(t)
 
 		// Delete single record
@@ -467,7 +473,7 @@ func (s *DatabaseTestSuite) TestDeleteMany(t *testing.T) {
 	})
 
 	t.Run("DeleteManyWithLikeCondition", func(t *testing.T) {
-		defer s.cleanupTables()
+		defer s.modelManager.CleanupTables()
 		models := s.PopulateTableWithTestData(t)
 
 		// Delete records with 'old' in email
@@ -494,7 +500,7 @@ func (s *DatabaseTestSuite) TestDeleteMany(t *testing.T) {
 	})
 
 	t.Run("DeleteManyWithInCondition", func(t *testing.T) {
-		defer s.cleanupTables()
+		defer s.modelManager.CleanupTables()
 		models := s.PopulateTableWithTestData(t)
 
 		expr := clause.Expression{
@@ -527,7 +533,7 @@ func (s *DatabaseTestSuite) TestDeleteMany(t *testing.T) {
 	})
 
 	t.Run("DeleteManyWithNoMatchingRecordsOrEmptyExpression", func(t *testing.T) {
-		defer s.cleanupTables()
+		defer s.modelManager.CleanupTables()
 		models := s.PopulateTableWithTestData(t)
 
 		expr := getWhereExpr("id", clause.OpEqual, "nonexistent")
@@ -548,7 +554,7 @@ func (s *DatabaseTestSuite) TestDeleteMany(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	// Rollback scenario: create inside transaction but return error to force rollback
 	rollbackModel := s.modelManager.Create("tx_rollback")
@@ -582,7 +588,7 @@ func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
-	defer s.cleanupTables()
+	defer s.modelManager.CleanupTables()
 
 	models := s.PopulateTableWithTestData(t)
 
@@ -702,7 +708,7 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 	})
 
 	t.Run("Distinct", func(t *testing.T) {
-		s.cleanupTables()
+		s.modelManager.CleanupTables()
 		defer s.PopulateTableWithTestData(t)
 
 		// Create duplicate email records
@@ -782,7 +788,7 @@ func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {
 }
 
 func (s *DatabaseTestSuite) TestCount(t *testing.T) {
-	defer s.cleanupDatabase()
+	defer s.modelManager.CleanupTables()
 
 	models := s.PopulateTableWithTestData(t)
 
@@ -903,7 +909,7 @@ func (s *DatabaseTestSuite) TestCount(t *testing.T) {
 
 	t.Run("CountWithEmptyTable", func(t *testing.T) {
 		// Clean up all records
-		s.cleanupTables()
+		s.modelManager.CleanupTables()
 		defer s.PopulateTableWithTestData(t)
 
 		// Create a fresh model instance for the empty table
