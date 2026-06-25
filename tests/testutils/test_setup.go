@@ -346,3 +346,19 @@ func SetupGormAdapter(t *testing.T, db *gorm.DB) *adapters.GormAdapter {
 func SetupBunAdapter(t *testing.T, db *bun.DB) *adapters.BunAdapter {
 	return adapters.NewBunAdapter(db)
 }
+
+func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *adapters.MongoAdapter {
+	return adapters.NewMongoAdapter(client, dbName)
+}
+
+func SetupPostgresAdapter(db *sql.DB) *adapters.PostgresAdapter {
+	return adapters.NewPostgresAdapter(db)
+}
+
+func SetupMySQLAdapter(db *sql.DB) *adapters.MySQLAdapter {
+	return adapters.NewMySQLAdapter(db)
+}
+
+func SetupMSSQLAdapter(db *sql.DB) *adapters.SQLServerAdapter {
+	return adapters.NewSQLServerAdapter(db)
+}
