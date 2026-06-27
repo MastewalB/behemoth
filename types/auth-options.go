@@ -8,25 +8,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// type Config[T User] struct {
-// 	DatabaseConfig          DatabaseConfig
-// 	JWT                     *JWTConfig
-// 	Session                 *SessionConfig
-// 	Password                *PasswordConfig
-// 	OAuthProviders          []Provider
-// 	UseSessions             bool
-// 	UseEmailAndPasswordAuth bool
-// }
-
-// // DatabaseConfig defines configuration for database connection and user model/table.
-// type DatabaseConfig struct {
-// 	Name           DatabaseName
-// 	DB             *sql.DB
-// 	UseDefaultUser bool
-// 	UserModel      User
-// 	UserFactory    func(map[string]any) User
-// }
-
 type PasswordOptions struct {
 	PasswordHasher core.PasswordHasher
 	HashCost       int
