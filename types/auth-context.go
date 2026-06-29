@@ -6,7 +6,9 @@ import (
 )
 
 type AuthContext struct {
-	Adapter Database
+	DB Database
+
+	KV KeyValueStorage
 
 	InternalAdapter adapters.InternalAdapter
 
@@ -18,3 +20,4 @@ type AuthContext struct {
 
 	Validator Validator
 }
+
