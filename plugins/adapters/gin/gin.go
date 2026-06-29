@@ -22,12 +22,7 @@ func (gd *GinDriver) Mount(endpoints ...plugins.Route) {
 		handler := ep.Handler
 		gd.router.Handle(ep.Method, ep.Path, func(c *gin.Context) {
 
-			requestContext := &types.RequestContext{
-				Ctx:      c.Request.Context(),
-				Request:  c.Request,
-				Response: types.NewResponseRecorder(),
-				Values:   make(types.M),
-			}
+			requestContext := buildRequestContext(c)
 
 			if err := handler(requestContext); err != nil {
 				c.AbortWithError(http.StatusInternalServerError, err)
@@ -37,5 +32,37 @@ func (gd *GinDriver) Mount(endpoints ...plugins.Route) {
 			requestContext.Response.Flush(c.Writer)
 		},
 		)
+	}
+}
+
+func (gd *GinDriver) MountMiddleware(middlewares ...plugins.PathMiddleware) {
+
+	ginMiddlewares := make([]gin.HandlerFunc, len(middlewares))
+	for _, mw := range middlewares {
+
+		ginMiddlewares = append(ginMiddlewares, func(c *gin.Context) {
+			ginNextCaller := func() { c.Next() }
+			requestContext := buildRequestContext(c)
+
+			if err := mw.Fn.Handle(requestContext, func(c *types.RequestContext) error {
+				ginNextCaller()
+				return nil
+			}); err != nil {
+				c.AbortWithError(http.StatusInternalServerError, err)
+				return
+			}
+
+		})
+	}
+
+	gd.router.Use(ginMiddlewares...)
+}
+
+func buildRequestContext(c *gin.Context) *types.RequestContext {
+	return &types.RequestContext{
+		Ctx:      c.Request.Context(),
+		Request:  c.Request,
+		Response: types.NewResponseRecorder(),
+		Values:   make(types.M),
 	}
 }
