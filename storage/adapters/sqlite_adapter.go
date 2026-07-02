@@ -53,7 +53,7 @@ func (sqlt *SQLiteAdapter) FindOne(
 
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
-	whereClause, args := BuildSQLWhereClause(&whereExpression)
+	whereClause, args := BuildSQLWhereClause(&whereExpression, DefaultClauseOption)
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
 		strings.Join(columns, ", "),
@@ -98,7 +98,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 		distinctClause = "DISTINCT "
 	}
 
-	whereClause, args := BuildSQLWhereClause(&whereExpression)
+	whereClause, args := BuildSQLWhereClause(&whereExpression, DefaultClauseOption)
 
 	if whereClause != "" {
 		query = fmt.Sprintf(
@@ -183,7 +183,7 @@ func (sqlt *SQLiteAdapter) UpdateOne(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereClause, args := buildSQLiteWhereClause(&expr, len(values)+1)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
@@ -216,7 +216,7 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereExpression, args := buildSQLiteWhereClause(&expr, len(values)+1)
+	whereExpression, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
@@ -243,7 +243,7 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 
 func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 
-	whereClause, args := BuildSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -272,7 +272,7 @@ func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 }
 
 func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	if whereClause == "" {
 		return &behemotherr.DomainError{
@@ -305,7 +305,7 @@ func (sqlt *SQLiteAdapter) DeleteAll(ctx context.Context, m behemoth.Model) erro
 
 func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
 	var query string
-	whereClause, args := BuildSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	if whereClause != "" {
 
@@ -320,8 +320,6 @@ func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 			m.SchemaName(),
 		)
 	}
-
-	// fmt.Println("Count Query: ", query, args)
 
 	row, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -363,101 +361,6 @@ func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 	}
 
 	return tx.Commit()
-}
-
-func BuildSQLWhereClause(expr *clause.Expression) (string, []any) {
-	return buildSQLiteWhereClause(expr, 1)
-}
-
-func buildSQLiteWhereClause(expr *clause.Expression, N int) (string, []any) {
-	if expr == nil {
-		return "", nil
-	}
-
-	var queryParts []string
-	var args []any
-	var formatString string
-	var logicalOp clause.Logic = clause.OpAnd
-
-	totalConditions := len(expr.Conditions) + len(expr.Children)
-	if totalConditions > 1 {
-		formatString = "(%s)"
-	} else {
-		formatString = "%s"
-	}
-
-	if expr.Logic != "" {
-		logicalOp = expr.Logic
-	}
-
-	if len(expr.Children) > 0 {
-		for _, child := range expr.Children {
-			subQuery, subArgs := buildSQLiteWhereClause(child, N)
-			queryParts = append(queryParts, subQuery)
-			args = append(args, subArgs...)
-			N += len(subArgs)
-		}
-	}
-	for _, cond := range expr.Conditions {
-		subQuery, subArgs := buildConditionSQL(cond, N)
-		queryParts = append(queryParts, subQuery)
-		args = append(args, subArgs...)
-		N += len(subArgs)
-	}
-
-	joinedQuery := strings.Join(queryParts, fmt.Sprintf(" %s ", logicalOp))
-
-	return fmt.Sprintf(formatString, joinedQuery), args
-}
-
-func buildConditionSQL(cond clause.Condition, N int) (string, []any) {
-	switch cond.Operator {
-	case clause.OpEqual:
-		return fmt.Sprintf("(%s = $%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpNotEqual:
-		return fmt.Sprintf("(%s != $%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpGreaterThan:
-		return fmt.Sprintf("(%s > $%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpGreaterEq:
-		return fmt.Sprintf("(%s >= $%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpLessThan:
-		return fmt.Sprintf("(%s < $%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpLessEq:
-		return fmt.Sprintf("(%s <= $%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpIn:
-		valueSlice := ToSlice(cond.Value)
-		placeholders := utils.GenerateSQLPlaceholders(N, N+len(valueSlice)-1)
-		return fmt.Sprintf("(%s IN %s)", cond.Field, placeholders), valueSlice
-
-	case clause.OpNotIn:
-		valueSlice := ToSlice(cond.Value)
-		placeholders := utils.GenerateSQLPlaceholders(N, N+len(valueSlice)-1)
-		return fmt.Sprintf("(%s NOT IN %s)", cond.Field, placeholders), valueSlice
-
-	case clause.OpStartsWith:
-		return fmt.Sprintf("(%s LIKE $%d)", cond.Field, N), []any{fmt.Sprintf("%s%%", cond.Value)}
-
-	case clause.OpEndsWith:
-		return fmt.Sprintf("(%s LIKE $%d)", cond.Field, N), []any{fmt.Sprintf("%%%s", cond.Value)}
-
-	case clause.OpContains:
-		return fmt.Sprintf("(%s LIKE $%d)", cond.Field, N), []any{fmt.Sprintf("%%%s%%", cond.Value)}
-
-	case clause.OpIsNull:
-		return fmt.Sprintf("(%s IS NULL)", cond.Field), nil
-
-	case clause.OpNotNull:
-		return fmt.Sprintf("(%s IS NOT NULL)", cond.Field), nil
-
-	default:
-		return "", []any{cond.Value}
-	}
 }
 
 func mapSQLErrors(op, entity string, err error) error {

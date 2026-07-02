@@ -8,6 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var defaultPostgresClauseOptions = &adapters.ClauseOptions{
+	Placeholder:            "$",
+	UseNumberedPlaceholder: true,
+	Number:                 1,
+}
+
 func TestBuildSQLiteWhereClause(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -333,7 +339,7 @@ func TestBuildSQLiteWhereClause(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sql, args := adapters.BuildSQLWhereClause(tt.expr)
+			sql, args := adapters.BuildSQLWhereClause(tt.expr, defaultPostgresClauseOptions)
 			assert.Equal(t, tt.expectedSQL, sql)
 			assert.Equal(t, tt.expectedArgs, args)
 		})
@@ -347,7 +353,7 @@ func TestBuildSQLiteWhereClauseEdgeCases(t *testing.T) {
 			Conditions: []clause.Condition{},
 			Children:   []*clause.Expression{},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		assert.Equal(t, "", sql)
 		assert.Empty(t, args)
 	})
@@ -358,7 +364,7 @@ func TestBuildSQLiteWhereClauseEdgeCases(t *testing.T) {
 				{Field: "ids", Operator: clause.OpIn, Value: []any{}},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		// This will produce invalid SQL, but we test current behavior
 		assert.Equal(t, "(ids IN ())", sql)
 		assert.Empty(t, args)
@@ -370,7 +376,7 @@ func TestBuildSQLiteWhereClauseEdgeCases(t *testing.T) {
 				{Field: "name", Operator: clause.OpContains, Value: "%_test%"},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		assert.Equal(t, "(name LIKE $1)", sql)
 		assert.Equal(t, []any{"%%_test%%"}, args) // Note: SQLite will treat % and _ as special chars
 	})
@@ -382,7 +388,7 @@ func TestBuildSQLiteWhereClauseEdgeCases(t *testing.T) {
 				{Field: "field2", Operator: clause.OpNotEqual, Value: nil},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		assert.Equal(t, "((field1 = $1) AND (field2 != $2))", sql)
 		assert.Equal(t, []any{nil, nil}, args)
 	})
@@ -394,7 +400,7 @@ func TestBuildSQLiteWhereClauseEdgeCases(t *testing.T) {
 				{Field: "is_deleted", Operator: clause.OpEqual, Value: false},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		assert.Equal(t, "((is_active = $1) AND (is_deleted = $2))", sql)
 		assert.Equal(t, []any{true, false}, args)
 	})
@@ -406,7 +412,7 @@ func TestBuildSQLiteWhereClauseEdgeCases(t *testing.T) {
 				{Field: "rating", Operator: clause.OpLessEq, Value: 4.5},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		assert.Equal(t, "((price > $1) AND (rating <= $2))", sql)
 		assert.Equal(t, []any{99.99, 4.5}, args)
 	})
@@ -431,7 +437,7 @@ func TestBuildSQLiteWhereClauseWithRealisticScenarios(t *testing.T) {
 				},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		expectedSQL := "(((full_name LIKE $1) OR (email LIKE $2) OR (username LIKE $3)) AND (deleted_at IS NULL) AND (status IN ($4, $5)))"
 		expectedArgs := []any{"%john%", "%john%", "%john%", "active", "pending"}
 
@@ -458,7 +464,7 @@ func TestBuildSQLiteWhereClauseWithRealisticScenarios(t *testing.T) {
 				},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		expectedSQL := "(((category = $1) OR (category = $2) OR (tags LIKE $3)) AND (price >= $4) AND (price <= $5) AND (in_stock = $6))"
 		expectedArgs := []any{"electronics", "computers", "%sale%", 10.00, 100.00, true}
 
@@ -475,7 +481,7 @@ func TestBuildSQLiteWhereClauseWithRealisticScenarios(t *testing.T) {
 				{Field: "status", Operator: clause.OpNotEqual, Value: "cancelled"},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		expectedSQL := "((created_at >= $1) AND (created_at <= $2) AND (status != $3))"
 		expectedArgs := []any{"2024-01-01", "2024-12-31", "cancelled"}
 
@@ -491,7 +497,7 @@ func TestBuildSQLiteWhereClauseUnsupportedOperator(t *testing.T) {
 				{Field: "test", Operator: "unsupported", Value: "value"},
 			},
 		}
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		// The current implementation returns empty string and args for unsupported ops
 		assert.Equal(t, "", sql)
 		assert.Equal(t, []any{"value"}, args) // default case in buildConditionSQL returns args
@@ -525,7 +531,7 @@ func TestBuildSQLiteWhereClauseParameterNumberingSequence(t *testing.T) {
 			},
 		}
 
-		sql, args := adapters.BuildSQLWhereClause(expr)
+		sql, args := adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 		// Parameters should be sequential: $1, $2, $3, $4, $5
 		expectedSQL := "(((a = $1) AND (b = $2)) AND (((d = $3) AND (e = $4)) AND (c = $5)))"
 		expectedArgs := []any{1, 2, 4, 5, 3}
@@ -555,6 +561,6 @@ func BenchmarkBuildSQLiteWhereClause(b *testing.B) {
 	}
 
 	for b.Loop() {
-		adapters.BuildSQLWhereClause(expr)
+		adapters.BuildSQLWhereClause(expr, defaultPostgresClauseOptions)
 	}
 }

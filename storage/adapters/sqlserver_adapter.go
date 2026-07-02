@@ -37,6 +37,23 @@ func NewSQLServerAdapter(db Querier) *SQLServerAdapter {
 	return &SQLServerAdapter{DB: db}
 }
 
+// SQL Server uses @p1, @p2, … positional named parameters. The counter N
+// is threaded through recursive calls so nested expressions and multi-step
+// operations (UpdateOne SET args + WHERE args) share a single sequence.
+var defaultMSSQLClauseOptions = &ClauseOptions{
+	Placeholder:            "@p",
+	UseNumberedPlaceholder: true,
+	Number:                 1,
+}
+
+func NewMSSQLClauseOptions(N int) *ClauseOptions {
+	return &ClauseOptions{
+		Placeholder:            "@p",
+		UseNumberedPlaceholder: true,
+		Number:                 N,
+	}
+}
+
 func (ms *SQLServerAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	if _, ok := m.(behemoth.Serializable); !ok {
 		return behemotherr.SerializableNotImplemented()
@@ -68,7 +85,7 @@ func (ms *SQLServerAdapter) FindOne(
 	}
 
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
-	whereClause, args := BuildMSSQLWhereClause(&whereExpression)
+	whereClause, args := BuildSQLWhereClause(&whereExpression, defaultMSSQLClauseOptions)
 
 	// SQL Server uses SELECT TOP 1 instead of appending LIMIT 1.
 	query := fmt.Sprintf(
@@ -114,7 +131,7 @@ func (ms *SQLServerAdapter) FindMany(
 		distinctClause = "DISTINCT "
 	}
 
-	whereClause, args := BuildMSSQLWhereClause(&whereExpression)
+	whereClause, args := BuildSQLWhereClause(&whereExpression, defaultMSSQLClauseOptions)
 
 	var query string
 	if whereClause != "" {
@@ -196,7 +213,7 @@ func (ms *SQLServerAdapter) UpdateOne(
 
 	// SET args occupy @p1 … @pN; WHERE args start at @p(N+1).
 	setClause := mssqlSETClause(columns, 1)
-	whereClause, whereArgs := buildMSSQLWhereClause(&expr, len(values)+1)
+	whereClause, whereArgs := BuildSQLWhereClause(&expr, NewMSSQLClauseOptions(len(values)+1))
 
 	// SQL Server allows a plain subquery on the same table in an UPDATE.
 	subQuery := fmt.Sprintf(
@@ -230,7 +247,7 @@ func (ms *SQLServerAdapter) UpdateMany(
 
 	columns, values := utils.MapToSlice(updates)
 	setClause := mssqlSETClause(columns, 1)
-	whereClause, whereArgs := buildMSSQLWhereClause(&expr, len(values)+1)
+	whereClause, whereArgs := BuildSQLWhereClause(&expr, NewMSSQLClauseOptions(len(values)+1))
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
@@ -259,7 +276,7 @@ func (ms *SQLServerAdapter) DeleteOne(
 	m behemoth.Model,
 	expr clause.Expression,
 ) error {
-	whereClause, args := BuildMSSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, defaultMSSQLClauseOptions)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -292,7 +309,7 @@ func (ms *SQLServerAdapter) DeleteMany(
 	m behemoth.Model,
 	expr clause.Expression,
 ) error {
-	whereClause, args := BuildMSSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, defaultMSSQLClauseOptions)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -323,7 +340,7 @@ func (ms *SQLServerAdapter) Count(
 	m behemoth.Model,
 	expr clause.Expression,
 ) (int64, error) {
-	whereClause, args := BuildMSSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, defaultMSSQLClauseOptions)
 
 	var query string
 	if whereClause != "" {
@@ -379,108 +396,6 @@ func (ms *SQLServerAdapter) Transaction(ctx context.Context, fn behemoth.Transac
 	}
 
 	return tx.Commit()
-}
-
-// -----------------------------------------------------------------------
-// WHERE clause builder
-//
-// SQL Server uses @p1, @p2, … positional named parameters. The counter N
-// is threaded through recursive calls so nested expressions and multi-step
-// operations (UpdateOne SET args + WHERE args) share a single sequence.
-// -----------------------------------------------------------------------
-
-// BuildMSSQLWhereClause is the exported entry point (N starts at 1).
-func BuildMSSQLWhereClause(expr *clause.Expression) (string, []any) {
-	return buildMSSQLWhereClause(expr, 1)
-}
-
-func buildMSSQLWhereClause(expr *clause.Expression, N int) (string, []any) {
-	if expr == nil {
-		return "", nil
-	}
-
-	var queryParts []string
-	var args []any
-	var formatString string
-	var logicalOp clause.Logic = clause.OpAnd
-
-	totalConditions := len(expr.Conditions) + len(expr.Children)
-	if totalConditions > 1 {
-		formatString = "(%s)"
-	} else {
-		formatString = "%s"
-	}
-
-	if expr.Logic != "" {
-		logicalOp = expr.Logic
-	}
-
-	for _, child := range expr.Children {
-		subQuery, subArgs := buildMSSQLWhereClause(child, N)
-		queryParts = append(queryParts, subQuery)
-		args = append(args, subArgs...)
-		N += len(subArgs)
-	}
-
-	for _, cond := range expr.Conditions {
-		subQuery, subArgs := buildMSSQLConditionSQL(cond, N)
-		queryParts = append(queryParts, subQuery)
-		args = append(args, subArgs...)
-		N += len(subArgs)
-	}
-
-	joined := strings.Join(queryParts, fmt.Sprintf(" %s ", logicalOp))
-	return fmt.Sprintf(formatString, joined), args
-}
-
-func buildMSSQLConditionSQL(cond clause.Condition, N int) (string, []any) {
-	switch cond.Operator {
-	case clause.OpEqual:
-		return fmt.Sprintf("(%s = @p%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpNotEqual:
-		return fmt.Sprintf("(%s != @p%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpGreaterThan:
-		return fmt.Sprintf("(%s > @p%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpGreaterEq:
-		return fmt.Sprintf("(%s >= @p%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpLessThan:
-		return fmt.Sprintf("(%s < @p%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpLessEq:
-		return fmt.Sprintf("(%s <= @p%d)", cond.Field, N), []any{cond.Value}
-
-	case clause.OpIn:
-		valueSlice := ToSlice(cond.Value)
-		placeholders := mssqlPlaceholders(N, len(valueSlice))
-		return fmt.Sprintf("(%s IN (%s))", cond.Field, strings.Join(placeholders, ", ")), valueSlice
-
-	case clause.OpNotIn:
-		valueSlice := ToSlice(cond.Value)
-		placeholders := mssqlPlaceholders(N, len(valueSlice))
-		return fmt.Sprintf("(%s NOT IN (%s))", cond.Field, strings.Join(placeholders, ", ")), valueSlice
-
-	case clause.OpStartsWith:
-		return fmt.Sprintf("(%s LIKE @p%d)", cond.Field, N), []any{fmt.Sprintf("%s%%", cond.Value)}
-
-	case clause.OpEndsWith:
-		return fmt.Sprintf("(%s LIKE @p%d)", cond.Field, N), []any{fmt.Sprintf("%%%s", cond.Value)}
-
-	case clause.OpContains:
-		return fmt.Sprintf("(%s LIKE @p%d)", cond.Field, N), []any{fmt.Sprintf("%%%s%%", cond.Value)}
-
-	case clause.OpIsNull:
-		return fmt.Sprintf("(%s IS NULL)", cond.Field), nil
-
-	case clause.OpNotNull:
-		return fmt.Sprintf("(%s IS NOT NULL)", cond.Field), nil
-
-	default:
-		return "", []any{cond.Value}
-	}
 }
 
 // Pagination helper
@@ -556,7 +471,7 @@ func mapMSSQLError(op, entity string, err error) error {
 }
 
 // mssqlPlaceholders returns a slice of n @pN-style placeholder strings
-// starting from startN, e.g. mssqlPlaceholders(3, 2) → ["@p3", "@p4"].
+// starting from startN, e.g. mssqlPlaceholders(3, 2) -> ["@p3", "@p4"].
 func mssqlPlaceholders(startN, count int) []string {
 	placeholders := make([]string, count)
 	for i := range placeholders {
@@ -566,7 +481,7 @@ func mssqlPlaceholders(startN, count int) []string {
 }
 
 // mssqlSETClause builds a SET fragment with @pN placeholders beginning
-// at startN, e.g. mssqlSETClause(["name","age"], 1) → "name = @p1, age = @p2".
+// at startN, e.g. mssqlSETClause(["name","age"], 1) -> "name = @p1, age = @p2".
 func mssqlSETClause(columns []string, startN int) string {
 	parts := make([]string, len(columns))
 	for i, col := range columns {

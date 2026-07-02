@@ -13,19 +13,27 @@ import (
 	"github.com/MastewalB/behemoth/utils"
 )
 
-// Querier is implemented by both *sql.DB and *sql.Tx
-type Querier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 type PostgresAdapter struct {
 	DB Querier
 }
 
 func NewPostgresAdapter(db Querier) *PostgresAdapter {
 	return &PostgresAdapter{DB: db}
+}
+
+var defaultPostgresClauseOptions = &ClauseOptions{
+	Placeholder:            "$",
+	UseNumberedPlaceholder: true,
+	Number:                 1,
+}
+
+// Create a Postgres ClauseOptions with a specified starting number for numbered placeholderes.
+func NewPostgresClauseOptions(N int) *ClauseOptions {
+	return &ClauseOptions{
+		Placeholder:            "$",
+		UseNumberedPlaceholder: true,
+		Number:                 N,
+	}
 }
 
 func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
@@ -56,7 +64,7 @@ func (pg *PostgresAdapter) FindOne(
 
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
-	whereClause, args := BuildSQLWhereClause(&whereExpression)
+	whereClause, args := BuildSQLWhereClause(&whereExpression, defaultPostgresClauseOptions)
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
 		strings.Join(columns, ", "),
@@ -101,7 +109,7 @@ func (pg *PostgresAdapter) FindMany(
 		distinctClause = "DISTINCT "
 	}
 
-	whereClause, args := BuildSQLWhereClause(&whereExpression)
+	whereClause, args := BuildSQLWhereClause(&whereExpression, defaultPostgresClauseOptions)
 
 	if whereClause != "" {
 		query = fmt.Sprintf(
@@ -190,7 +198,7 @@ func (pg *PostgresAdapter) UpdateOne(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereClause, args := buildSQLiteWhereClause(&expr, len(values)+1)
+	whereClause, args := BuildSQLWhereClause(&expr, NewPostgresClauseOptions(len(values)+1))
 
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
@@ -223,7 +231,7 @@ func (pg *PostgresAdapter) UpdateMany(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereExpression, args := buildSQLiteWhereClause(&expr, len(values)+1)
+	whereExpression, args := BuildSQLWhereClause(&expr, NewPostgresClauseOptions(len(values)+1))
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
@@ -251,7 +259,7 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 
 func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 
-	whereClause, args := BuildSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, defaultPostgresClauseOptions)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -280,7 +288,7 @@ func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 }
 
 func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, defaultPostgresClauseOptions)
 
 	if whereClause == "" {
 		return &behemotherr.DomainError{
@@ -313,7 +321,7 @@ func (pg *PostgresAdapter) DeleteAll(ctx context.Context, m behemoth.Model) erro
 
 func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
 	var query string
-	whereClause, args := BuildSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, defaultPostgresClauseOptions)
 
 	if whereClause != "" {
 

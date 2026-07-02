@@ -69,7 +69,7 @@ func (my *MySQLAdapter) FindOne(
 	}
 
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
-	whereClause, args := BuildMySQLWhereClause(&whereExpression)
+	whereClause, args := BuildSQLWhereClause(&whereExpression, DefaultClauseOption)
 
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
@@ -115,7 +115,7 @@ func (my *MySQLAdapter) FindMany(
 		distinctClause = "DISTINCT "
 	}
 
-	whereClause, args := BuildMySQLWhereClause(&whereExpression)
+	whereClause, args := BuildSQLWhereClause(&whereExpression, DefaultClauseOption)
 
 	if whereClause != "" {
 		query = fmt.Sprintf(
@@ -199,7 +199,7 @@ func (my *MySQLAdapter) UpdateOne(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereClause, whereArgs := buildMySQLWhereClause(&expr)
+	whereClause, whereArgs := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	// MySQL forbids "UPDATE t SET ... WHERE pk = (SELECT pk FROM t WHERE ...)"
 	// when the subquery references the same table. We work around this by
@@ -236,7 +236,7 @@ func (my *MySQLAdapter) UpdateMany(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereClause, whereArgs := buildMySQLWhereClause(&expr)
+	whereClause, whereArgs := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
@@ -261,7 +261,7 @@ func (my *MySQLAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 }
 
 func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -291,7 +291,7 @@ func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cl
 }
 
 func (my *MySQLAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -318,7 +318,7 @@ func (my *MySQLAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 }
 
 func (my *MySQLAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	var query string
 	if whereClause != "" {
@@ -375,97 +375,4 @@ func (my *MySQLAdapter) Transaction(ctx context.Context, fn behemoth.Transaction
 
 	return tx.Commit()
 
-}
-
-// BuildMySQLWhereClause is the exported entry point used by FindOne / FindMany / Count.
-func BuildMySQLWhereClause(expr *clause.Expression) (string, []any) {
-	return buildMySQLWhereClause(expr)
-}
-
-func buildMySQLWhereClause(expr *clause.Expression) (string, []any) {
-	if expr == nil {
-		return "", nil
-	}
-
-	var queryParts []string
-	var args []any
-	var formatString string
-	var logicalOp clause.Logic = clause.OpAnd
-
-	totalConditions := len(expr.Conditions) + len(expr.Children)
-	if totalConditions > 1 {
-		formatString = "(%s)"
-	} else {
-		formatString = "%s"
-	}
-
-	if expr.Logic != "" {
-		logicalOp = expr.Logic
-	}
-
-	for _, child := range expr.Children {
-		subQuery, subArgs := buildMySQLWhereClause(child)
-		queryParts = append(queryParts, subQuery)
-		args = append(args, subArgs...)
-	}
-
-	for _, cond := range expr.Conditions {
-		subQuery, subArgs := buildMySQLConditionSQL(cond)
-		queryParts = append(queryParts, subQuery)
-		args = append(args, subArgs...)
-	}
-
-	joined := strings.Join(queryParts, fmt.Sprintf(" %s ", logicalOp))
-	return fmt.Sprintf(formatString, joined), args
-}
-
-// buildMySQLConditionSQL emits '?' placeholders instead of '$N'.
-func buildMySQLConditionSQL(cond clause.Condition) (string, []any) {
-	switch cond.Operator {
-	case clause.OpEqual:
-		return fmt.Sprintf("(%s = ?)", cond.Field), []any{cond.Value}
-
-	case clause.OpNotEqual:
-		return fmt.Sprintf("(%s != ?)", cond.Field), []any{cond.Value}
-
-	case clause.OpGreaterThan:
-		return fmt.Sprintf("(%s > ?)", cond.Field), []any{cond.Value}
-
-	case clause.OpGreaterEq:
-		return fmt.Sprintf("(%s >= ?)", cond.Field), []any{cond.Value}
-
-	case clause.OpLessThan:
-		return fmt.Sprintf("(%s < ?)", cond.Field), []any{cond.Value}
-
-	case clause.OpLessEq:
-		return fmt.Sprintf("(%s <= ?)", cond.Field), []any{cond.Value}
-
-	case clause.OpIn:
-		valueSlice := ToSlice(cond.Value)
-		placeholders := "(" + strings.Repeat("?, ", len(valueSlice)-1) + "?)"
-		return fmt.Sprintf("(%s IN %s)", cond.Field, placeholders), valueSlice
-
-	case clause.OpNotIn:
-		valueSlice := ToSlice(cond.Value)
-		placeholders := "(" + strings.Repeat("?, ", len(valueSlice)-1) + "?)"
-		return fmt.Sprintf("(%s NOT IN %s)", cond.Field, placeholders), valueSlice
-
-	case clause.OpStartsWith:
-		return fmt.Sprintf("(%s LIKE ?)", cond.Field), []any{fmt.Sprintf("%s%%", cond.Value)}
-
-	case clause.OpEndsWith:
-		return fmt.Sprintf("(%s LIKE ?)", cond.Field), []any{fmt.Sprintf("%%%s", cond.Value)}
-
-	case clause.OpContains:
-		return fmt.Sprintf("(%s LIKE ?)", cond.Field), []any{fmt.Sprintf("%%%s%%", cond.Value)}
-
-	case clause.OpIsNull:
-		return fmt.Sprintf("(%s IS NULL)", cond.Field), nil
-
-	case clause.OpNotNull:
-		return fmt.Sprintf("(%s IS NOT NULL)", cond.Field), nil
-
-	default:
-		return "", []any{cond.Value}
-	}
 }

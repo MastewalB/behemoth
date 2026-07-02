@@ -37,7 +37,7 @@ func (ba *BunAdapter) FindOne(
 	m behemoth.Model,
 	expr clause.Expression,
 ) (behemoth.Model, error) {
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 	dest := m.New()
 
 	err := ba.db.NewSelect().
@@ -60,7 +60,7 @@ func (ba *BunAdapter) FindMany(
 	expr clause.Expression,
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 
 	// Build *[]ConcreteType via reflection so Bun can scan into it.
 	modelType := reflect.TypeOf(m)
@@ -127,7 +127,7 @@ func (ba *BunAdapter) UpdateOne(
 		return nil
 	}
 
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 
 	subQuery := ba.db.NewSelect().
 		TableExpr(m.SchemaName()).
@@ -156,7 +156,7 @@ func (ba *BunAdapter) UpdateMany(
 		return nil
 	}
 
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 
 	q := ApplyMapUpdates(
 		ba.db.NewUpdate().
@@ -182,7 +182,7 @@ func (ba *BunAdapter) DeleteOne(
 	m behemoth.Model,
 	expr clause.Expression,
 ) error {
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -211,7 +211,7 @@ func (ba *BunAdapter) DeleteMany(
 	m behemoth.Model,
 	expr clause.Expression,
 ) error {
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -247,7 +247,7 @@ func (ba *BunAdapter) Count(
 	m behemoth.Model,
 	expr clause.Expression,
 ) (int64, error) {
-	whereClause, args := BuildMySQLWhereClause(&expr)
+	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 
 	q := ba.db.NewSelect().
 		TableExpr(m.SchemaName())

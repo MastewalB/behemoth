@@ -26,7 +26,7 @@ func (ga *GormAdapter) Create(ctx context.Context, m behemoth.Model) error {
 }
 
 func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
-	query, args := BuildSQLWhereClause(&expr)
+	query, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 	newModel := m.New()
 	err := ga.db.
 		WithContext(ctx).
@@ -46,7 +46,7 @@ func (ga *GormAdapter) FindMany(
 	expr clause.Expression,
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
-	query, args := BuildSQLWhereClause(&expr)
+	query, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	modelType := reflect.TypeOf(m)
 	sliceType := reflect.SliceOf(modelType)
@@ -96,10 +96,6 @@ func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	return WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
-// func replaceParams(s string) string {
-// 	return regexp.MustCompile(`\$\d+`).ReplaceAllString(s, "?")
-// }
-
 func (ga *GormAdapter) UpdateOne(
 	ctx context.Context,
 	m behemoth.Model,
@@ -110,7 +106,7 @@ func (ga *GormAdapter) UpdateOne(
 		return nil
 	}
 
-	query, args := BuildSQLWhereClause(&expr)
+	query, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	err := ga.db.
 		WithContext(ctx).
@@ -139,7 +135,7 @@ func (ga *GormAdapter) UpdateMany(
 		return nil
 	}
 
-	query, args := BuildSQLWhereClause(&expr)
+	query, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 	err := ga.db.
 		WithContext(ctx).
 		Model(m.New()).
@@ -155,7 +151,7 @@ func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 }
 
 func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 	if whereClause == "" {
 		return &behemotherr.DomainError{
 			Type:    behemotherr.Database,
@@ -165,7 +161,7 @@ func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cla
 		}
 	}
 
-	query, args := BuildSQLWhereClause(&expr)
+	query, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	err := ga.db.
 		WithContext(ctx).
@@ -184,7 +180,7 @@ func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cla
 }
 
 func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildSQLWhereClause(&expr)
+	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	if whereClause == "" {
 		return &behemotherr.DomainError{
@@ -218,7 +214,7 @@ func (ga *GormAdapter) Count(
 	m behemoth.Model,
 	expr clause.Expression,
 ) (int64, error) {
-	query, args := BuildSQLWhereClause(&expr)
+	query, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 	var count int64
 
 	err := ga.db.
