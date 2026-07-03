@@ -10,7 +10,7 @@ import (
 	_ "github.com/MastewalB/behemoth/migration/plugins/postgres"
 	_ "github.com/MastewalB/behemoth/migration/plugins/sqlite"
 	"github.com/MastewalB/behemoth/storage/adapters"
-	"github.com/uptrace/bun"
+	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/sqliteshim"
 
@@ -22,6 +22,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/uptrace/bun"
 
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -343,8 +345,8 @@ func SetupGormAdapter(t *testing.T, db *gorm.DB) *adapters.GormAdapter {
 	return adapters.NewGormAdapter(db)
 }
 
-func SetupBunAdapter(t *testing.T, db *bun.DB) *adapters.BunAdapter {
-	return adapters.NewBunAdapter(db)
+func SetupBunAdapter(t *testing.T, db *bun.DB) *bunAdapter.BunAdapter {
+	return bunAdapter.NewBunAdapter(db)
 }
 
 func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *adapters.MongoAdapter {

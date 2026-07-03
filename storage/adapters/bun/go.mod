@@ -1,4 +1,4 @@
-module behemoth.com/bun
+module github.com/MastewalB/behemoth/storage/adapters/bun 
 
 go 1.26.4
 
