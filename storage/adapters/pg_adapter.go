@@ -43,7 +43,12 @@ func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
-	placeholders := utils.GenerateSQLPlaceholders(1, len(columns))
+	placeholders := GeneratePlaceholdersSlice(
+		defaultPostgresClauseOptions.Number,
+		len(columns),
+		defaultPostgresClauseOptions.Placeholder,
+		defaultPostgresClauseOptions.UseNumberedPlaceholder,
+	)
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES %s",
@@ -176,7 +181,11 @@ func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = $%d",
 		m.SchemaName(),
-		utils.GenerateSQLSETClause(columns),
+		GenerateSQLSETClause(columns,
+			defaultPostgresClauseOptions.Number,
+			defaultPostgresClauseOptions.Placeholder,
+			defaultPostgresClauseOptions.UseNumberedPlaceholder,
+		),
 		m.PrimaryKeyName(),
 		len(values)+1,
 	)
@@ -210,7 +219,12 @@ func (pg *PostgresAdapter) UpdateOne(
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = (%s)",
 		m.SchemaName(),
-		utils.GenerateSQLSETClause(columns),
+		GenerateSQLSETClause(columns,
+			defaultPostgresClauseOptions.Number,
+			defaultPostgresClauseOptions.Placeholder,
+			defaultPostgresClauseOptions.UseNumberedPlaceholder,
+		),
+
 		m.PrimaryKeyName(),
 		selectQuery,
 	)
@@ -236,7 +250,12 @@ func (pg *PostgresAdapter) UpdateMany(
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
 		m.SchemaName(),
-		utils.GenerateSQLSETClause(columns),
+		GenerateSQLSETClause(columns,
+			defaultPostgresClauseOptions.Number,
+			defaultPostgresClauseOptions.Placeholder,
+			defaultPostgresClauseOptions.UseNumberedPlaceholder,
+		),
+
 		whereExpression,
 	)
 

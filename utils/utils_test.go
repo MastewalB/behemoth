@@ -46,6 +46,7 @@ func TestGenerateSqliteSETClause(t *testing.T) {
 	}
 }
 
+//Change
 func TestIsValidEmail(t *testing.T) {
 	emailTests := []struct {
 		email    string

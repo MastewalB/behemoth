@@ -28,7 +28,12 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
-	placeholders := utils.GenerateSQLPlaceholders(1, len(columns))
+	placeholders := GeneratePlaceholdersSlice(
+		DefaultClauseOption.Number,
+		len(columns),
+		DefaultClauseOption.Placeholder,
+		DefaultClauseOption.UseNumberedPlaceholder,
+	)
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES %s",
@@ -164,7 +169,12 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = ?",
 		m.SchemaName(),
-		utils.GenerateSQLSETClause(columns),
+		GenerateSQLSETClause(
+			columns,
+			DefaultClauseOption.Number,
+			DefaultClauseOption.Placeholder,
+			DefaultClauseOption.UseNumberedPlaceholder,
+		),
 		m.PrimaryKeyName(),
 	)
 
@@ -195,7 +205,12 @@ func (sqlt *SQLiteAdapter) UpdateOne(
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = (%s)",
 		m.SchemaName(),
-		utils.GenerateSQLSETClause(columns),
+		GenerateSQLSETClause(
+			columns,
+			DefaultClauseOption.Number,
+			DefaultClauseOption.Placeholder,
+			DefaultClauseOption.UseNumberedPlaceholder,
+		),
 		m.PrimaryKeyName(),
 		selectQuery,
 	)
@@ -221,7 +236,12 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
 		m.SchemaName(),
-		utils.GenerateSQLSETClause(columns),
+		GenerateSQLSETClause(
+			columns,
+			DefaultClauseOption.Number,
+			DefaultClauseOption.Placeholder,
+			DefaultClauseOption.UseNumberedPlaceholder,
+		),
 		whereExpression,
 	)
 
