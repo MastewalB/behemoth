@@ -132,3 +132,58 @@ func (r *ResponseRecorder) Flush(w http.ResponseWriter) {
 	w.WriteHeader(r.Code)
 	r.body.WriteTo(w)
 }
+
+type HookPoint string
+type HookPhase string
+
+// HookContext is the normalized context passed to every lifecycle hook handler
+// (both Tier 1 data hooks and Tier 2 semantic flow hooks). Unlike RequestContext,
+// it makes no assumption about transport — a hook may fire from an HTTP request,
+// a CLI command, a background job, or a plugin calling another plugin's service
+// method directly.
+type HookContext struct {
+	Ctx context.Context
+
+	Point HookPoint
+	Phase HookPhase
+
+	Auth *AuthContext
+
+	// Values is scratch space scoped to this single dispatch chain — lets one
+	// handler leave a note for a later handler in the same chain (e.g. "password
+	// strength already checked by plugin X"). Distinct from the payload itself,
+	// same idiom as RequestContext.Values but chain-scoped rather than request-scoped.
+	Values M
+
+	// Request is set only when this lifecycle was triggered from within an HTTP
+	// request — i.e. some plugin endpoint handler called into a service that fired
+	// this hook. Nil for CLI-triggered, job-triggered, or internal plugin-to-plugin calls.
+	// Handlers that don't care about transport (the common case) should never need to touch this.
+	Request *RequestContext
+}
+
+// BeforeHookFunc: pre-persistence, validate-and-prepare only.
+// Contract: return (mutatedPayload, nil) to continue the chain with that payload,
+// or (nil, err) to ABORT. There is no separate "abort" flag — a non-nil error IS
+// the abort signal. err must be one of the existing behemotherr domain error types
+// (ValidationError, DomainError, etc.) so it maps cleanly to an HTTP status later.
+// Handlers MUST return the full payload to proceed with, even if unchanged —
+// never rely on nil meaning "no change," since that's ambiguous with an empty M.
+type BeforeHookFunc func(hctx *HookContext, payload M) (M, error)
+
+// AfterHookFunc: strictly post-commit, read-only with respect to the operation's
+// outcome. result is the already-persisted entity. A returned error does NOT roll
+// anything back (nothing left to roll back) — the dispatcher captures it and hands
+// it to a configurable failure reporter/retry policy instead of propagating it as
+// the parent operation's error.
+type AfterHookFunc func(hctx *HookContext, result Model) error
+
+// FailedHookFunc: notification-only, fired for business-rejected operations
+// (bad password, TOTP mismatch, banned domain) — NOT for system errors like a
+// DB timeout, which just propagate as ordinary errors and never reach here.
+type FailedHookFunc func(hctx *HookContext, reason FailureReason) error
+
+type FailureReason struct {
+	Code  string // "invalidCredentials", "userNotFound", "secondFactorRejected", ...
+	Cause error  // underlying error, if any — nil for pure business rejections
+}
