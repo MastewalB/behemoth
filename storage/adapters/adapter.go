@@ -3,6 +3,8 @@ package adapters
 import (
 	"context"
 	"database/sql"
+	"reflect"
+	"runtime"
 )
 
 // Querier is implemented by both *sql.DB and *sql.Tx
@@ -10,4 +12,51 @@ type Querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+const (
+	OpCreate     = "Create"
+	OpFindOne    = "FindOne"
+	OpFindMany   = "FindMany"
+	OpUpdate     = "Update"
+	OpUpdateOne  = "UpdateOne"
+	OpUpdateMany = "UpdateMany"
+	OpDelete     = "Delete"
+	OpDeleteOne  = "Delete"
+	OpDeleteMany = "DeleteMany"
+	OpDeleteAll  = "DeleteAll"
+
+	OpCount       = "Count"
+	OpTransaction = "Transaction"
+
+	OpGet = "Get"
+	OpSet = "Set"
+)
+
+// ToSlice is a helper function that safely converts any value to a slice of any.
+// If the value is already a slice, it returns it as is. If it's a single value, it wraps it in a slice.
+func ToSlice(value any) []any {
+	rv := reflect.ValueOf(value)
+
+	if rv.Kind() == reflect.Slice {
+		slice := make([]any, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			slice[i] = rv.Index(i).Interface()
+		}
+		return slice
+	}
+	return []any{value}
+}
+
+func WrapWithCaller(err error, entity string, wrapperFn func(string, string, error) error) error {
+
+	pc := make([]uintptr, 1)
+	runtime.Callers(2, pc)
+	caller := runtime.FuncForPC(pc[0])
+	op := "unknown"
+	if caller != nil {
+		op = caller.Name()
+	}
+
+	return wrapperFn(op, entity, err)
 }

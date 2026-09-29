@@ -75,9 +75,9 @@ func (j *JWTManager) Revoke(ctx context.Context, tokenStr string) error {
 	return errors.New("token revocation not available")
 }
 
-func (j *JWTManager) TokenType() behemoth.TokenType {
-	return behemoth.TokenTypeBearer
-}
+// func (j *JWTManager) TokenType() behemoth.TokenType {
+// 	return behemoth.TokenTypeBearer
+// }
 
 type DefaultJWTClaims struct {
 	ID string `json:"id"`

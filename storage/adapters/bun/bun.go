@@ -184,12 +184,7 @@ func (ba *BunAdapter) DeleteOne(
 ) error {
 	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteOne",
-			Entity:  m.SchemaName(),
-			Message: "DeleteOne requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
 	subQuery := ba.db.NewSelect().
@@ -213,12 +208,7 @@ func (ba *BunAdapter) DeleteMany(
 ) error {
 	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteMany",
-			Entity:  m.SchemaName(),
-			Message: "DeleteMany requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
 	}
 
 	_, err := ba.db.NewDelete().

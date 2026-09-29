@@ -1,53 +1,55 @@
 package core
 
-import (
-	"fmt"
-	"sync"
-)
+// import (
+// 	"fmt"
+// 	"sync"
 
-var (
-	ErrLocked    = fmt.Errorf("can't acquire lock")
-	ErrNotLocked = fmt.Errorf("can't unlock, as not currently locked")
-)
+// 	behemotherr "github.com/MastewalB/behemoth/errors"
+// )
 
-var driversMu sync.RWMutex
-var drivers = make(map[string]Driver)
+// var (
+// 	ErrLocked    = fmt.Errorf("can't acquire lock")
+// 	ErrNotLocked = fmt.Errorf("can't unlock, as not currently locked")
+// )
 
-func Register(name string, driver Driver) {
-	driversMu.Lock()
-	defer driversMu.Unlock()
+// var driversMu sync.RWMutex
+// var drivers = make(map[string]Driver)
 
-	if driver == nil {
-		panic("driver is nil")
-	}
+// func Register(name string, driver Driver) {
+// 	driversMu.Lock()
+// 	defer driversMu.Unlock()
 
-	if _, dup := drivers[name]; dup {
-		panic("Driver already registered " + name)
-	}
+// 	if driver == nil {
+// 		panic("driver is nil")
+// 	}
 
-	drivers[name] = driver
-}
+// 	if _, dup := drivers[name]; dup {
+// 		panic("Driver already registered " + name)
+// 	}
 
-func Open(name string, config *Config) (Driver, error) {
-	driversMu.RLock()
-	driver, exists := drivers[name]
-	driversMu.RUnlock()
+// 	drivers[name] = driver
+// }
 
-	if !exists {
-		return nil, fmt.Errorf("\"%s\" %w (forgotten import?)", name, ErrPluginNotFound)
-	}
+// func Open(name string, config *Config) (Driver, error) {
+// 	driversMu.RLock()
+// 	driver, exists := drivers[name]
+// 	driversMu.RUnlock()
 
-	return driver.Open(config)
-}
+// 	if !exists {
+// 		return nil, fmt.Errorf("\"%s\" %w (forgotten import?)", name, behemotherr.NewMigrationError("Migrator.Open", "driver_not_found", nil))
+// 	}
 
-func List() []string {
-	driversMu.RLock()
-	defer driversMu.RUnlock()
+// 	return driver.Open(config)
+// }
 
-	names := make([]string, 0, len(drivers))
-	for n := range drivers {
-		names = append(names, n)
-	}
+// func List() []string {
+// 	driversMu.RLock()
+// 	defer driversMu.RUnlock()
 
-	return names
-}
+// 	names := make([]string, 0, len(drivers))
+// 	for n := range drivers {
+// 		names = append(names, n)
+// 	}
+
+// 	return names
+// }

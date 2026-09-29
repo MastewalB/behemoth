@@ -5,7 +5,39 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
+
+	"github.com/MastewalB/behemoth"
 )
+
+type Plugin interface {
+
+	// Meta returns the Plugin metadata
+	Meta() PluginMeta
+
+	// Version is the plugin version. e.g. "1.0.0"
+	Version() string
+
+	// Init is called once when behemoth starts up.
+	// Plugins receive a PluginContext that contains access to core services.
+	Init(ctx *AuthContext) error
+
+	// Routes returns the HTTP endpoints this plugin wants to register.
+	// Returning an empty slice is valid (the plugin may only use hooks).
+	Routes() []Route
+
+	// Middlewares() returns middleware functions that the plugin wants to register.
+	Middlewares() []Middleware
+
+	// DeclareHooks() []types.HookPointDef
+
+	// Declare lets the plugins declare hooks, tokens, and ratelimit rules it wants to get registered.
+	Declare(ic *PluginInitContext) error
+
+	RegisterHooks() []Listener
+
+	Register(reg HookRegistry) error
+}
 
 // PluginContext is injected into every plugin's Init method.
 // It gives plugins access to behemoth's core services without leaking
@@ -38,7 +70,9 @@ type RequestContext struct {
 	Auth *AuthContext
 
 	// Per request map to store data (user ID, claims etc...)
-	Values M
+	Values behemoth.M
+
+	Params map[string]string // path params, populated by the driver before Handler runs
 }
 
 func (rc *RequestContext) Set(key string, val any) {
@@ -49,6 +83,8 @@ func (rc *RequestContext) Get(key string) (any, bool) {
 	v, ok := rc.Values[key]
 	return v, ok
 }
+
+func (rc *RequestContext) Param(name string) string { return rc.Params[name] }
 
 // ResponseRecorder buffers status code, headers, and body so the plugin
 // handler can write a complete response without ever touching a framework type.
@@ -118,6 +154,10 @@ func (r *ResponseRecorder) Redirect(code int, url string) {
 	r.Headers.Set("Location", url)
 }
 
+func (r *ResponseRecorder) Error(code int, err string) error {
+	return r.JSON(code, map[string]string{"error": err})
+}
+
 // Flush copies the buffered response onto the real http.ResponseWriter.
 // Called once by the framework adapter after the plugin handler returns.
 func (r *ResponseRecorder) Flush(w http.ResponseWriter) {
@@ -133,12 +173,58 @@ func (r *ResponseRecorder) Flush(w http.ResponseWriter) {
 	r.body.WriteTo(w)
 }
 
+type HandlerFunc func(ctx *RequestContext) error
+
+// Middleware is a named function that wraps a HandlerFunc.
+// It receives the RequestContext and a `next` function to call the next
+// handler in the chain. Not calling next short-circuits the chain (useful
+// for auth guards that want to reject a request early).
+//
+// Example: a minimal logger middleware:
+//
+//	plugin.Middleware{
+//	    Name: "logger",
+//	    Handle: func(rc *plugin.RequestContext, next plugin.HandlerFunc) error {
+//	        log.Printf("--> %s %s", rc.Request.Method, rc.Request.URL.Path)
+//	        err := next(rc)
+//	        log.Printf("<-- %d", rc.Response.Code)
+//	        return err
+//	    },
+//	}
+// type Middleware struct {
+// 	Name   string
+// 	Handle func(rc *RequestContext, next HandlerFunc) error
+// }
+type Middleware func(next HandlerFunc) HandlerFunc
+
+// Route describes a single HTTP endpoint a plugin wants to expose.
+// The Handler receives a framework-agnostic RequestContext and writes its
+// response into rc.Response
+type Route struct {
+	Method      string       // "GET", "POST", "PUT", "DELETE" ...
+	Path        string       // "/plugin-name/some-action"
+	Handler     HandlerFunc  // the core logic for this route
+	Middlewares []Middleware // optional, run left-to-right before Handler
+}
+
 type HookPoint string
 type HookPhase string
 
+const (
+	BeforeHookPhase HookPhase = "before"
+	AfterHookPhase  HookPhase = "after"
+	FailedHookPhase HookPhase = "failed"
+)
+
+type HookRegistry interface {
+	OnBefore(point HookPoint, fn BeforeHookFunc, opts *HookOptions) error
+	OnAfter(point HookPoint, fn AfterHookFunc, opts *HookOptions) error
+	OnFailed(point HookPoint, fn FailedHookFunc, opts *HookOptions) error
+}
+
 // HookContext is the normalized context passed to every lifecycle hook handler
 // (both Tier 1 data hooks and Tier 2 semantic flow hooks). Unlike RequestContext,
-// it makes no assumption about transport — a hook may fire from an HTTP request,
+// it makes no assumption about transport; a hook may fire from an HTTP request,
 // a CLI command, a background job, or a plugin calling another plugin's service
 // method directly.
 type HookContext struct {
@@ -149,41 +235,316 @@ type HookContext struct {
 
 	Auth *AuthContext
 
-	// Values is scratch space scoped to this single dispatch chain — lets one
+	// Values is scratch space scoped to this single dispatch chain; lets one
 	// handler leave a note for a later handler in the same chain (e.g. "password
 	// strength already checked by plugin X"). Distinct from the payload itself,
 	// same idiom as RequestContext.Values but chain-scoped rather than request-scoped.
-	Values M
+	Values behemoth.M
 
 	// Request is set only when this lifecycle was triggered from within an HTTP
-	// request — i.e. some plugin endpoint handler called into a service that fired
+	// request; i.e. some plugin endpoint handler called into a service that fired
 	// this hook. Nil for CLI-triggered, job-triggered, or internal plugin-to-plugin calls.
 	// Handlers that don't care about transport (the common case) should never need to touch this.
 	Request *RequestContext
 }
 
+type HookCatalog interface {
+	Declare(def HookPointDef) error // errors if Point already declared by a different owner
+	Lookup(point HookPoint) (HookPointDef, bool)
+	All() []HookPointDef
+}
+
+type PluginInitContext struct {
+	Hooks      HookCatalog
+	Tokens     TokenCatalog
+	RateLimits RateLimitCatalog
+}
+
 // BeforeHookFunc: pre-persistence, validate-and-prepare only.
 // Contract: return (mutatedPayload, nil) to continue the chain with that payload,
-// or (nil, err) to ABORT. There is no separate "abort" flag — a non-nil error IS
+// or (nil, err) to ABORT. There is no separate "abort" flag; a non-nil error IS
 // the abort signal. err must be one of the existing behemotherr domain error types
 // (ValidationError, DomainError, etc.) so it maps cleanly to an HTTP status later.
 // Handlers MUST return the full payload to proceed with, even if unchanged —
 // never rely on nil meaning "no change," since that's ambiguous with an empty M.
-type BeforeHookFunc func(hctx *HookContext, payload M) (M, error)
+type BeforeHookFunc func(hctx *HookContext, payload behemoth.M) (behemoth.M, error)
 
 // AfterHookFunc: strictly post-commit, read-only with respect to the operation's
 // outcome. result is the already-persisted entity. A returned error does NOT roll
 // anything back (nothing left to roll back) — the dispatcher captures it and hands
 // it to a configurable failure reporter/retry policy instead of propagating it as
 // the parent operation's error.
-type AfterHookFunc func(hctx *HookContext, result Model) error
+type AfterHookFunc func(hctx *HookContext, result any) error
 
 // FailedHookFunc: notification-only, fired for business-rejected operations
-// (bad password, TOTP mismatch, banned domain) — NOT for system errors like a
-// DB timeout, which just propagate as ordinary errors and never reach here.
+// (bad password, TOTP mismatch, banned domain)
+// system errors like a DB timeout, should just propagate as ordinary errors.
 type FailedHookFunc func(hctx *HookContext, reason FailureReason) error
 
 type FailureReason struct {
 	Code  string // "invalidCredentials", "userNotFound", "secondFactorRejected", ...
-	Cause error  // underlying error, if any — nil for pure business rejections
+	Cause error  // underlying error, if any. nil for pure business rejections
+}
+
+type Dispatcher interface {
+	// RunBefore executes the frozen before-chain for point, threading payload
+	// through each handler in registered order. Returns the mutated payload,
+	// or the first non-nil error returned by any handler - that error IS the abort.
+	RunBefore(hctx *HookContext, point HookPoint, payload behemoth.M) (behemoth.M, error)
+
+	// RunAfter executes the frozen after-chain for point, strictly post-commit.
+	// Never surfaces an error to the caller; failures are captured internally
+	// and handed to the configured FailureReporter. The flow has already succeeded;
+	// this call cannot change that.
+	RunAfter(hctx *HookContext, point HookPoint, result any)
+
+	// Fail dispatches the frozen failed-chain for point with reason.
+	// No-op if point == ""; this is what lets Tier 1 CRUD skip cascading entirely.
+	Fail(hctx *HookContext, point HookPoint, reason FailureReason)
+}
+
+// HookPointDef formally defines an event type.
+// E.g. 'data.create' owner - 'core' supported phases 'before', 'after'
+type HookPointDef struct {
+	Point HookPoint
+	Owner string     // plugin name, e.g. "core"
+	Phase HookPhase  // which phases are valid for this point - e.g.  data.user hooks support before/after phases but maybe not failed
+	Audit *AuditSpec // nil = not audited; if set, dispatcher auto-records on this phase
+}
+
+type HookOptions struct {
+	Priority HookPriority // default: PriorityNormal
+	Before   []string     // plugin names this handler must run before, on this point
+	After    []string     // plugin names this handler must run after, on this point
+}
+
+type HookPriority int
+
+const (
+	PriorityHighest HookPriority = -100 // gatekeepers: validation, security checks that should see raw input first
+	PriorityHigh    HookPriority = -50
+	PriorityNormal  HookPriority = 0
+	PriorityLow     HookPriority = 50
+	PriorityLowest  HookPriority = 100 // observers: logging, analytics; should see the final mutated state
+)
+
+// ListenOn declares event listening registry definition.
+type Listener struct {
+	Point    HookPoint
+	Phase    HookPhase // Like 'before', 'after', or 'failed'
+	Callback any       // Should be one of BeforeHookFunc, AfterHookFunc, FailedHookFunc
+	Options  *HookOptions
+}
+
+func WithLifecycle[TIn, TOut any](
+	dispatcher Dispatcher,
+	before, success, failed HookPoint,
+	fn func(hctx *HookContext, in TIn) (TOut, error),
+) func(hctx *HookContext, in TIn) (TOut, error) {
+	return func(hctx *HookContext, in TIn) (TOut, error) {
+		var zero TOut
+
+		payload, err := structToM(&in)
+		if err != nil {
+			return zero, err
+		}
+
+		mutated, err := dispatcher.RunBefore(hctx, before, payload)
+		if err != nil {
+			dispatcher.Fail(hctx, failed, FailureReason{Code: "rejectedByHook", Cause: err})
+			return zero, err
+		}
+
+		if err := mFromStruct(mutated, &in); err != nil {
+			return zero, err
+		}
+
+		out, err := fn(hctx, in)
+		if err != nil {
+			return zero, err // flow's own business-rejection Fail() calls already happened inside fn
+		}
+		dispatcher.RunAfter(hctx, success, out)
+		return out, nil
+	}
+}
+
+// structToM converts any struct to M. If T implements Serializable, that's used
+// directly (predictable, no reflection, lets a type customize - e.g. excluding a
+// field, or handling a type json can't round-trip cleanly). Otherwise falls back
+// to a generic json marshal/unmarshal roundtrip, which works for any exported,
+// json-taggable struct with zero boilerplate.
+func structToM[T any](v *T) (behemoth.M, error) {
+	if s, ok := any(v).(behemoth.Serializable); ok {
+		mp, err := s.ToMap()
+		return mp, err
+	}
+
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+
+	var m behemoth.M
+	return m, json.Unmarshal(b, &m)
+}
+
+func mFromStruct[T any](m behemoth.M, v *T) error {
+	if s, ok := any(v).(behemoth.Serializable); ok {
+		return s.FromMap(m)
+	}
+
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
+}
+
+
+// KahnSort performs topological sorting on a given Directed Acyclic Graph.
+// The graph map should have nodes as keys and their dependants as lists.
+// For eg. If A and C depend on B,
+// B: {A, C}
+// Ties among nodes with in-degree zero at the same step are broken by name, ascending
+func KahnSort(graph map[string][]string, less func(a, b string) bool) (order []string, cyclePath []string, ok bool) {
+
+	// Collect every node
+	allNodes := make(map[string]bool)
+	for node, dependants := range graph {
+		allNodes[node] = true
+		for _, d := range dependants {
+			allNodes[d] = true
+		}
+	}
+
+	// Use len(allNodes) instead of N since some nodes might only be listed as dependants
+	N := len(allNodes)
+	indegree := make(map[string]int, N)
+	for n := range allNodes {
+		indegree[n] = 0
+	}
+	for _, dependants := range graph {
+		for _, dep := range dependants {
+			indegree[dep]++
+		}
+	}
+
+	queue := make([]string, 0)
+	for node := range graph {
+		if indegree[node] == 0 {
+			queue = append(queue, node)
+		}
+	}
+	sort.Slice(queue, func(i, j int) bool { return less(queue[i], queue[j]) })
+
+	order = make([]string, 0, N)
+
+	front := 0
+	for len(queue) > 0 {
+		// Pop the alphabetically-first ready node
+		curr := queue[front]
+		queue = queue[1:]
+		order = append(order, curr)
+
+		// new eligible nodes
+		var newEntries []string
+		for _, dep := range graph[curr] {
+			indegree[dep]--
+			if indegree[dep] == 0 {
+				newEntries = append(newEntries, dep)
+			}
+		}
+
+		sort.Strings(newEntries)
+		sort.Slice(newEntries, func(i, j int) bool { return less(newEntries[i], newEntries[j]) })
+		queue = mergeSorted(queue, newEntries, less) // keep 'queue' sorted as new nodes join
+	}
+
+	if len(order) != N {
+		// return remaining indegree nodes as cycles
+		return nil, findCyclePath(graph, indegree), false
+	}
+
+	return order, nil, true
+}
+
+func mergeSorted(a, b []string, less func(a, b string) bool) []string {
+	if len(b) == 0 {
+		return a
+	}
+	out := make([]string, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if !less(b[j], a[i]) { // a[i] <= b[j]
+			out = append(out, a[i])
+			i++
+		} else {
+			out = append(out, b[j])
+			j++
+		}
+	}
+	return append(append(out, a[i:]...), b[j:]...)
+}
+
+// findCyclePath walks from any node that still has unresolved in-degree
+// (proof it's part of, or downstream of, a cycle) following one dependency
+// edge at a time until a node repeats, which marks the actual cycle,
+// trimmed out of the full walk for a concise, readable report.
+func findCyclePath(graph map[string][]string, remainingInDegree map[string]int) []string {
+	// Build the reverse (dependency-direction) map once, for walking;
+	// since the graph i sin dependant-direction
+	dependsOn := make(map[string][]string)
+	for node, dependants := range graph {
+		for _, d := range dependants {
+			dependsOn[d] = append(dependsOn[d], node)
+		}
+	}
+
+	var start string
+	for n, deg := range remainingInDegree {
+		if deg > 0 {
+			start = n
+			break
+		}
+	}
+
+	if start == "" {
+		return nil // defensive: shouldn't happen if the caller already confirmed a cycle exists
+	}
+
+	visited := map[string]bool{}
+	path := []string{start}
+	current := start
+	for {
+		next := dependsOn[current]
+		if len(next) == 0 {
+			return path // dead end without a repeat. shouldn't occur in a genuine cycle
+		}
+		sort.Strings(next) // deterministic even when a node has multiple unresolved dependencies
+		current = next[0]
+		if visited[current] {
+			path = append(path, current)
+			// Trim everything before the repeat's first occurrence,
+			// so the reported path is exactly the cycle.
+			for i, n := range path {
+				if n == current {
+					return path[i:]
+				}
+			}
+		}
+		visited[current] = true
+		path = append(path, current)
+	}
+}
+
+type PluginDependency struct {
+	Name     string
+	Optional bool // if true, missing dependency is fine and edge is just skipped
+}
+
+type PluginMeta struct {
+	// Name returns a unique, human-readable identifier, e.g. "two-factor".
+	Name         string
+	Dependencies []PluginDependency
+	MountPath    string // optional; "" mounts flat under basePath
 }

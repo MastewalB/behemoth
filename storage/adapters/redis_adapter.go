@@ -18,7 +18,7 @@ func NewRedisAdapter(client *redis.Client) *RedisAdapter {
 
 func (rkv *RedisAdapter) Get(ctx context.Context, key string) (string, error) {
 	if key == "" {
-		return "", behemotherr.ErrEmptyKey
+		return "", behemotherr.NewEmptyKey("Get", nil)
 	}
 
 	value, err := rkv.redisClient.Get(ctx, key).Result()
@@ -35,7 +35,7 @@ func (rkv *RedisAdapter) Set(
 	ttl int,
 ) error {
 	if key == "" {
-		return behemotherr.ErrEmptyKey
+		return behemotherr.NewEmptyKey(OpSet, nil)
 	}
 	err := rkv.redisClient.Set(ctx, key, value, time.Duration(ttl*int(time.Second))).Err()
 
@@ -44,14 +44,14 @@ func (rkv *RedisAdapter) Set(
 
 func (rkv *RedisAdapter) Delete(ctx context.Context, key string) error {
 	if key == "" {
-		return behemotherr.ErrEmptyKey
+		return behemotherr.NewEmptyKey(OpDelete, nil)
 	}
 
 	err := rkv.redisClient.Del(ctx, key).Err()
 	if err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -67,8 +67,8 @@ func handleRedisError(op, entity string, err error) error {
 		return behemotherr.NewKeyNotFound(op, err)
 		// case redis.
 
-	case behemotherr.ErrEmptyKey:
-		return behemotherr.NewEmptyKey(op, err)
+		// case behemotherr.ErrEmptyKey:
+		// 	return behemotherr.NewEmptyKey(op, err)
 	}
 	return behemotherr.NewDatabaseError(op, err)
 }

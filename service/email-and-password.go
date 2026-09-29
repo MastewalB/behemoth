@@ -74,7 +74,8 @@ func (eps *EmailAndPasswordService) SignIn(ctx context.Context, credentials Emai
 		return nil, err
 	}
 
-	if !eps.authContext.PasswordOptions.PasswordHasher.Verify(user.GetPasswordHash(), credentials.Password) {
+	valid, _ := eps.authContext.PasswordOptions.PasswordHasher.Verify(user.GetPasswordHash(), credentials.Password)
+	if !valid {
 		return nil, errors.New("invalid email or password")
 	}
 

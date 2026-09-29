@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/utils"
+	"github.com/mattn/go-sqlite3"
 )
 
 type SQLiteAdapter struct {
@@ -265,12 +267,7 @@ func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 
 	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteOne",
-			Entity:  m.SchemaName(),
-			Message: "DeleteOne requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
 	selectQuery := fmt.Sprintf(
@@ -295,12 +292,7 @@ func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteMany",
-			Entity:  m.SchemaName(),
-			Message: "DeleteMany requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
@@ -388,14 +380,46 @@ func mapSQLErrors(op, entity string, err error) error {
 		return nil
 	}
 
-	switch err {
-	case sql.ErrNoRows:
-		return behemotherr.NewNotFound(op, entity, err)
-	case sql.ErrTxDone:
-		return behemotherr.NewTransactionError(op, err)
-
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return classify(op, entity, sentinelNotFound, err)
+	case errors.Is(err, sql.ErrTxDone):
+		return classify(op, entity, sentinelTxDone, err)
+	case isSQLiteConstraintViolation(err):
+		if isUniqueConstraint(err) {
+			return classify(op, entity, sentinelDuplicateKey, err)
+		}
+		if isForeignKeyConstraint(err) {
+			return classify(op, entity, sentinelForeignKey, err)
+		}
+		return classify(op, entity, sentinelConstraintViolation, err)
 	default:
-		return behemotherr.NewDatabaseError(op, err)
+		return classify(op, entity, sentinelUnknown, err)
 	}
 
+}
+
+func isSQLiteConstraintViolation(err error) bool {
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code == sqlite3.ErrConstraint
+	}
+	return false
+}
+
+func isUniqueConstraint(err error) bool {
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique ||
+			sqliteErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey
+	}
+	return false
+}
+
+func isForeignKeyConstraint(err error) bool {
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintForeignKey
+	}
+	return false
 }

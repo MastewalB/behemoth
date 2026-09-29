@@ -3,89 +3,101 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	_ "github.com/lib/pq"
 )
 
 func init() {
-	pgdb := &PostgreSQLDriver{}
-	core.Register("postgres", pgdb)
-	core.Register("postgresql", pgdb)
+	// pgdb := &PostgreSQLDriver{}
+	// core.Register("postgres", pgdb)
+	// core.Register("postgresql", pgdb)
 }
 
 type PostgreSQLDriver struct {
-	db     *sql.DB
-	config *core.Config
+	db       *sql.DB
+	config   *core.Config
+	resolver core.SchemaResolver
 }
 
-func WithInstance(ctx context.Context, db *sql.DB, config *core.Config) (core.Driver, error) {
-	if err := db.PingContext(ctx); err != nil {
-		return nil, err
-	}
-
-	return &PostgreSQLDriver{
-		db:     db,
-		config: config,
-	}, nil
+// execer is satisfied by both *sql.DB (standalone calls) and *sql.Tx
+// (calls made inside ApplyMigration/RecordBaseline) — this is what lets
+// every DDL-building method below exist exactly once, regardless of
+// whether it's invoked standalone or as part of a migration's transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-func (pgd *PostgreSQLDriver) CreateTable(ctx context.Context, name string, schema *core.TableSchema) error {
+// func WithInstance(ctx context.Context, db *sql.DB, config *core.Config) (core.Driver, error) {
+// 	if err := db.PingContext(ctx); err != nil {
+// 		return nil, err
+// 	}
 
-	query := CreatePGTable(schema)
-	_, err := pgd.db.ExecContext(ctx, query)
-	return err
-}
+// 	return &PostgreSQLDriver{
+// 		db:     db,
+// 		config: config,
+// 	}, nil
+// }
 
-func (pgd *PostgreSQLDriver) DropTable(ctx context.Context, name string) error {
+// func (pgd *PostgreSQLDriver) CreateTable(ctx context.Context, name string, schema *core.TableSchema) error {
 
-	query := fmt.Sprintf("DROP TABLE IF EXISTS %s", name)
-	_, err := pgd.db.ExecContext(ctx, query)
-	return err
-}
+// 	query := CreatePGTable(schema)
+// 	_, err := pgd.db.ExecContext(ctx, query)
+// 	return err
+// }
 
-func (pgd *PostgreSQLDriver) AddColumn(ctx context.Context, table, column, columnType string) error {
+// func (pgd *PostgreSQLDriver) DropTable(ctx context.Context, name string) error {
 
-	query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, columnType)
-	_, err := pgd.db.ExecContext(ctx, query)
-	return err
-}
+// 	query := fmt.Sprintf("DROP TABLE IF EXISTS %s", name)
+// 	_, err := pgd.db.ExecContext(ctx, query)
+// 	return err
+// }
 
-func (pgd *PostgreSQLDriver) RemoveColumn(ctx context.Context, table, column string) error {
+// func (pgd *PostgreSQLDriver) AddColumn(ctx context.Context, table, column, columnType string) error {
 
-	query := fmt.Sprintf("ALTER TABLE %s DROP COLUMN IF EXISTS %s", table, column)
-	_, err := pgd.db.ExecContext(ctx, query)
-	return err
-}
+// 	query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, columnType)
+// 	_, err := pgd.db.ExecContext(ctx, query)
+// 	return err
+// }
 
-func (pgd *PostgreSQLDriver) CreateMigrationTable(ctx context.Context) error {
-	query := `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version INTEGER PRIMARY KEY,
-			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`
+// func (pgd *PostgreSQLDriver) RemoveColumn(ctx context.Context, table, column string) error {
 
-	_, err := pgd.db.ExecContext(ctx, query)
-	return err
-}
+// 	query := fmt.Sprintf("ALTER TABLE %s DROP COLUMN IF EXISTS %s", table, column)
+// 	_, err := pgd.db.ExecContext(ctx, query)
+// 	return err
+// }
 
-func (pgd *PostgreSQLDriver) Open(config *core.Config) (core.Driver, error) {
+// func (pgd *PostgreSQLDriver) CreateMigrationTable(ctx context.Context) error {
+// 	query := `
+// 		CREATE TABLE IF NOT EXISTS schema_migrations (
+// 			version INTEGER PRIMARY KEY,
+// 			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+// 		)
+// 	`
 
-	dbInstance := config.DB
-	if dbInstance == nil {
-		return nil, fmt.Errorf("sql db instance is required")
-	}
+// 	_, err := pgd.db.ExecContext(ctx, query)
+// 	return err
+// }
 
-	db, ok := dbInstance.(*sql.DB)
-	if !ok {
-		return nil, fmt.Errorf("unknown sql db instance provided")
-	}
+// func (pgd *PostgreSQLDriver) Open(config *core.Config) (core.Driver, error) {
 
-	return WithInstance(context.Background(), db, config)
-}
+// 	dbInstance := config.DB
+// 	if dbInstance == nil {
+// 		return nil, fmt.Errorf("sql db instance is required")
+// 	}
+
+// 	db, ok := dbInstance.(*sql.DB)
+// 	if !ok {
+// 		return nil, fmt.Errorf("unknown sql db instance provided")
+// 	}
+
+// 	return WithInstance(context.Background(), db, config)
+// }
 
 // Run executes raw migration string
 func (pgd *PostgreSQLDriver) Run(ctx context.Context, migration string) error {
@@ -155,7 +167,7 @@ func CreatePGTable(tableSchema *core.TableSchema) string {
 		}
 
 		fmt.Fprintf(&query, " %s %s", col.Name, getPGColumnType(col))
-		if col.Primary {
+		if col.PrimaryKey {
 			query.WriteString(" PRIMARY KEY")
 		}
 
@@ -171,7 +183,7 @@ func CreatePGTable(tableSchema *core.TableSchema) string {
 			query.WriteString(" NOT NULL")
 		}
 
-		if col.Unique && !col.Primary {
+		if col.Unique && !col.PrimaryKey {
 			query.WriteString(" UNIQUE")
 		}
 
@@ -191,34 +203,37 @@ func CreatePGTable(tableSchema *core.TableSchema) string {
 func getPGColumnType(col core.Column) string {
 	switch col.Type {
 
-	case core.Integer:
+	case core.ColTypeInteger:
 		return "INTEGER"
 
-	case core.Real:
+	case core.ColTypeReal:
 		return "DOUBLE PRECISION"
 
-	case core.Numeric:
+	case core.ColTypeNumeric:
 		return "NUMERIC"
 
-	case core.BigInt:
+	case core.ColTypeBigInt:
 		return "BIGINT"
 
-	case core.Text:
+	case core.ColTypeText:
 		return "TEXT"
 
-	case core.Uuid:
+	case core.ColTypeUuid:
 		return "UUID"
 
-	case core.Blob:
+	case core.ColTypeBlob, core.ColTypeBytes:
 		return "BYTEA"
 
-	case core.Json:
+	case core.ColTypeJson:
 		return "JSONB"
 
-	case core.DateTime:
+	case core.ColTypeTimestamp:
+		return "TIMESTAMPTZ"
+
+	case core.ColTypeDateTime:
 		return "TIMESTAMP"
 
-	case core.Boolean:
+	case core.ColTypeBoolean:
 		return "BOOLEAN"
 
 	default:
@@ -226,3 +241,707 @@ func getPGColumnType(col core.Column) string {
 	}
 
 }
+
+func (d *PostgreSQLDriver) AtomicityLevel() core.AtomicityLevel { return core.AtomicityFull }
+
+// quoteIdent applies standard Postgres double-quote identifier escaping —
+// used for every table/column/index/constraint name emitted into SQL,
+// never string-concatenated raw. Values (defaults) are handled separately
+// via renderDefault, never through this function.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// renderDefault produces a SQL literal fragment for Column.Default. Only
+// plain literals are supported — this is the forward counterpart of the
+// introspector's parsePgDefault, which refuses to interpret function/
+// sequence expressions on the way IN; symmetrically, this never attempts
+// to emit one on the way OUT. A nil Default means no DEFAULT clause at all.
+func renderDefault(v any) (string, error) {
+	switch val := v.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return "DEFAULT '" + strings.ReplaceAll(val, "'", "''") + "'", nil
+	case bool:
+		if val {
+			return "DEFAULT TRUE", nil
+		}
+		return "DEFAULT FALSE", nil
+	case int, int32, int64:
+		return fmt.Sprintf("DEFAULT %d", val), nil
+	case float32, float64:
+		return fmt.Sprintf("DEFAULT %v", val), nil
+	default:
+		return "", behemotherr.NewMigrationError("PostgresDriver.renderDefault", "unsupported_default_type", fmt.Errorf("cannot render default value of type %T", v))
+	}
+}
+
+// renderPgType is the FORWARD (canonical -> native) direction of type
+// mapping — deliberately a separate, simpler table from the introspector's
+// pgTypeMapping, which handles the harder REVERSE direction. Forward
+// mapping only ever needs one canonical choice per type, never a
+// compatibility family.
+func renderPgType(ct core.ColumnType, length int) (string, error) {
+	switch ct {
+	case core.ColTypeString:
+		l := length
+		if l <= 0 {
+			l = 255
+		}
+		return fmt.Sprintf("VARCHAR(%d)", l), nil
+	case core.ColTypeText:
+		return "TEXT", nil
+	case core.ColTypeInteger:
+		return "INTEGER", nil
+	case core.ColTypeBigInt:
+		return "BIGINT", nil
+	case core.ColTypeBoolean:
+		return "BOOLEAN", nil
+	case core.ColTypeTimestamp:
+		return "TIMESTAMPTZ", nil
+	case core.ColTypeUuid:
+		return "UUID", nil
+	case core.ColTypeJson:
+		return "JSONB", nil
+	case core.ColTypeBytes:
+		return "BYTEA", nil
+	default:
+		return "", behemotherr.NewMigrationError("PostgresDriver.renderPgType", "unsupported_canonical_type", fmt.Errorf("no Postgres rendering for canonical type %q", ct))
+	}
+}
+
+func mapFKAction(a core.ForeignKeyAction) string {
+	switch a {
+	case core.FKCascade:
+		return "CASCADE"
+	case core.FKSetNull:
+		return "SET NULL"
+	default:
+		return "RESTRICT"
+	}
+}
+
+func (d *PostgreSQLDriver) CreateTable(ctx context.Context, t core.TableSchema) error {
+	return d.createTable(ctx, d.db, t)
+}
+
+func (d *PostgreSQLDriver) createTable(ctx context.Context, ex execer, t core.TableSchema) error {
+	physicalTable := d.resolver.Resolve(t.Name)
+
+	var colDefs []string
+	var pkCols []string
+	for _, col := range t.Columns {
+		def, err := d.renderColumnDefinition(t.Name, col)
+		if err != nil {
+			return err
+		}
+		colDefs = append(colDefs, def)
+		if col.PrimaryKey {
+			pkCols = append(pkCols, quoteIdent(d.resolver.ResolveColumn(t.Name, col.Name)))
+		}
+	}
+	if len(pkCols) > 0 {
+		colDefs = append(colDefs, "PRIMARY KEY ("+strings.Join(pkCols, ", ")+")")
+	}
+
+	// NOTE: t.ForeignKeys is intentionally NEVER read here — CreateTable
+	// must never emit inline FK constraints, per the "foreign keys are
+	// always their own OpAddForeignKey" invariant enforced upstream by
+	// MigrationGenerator's checkNoInlineForeignKeys. This driver does not
+	// re-validate that invariant; it trusts the caller, consistent with
+	// Runner/Generator owning that guarantee.
+	query := fmt.Sprintf("CREATE TABLE %s (%s)", quoteIdent(physicalTable), strings.Join(colDefs, ", "))
+	if _, err := ex.ExecContext(ctx, query); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.CreateTable", "exec_failed", err)
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) renderColumnDefinition(canonicalTable string, col core.Column) (string, error) {
+	physCol := d.resolver.ResolveColumn(canonicalTable, col.Name)
+	nativeType, err := renderPgType(col.Type, col.Length)
+	if err != nil {
+		return "", err
+	}
+
+	parts := []string{quoteIdent(physCol), nativeType}
+	if !col.Nullable {
+		parts = append(parts, "NOT NULL")
+	}
+	if col.Unique && !col.PrimaryKey { // PK already implies uniqueness — avoid a redundant constraint
+		parts = append(parts, "UNIQUE")
+	}
+	defClause, err := renderDefault(col.Default)
+	if err != nil {
+		return "", err
+	}
+	if defClause != "" {
+		parts = append(parts, defClause)
+	}
+	return strings.Join(parts, " "), nil
+}
+
+func (d *PostgreSQLDriver) DropTable(ctx context.Context, name string) error {
+	return d.dropTable(ctx, d.db, name)
+}
+
+func (d *PostgreSQLDriver) dropTable(ctx context.Context, ex execer, name string) error {
+	physical := d.resolver.Resolve(name)
+	if _, err := ex.ExecContext(ctx, "DROP TABLE "+quoteIdent(physical)); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.DropTable", "exec_failed", err)
+	}
+	return nil
+}
+func (d *PostgreSQLDriver) AddColumn(ctx context.Context, table string, col core.Column) error {
+	return d.addColumn(ctx, d.db, table, col)
+}
+
+func (d *PostgreSQLDriver) addColumn(ctx context.Context, ex execer, table string, col core.Column) error {
+	physicalTable := d.resolver.Resolve(table)
+	def, err := d.renderColumnDefinition(table, col)
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", quoteIdent(physicalTable), def)
+	if _, err := ex.ExecContext(ctx, query); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.AddColumn", "exec_failed", err)
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) DropColumn(ctx context.Context, table, column string) error {
+	return d.dropColumn(ctx, d.db, table, column)
+}
+
+func (d *PostgreSQLDriver) dropColumn(ctx context.Context, ex execer, table, column string) error {
+	physicalTable := d.resolver.Resolve(table)
+	physicalCol := d.resolver.ResolveColumn(table, column)
+	query := fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", quoteIdent(physicalTable), quoteIdent(physicalCol))
+	if _, err := ex.ExecContext(ctx, query); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.DropColumn", "exec_failed", err)
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) RenameColumn(ctx context.Context, table, oldName, newName string) error {
+	return d.renameColumn(ctx, d.db, table, oldName, newName)
+}
+
+func (d *PostgreSQLDriver) renameColumn(ctx context.Context, ex execer, table, oldName, newName string) error {
+	physicalTable := d.resolver.Resolve(table)
+	// Resolved against the SAME canonical table for both names — a rename
+	// operation's ColumnName/NewColumnName are both canonical identifiers
+	// on the same table, so both resolve through ResolveColumn identically.
+	physOld := d.resolver.ResolveColumn(table, oldName)
+	physNew := d.resolver.ResolveColumn(table, newName)
+	query := fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", quoteIdent(physicalTable), quoteIdent(physOld), quoteIdent(physNew))
+	if _, err := ex.ExecContext(ctx, query); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.RenameColumn", "exec_failed", err)
+	}
+	return nil
+}
+
+// AlterColumn issues up to three separate ALTER TABLE ... ALTER COLUMN
+// clauses (type, nullability, default) UNCONDITIONALLY — see the note at
+// the top of this response. Each is a distinct statement because Postgres
+// does not allow combining TYPE/SET NOT NULL/SET DEFAULT into one
+// ALTER COLUMN clause.
+func (d *PostgreSQLDriver) AlterColumn(ctx context.Context, table string, col core.Column) error {
+	return d.alterColumn(ctx, d.db, table, col)
+}
+
+func (d *PostgreSQLDriver) alterColumn(ctx context.Context, ex execer, table string, col core.Column) error {
+	physicalTable := d.resolver.Resolve(table)
+	physCol := d.resolver.ResolveColumn(table, col.Name)
+	nativeType, err := renderPgType(col.Type, col.Length)
+	if err != nil {
+		return err
+	}
+
+	stmts := []string{
+		fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s USING %s::%s",
+			quoteIdent(physicalTable), quoteIdent(physCol), nativeType, quoteIdent(physCol), nativeType),
+	}
+	if col.Nullable {
+		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP NOT NULL", quoteIdent(physicalTable), quoteIdent(physCol)))
+	} else {
+		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL", quoteIdent(physicalTable), quoteIdent(physCol)))
+	}
+
+	defClause, err := renderDefault(col.Default)
+	if err != nil {
+		return err
+	}
+	if defClause != "" {
+		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET %s", quoteIdent(physicalTable), quoteIdent(physCol), defClause))
+	} else {
+		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT", quoteIdent(physicalTable), quoteIdent(physCol)))
+	}
+
+	for _, stmt := range stmts {
+		if _, err := ex.ExecContext(ctx, stmt); err != nil {
+			return behemotherr.NewMigrationError("PostgresDriver.AlterColumn", "exec_failed", err)
+		}
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) AddIndex(ctx context.Context, table string, idx core.Index) error {
+	return d.addIndex(ctx, d.db, table, idx)
+}
+
+func (d *PostgreSQLDriver) addIndex(ctx context.Context, ex execer, table string, idx core.Index) error {
+	physicalTable := d.resolver.Resolve(table)
+	physIdxName := d.resolver.ResolveColumn(table, idx.Name) // index name treated as a table-scoped identifier for resolution purposes, same as a column
+
+	cols := make([]string, len(idx.Columns))
+	for i, c := range idx.Columns {
+		cols[i] = quoteIdent(d.resolver.ResolveColumn(table, c))
+	}
+
+	uniqueKw := ""
+	if idx.Unique {
+		uniqueKw = "UNIQUE "
+	}
+	query := fmt.Sprintf("CREATE %sINDEX %s ON %s (%s)", uniqueKw, quoteIdent(physIdxName), quoteIdent(physicalTable), strings.Join(cols, ", "))
+	if _, err := ex.ExecContext(ctx, query); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.AddIndex", "exec_failed", err)
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) DropIndex(ctx context.Context, table, indexName string) error {
+	return d.dropIndex(ctx, d.db, table, indexName)
+}
+
+func (d *PostgreSQLDriver) dropIndex(ctx context.Context, ex execer, table, indexName string) error {
+	physIdxName := d.resolver.ResolveColumn(table, indexName)
+	if _, err := ex.ExecContext(ctx, "DROP INDEX "+quoteIdent(physIdxName)); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.DropIndex", "exec_failed", err)
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) AddForeignKey(ctx context.Context, table string, fk core.ForeignKey) error {
+	return d.addForeignKey(ctx, d.db, table, fk)
+}
+
+func (d *PostgreSQLDriver) addForeignKey(ctx context.Context, ex execer, table string, fk core.ForeignKey) error {
+	physicalTable := d.resolver.Resolve(table)
+	physConstraint := d.resolver.ResolveColumn(table, fk.Name)
+	physRefTable := d.resolver.Resolve(fk.RefTable)
+
+	cols := make([]string, len(fk.Columns))
+	for i, c := range fk.Columns {
+		cols[i] = quoteIdent(d.resolver.ResolveColumn(table, c))
+	}
+	refCols := make([]string, len(fk.RefColumns))
+	for i, c := range fk.RefColumns {
+		refCols[i] = quoteIdent(d.resolver.ResolveColumn(fk.RefTable, c))
+	}
+
+	query := fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s",
+		quoteIdent(physicalTable), quoteIdent(physConstraint), strings.Join(cols, ", "),
+		quoteIdent(physRefTable), strings.Join(refCols, ", "), mapFKAction(fk.OnDelete))
+	if _, err := ex.ExecContext(ctx, query); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.AddForeignKey", "exec_failed", err)
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) DropForeignKey(ctx context.Context, table, fkName string) error {
+	return d.dropForeignKey(ctx, d.db, table, fkName)
+}
+
+func (d *PostgreSQLDriver) dropForeignKey(ctx context.Context, ex execer, table, fkName string) error {
+	physicalTable := d.resolver.Resolve(table)
+	physConstraint := d.resolver.ResolveColumn(table, fkName)
+	query := fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT %s", quoteIdent(physicalTable), quoteIdent(physConstraint))
+	if _, err := ex.ExecContext(ctx, query); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.DropForeignKey", "exec_failed", err)
+	}
+	return nil
+}
+
+// func (d *PostgreSQLDriver) applyOperationTx(ctx context.Context, tx *sql.Tx, op core.SchemaOperation) error {
+// 	switch op.Kind {
+// 	case core.OpCreateTable:
+// 		if op.NewTable == nil {
+// 			return behemotherr.NewInternalError("PostgresDriver.applyOperationTx", fmt.Errorf("operation %q: OpCreateTable missing NewTable", op.ID))
+// 		}
+// 		return d.createTable(ctx, tx, *op.NewTable)
+// 	case core.OpDropTable:
+// 		return d.dropTable(ctx, tx, op.Table)
+// 	case core.OpAddColumn:
+// 		if op.Column == nil {
+// 			return behemotherr.NewInternalError("PostgresDriver.applyOperationTx", fmt.Errorf("operation %q: OpAddColumn missing Column", op.ID))
+// 		}
+// 		return d.addColumn(ctx, tx, op.Table, *op.Column)
+// 	case core.OpDropColumn:
+// 		return d.dropColumn(ctx, tx, op.Table, op.ColumnName)
+// 	case core.OpRenameColumn:
+// 		return d.renameColumn(ctx, tx, op.Table, op.ColumnName, op.NewColumnName)
+// 	case core.OpAlterColumn:
+// 		if op.Column == nil {
+// 			return behemotherr.NewInternalError("PostgresDriver.applyOperationTx", fmt.Errorf("operation %q: OpAlterColumn missing Column", op.ID))
+// 		}
+// 		return d.alterColumn(ctx, tx, op.Table, *op.Column)
+// 	case core.OpAddIndex:
+// 		if op.Index == nil {
+// 			return behemotherr.NewInternalError("PostgresDriver.applyOperationTx", fmt.Errorf("operation %q: OpAddIndex missing Index", op.ID))
+// 		}
+// 		return d.addIndex(ctx, tx, op.Table, *op.Index)
+// 	case core.OpDropIndex:
+// 		return d.dropIndex(ctx, tx, op.Table, op.IndexName)
+// 	case core.OpAddForeignKey:
+// 		if op.ForeignKey == nil {
+// 			return behemotherr.NewInternalError("PostgresDriver.applyOperationTx", fmt.Errorf("operation %q: OpAddForeignKey missing ForeignKey", op.ID))
+// 		}
+// 		return d.addForeignKey(ctx, tx, op.Table, *op.ForeignKey)
+// 	case core.OpDropForeignKey:
+// 		return d.dropForeignKey(ctx, tx, op.Table, op.ForeignKeyName)
+// 	default:
+// 		return behemotherr.NewInternalError("PostgresDriver.applyOperationTx", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
+// 	}
+// }
+
+func (d *PostgreSQLDriver) insertLedgerTx(ctx context.Context, tx *sql.Tx, table string, entry core.MigrationLedgerEntry) error {
+	query := fmt.Sprintf("INSERT INTO %s (id, applied_at) VALUES ($1, $2)", quoteIdent(table))
+	if _, err := tx.ExecContext(ctx, query, entry.ID, entry.AppliedAt); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.insertLedger", "exec_failed", err)
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) upsertSnapshotTx(ctx context.Context, tx *sql.Tx, table string, snap core.SchemaSnapshot) error {
+	data, err := json.Marshal(snap.Tables)
+	if err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.upsertSnapshot", "marshal_failed", err)
+	}
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, version, tables) VALUES (1, $1, $2)
+		ON CONFLICT (id) DO UPDATE SET version = $1, tables = $2`, quoteIdent(table))
+	if _, err := tx.ExecContext(ctx, query, snap.Version, data); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.upsertSnapshot", "exec_failed", err)
+	}
+	return nil
+}
+
+func (d *PostgreSQLDriver) ApplyMigration(ctx context.Context, req core.MigrationRequest) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.ApplyMigration", "begin_tx_failed", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	for _, op := range req.Migration.Up {
+		if err := d.applyOperationTx(ctx, tx, op); err != nil {
+			tx.Rollback()
+			return behemotherr.WrapOp("PostgresDriver.ApplyMigration", fmt.Sprintf("operation %q (%s on %s)", op.ID, op.Kind, op.Table), err)
+		}
+	}
+	if err := d.insertLedgerTx(ctx, tx, req.LedgerTable, req.LedgerEntry); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := d.upsertSnapshotTx(ctx, tx, req.SnapshotTable, req.SnapshotUpdate); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.ApplyMigration", "commit_failed", err)
+	}
+	return nil
+}
+
+// RecordBaseline reuses the exact ledger+snapshot transaction logic above,
+// minus the DDL loop — this driver implements it by literally calling the
+// same two tx-bound helpers ApplyMigration uses, never duplicating them.
+func (d *PostgreSQLDriver) RecordBaseline(ctx context.Context, req core.MigrationRequest) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.RecordBaseline", "begin_tx_failed", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	if err := d.insertLedgerTx(ctx, tx, req.LedgerTable, req.LedgerEntry); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := d.upsertSnapshotTx(ctx, tx, req.SnapshotTable, req.SnapshotUpdate); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return behemotherr.NewMigrationError("PostgresDriver.RecordBaseline", "commit_failed", err)
+	}
+	return nil
+}
+
+// RenderOperation returns the exact SQL text for one operation, with no
+// execution. Every existing private builder (createTable, addColumn, ...)
+// already separates "build the query string" from "call ex.ExecContext" —
+// this just exposes that string-building half as its own method, reusing
+// the identical rendering loges applyOperationTx already calls.
+func (d *PostgreSQLDriver) RenderOperation(op core.SchemaOperation) ([]string, error) {
+	return d.buildOperationSQL(op)
+	// buildOperationSQL is applyOperationTx's existing switch, refactored to return (string, error) instead of executing —
+	// applyOperationTx now does: sql, err := d.buildOperationSQL(op); ...; ex.ExecContext(ctx, sql)
+}
+
+// RenderMigration joins every operation's SQL into one file body, in the
+// EXACT order Migration.Up already specifies — the same order ApplyMigration
+// executes, so the file is a truthful preview/record of what ran or will run.
+func (d *PostgreSQLDriver) RenderMigration(m core.Migration) (string, error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "-- Migration: %s\n-- Generated: %s\n\n", m.ID, m.CreatedAt.Format(time.RFC3339))
+	for _, op := range m.Up {
+		stmt, err := d.buildOperationSQL(op)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "%s;\n", stmt)
+	}
+	return b.String(), nil
+}
+
+// ---- Pure SQL builders ----
+
+func (d *PostgreSQLDriver) buildCreateTable(t core.TableSchema) (string, error) {
+	physicalTable := d.resolver.Resolve(t.Name)
+	var colDefs []string
+	var pkCols []string
+	for _, col := range t.Columns {
+		def, err := d.renderColumnDefinition(t.Name, col)
+		if err != nil {
+			return "", err
+		}
+		colDefs = append(colDefs, def)
+		if col.PrimaryKey {
+			pkCols = append(pkCols, quoteIdent(d.resolver.ResolveColumn(t.Name, col.Name)))
+		}
+	}
+	if len(pkCols) > 0 {
+		colDefs = append(colDefs, "PRIMARY KEY ("+strings.Join(pkCols, ", ")+")")
+	}
+	return fmt.Sprintf("CREATE TABLE %s (%s)", quoteIdent(physicalTable), strings.Join(colDefs, ", ")), nil
+}
+
+func (d *PostgreSQLDriver) buildDropTable(table string) string {
+	return "DROP TABLE " + quoteIdent(d.resolver.Resolve(table))
+}
+
+func (d *PostgreSQLDriver) buildAddColumn(table string, col core.Column) (string, error) {
+	def, err := d.renderColumnDefinition(table, col)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", quoteIdent(d.resolver.Resolve(table)), def), nil
+}
+
+func (d *PostgreSQLDriver) buildDropColumn(table, column string) string {
+	return fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s",
+		quoteIdent(d.resolver.Resolve(table)), quoteIdent(d.resolver.ResolveColumn(table, column)))
+}
+
+func (d *PostgreSQLDriver) buildRenameColumn(table, oldName, newName string) string {
+	return fmt.Sprintf(
+		"ALTER TABLE %s RENAME COLUMN %s TO %s",
+		quoteIdent(d.resolver.Resolve(table)),
+		quoteIdent(d.resolver.ResolveColumn(table, oldName)),
+		quoteIdent(d.resolver.ResolveColumn(table, newName)),
+	)
+}
+
+// buildAlterColumn returns UP TO THREE statements — this is the case that
+// forces RenderOperation/buildOperationSQL to return []string rather than
+// string, per the correction above.
+func (d *PostgreSQLDriver) buildAlterColumn(table string, col core.Column) ([]string, error) {
+	physicalTable := d.resolver.Resolve(table)
+	physCol := d.resolver.ResolveColumn(table, col.Name)
+	nativeType, err := renderPgType(col.Type, col.Length)
+	if err != nil {
+		return nil, err
+	}
+
+	stmts := []string{
+		fmt.Sprintf(
+			"ALTER TABLE %s ALTER COLUMN %s TYPE %s USING %s::%s",
+			quoteIdent(physicalTable),
+			quoteIdent(physCol),
+			nativeType,
+			quoteIdent(physCol), nativeType,
+		),
+	}
+	if col.Nullable {
+		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP NOT NULL", quoteIdent(physicalTable), quoteIdent(physCol)))
+	} else {
+		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL", quoteIdent(physicalTable), quoteIdent(physCol)))
+	}
+
+	defClause, err := renderDefault(col.Default)
+	if err != nil {
+		return nil, err
+	}
+	if defClause != "" {
+		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET %s", quoteIdent(physicalTable), quoteIdent(physCol), defClause))
+	} else {
+		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT", quoteIdent(physicalTable), quoteIdent(physCol)))
+	}
+	return stmts, nil
+}
+
+func (d *PostgreSQLDriver) buildAddIndex(table string, idx core.Index) (string, error) {
+	cols := make([]string, len(idx.Columns))
+	for i, c := range idx.Columns {
+		cols[i] = quoteIdent(d.resolver.ResolveColumn(table, c))
+	}
+	uniqueKw := ""
+	if idx.Unique {
+		uniqueKw = "UNIQUE "
+	}
+	return fmt.Sprintf("CREATE %sINDEX %s ON %s (%s)", uniqueKw,
+		quoteIdent(d.resolver.ResolveColumn(table, idx.Name)), quoteIdent(d.resolver.Resolve(table)), strings.Join(cols, ", ")), nil
+}
+
+func (d *PostgreSQLDriver) buildDropIndex(table, indexName string) string {
+	return "DROP INDEX " + quoteIdent(d.resolver.ResolveColumn(table, indexName))
+}
+
+func (d *PostgreSQLDriver) buildAddForeignKey(table string, fk core.ForeignKey) string {
+	cols := make([]string, len(fk.Columns))
+	for i, c := range fk.Columns {
+		cols[i] = quoteIdent(d.resolver.ResolveColumn(table, c))
+	}
+	refCols := make([]string, len(fk.RefColumns))
+	for i, c := range fk.RefColumns {
+		refCols[i] = quoteIdent(d.resolver.ResolveColumn(fk.RefTable, c))
+	}
+	return fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s",
+		quoteIdent(d.resolver.Resolve(table)), quoteIdent(d.resolver.ResolveColumn(table, fk.Name)),
+		strings.Join(cols, ", "), quoteIdent(d.resolver.Resolve(fk.RefTable)), strings.Join(refCols, ", "), mapFKAction(fk.OnDelete))
+}
+
+func (d *PostgreSQLDriver) buildDropForeignKey(table, fkName string) string {
+	return fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT %s",
+		quoteIdent(d.resolver.Resolve(table)), quoteIdent(d.resolver.ResolveColumn(table, fkName)))
+}
+
+// buildOperationSQL is pure — no execution, no side effects. Every
+// validation (nil-pointer guards on op.NewTable/Column/Index/ForeignKey) is
+// identical to applyOperationTx's existing switch, since both consumers
+// need the same guarantee: an operation missing its required payload is an
+// Internal error, never a silent no-op.
+func (d *PostgreSQLDriver) buildOperationSQL(op core.SchemaOperation) ([]string, error) {
+	switch op.Kind {
+	case core.OpCreateTable:
+		if op.NewTable == nil {
+			return nil, behemotherr.NewInternalError("PostgresDriver.buildOperationSQL", fmt.Errorf("operation %q: OpCreateTable missing NewTable", op.ID))
+		}
+		stmt, err := d.buildCreateTable(*op.NewTable)
+		if err != nil {
+			return nil, err
+		}
+		return []string{stmt}, nil
+
+	case core.OpDropTable:
+		return []string{d.buildDropTable(op.Table)}, nil
+
+	case core.OpAddColumn:
+		if op.Column == nil {
+			return nil, behemotherr.NewInternalError("PostgresDriver.buildOperationSQL", fmt.Errorf("operation %q: OpAddColumn missing Column", op.ID))
+		}
+		stmt, err := d.buildAddColumn(op.Table, *op.Column)
+		if err != nil {
+			return nil, err
+		}
+		return []string{stmt}, nil
+
+	case core.OpDropColumn:
+		return []string{d.buildDropColumn(op.Table, op.ColumnName)}, nil
+
+	case core.OpRenameColumn:
+		return []string{d.buildRenameColumn(op.Table, op.ColumnName, op.NewColumnName)}, nil
+
+	case core.OpAlterColumn:
+		if op.Column == nil {
+			return nil, behemotherr.NewInternalError("PostgresDriver.buildOperationSQL", fmt.Errorf("operation %q: OpAlterColumn missing Column", op.ID))
+		}
+		return d.buildAlterColumn(op.Table, *op.Column) // already returns ([]string, error)
+
+	case core.OpAddIndex:
+		if op.Index == nil {
+			return nil, behemotherr.NewInternalError("PostgresDriver.buildOperationSQL", fmt.Errorf("operation %q: OpAddIndex missing Index", op.ID))
+		}
+		stmt, err := d.buildAddIndex(op.Table, *op.Index)
+		if err != nil {
+			return nil, err
+		}
+		return []string{stmt}, nil
+
+	case core.OpDropIndex:
+		return []string{d.buildDropIndex(op.Table, op.IndexName)}, nil
+
+	case core.OpAddForeignKey:
+		if op.ForeignKey == nil {
+			return nil, behemotherr.NewInternalError("PostgresDriver.buildOperationSQL", fmt.Errorf("operation %q: OpAddForeignKey missing ForeignKey", op.ID))
+		}
+		return []string{d.buildAddForeignKey(op.Table, *op.ForeignKey)}, nil
+
+	case core.OpDropForeignKey:
+		return []string{d.buildDropForeignKey(op.Table, op.ForeignKeyName)}, nil
+
+	default:
+		return nil, behemotherr.NewInternalError("PostgresDriver.buildOperationSQL", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
+	}
+}
+
+// applyOperationTx — was a duplicate switch executing directly; now builds
+// via buildOperationSQL and executes each returned statement in order.
+func (d *PostgreSQLDriver) applyOperationTx(ctx context.Context, tx *sql.Tx, op core.SchemaOperation) error {
+	stmts, err := d.buildOperationSQL(op)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return behemotherr.NewMigrationError("PostgresDriver.applyOperationTx", "exec_failed", err)
+		}
+	}
+	return nil
+}
+
+// // RenderOperation — corrected signature from last round: []string, not string.
+// func (d *PostgreSQLDriver) RenderOperation(op core.SchemaOperation) ([]string, error) {
+// 	return d.buildOperationSQL(op)
+// }
+
+// // RenderMigration — flattens every operation's statement(s) in Up order,
+// // each individually terminated. A 3-statement AlterColumn now correctly
+// // yields 3 separate `;`-terminated lines instead of colliding with a
+// // single combined string.
+// func (d *PostgreSQLDriver) RenderMigration(m core.Migration) (string, error) {
+// 	var b strings.Builder
+// 	fmt.Fprintf(&b, "-- Migration: %s\n-- Generated: %s\n\n", m.ID, m.CreatedAt.Format(time.RFC3339))
+// 	for _, op := range m.Up {
+// 		stmts, err := d.buildOperationSQL(op)
+// 		if err != nil {
+// 			return "", err
+// 		}
+// 		for _, stmt := range stmts {
+// 			fmt.Fprintf(&b, "%s;\n", stmt)
+// 		}
+// 	}
+// 	return b.String(), nil
+// }

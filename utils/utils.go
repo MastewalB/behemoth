@@ -2,7 +2,9 @@ package utils
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
@@ -10,6 +12,11 @@ import (
 
 	"github.com/google/uuid"
 )
+
+func LookupHashOf(rawToken string) string {
+	sum := sha256.Sum256([]byte(rawToken))
+	return hex.EncodeToString(sum[:])
+}
 
 func GenerateRandomString(length int) string {
 	// Calculate the required byte length to produce the desired string length
