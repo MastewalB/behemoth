@@ -184,7 +184,7 @@ func (ba *BunAdapter) DeleteOne(
 ) error {
 	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
+		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 
 	subQuery := ba.db.NewSelect().
@@ -208,7 +208,7 @@ func (ba *BunAdapter) DeleteMany(
 ) error {
 	whereClause, args := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
+		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 
 	_, err := ba.db.NewDelete().

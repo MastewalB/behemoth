@@ -1,4 +1,4 @@
-module github.com/MastewalB/behemoth/storage/adapters/bun 
+module github.com/MastewalB/behemoth/storage/adapters/bun
 
 go 1.26.4
 
@@ -17,6 +17,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/microsoft/go-mssqldb v1.10.0 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
