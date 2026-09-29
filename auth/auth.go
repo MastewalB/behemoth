@@ -15,7 +15,7 @@ import (
 type Behemoth[T behemoth.User] struct {
 	DB               behemoth.Database
 	EmailAndPassword *service.EmailAndPasswordService
-	Transport        *behemoth.AuthTransportManager
+	// Transport        *behemoth.AuthTransportManager
 }
 
 // New creates a new Behemoth instance with the given config.
@@ -24,7 +24,7 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	var database behemoth.Database
 	var userModel behemoth.User
 	var emailAndPasswordAuth *service.EmailAndPasswordService
-	var transportManager *behemoth.AuthTransportManager
+	// var transportManager *behemoth.AuthTransportManager
 
 	if cfg.DatabaseConfig.UseDefaultUser {
 		userModel = &models.User{}
@@ -57,7 +57,7 @@ func New[T behemoth.User](cfg *behemoth.Config[T]) (*Behemoth[T], error) {
 	return &Behemoth[T]{
 		DB:               database,
 		EmailAndPassword: emailAndPasswordAuth,
-		Transport:        transportManager,
+		// Transport:        transportManager,
 	}, nil
 }
 

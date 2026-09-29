@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,7 +38,7 @@ func TestUpdateIA(t *testing.T) {
 	testUser := user.(*testutils.TestUser)
 	testUser.Email = "updated@email.com"
 
-	updatedUser, err := adapter.UpdateUser(context.Background(), testUser)
+	updatedUser, err := adapter.UpdateUser(context.Background(), testUser, behemoth.M{})
 	updatedTestUser := updatedUser.(*testutils.TestUser)
 	assert.NoError(t, err)
 	assert.NotNil(t, updatedUser)

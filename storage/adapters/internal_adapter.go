@@ -6,12 +6,20 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/utils"
 )
 
 type InternalAdapter struct {
 	DB behemoth.Database
 	KV behemoth.KeyValueStorage
+}
+
+func NewInternalAdapter(db behemoth.Database, kv behemoth.KeyValueStorage) types.InternalAdapter {
+	return &InternalAdapter{
+		DB: db,
+		KV: kv,
+	}
 }
 
 func (adapter *InternalAdapter) CreateUser(ctx context.Context, modelType behemoth.Model, user behemoth.M) (behemoth.User, error) {
@@ -74,7 +82,7 @@ func (adapter *InternalAdapter) FindUserByEmail(ctx context.Context, model behem
 
 }
 
-func (adapter *InternalAdapter) UpdateUser(ctx context.Context, user behemoth.Model) (behemoth.User, error) {
+func (adapter *InternalAdapter) UpdateUser(ctx context.Context, user behemoth.Model, updates behemoth.M) (behemoth.User, error) {
 	err := adapter.DB.Update(ctx, user)
 	if err != nil {
 		return nil, err

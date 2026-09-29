@@ -5,6 +5,25 @@ import (
 	"runtime"
 )
 
+const (
+	OpCreate     = "Create"
+	OpFindOne    = "FindOne"
+	OpFindMany   = "FindMany"
+	OpUpdate     = "Update"
+	OpUpdateOne  = "UpdateOne"
+	OpUpdateMany = "UpdateMany"
+	OpDelete     = "Delete"
+	OpDeleteOne  = "Delete"
+	OpDeleteMany = "DeleteMany"
+	OpDeleteAll  = "DeleteAll"
+
+	OpCount       = "Count"
+	OpTransaction = "Transaction"
+
+	OpGet = "Get"
+	OpSet = "Set"
+)
+
 // ToSlice is a helper function that safely converts any value to a slice of any.
 // If the value is already a slice, it returns it as is. If it's a single value, it wraps it in a slice.
 func ToSlice(value any) []any {

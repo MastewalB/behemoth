@@ -261,12 +261,7 @@ func (ms *SQLServerAdapter) DeleteOne(
 ) error {
 	whereClause, args := BuildMSSQLWhereClause(&expr)
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteOne",
-			Entity:  m.SchemaName(),
-			Message: "DeleteOne requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
 	subQuery := fmt.Sprintf(
@@ -294,12 +289,7 @@ func (ms *SQLServerAdapter) DeleteMany(
 ) error {
 	whereClause, args := BuildMSSQLWhereClause(&expr)
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteMany",
-			Entity:  m.SchemaName(),
-			Message: "DeleteMany requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(

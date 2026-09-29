@@ -157,12 +157,7 @@ func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	whereClause, args := BuildSQLWhereClause(&expr)
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteOne",
-			Entity:  m.SchemaName(),
-			Message: "DeleteOne requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
 	query, args := BuildSQLWhereClause(&expr)
@@ -187,12 +182,7 @@ func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr cl
 	whereClause, args := BuildSQLWhereClause(&expr)
 
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteMany",
-			Entity:  m.SchemaName(),
-			Message: "DeleteMany requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
 	}
 	err := ga.db.
 		WithContext(ctx).

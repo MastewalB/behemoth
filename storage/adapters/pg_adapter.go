@@ -253,12 +253,7 @@ func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 
 	whereClause, args := BuildSQLWhereClause(&expr)
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteOne",
-			Entity:  m.SchemaName(),
-			Message: "DeleteOne requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
 	selectQuery := fmt.Sprintf(
@@ -283,12 +278,7 @@ func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 	whereClause, args := BuildSQLWhereClause(&expr)
 
 	if whereClause == "" {
-		return &behemotherr.DomainError{
-			Type:    behemotherr.Database,
-			Op:      "DeleteMany",
-			Entity:  m.SchemaName(),
-			Message: "DeleteMany requires a where clause.",
-		}
+		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
