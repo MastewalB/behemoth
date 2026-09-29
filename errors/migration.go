@@ -1,0 +1,5 @@
+package behemotherr
+
+const (
+	ErrCodeMigration = ""
+)
