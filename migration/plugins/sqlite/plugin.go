@@ -9,6 +9,7 @@ import (
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 // DriverName is the key used for per-database Column.Overrides lookups.
@@ -271,7 +272,7 @@ func execDDL(ctx context.Context, tx execQuerier, op, query string) error {
 	return nil
 }
 
-func (d *SQLiteDriver) createTable(ctx context.Context, tx execQuerier, t core.TableSchema) error {
+func (d *SQLiteDriver) createTable(ctx context.Context, tx execQuerier, t schema.Table) error {
 	query, err := d.buildCreateTable(t)
 	if err != nil {
 		return err
@@ -285,7 +286,7 @@ func (d *SQLiteDriver) createTable(ctx context.Context, tx execQuerier, t core.T
 // always arrive as their own OpAddForeignKey (enforced upstream by
 // MigrationGenerator's checkNoInlineForeignKeys) and indexes as their own
 // OpAddIndex, exactly as BuildBaselineMigration emits them.
-func (d *SQLiteDriver) buildCreateTable(t core.TableSchema) (string, error) {
+func (d *SQLiteDriver) buildCreateTable(t schema.Table) (string, error) {
 	var pkCols []string
 	for _, col := range t.Columns {
 		if col.PrimaryKey {
@@ -322,7 +323,7 @@ func (d *SQLiteDriver) dropTable(ctx context.Context, tx execQuerier, table stri
 // otherwise. Native ADD COLUMN rejects PRIMARY KEY / UNIQUE columns and
 // NOT NULL columns without a default; an override default is a raw
 // expression that may be non-constant, which native ADD COLUMN also rejects.
-func (d *SQLiteDriver) addColumn(ctx context.Context, tx execQuerier, table string, col core.Column) error {
+func (d *SQLiteDriver) addColumn(ctx context.Context, tx execQuerier, table string, col schema.Column) error {
 	resolved := applyOverride(col)
 	native := !resolved.PrimaryKey && !resolved.Unique && !resolved.AutoInc &&
 		(resolved.Nullable || resolved.Default != nil) &&
@@ -368,7 +369,7 @@ func (d *SQLiteDriver) renameColumn(ctx context.Context, tx execQuerier, table, 
 
 // alterColumn replaces the column's definition wholesale via a rebuild —
 // type, nullability, uniqueness, default and check all take the new value.
-func (d *SQLiteDriver) alterColumn(ctx context.Context, tx execQuerier, table string, col core.Column) error {
+func (d *SQLiteDriver) alterColumn(ctx context.Context, tx execQuerier, table string, col schema.Column) error {
 	physCol := d.resolver.ResolveColumn(table, col.Name)
 	return d.rebuildTable(ctx, tx, table, func(s *tableSQL) error {
 		// Keep the key where it already lives: inline if the column owned it,
@@ -382,7 +383,7 @@ func (d *SQLiteDriver) alterColumn(ctx context.Context, tx execQuerier, table st
 	}, nil)
 }
 
-func (d *SQLiteDriver) addIndex(ctx context.Context, tx execQuerier, table string, idx core.Index) error {
+func (d *SQLiteDriver) addIndex(ctx context.Context, tx execQuerier, table string, idx schema.Index) error {
 	if len(idx.Columns) == 0 {
 		return behemotherr.NewMigrationError("SQLiteDriver.AddIndex", behemotherr.ErrorCodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
 	}
@@ -406,7 +407,7 @@ func (d *SQLiteDriver) dropIndex(ctx context.Context, tx execQuerier, indexName 
 // addForeignKey appends a named table constraint via a rebuild — the name is
 // what makes a later OpDropForeignKey possible, since PRAGMA foreign_key_list
 // doesn't report constraint names.
-func (d *SQLiteDriver) addForeignKey(ctx context.Context, tx execQuerier, table string, fk core.ForeignKey) error {
+func (d *SQLiteDriver) addForeignKey(ctx context.Context, tx execQuerier, table string, fk schema.ForeignKey) error {
 	if len(fk.Columns) == 0 || len(fk.Columns) != len(fk.RefColumns) {
 		return behemotherr.NewMigrationError("SQLiteDriver.AddForeignKey", behemotherr.ErrorCodeMigrationInvalidForeignKey,
 			fmt.Errorf("foreign key %q: %d column(s) vs %d referenced column(s)", fk.Name, len(fk.Columns), len(fk.RefColumns)))
@@ -448,7 +449,7 @@ func (d *SQLiteDriver) dropForeignKey(ctx context.Context, tx execQuerier, table
 // applyOverride folds Column.Overrides["sqlite"] into the column. Default is
 // deliberately left alone: an override default is a raw SQL expression and is
 // rendered separately by overrideDefault.
-func applyOverride(col core.Column) core.Column {
+func applyOverride(col schema.Column) schema.Column {
 	ov, ok := col.Overrides[DriverName]
 	if !ok {
 		return col
@@ -465,11 +466,11 @@ func applyOverride(col core.Column) core.Column {
 	return col
 }
 
-func overrideDefault(col core.Column) string {
+func overrideDefault(col schema.Column) string {
 	return col.Overrides[DriverName].Default
 }
 
-func (d *SQLiteDriver) renderColumnDefinition(table string, raw core.Column, inlinePK bool) (string, error) {
+func (d *SQLiteDriver) renderColumnDefinition(table string, raw schema.Column, inlinePK bool) (string, error) {
 	col := applyOverride(raw)
 
 	nativeType, err := renderSQLiteType(col.Type, col.Length)
@@ -482,7 +483,7 @@ func (d *SQLiteDriver) renderColumnDefinition(table string, raw core.Column, inl
 			return "", behemotherr.NewMigrationError("SQLiteDriver.renderColumnDefinition", behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
 				fmt.Errorf("column %q: SQLite supports AUTOINCREMENT only on a single-column primary key", col.Name))
 		}
-		if col.Type != core.ColTypeInteger && col.Type != core.ColTypeBigInt {
+		if col.Type != schema.ColTypeInteger && col.Type != schema.ColTypeBigInt {
 			return "", behemotherr.NewMigrationError("SQLiteDriver.renderColumnDefinition", behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
 				fmt.Errorf("column %q: AUTOINCREMENT requires an integer column, got %q", col.Name, col.Type))
 		}
@@ -549,45 +550,45 @@ func renderDefault(v any) (string, error) {
 // storage classes, but the declared type decides column affinity and is what
 // database/sql drivers (e.g. mattn/go-sqlite3) use to decode values — hence
 // DATETIME/TIMESTAMP/BOOLEAN rather than collapsing everything to TEXT/INTEGER.
-func renderSQLiteType(ct core.ColumnType, length int) (string, error) {
+func renderSQLiteType(ct schema.ColumnType, length int) (string, error) {
 	switch ct {
-	case core.ColTypeString:
+	case schema.ColTypeString:
 		if length <= 0 {
 			length = 255
 		}
 		return fmt.Sprintf("VARCHAR(%d)", length), nil // TEXT affinity; length is informational only
-	case core.ColTypeText:
+	case schema.ColTypeText:
 		return "TEXT", nil
-	case core.ColTypeJson:
+	case schema.ColTypeJson:
 		return "TEXT", nil // a declared type of JSON would get NUMERIC affinity
-	case core.ColTypeInteger:
+	case schema.ColTypeInteger:
 		return "INTEGER", nil
-	case core.ColTypeBigInt:
+	case schema.ColTypeBigInt:
 		return "BIGINT", nil
-	case core.ColTypeReal:
+	case schema.ColTypeReal:
 		return "REAL", nil
-	case core.ColTypeNumeric:
+	case schema.ColTypeNumeric:
 		return "NUMERIC", nil
-	case core.ColTypeBoolean:
+	case schema.ColTypeBoolean:
 		return "BOOLEAN", nil
-	case core.ColTypeDateTime:
+	case schema.ColTypeDateTime:
 		return "DATETIME", nil
-	case core.ColTypeTimestamp:
+	case schema.ColTypeTimestamp:
 		return "TIMESTAMP", nil
-	case core.ColTypeUuid:
+	case schema.ColTypeUuid:
 		return "BLOB", nil // override with ColumnOverride{Type: ColTypeText} to store the string form
-	case core.ColTypeBlob, core.ColTypeBytes:
+	case schema.ColTypeBlob, schema.ColTypeBytes:
 		return "BLOB", nil
 	default:
 		return "", behemotherr.NewMigrationError("SQLiteDriver.renderSQLiteType", behemotherr.ErrorCodeMigrationUnsupportedCanonicalType, fmt.Errorf("no SQLite rendering for canonical type %q", ct))
 	}
 }
 
-func mapFKAction(a core.ForeignKeyAction) string {
+func mapFKAction(a schema.ForeignKeyAction) string {
 	switch a {
-	case core.FKCascade:
+	case schema.FKCascade:
 		return "CASCADE"
-	case core.FKSetNull:
+	case schema.FKSetNull:
 		return "SET NULL"
 	default:
 		return "RESTRICT"

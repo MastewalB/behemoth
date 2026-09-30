@@ -14,6 +14,7 @@ import (
 	"github.com/MastewalB/behemoth/storage/adapters"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/uptrace/bun"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -141,13 +142,13 @@ func TestSQLiteAdapterWithPhysicalNames(t *testing.T) {
 // PhysicalNames -> BuildSchemaResolverTable -> DefaultSchemaResolver.
 func physicalNamesResolver(t *testing.T) behemoth.SchemaResolver {
 	t.Helper()
-	registry := core.NewSchemaRegistry()
-	err := registry.Declare(&testutils.TestUser{}, core.TableSchema{
+	registry := schema.NewRegistry()
+	err := registry.Declare(&testutils.TestUser{}, schema.Table{
 		Name: "users", PhysicalName: "app_users",
-		Columns: []core.Column{
-			{Name: "id", PhysicalName: "user_id", Type: core.ColTypeText, PrimaryKey: true},
-			{Name: "email", PhysicalName: "email_address", Type: core.ColTypeText},
-			{Name: "username", PhysicalName: "handle", Type: core.ColTypeText, Unique: true},
+		Columns: []schema.Column{
+			{Name: "id", PhysicalName: "user_id", Type: schema.ColTypeText, PrimaryKey: true},
+			{Name: "email", PhysicalName: "email_address", Type: schema.ColTypeText},
+			{Name: "username", PhysicalName: "handle", Type: schema.ColTypeText, Unique: true},
 		},
 	})
 	if err != nil {

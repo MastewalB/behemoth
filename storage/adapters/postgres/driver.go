@@ -12,6 +12,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 // DriverName is the key used for per-database Column.Overrides lookups.
@@ -266,7 +267,7 @@ func (d *PostgreSQLDriver) buildOperationSQL(op core.SchemaOperation) ([]string,
 // always arrive as their own OpAddForeignKey (enforced upstream by
 // MigrationGenerator's checkNoInlineForeignKeys) and indexes as their own
 // OpAddIndex, exactly as BuildBaselineMigration emits them.
-func (d *PostgreSQLDriver) buildCreateTable(t core.TableSchema) (string, error) {
+func (d *PostgreSQLDriver) buildCreateTable(t schema.Table) (string, error) {
 	var colDefs, pkCols []string
 	for _, col := range t.Columns {
 		def, err := d.renderColumnDefinition(t.Name, col)
@@ -288,7 +289,7 @@ func (d *PostgreSQLDriver) buildDropTable(table string) string {
 	return "DROP TABLE " + quoteIdent(d.resolver.Resolve(table))
 }
 
-func (d *PostgreSQLDriver) buildAddColumn(table string, col core.Column) (string, error) {
+func (d *PostgreSQLDriver) buildAddColumn(table string, col schema.Column) (string, error) {
 	def, err := d.renderColumnDefinition(table, col)
 	if err != nil {
 		return "", err
@@ -321,7 +322,7 @@ func (d *PostgreSQLDriver) buildRenameColumn(table, oldName, newName string) str
 // Uniqueness and CHECK live in named constraints (see renderColumnDefinition)
 // and are only changed when prev — the OpAlterColumn's PrevColumn — says they
 // differ; without prev they are left exactly as they are.
-func (d *PostgreSQLDriver) buildAlterColumn(table string, raw core.Column, prevRaw *core.Column) ([]string, error) {
+func (d *PostgreSQLDriver) buildAlterColumn(table string, raw schema.Column, prevRaw *schema.Column) ([]string, error) {
 	col := applyOverride(raw)
 	physTableName := d.resolver.Resolve(table)
 	physTable := quoteIdent(physTableName)
@@ -375,7 +376,7 @@ func (d *PostgreSQLDriver) buildAlterColumn(table string, raw core.Column, prevR
 	return stmts, nil
 }
 
-func (d *PostgreSQLDriver) buildAddIndex(table string, idx core.Index) (string, error) {
+func (d *PostgreSQLDriver) buildAddIndex(table string, idx schema.Index) (string, error) {
 	if len(idx.Columns) == 0 {
 		return "", behemotherr.NewMigrationError("PostgresDriver.AddIndex", behemotherr.ErrorCodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
 	}
@@ -396,7 +397,7 @@ func (d *PostgreSQLDriver) buildDropIndex(indexName string) string {
 	return "DROP INDEX " + quoteIdent(indexName)
 }
 
-func (d *PostgreSQLDriver) buildAddForeignKey(table string, fk core.ForeignKey) (string, error) {
+func (d *PostgreSQLDriver) buildAddForeignKey(table string, fk schema.ForeignKey) (string, error) {
 	if len(fk.Columns) == 0 || len(fk.Columns) != len(fk.RefColumns) {
 		return "", behemotherr.NewMigrationError("PostgresDriver.AddForeignKey", behemotherr.ErrorCodeMigrationInvalidForeignKey,
 			fmt.Errorf("foreign key %q: %d column(s) vs %d referenced column(s)", fk.Name, len(fk.Columns), len(fk.RefColumns)))
@@ -423,7 +424,7 @@ func (d *PostgreSQLDriver) buildDropForeignKey(table, fkName string) string {
 // applyOverride folds Column.Overrides["postgres"] into the column. Default is
 // deliberately left alone: an override default is a raw SQL expression and is
 // rendered by renderDefaultExpr.
-func applyOverride(col core.Column) core.Column {
+func applyOverride(col schema.Column) schema.Column {
 	ov, ok := col.Overrides[DriverName]
 	if !ok {
 		return col
@@ -443,7 +444,7 @@ func applyOverride(col core.Column) core.Column {
 // renderColumnDefinition renders one column. The primary key is rendered as a
 // table constraint by buildCreateTable, never inline. UNIQUE and CHECK are
 // named deterministically so buildAlterColumn can later drop them by name.
-func (d *PostgreSQLDriver) renderColumnDefinition(table string, raw core.Column) (string, error) {
+func (d *PostgreSQLDriver) renderColumnDefinition(table string, raw schema.Column) (string, error) {
 	col := applyOverride(raw)
 	physTable := d.resolver.Resolve(table)
 	physCol := d.resolver.ResolveColumn(table, col.Name)
@@ -455,7 +456,7 @@ func (d *PostgreSQLDriver) renderColumnDefinition(table string, raw core.Column)
 
 	parts := []string{quoteIdent(physCol), nativeType}
 	if col.AutoInc {
-		if col.Type != core.ColTypeInteger && col.Type != core.ColTypeBigInt {
+		if col.Type != schema.ColTypeInteger && col.Type != schema.ColTypeBigInt {
 			return "", behemotherr.NewMigrationError("PostgresDriver.renderColumnDefinition", behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
 				fmt.Errorf("column %q: AutoInc requires an integer column, got %q", col.Name, col.Type))
 		}
@@ -495,7 +496,7 @@ func checkConstraintName(table, column string) string  { return table + "_" + co
 // renderDefaultExpr returns the DEFAULT expression for a column, or "" for
 // none: the postgres override's raw expression if set (e.g. "now()"),
 // otherwise Column.Default rendered as a literal.
-func renderDefaultExpr(col core.Column) (string, error) {
+func renderDefaultExpr(col schema.Column) (string, error) {
 	if expr := col.Overrides[DriverName].Default; expr != "" {
 		return expr, nil
 	}
@@ -528,45 +529,45 @@ func renderLiteral(v any) (string, error) {
 // renderPgType is the FORWARD (canonical -> native) direction of type
 // mapping — deliberately a separate, simpler table from the introspector's
 // pgTypeMapping, which handles the harder REVERSE direction.
-func renderPgType(ct core.ColumnType, length int) (string, error) {
+func renderPgType(ct schema.ColumnType, length int) (string, error) {
 	switch ct {
-	case core.ColTypeString:
+	case schema.ColTypeString:
 		if length <= 0 {
 			length = 255
 		}
 		return fmt.Sprintf("VARCHAR(%d)", length), nil
-	case core.ColTypeText:
+	case schema.ColTypeText:
 		return "TEXT", nil
-	case core.ColTypeInteger:
+	case schema.ColTypeInteger:
 		return "INTEGER", nil
-	case core.ColTypeBigInt:
+	case schema.ColTypeBigInt:
 		return "BIGINT", nil
-	case core.ColTypeReal:
+	case schema.ColTypeReal:
 		return "DOUBLE PRECISION", nil
-	case core.ColTypeNumeric:
+	case schema.ColTypeNumeric:
 		return "NUMERIC", nil
-	case core.ColTypeBoolean:
+	case schema.ColTypeBoolean:
 		return "BOOLEAN", nil
-	case core.ColTypeDateTime:
+	case schema.ColTypeDateTime:
 		return "TIMESTAMP", nil
-	case core.ColTypeTimestamp:
+	case schema.ColTypeTimestamp:
 		return "TIMESTAMPTZ", nil
-	case core.ColTypeUuid:
+	case schema.ColTypeUuid:
 		return "UUID", nil
-	case core.ColTypeJson:
+	case schema.ColTypeJson:
 		return "JSONB", nil
-	case core.ColTypeBytes, core.ColTypeBlob:
+	case schema.ColTypeBytes, schema.ColTypeBlob:
 		return "BYTEA", nil
 	default:
 		return "", behemotherr.NewMigrationError("PostgresDriver.renderPgType", behemotherr.ErrorCodeMigrationUnsupportedCanonicalType, fmt.Errorf("no Postgres rendering for canonical type %q", ct))
 	}
 }
 
-func mapFKAction(a core.ForeignKeyAction) string {
+func mapFKAction(a schema.ForeignKeyAction) string {
 	switch a {
-	case core.FKCascade:
+	case schema.FKCascade:
 		return "CASCADE"
-	case core.FKSetNull:
+	case schema.FKSetNull:
 		return "SET NULL"
 	default:
 		return "RESTRICT"

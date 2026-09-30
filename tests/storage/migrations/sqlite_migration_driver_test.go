@@ -14,6 +14,7 @@ import (
 
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
+	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -157,16 +158,16 @@ func normalizeColList(list string) string {
 	return strings.Join(parts, ",")
 }
 
-func sqliteFKAction(a string) core.ForeignKeyAction {
+func sqliteFKAction(a string) schema.ForeignKeyAction {
 	switch strings.ToUpper(a) {
 	case "CASCADE":
-		return core.FKCascade
+		return schema.FKCascade
 	case "SET NULL":
-		return core.FKSetNull
+		return schema.FKSetNull
 	case "RESTRICT":
-		return core.FKRestrict
+		return schema.FKRestrict
 	default:
-		return core.ForeignKeyAction(strings.ToLower(a))
+		return schema.ForeignKeyAction(strings.ToLower(a))
 	}
 }
 
@@ -356,7 +357,7 @@ func TestSQLiteRebuildPreservesUnmanagedSchema(t *testing.T) {
 	_, err = db.ExecContext(ctx, `DELETE FROM accounts WHERE id = 2`) // sequence stays at 2
 	require.NoError(t, err)
 
-	require.NoError(t, apply(alterColumnOp("accounts", core.Column{Name: "note", Type: core.ColTypeText, Nullable: true, Default: "n/a"})))
+	require.NoError(t, apply(alterColumnOp("accounts", schema.Column{Name: "note", Type: schema.ColTypeText, Nullable: true, Default: "n/a"})))
 
 	var createSQL string
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE name = 'accounts'").Scan(&createSQL))
@@ -386,7 +387,7 @@ func TestSQLiteRebuildPreservesUnmanagedSchema(t *testing.T) {
 func TestSQLiteRebuildLeavesNoTemporaryTable(t *testing.T) {
 	ctx, db, _, apply := newSQLiteFixture(t)
 	require.NoError(t, apply(createTableOp(usersTable())))
-	require.NoError(t, apply(alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "x"})))
+	require.NoError(t, apply(alterColumnOp("users", schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Default: "x"})))
 
 	var n int
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '_behemoth_rebuild_%'").Scan(&n))
@@ -398,7 +399,7 @@ func TestSQLiteRestoresForeignKeyEnforcement(t *testing.T) {
 	db.SetMaxOpenConns(1) // the driver's connection is the only one; it must come back with FKs on
 
 	require.NoError(t, apply(createTableOp(usersTable()), createTableOp(postsTable())))
-	require.NoError(t, apply(addForeignKeyOp("posts", postsUserFK(core.FKCascade))))
+	require.NoError(t, apply(addForeignKeyOp("posts", postsUserFK(schema.FKCascade))))
 
 	var enabled bool
 	require.NoError(t, db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&enabled))
@@ -407,18 +408,18 @@ func TestSQLiteRestoresForeignKeyEnforcement(t *testing.T) {
 
 func TestSQLiteDeclaredTypes(t *testing.T) {
 	ctx, db, _, apply := newSQLiteFixture(t)
-	require.NoError(t, apply(createTableOp(core.TableSchema{
+	require.NoError(t, apply(createTableOp(schema.Table{
 		Name: "typed",
-		Columns: []core.Column{
-			{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true},
-			{Name: "s", Type: core.ColTypeString, Length: 40},
-			{Name: "flag", Type: core.ColTypeBoolean},
-			{Name: "at", Type: core.ColTypeTimestamp},
-			{Name: "doc", Type: core.ColTypeJson},
-			{Name: "uid", Type: core.ColTypeUuid, Overrides: map[string]core.ColumnOverride{
-				sqlite.DriverName: {Type: core.ColTypeText},
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "s", Type: schema.ColTypeString, Length: 40},
+			{Name: "flag", Type: schema.ColTypeBoolean},
+			{Name: "at", Type: schema.ColTypeTimestamp},
+			{Name: "doc", Type: schema.ColTypeJson},
+			{Name: "uid", Type: schema.ColTypeUuid, Overrides: map[string]schema.ColumnOverride{
+				sqlite.DriverName: {Type: schema.ColTypeText},
 			}},
-			{Name: "created", Type: core.ColTypeDateTime, Overrides: map[string]core.ColumnOverride{
+			{Name: "created", Type: schema.ColTypeDateTime, Overrides: map[string]schema.ColumnOverride{
 				sqlite.DriverName: {Default: "CURRENT_TIMESTAMP"},
 			}},
 		},
@@ -444,11 +445,11 @@ func TestSQLiteDeclaredTypes(t *testing.T) {
 
 func TestSQLiteAutoIncrementRequiresSinglePrimaryKey(t *testing.T) {
 	_, _, _, apply := newSQLiteFixture(t)
-	err := apply(createTableOp(core.TableSchema{
+	err := apply(createTableOp(schema.Table{
 		Name: "bad",
-		Columns: []core.Column{
-			{Name: "a", Type: core.ColTypeInteger, PrimaryKey: true, AutoInc: true},
-			{Name: "b", Type: core.ColTypeInteger, PrimaryKey: true},
+		Columns: []schema.Column{
+			{Name: "a", Type: schema.ColTypeInteger, PrimaryKey: true, AutoInc: true},
+			{Name: "b", Type: schema.ColTypeInteger, PrimaryKey: true},
 		},
 	}))
 	assert.Error(t, err)
@@ -478,9 +479,9 @@ func TestSQLiteRenderedScriptReproducesApply(t *testing.T) {
 	ctx := context.Background()
 	seed := []core.SchemaOperation{createTableOp(usersTable()), createTableOp(postsTable())}
 	m := core.Migration{ID: "0002_test", Name: "test", Up: []core.SchemaOperation{
-		addForeignKeyOp("posts", postsUserFK(core.FKCascade)),
-		alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "it's"}),
-		addIndexOp("users", core.Index{Name: "idx_users_status", Columns: []string{"status"}}),
+		addForeignKeyOp("posts", postsUserFK(schema.FKCascade)),
+		alterColumnOp("users", schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Default: "it's"}),
+		addIndexOp("users", schema.Index{Name: "idx_users_status", Columns: []string{"status"}}),
 		renameColumnOp("posts", "title", "headline"),
 	}}
 
@@ -517,12 +518,12 @@ func TestSQLiteRenderBaselineDumpsExistingSchema(t *testing.T) {
 	ctx, db, driver, apply := newSQLiteFixture(t)
 	require.NoError(t, apply(createTableOp(usersTable()), createTableOp(postsTable())))
 	require.NoError(t, apply(
-		addIndexOp("users", core.Index{Name: "idx_users_status", Columns: []string{"status"}}),
-		addForeignKeyOp("posts", postsUserFK(core.FKCascade)),
+		addIndexOp("users", schema.Index{Name: "idx_users_status", Columns: []string{"status"}}),
+		addForeignKeyOp("posts", postsUserFK(schema.FKCascade)),
 	))
 
 	users, posts := usersTable(), postsTable()
-	baseline := core.BuildBaselineMigration(map[string]core.TableSchema{"users": users, "posts": posts})
+	baseline := core.BuildBaselineMigration(map[string]schema.Table{"users": users, "posts": posts})
 	script, err := driver.RenderMigration(ctx, baseline)
 	require.NoError(t, err)
 
@@ -531,7 +532,7 @@ func TestSQLiteRenderBaselineDumpsExistingSchema(t *testing.T) {
 		assert.Contains(t, script, def+";")
 	}
 
-	baseline.Up = append(baseline.Up, createTableOp(core.TableSchema{Name: "missing"}))
+	baseline.Up = append(baseline.Up, createTableOp(schema.Table{Name: "missing"}))
 	_, err = driver.RenderMigration(ctx, baseline)
 	assert.Error(t, err, "a baseline table that isn't live is an error")
 }

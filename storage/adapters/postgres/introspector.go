@@ -10,6 +10,7 @@ import (
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 // pgTypeMapping implements Tier 0 (same-family native types collapse to one
@@ -17,23 +18,23 @@ import (
 // ColTypeString/ColTypeText without flagging an ambiguity, since database/sql
 // already scans all of them into a Go string uniformly. Keys are
 // information_schema.columns.data_type values.
-var pgTypeMapping = map[string]core.ColumnType{
-	"character varying":           core.ColTypeString,
-	"character":                   core.ColTypeString, // CHAR(n) — fixed-width, still string-compatible
-	"text":                        core.ColTypeText,
-	"smallint":                    core.ColTypeInteger,
-	"integer":                     core.ColTypeInteger,
-	"bigint":                      core.ColTypeBigInt,
-	"real":                        core.ColTypeReal,
-	"double precision":            core.ColTypeReal,
-	"numeric":                     core.ColTypeNumeric,
-	"boolean":                     core.ColTypeBoolean,
-	"timestamp without time zone": core.ColTypeDateTime,
-	"timestamp with time zone":    core.ColTypeTimestamp,
-	"uuid":                        core.ColTypeUuid,
-	"json":                        core.ColTypeJson,
-	"jsonb":                       core.ColTypeJson,
-	"bytea":                       core.ColTypeBytes,
+var pgTypeMapping = map[string]schema.ColumnType{
+	"character varying":           schema.ColTypeString,
+	"character":                   schema.ColTypeString, // CHAR(n) — fixed-width, still string-compatible
+	"text":                        schema.ColTypeText,
+	"smallint":                    schema.ColTypeInteger,
+	"integer":                     schema.ColTypeInteger,
+	"bigint":                      schema.ColTypeBigInt,
+	"real":                        schema.ColTypeReal,
+	"double precision":            schema.ColTypeReal,
+	"numeric":                     schema.ColTypeNumeric,
+	"boolean":                     schema.ColTypeBoolean,
+	"timestamp without time zone": schema.ColTypeDateTime,
+	"timestamp with time zone":    schema.ColTypeTimestamp,
+	"uuid":                        schema.ColTypeUuid,
+	"json":                        schema.ColTypeJson,
+	"jsonb":                       schema.ColTypeJson,
+	"bytea":                       schema.ColTypeBytes,
 }
 
 // mapPgType returns the canonical type, or (ColTypeText, ambiguity) as a safe
@@ -42,7 +43,7 @@ var pgTypeMapping = map[string]core.ColumnType{
 // the fallback because it's the loosest, least lossy landing spot (a value
 // scanned as a Go string is always representable), not because it's presumed
 // correct.
-func mapPgType(dataType, udtName string) (core.ColumnType, *core.ColumnAmbiguity) {
+func mapPgType(dataType, udtName string) (schema.ColumnType, *core.ColumnAmbiguity) {
 	if ct, ok := pgTypeMapping[dataType]; ok {
 		return ct, nil
 	}
@@ -50,7 +51,7 @@ func mapPgType(dataType, udtName string) (core.ColumnType, *core.ColumnAmbiguity
 	if dataType == "USER-DEFINED" || dataType == "ARRAY" {
 		native = udtName // e.g. an enum's name, or "_int4" for integer[]
 	}
-	return core.ColTypeText, &core.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized Postgres type %q — defaulted to text; verify manually", native)}
+	return schema.ColTypeText, &core.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized Postgres type %q — defaulted to text; verify manually", native)}
 }
 
 // TableExists implements [core.SchemaIntrospector]. Any relation counts —
@@ -136,12 +137,12 @@ func (d *PostgreSQLDriver) Introspect(ctx context.Context, name string) (core.In
 	return core.IntrospectedTable{
 		Kind:        core.ObjectTable,
 		Exists:      true,
-		Schema:      core.TableSchema{Name: name, PhysicalName: physical, Columns: cols, Indexes: indexes, ForeignKeys: fks},
+		Schema:      schema.Table{Name: name, PhysicalName: physical, Columns: cols, Indexes: indexes, ForeignKeys: fks},
 		Ambiguities: ambiguities,
 	}, nil
 }
 
-func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical string, pkCols, uniqueCols []string) ([]core.Column, []core.ColumnAmbiguity, error) {
+func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical string, pkCols, uniqueCols []string) ([]schema.Column, []core.ColumnAmbiguity, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT column_name, data_type, udt_name, character_maximum_length, is_nullable, column_default, is_identity
 		FROM information_schema.columns
@@ -153,7 +154,7 @@ func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical strin
 	defer rows.Close()
 
 	pkSet, uniqueSet := toSet(pkCols), toSet(uniqueCols)
-	var cols []core.Column
+	var cols []schema.Column
 	var ambiguities []core.ColumnAmbiguity
 
 	for rows.Next() {
@@ -169,11 +170,11 @@ func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical strin
 			ambig.Column = name
 			ambiguities = append(ambiguities, *ambig)
 		}
-		if ct == core.ColTypeString && !length.Valid {
-			ct = core.ColTypeText // VARCHAR without a length is unbounded — the same thing as TEXT
+		if ct == schema.ColTypeString && !length.Valid {
+			ct = schema.ColTypeText // VARCHAR without a length is unbounded — the same thing as TEXT
 		}
 
-		col := core.Column{
+		col := schema.Column{
 			Name: name, Type: ct, Length: int(length.Int64),
 			Nullable: isNullable == "YES", PrimaryKey: pkSet[name], Unique: uniqueSet[name] && !pkSet[name],
 			AutoInc: isIdentity == "YES",
@@ -191,7 +192,7 @@ func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical strin
 				// guess. It's kept verbatim as a raw Postgres expression —
 				// exactly what an override Default means, and what the
 				// renderer emits unchanged.
-				col.Overrides = map[string]core.ColumnOverride{DriverName: {Default: defaultExpr.String}}
+				col.Overrides = map[string]schema.ColumnOverride{DriverName: {Default: defaultExpr.String}}
 			}
 		}
 		cols = append(cols, col)
@@ -268,7 +269,7 @@ func (d *PostgreSQLDriver) primaryKeyColumns(ctx context.Context, physical strin
 // uniqueConstraints splits single-column UNIQUE constraints (mapped onto
 // Column.Unique) from multi-column ones (which have no per-column
 // representation and become an Index{Unique: true} instead).
-func (d *PostgreSQLDriver) uniqueConstraints(ctx context.Context, physical string) (single []string, composite []core.Index, err error) {
+func (d *PostgreSQLDriver) uniqueConstraints(ctx context.Context, physical string) (single []string, composite []schema.Index, err error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT c.conname, a.attname
 		FROM pg_constraint c
@@ -299,7 +300,7 @@ func (d *PostgreSQLDriver) uniqueConstraints(ctx context.Context, physical strin
 		if cols := grouped[name]; len(cols) == 1 {
 			single = append(single, cols[0])
 		} else {
-			composite = append(composite, core.Index{Name: name, Columns: cols, Unique: true})
+			composite = append(composite, schema.Index{Name: name, Columns: cols, Unique: true})
 		}
 	}
 	return single, composite, rows.Err()
@@ -311,7 +312,7 @@ func (d *PostgreSQLDriver) uniqueConstraints(ctx context.Context, physical strin
 // composite UNIQUE, by uniqueConstraints), and including them would show a
 // phantom "extra live index" on every diff. Expression indexes are skipped:
 // the canonical Index has no way to express them.
-func (d *PostgreSQLDriver) introspectIndexes(ctx context.Context, physical string) ([]core.Index, error) {
+func (d *PostgreSQLDriver) introspectIndexes(ctx context.Context, physical string) ([]schema.Index, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT ix.relname, a.attname, i.indisunique
 		FROM pg_class t
@@ -329,7 +330,7 @@ func (d *PostgreSQLDriver) introspectIndexes(ctx context.Context, physical strin
 	}
 	defer rows.Close()
 
-	var indexes []core.Index
+	var indexes []schema.Index
 	for rows.Next() {
 		var idxName, colName string
 		var isUnique bool
@@ -340,7 +341,7 @@ func (d *PostgreSQLDriver) introspectIndexes(ctx context.Context, physical strin
 			indexes[n-1].Columns = append(indexes[n-1].Columns, colName)
 			continue
 		}
-		indexes = append(indexes, core.Index{Name: idxName, Columns: []string{colName}, Unique: isUnique})
+		indexes = append(indexes, schema.Index{Name: idxName, Columns: []string{colName}, Unique: isUnique})
 	}
 	return indexes, rows.Err()
 }
@@ -348,7 +349,7 @@ func (d *PostgreSQLDriver) introspectIndexes(ctx context.Context, physical strin
 // introspectForeignKeys reads pg_constraint directly: joining
 // information_schema.constraint_column_usage pairs every local column with
 // every referenced column, which scrambles composite keys.
-func (d *PostgreSQLDriver) introspectForeignKeys(ctx context.Context, physical string) ([]core.ForeignKey, error) {
+func (d *PostgreSQLDriver) introspectForeignKeys(ctx context.Context, physical string) ([]schema.ForeignKey, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT c.conname, c.confdeltype::text, rt.relname, a.attname, ra.attname
 		FROM pg_constraint c
@@ -365,7 +366,7 @@ func (d *PostgreSQLDriver) introspectForeignKeys(ctx context.Context, physical s
 	}
 	defer rows.Close()
 
-	var fks []core.ForeignKey
+	var fks []schema.ForeignKey
 	for rows.Next() {
 		var name, action, refTable, col, refCol string
 		if err := rows.Scan(&name, &action, &refTable, &col, &refCol); err != nil {
@@ -376,7 +377,7 @@ func (d *PostgreSQLDriver) introspectForeignKeys(ctx context.Context, physical s
 			fks[n-1].RefColumns = append(fks[n-1].RefColumns, refCol)
 			continue
 		}
-		fks = append(fks, core.ForeignKey{
+		fks = append(fks, schema.ForeignKey{
 			Name: name, Columns: []string{col}, RefTable: refTable, RefColumns: []string{refCol},
 			OnDelete: mapDeleteAction(action),
 		})
@@ -388,14 +389,14 @@ func (d *PostgreSQLDriver) introspectForeignKeys(ctx context.Context, physical s
 // ('a', the default) and "set default" ('d') have no ForeignKeyAction
 // equivalent; both collapse to Restrict as the closest safe behavior — a real
 // distinction Postgres makes that the canonical model doesn't.
-func mapDeleteAction(code string) core.ForeignKeyAction {
+func mapDeleteAction(code string) schema.ForeignKeyAction {
 	switch code {
 	case "c":
-		return core.FKCascade
+		return schema.FKCascade
 	case "n":
-		return core.FKSetNull
+		return schema.FKSetNull
 	default: // 'r' restrict, 'a' no action, 'd' set default
-		return core.FKRestrict
+		return schema.FKRestrict
 	}
 }
 

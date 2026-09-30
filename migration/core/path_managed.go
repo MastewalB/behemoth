@@ -12,6 +12,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 type RunState string
@@ -43,7 +44,7 @@ type RunResult struct {
 func RunMigration(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current SchemaRegistry,
+	current schema.Registry,
 	deps MigrationDeps,
 	confirmApply bool,
 ) (*RunResult, error) {
@@ -75,7 +76,7 @@ func buildBaselineMigrationOnly(ctx context.Context, candidates []BaselineCandid
 	if err := RejectAmbiguousTypes(report); err != nil {
 		return nil, err
 	}
-	tables := map[string]TableSchema{}
+	tables := map[string]schema.Table{}
 	for table, ti := range report.Tables {
 		if ti.IncompatibleObject {
 			return nil, behemotherr.NewMigrationError("Baseline.Build", behemotherr.ErrorCodeMigrationIncompatibleObject,
@@ -102,7 +103,7 @@ func runBaselinePhase(ctx context.Context, candidates []BaselineCandidate, cfg M
 func runFirstTimeEmpty(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current SchemaRegistry,
+	current schema.Registry,
 	deps MigrationDeps,
 	confirmApply bool,
 ) (*RunResult, error) {
@@ -129,7 +130,7 @@ func runFirstTimeEmpty(
 func runFirstTimeAwaitingConfirm(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current SchemaRegistry,
+	current schema.Registry,
 	deps MigrationDeps,
 	existing Migration,
 	confirmApply bool,
@@ -181,7 +182,7 @@ func runFirstTimeAwaitingConfirm(
 func runOngoing(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current SchemaRegistry,
+	current schema.Registry,
 	deps MigrationDeps,
 	confirmApply bool,
 ) (*RunResult, error) {
@@ -313,7 +314,7 @@ func DetermineRunState(ctx context.Context, cfg MigrationConfig, deps MigrationD
 
 }
 
-func BuildBaselineMigration(tables map[string]TableSchema) Migration {
+func BuildBaselineMigration(tables map[string]schema.Table) Migration {
 	names := make([]string, 0, len(tables))
 	for name := range tables {
 		names = append(names, name)
@@ -323,8 +324,8 @@ func BuildBaselineMigration(tables map[string]TableSchema) Migration {
 	var up []SchemaOperation
 
 	for _, table := range names {
-		schema := tables[table]
-		bare := schema
+		ts := tables[table]
+		bare := ts
 		bare.ForeignKeys = nil // never inline, per checkNoInlineForeignKeys' invariant
 		up = append(up, SchemaOperation{
 			ID:        baselineTableID(table),
@@ -334,7 +335,7 @@ func BuildBaselineMigration(tables map[string]TableSchema) Migration {
 			Confirmed: true,
 		})
 
-		for _, idx := range schema.Indexes {
+		for _, idx := range ts.Indexes {
 			up = append(up, SchemaOperation{
 				ID:        baselineIndexID(table, idx.Name),
 				Kind:      OpAddIndex,
@@ -344,7 +345,7 @@ func BuildBaselineMigration(tables map[string]TableSchema) Migration {
 			})
 		}
 
-		for _, fk := range schema.ForeignKeys {
+		for _, fk := range ts.ForeignKeys {
 			up = append(up, SchemaOperation{
 				ID:         baselineForeignKeyID(table, fk.Name),
 				Kind:       OpAddForeignKey,
@@ -397,18 +398,18 @@ func migrationFilePath(cfg MigrationConfig, m Migration) string {
 	return filepath.Join(cfg.FolderPath, m.ID+"_"+m.Name+".json")
 }
 
-func registryFromCandidates(candidates []BaselineCandidate) SchemaRegistry {
-	r := &snapshotRegistry{tables: map[string]TableSchema{}}
+func registryFromCandidates(candidates []BaselineCandidate) schema.Registry {
+	r := &snapshotRegistry{tables: map[string]schema.Table{}}
 	for _, c := range candidates {
 		r.tables[c.Table] = c.Current
 	}
 	return r
 }
 
-func introspectedShape(ti TableIntrospection) TableSchema {
-	var cols []Column
-	var indexes []Index
-	var fks []ForeignKey
+func introspectedShape(ti TableIntrospection) schema.Table {
+	var cols []schema.Column
+	var indexes []schema.Index
+	var fks []schema.ForeignKey
 
 	for _, f := range ti.Columns {
 		if f.Live != nil {
@@ -428,7 +429,7 @@ func introspectedShape(ti TableIntrospection) TableSchema {
 		}
 	}
 
-	return TableSchema{
+	return schema.Table{
 		Name:         ti.Table,
 		PhysicalName: ti.Table,
 		Columns:      cols,

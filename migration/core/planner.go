@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 type MigrationPlan struct {
@@ -26,7 +27,7 @@ type PlanIssue struct {
 	Default     int
 }
 
-func BuildPlan(report *IntrospectionReport, current SchemaRegistry) (*MigrationPlan, []PlanIssue, error) {
+func BuildPlan(report *IntrospectionReport, current schema.Registry) (*MigrationPlan, []PlanIssue, error) {
 	plan := &MigrationPlan{}
 	var issues []PlanIssue
 
@@ -475,8 +476,8 @@ func buildFallbackOps(table string, members []RenameCandidate) []SchemaOperation
 // 	return tableMap
 // }
 
-func indexColumnsByName(columns []Column) map[string]Column {
-	columnMap := make(map[string]Column)
+func indexColumnsByName(columns []schema.Column) map[string]schema.Column {
+	columnMap := make(map[string]schema.Column)
 	for _, col := range columns {
 		columnMap[col.Name] = col
 	}
@@ -484,8 +485,8 @@ func indexColumnsByName(columns []Column) map[string]Column {
 	return columnMap
 }
 
-func indexIndexesByName(indexes []Index) map[string]Index {
-	indMap := make(map[string]Index)
+func indexIndexesByName(indexes []schema.Index) map[string]schema.Index {
+	indMap := make(map[string]schema.Index)
 	for _, ind := range indexes {
 		indMap[ind.Name] = ind
 	}
@@ -493,8 +494,8 @@ func indexIndexesByName(indexes []Index) map[string]Index {
 	return indMap
 }
 
-func indexFKsByName(indexes []ForeignKey) map[string]ForeignKey {
-	fkMap := make(map[string]ForeignKey)
+func indexFKsByName(indexes []schema.ForeignKey) map[string]schema.ForeignKey {
+	fkMap := make(map[string]schema.ForeignKey)
 	for _, fk := range indexes {
 		fkMap[fk.Name] = fk
 	}
@@ -502,23 +503,23 @@ func indexFKsByName(indexes []ForeignKey) map[string]ForeignKey {
 	return fkMap
 }
 
-type renamePair struct{ From, To Column }
+type renamePair struct{ From, To schema.Column }
 type ambiguousGroup struct {
 	ID       string
-	Declared []Column
-	Other    []Column
+	Declared []schema.Column
+	Other    []schema.Column
 }
 
 // matchRenameCandidates proposes rename pairs by structural signature
 // (Type, Length, Nullable, PrimaryKey, Unique all equal
 // For columns more than 2, with possible rename match, the function groups them into
 // ambiguousGroup
-func matchRenameCandidates(declared, other []Column) (pairs []renamePair, groups []ambiguousGroup, unmatchedDeclared, unmatchedOther []Column) {
+func matchRenameCandidates(declared, other []schema.Column) (pairs []renamePair, groups []ambiguousGroup, unmatchedDeclared, unmatchedOther []schema.Column) {
 	usedOther := make(map[string]bool)
 	groupSeq := 0
 
 	for _, d := range declared {
-		var candidates []Column
+		var candidates []schema.Column
 		for _, a := range other {
 			if usedOther[a.Name] {
 				continue
@@ -537,7 +538,7 @@ func matchRenameCandidates(declared, other []Column) (pairs []renamePair, groups
 			// AMBIGUOUS: e.g. two dropped columns and two added columns all
 			// share the same type/nullable signature.
 			groupSeq++
-			groups = append(groups, ambiguousGroup{ID: fmt.Sprintf("group_%d", groupSeq), Declared: []Column{d}, Other: candidates})
+			groups = append(groups, ambiguousGroup{ID: fmt.Sprintf("group_%d", groupSeq), Declared: []schema.Column{d}, Other: candidates})
 			for _, c := range candidates {
 				usedOther[c.Name] = true
 			}
@@ -551,7 +552,7 @@ func matchRenameCandidates(declared, other []Column) (pairs []renamePair, groups
 	return pairs, groups, unmatchedDeclared, unmatchedOther
 }
 
-func sameStructuralSignature(a, b Column) bool {
+func sameStructuralSignature(a, b schema.Column) bool {
 	return a.Type == b.Type &&
 		a.Length == b.Length &&
 		a.Nullable == b.Nullable &&
@@ -559,7 +560,7 @@ func sameStructuralSignature(a, b Column) bool {
 		a.Unique == b.Unique
 }
 
-func columnsEqual(a, b Column) bool {
+func columnsEqual(a, b schema.Column) bool {
 	return a.Name == b.Name &&
 		a.Type == b.Type &&
 		a.Length == b.Length &&
@@ -568,12 +569,12 @@ func columnsEqual(a, b Column) bool {
 		a.Unique == b.Unique
 }
 
-func indexesEqual(a, b Index) bool {
+func indexesEqual(a, b schema.Index) bool {
 	return a.Name == b.Name && a.Unique == b.Unique && slices.Equal(a.Columns, b.Columns)
 
 }
 
-func fkEqual(a, b ForeignKey) bool {
+func fkEqual(a, b schema.ForeignKey) bool {
 	return a.Name == b.Name &&
 		a.RefTable == b.RefTable &&
 		slices.Equal(a.RefColumns, b.RefColumns) &&
@@ -581,7 +582,7 @@ func fkEqual(a, b ForeignKey) bool {
 		slices.Equal(a.Columns, b.Columns)
 }
 
-func isNarrowingChange(a, b Column) bool {
+func isNarrowingChange(a, b schema.Column) bool {
 	return (a.Nullable && !b.Nullable) ||
 		(a.AutoInc && !b.AutoInc) ||
 		a.Length > b.Length

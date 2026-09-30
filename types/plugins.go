@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 type Plugin interface {
@@ -191,10 +192,11 @@ type HandlerFunc func(ctx *RequestContext) error
 //	        return err
 //	    },
 //	}
-// type Middleware struct {
-// 	Name   string
-// 	Handle func(rc *RequestContext, next HandlerFunc) error
-// }
+//
+//	type Middleware struct {
+//		Name   string
+//		Handle func(rc *RequestContext, next HandlerFunc) error
+//	}
 type Middleware func(next HandlerFunc) HandlerFunc
 
 // Route describes a single HTTP endpoint a plugin wants to expose.
@@ -258,6 +260,7 @@ type PluginInitContext struct {
 	Hooks      HookCatalog
 	Tokens     TokenCatalog
 	RateLimits RateLimitCatalog
+	Schemas    schema.Registry
 }
 
 // BeforeHookFunc: pre-persistence, validate-and-prepare only.
@@ -399,7 +402,6 @@ func mFromStruct[T any](m behemoth.M, v *T) error {
 	}
 	return json.Unmarshal(b, v)
 }
-
 
 // KahnSort performs topological sorting on a given Directed Acyclic Graph.
 // The graph map should have nodes as keys and their dependants as lists.

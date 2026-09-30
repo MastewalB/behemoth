@@ -5,11 +5,12 @@ import (
 	"fmt"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 func RunIntrospection(
 	ctx context.Context,
-	current SchemaRegistry,
+	current schema.Registry,
 	introspector SchemaIntrospector,
 	trackExtraColumns bool,
 ) (*IntrospectionReport, error) {
@@ -67,7 +68,7 @@ type canonicalNames struct {
 	columns map[string]map[string]string // canonical table -> physical column -> canonical column
 }
 
-func newCanonicalNames(declared []TableSchema) canonicalNames {
+func newCanonicalNames(declared []schema.Table) canonicalNames {
 	n := canonicalNames{tables: map[string]string{}, columns: map[string]map[string]string{}}
 	for _, t := range declared {
 		n.tables[orDefault(t.PhysicalName, t.Name)] = t.Name
@@ -109,7 +110,7 @@ func (n canonicalNames) columnList(canonicalTable string, physical []string) []s
 // live name in PhysicalName, so nothing is lost. live is never mutated in place.
 func (n canonicalNames) canonicalize(canonicalTable string, live IntrospectedTable) IntrospectedTable {
 	out := live
-	out.Schema.Columns = make([]Column, len(live.Schema.Columns))
+	out.Schema.Columns = make([]schema.Column, len(live.Schema.Columns))
 	for i, c := range live.Schema.Columns {
 		if canonical := n.column(canonicalTable, c.Name); canonical != c.Name {
 			c.PhysicalName, c.Name = c.Name, canonical // only set when it differs, matching how columns are declared
@@ -123,13 +124,13 @@ func (n canonicalNames) canonicalize(canonicalTable string, live IntrospectedTab
 		out.Ambiguities[i] = a
 	}
 
-	out.Schema.Indexes = make([]Index, len(live.Schema.Indexes))
+	out.Schema.Indexes = make([]schema.Index, len(live.Schema.Indexes))
 	for i, idx := range live.Schema.Indexes {
 		idx.Columns = n.columnList(canonicalTable, idx.Columns)
 		out.Schema.Indexes[i] = idx
 	}
 
-	out.Schema.ForeignKeys = make([]ForeignKey, len(live.Schema.ForeignKeys))
+	out.Schema.ForeignKeys = make([]schema.ForeignKey, len(live.Schema.ForeignKeys))
 	for i, fk := range live.Schema.ForeignKeys {
 		fk.Columns = n.columnList(canonicalTable, fk.Columns)
 		fk.RefTable = n.table(fk.RefTable)
@@ -145,7 +146,7 @@ func (n canonicalNames) canonicalize(canonicalTable string, live IntrospectedTab
 // anything below).
 func PartitionForBaseline(
 	ctx context.Context,
-	current SchemaRegistry,
+	current schema.Registry,
 	introspector SchemaIntrospector,
 ) (candidates []BaselineCandidate, freshTables []string, err error) {
 	for _, table := range current.All() {
@@ -168,7 +169,7 @@ func PartitionForBaseline(
 // This lets Planning have one implementation regardless of source i.e. whether "previous" came from a live
 // database or from behemoth's own snapshot,
 // No ambiguities are produced here since both registries are canonical.
-func RunIntrospectionFromSnapshotDiff(previous, current SchemaRegistry) *IntrospectionReport {
+func RunIntrospectionFromSnapshotDiff(previous, current schema.Registry) *IntrospectionReport {
 	report := &IntrospectionReport{Tables: map[string]TableIntrospection{}}
 	for _, declared := range current.All() {
 		prevTable, existed := previous.Lookup(declared.Name)
@@ -192,7 +193,7 @@ func RunIntrospectionFromSnapshotDiff(previous, current SchemaRegistry) *Introsp
 // trackExtraColumns controls the "extra live column" convention from the
 // In cases of migrations executed by behemoth's engine, a snapshot is used to record declarations
 // and a live column missing in the snapshot should be dropped.
-func diffColumns(declared, other []Column, ambiguities []ColumnAmbiguity, trackExtraColumns bool) ([]ColumnFinding, []RenameCandidate) {
+func diffColumns(declared, other []schema.Column, ambiguities []ColumnAmbiguity, trackExtraColumns bool) ([]ColumnFinding, []RenameCandidate) {
 	declaredByName := indexColumnsByName(declared)
 	otherByName := indexColumnsByName(other)
 	ambigByCol := make(map[string]ColumnAmbiguity, len(ambiguities))
@@ -208,7 +209,7 @@ func diffColumns(declared, other []Column, ambiguities []ColumnAmbiguity, trackE
 	}
 
 	var findings []ColumnFinding
-	var otherOnly, declaredOnly []Column
+	var otherOnly, declaredOnly []schema.Column
 
 	for name, d := range declaredByName {
 		o, ok := otherByName[name]
@@ -238,7 +239,7 @@ func diffColumns(declared, other []Column, ambiguities []ColumnAmbiguity, trackE
 	// never takes part in rename matching: its canonical type is only a guess,
 	// so pairing it by structural signature would be a guess too — and would
 	// move it out of the findings RejectAmbiguousTypes inspects.
-	var ambiguousOtherOnly []Column
+	var ambiguousOtherOnly []schema.Column
 	for name, o := range otherByName {
 		if _, ok := declaredByName[name]; ok {
 			continue
@@ -283,7 +284,7 @@ func diffColumns(declared, other []Column, ambiguities []ColumnAmbiguity, trackE
 	return findings, renames
 }
 
-func diffIndexes(declared, other []Index, trackExtra bool) []IndexFinding {
+func diffIndexes(declared, other []schema.Index, trackExtra bool) []IndexFinding {
 	declaredByName, otherByName := indexIndexesByName(declared), indexIndexesByName(other)
 	var findings []IndexFinding
 
@@ -329,7 +330,7 @@ func diffIndexes(declared, other []Index, trackExtra bool) []IndexFinding {
 	return findings
 }
 
-func diffForeignKeys(declared, other []ForeignKey, trackExtra bool) []ForeignKeyFinding {
+func diffForeignKeys(declared, other []schema.ForeignKey, trackExtra bool) []ForeignKeyFinding {
 	declaredByName, otherByName := indexFKsByName(declared), indexFKsByName(other)
 	var findings []ForeignKeyFinding
 

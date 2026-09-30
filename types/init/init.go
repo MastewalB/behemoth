@@ -12,29 +12,46 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
+// PrepareConfig is everything Prepare needs beyond the plugin list. None of
+// it touches a live connection: Prepare must stay runnable from a migration
+// CLI that never boots the application.
+type PrepareConfig struct {
+	Migration core.MigrationConfig
+
+	// Schema declares the application's own tables under owner "app". It
+	// runs after every plugin has declared, so it can also extend plugin
+	// tables (e.g. a column on "users"). nil = no application tables.
+	Schema func(reg schema.Registry) error
+}
+
+// PreparedApp is the connection-free result of Prepare: every catalog and
+// the schema registry, frozen, plus the SchemaResolver derived from them.
+// Build storage adapters and migration drivers with Resolver, then hand the
+// adapter to Boot.
 type PreparedApp struct {
 	Order      []string
 	Hooks      types.HookCatalog
 	Tokens     types.TokenCatalog
 	RateLimits types.RateLimitCatalog
+	Schemas    schema.Registry
+	Resolver   behemoth.SchemaResolver
+	Migration  core.MigrationConfig
+
+	plugins []types.Plugin // kept so Boot runs exactly the set that was prepared
 }
 
-func Boot(
-	plugins []types.Plugin,
-	db behemoth.Database,
-	kv behemoth.KeyValueStorage,
-	crypto types.Crypto,
-	tel *types.Telemetry,
-	rateLimitCfg types.RateLimitConfig,
-	sessionCfg types.SessionConfig,
-	tokenCfg types.TokenConfig,
-
-) (*types.AuthContext, error) {
+// Prepare runs every declaration step of initialization — plugin ordering,
+// hook/token/rate-limit catalogs and the schema registry — and freezes them.
+// It is the whole of Boot that needs no database, so migration tooling calls
+// it alone, and Boot calls nothing else to get there.
+func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	if err := DetectPluginNameConflicts(plugins); err != nil {
 		return nil, err
 	}
@@ -44,22 +61,22 @@ func Boot(
 		return nil, err
 	}
 
-	if tel == nil {
-		tel = types.NewTelemetry(nil, nil, nil)
-	}
-
 	// Initialize Catalogs
 	hookCatalog := NewDefaultHookCatalog()
 	tokenCatalog := NewDefaultTokenCatalog()
 	rateLimitCatalog := NewRateLimitCatalog(hookCatalog)
+	schemaRegistry := schema.NewRegistry()
 
 	// Core declares first, under owner "core" via the scoped
 	// wrappers all plugins get, to enforce uniform validation process
-	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, "core")
+	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, "core")
 	if err := CoreDeclareHookPoints(coreIC); err != nil {
 		return nil, err
 	}
 	if err := CoreDeclareRateLimitRules(coreIC); err != nil {
+		return nil, err
+	}
+	if err := CoreDeclareSchema(coreIC); err != nil {
 		return nil, err
 	}
 
@@ -67,21 +84,74 @@ func Boot(
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if p == nil {
-			return nil, behemotherr.NewConfigurationError("Boot", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
+			return nil, behemotherr.NewConfigurationError("Prepare", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
 		}
-		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, name)
+		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, name)
 		if err := p.Declare(ic); err != nil {
 			return nil, fmt.Errorf("plugin %q Declare failed: %w", name, err)
 		}
 	}
 
-	// Freeze all three catalogs
+	// Application tables last, so they can extend anything declared above
+	if cfg.Schema != nil {
+		if err := cfg.Schema(&scopedSchemaRegistry{inner: schemaRegistry, owner: "app"}); err != nil {
+			return nil, fmt.Errorf("application schema declaration failed: %w", err)
+		}
+	}
+
+	// Freeze all catalogs and the schema registry
 	hookCatalog.Freeze()
 	tokenCatalog.Freeze()
 	rateLimitCatalog.Freeze()
+	if err := schemaRegistry.Freeze(); err != nil {
+		return nil, err
+	}
+
+	// The resolver is derived from the frozen registry, never authored
+	// separately, so it is complete before any adapter or driver exists.
+	migrationCfg := core.NewMigrationConfig(cfg.Migration)
+	resolver := core.NewSchemaResolver()
+	resolver.Freeze(core.BuildSchemaResolverTable(schemaRegistry, migrationCfg))
+
+	return &PreparedApp{
+		Order:      order,
+		Hooks:      hookCatalog,
+		Tokens:     tokenCatalog,
+		RateLimits: rateLimitCatalog,
+		Schemas:    schemaRegistry,
+		Resolver:   resolver,
+		Migration:  migrationCfg,
+		plugins:    plugins,
+	}, nil
+}
+
+// Boot turns a PreparedApp into a running AuthContext. db must have been
+// built with app.Resolver, otherwise application queries and migrations
+// disagree on physical table and column names.
+func Boot(
+	app *PreparedApp,
+	db behemoth.Database,
+	kv behemoth.KeyValueStorage,
+	crypto types.Crypto,
+	tel *types.Telemetry,
+	rateLimitCfg types.RateLimitConfig,
+	sessionCfg types.SessionConfig,
+	tokenCfg types.TokenConfig,
+) (*types.AuthContext, error) {
+	if app == nil {
+		return nil, behemotherr.NewConfigurationError("Boot", "Boot requires the result of Prepare", nil)
+	}
+	if db == nil {
+		return nil, behemotherr.NewConfigurationError("Boot", "a Database is required", nil)
+	}
+	plugins, order := app.plugins, app.Order
+
+	if tel == nil {
+		tel = types.NewTelemetry(nil, nil, nil)
+	}
 
 	// Registration phase
-	hookRegistry := NewHookRegistry(hookCatalog)
+	hookRegistry := NewHookRegistry(app.Hooks)
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if p == nil {
@@ -93,7 +163,7 @@ func Boot(
 		}
 	}
 
-	frozenChains, err := freezeAllHookChains(hookCatalog, hookRegistry, order)
+	frozenChains, err := freezeAllHookChains(app.Hooks, hookRegistry, order)
 	if err != nil {
 		return nil, err
 	}
@@ -102,17 +172,20 @@ func Boot(
 	if err != nil {
 		return nil, err
 	}
-	rateLimiter := &DefaultRateLimiter{catalog: rateLimitCatalog, store: store, cfg: rateLimitCfg, tel: tel}
-	dispatcher := &DefaultDispatcher{catalog: hookCatalog, frozenChains: frozenChains, rateLimiter: rateLimiter, tel: tel}
+	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, store: store, cfg: rateLimitCfg, tel: tel}
+	dispatcher := &DefaultDispatcher{catalog: app.Hooks, frozenChains: frozenChains, rateLimiter: rateLimiter, tel: tel}
 	idb := adapters.NewInternalAdapter(db, kv)
 
 	ac := &types.AuthContext{
-		Dispatcher:     dispatcher,
-		TokenManager:   transport.NewDefaultTokenManager(db, kv, idb, tokenCatalog, crypto, dispatcher, tokenCfg),
-		SessionManager: transport.NewSessionManager(db, kv, idb, crypto, sessionCfg, dispatcher, tel),
-		RateLimiter:    rateLimiter,
-		Crypto:         crypto,
-		Telemetry:      *tel,
+		DB:              db,
+		KV:              kv,
+		InternalAdapter: idb,
+		Dispatcher:      dispatcher,
+		TokenManager:    transport.NewDefaultTokenManager(db, kv, idb, app.Tokens, crypto, dispatcher, tokenCfg),
+		SessionManager:  transport.NewSessionManager(db, kv, idb, crypto, sessionCfg, dispatcher, tel),
+		RateLimiter:     rateLimiter,
+		Crypto:          crypto,
+		Telemetry:       *tel,
 	}
 	cfg := struct {
 		BasePath    string
@@ -153,60 +226,6 @@ func Boot(
 		}
 	}
 	return ac, nil
-}
-
-func Prepare(plugins []types.Plugin) (*PreparedApp, error) {
-	if err := DetectPluginNameConflicts(plugins); err != nil {
-		return nil, err
-	}
-
-	order, err := ResolvePluginOrder(plugins)
-	if err != nil {
-		return nil, err
-	}
-
-	// if tel == nil {
-	// 	tel = types.NewTelemetry(nil, nil, nil)
-	// }
-
-	// Initialize Catalogs
-	hookCatalog := NewDefaultHookCatalog()
-	tokenCatalog := NewDefaultTokenCatalog()
-	rateLimitCatalog := NewRateLimitCatalog(hookCatalog)
-
-	// Core declares first, under owner "core" via the scoped
-	// wrappers all plugins get, to enforce uniform validation process
-	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, "core")
-	if err := CoreDeclareHookPoints(coreIC); err != nil {
-		return nil, err
-	}
-	if err := CoreDeclareRateLimitRules(coreIC); err != nil {
-		return nil, err
-	}
-
-	// Declare phase: every plugin, in dependency order
-	for _, name := range order {
-		p := lookup(plugins, name)
-		if p == nil {
-			return nil, behemotherr.NewConfigurationError("Boot", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
-		}
-		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, name)
-		if err := p.Declare(ic); err != nil {
-			return nil, fmt.Errorf("plugin %q Declare failed: %w", name, err)
-		}
-	}
-
-	// Freeze all three catalogs
-	hookCatalog.Freeze()
-	tokenCatalog.Freeze()
-	rateLimitCatalog.Freeze()
-
-	return &PreparedApp{
-		Order:      order,
-		Hooks:      hookCatalog,
-		Tokens:     tokenCatalog,
-		RateLimits: rateLimitCatalog,
-	}, nil
 }
 
 // ResolvePluginOrder builds a dependency DAG from every plugin's declared
@@ -327,15 +346,55 @@ func (s *scopedRateLimitCatalog) RulesForRoute() []types.RouteRateLimitRule {
 	return s.inner.RulesForRoute()
 }
 
+// scopedSchemaRegistry injects the declaring owner into every table and
+// contribution, the same way the catalog wrappers above do.
+type scopedSchemaRegistry struct {
+	inner schema.Registry
+	owner string
+}
+
+func (s *scopedSchemaRegistry) Declare(model behemoth.Model, table schema.Table) error {
+	table.Owner = s.owner
+	return s.inner.Declare(model, table)
+}
+func (s *scopedSchemaRegistry) ExtendColumn(c schema.ColumnContribution) error {
+	c.Owner = s.owner
+	return s.inner.ExtendColumn(c)
+}
+func (s *scopedSchemaRegistry) ExtendIndex(c schema.IndexContribution) error {
+	c.Owner = s.owner
+	return s.inner.ExtendIndex(c)
+}
+func (s *scopedSchemaRegistry) ExtendForeignKey(c schema.ForeignKeyContribution) error {
+	c.Owner = s.owner
+	return s.inner.ExtendForeignKey(c)
+}
+func (s *scopedSchemaRegistry) Lookup(name string) (schema.Table, bool) {
+	return s.inner.Lookup(name)
+}
+func (s *scopedSchemaRegistry) LookupModel(name string) (behemoth.Model, bool) {
+	return s.inner.LookupModel(name)
+}
+func (s *scopedSchemaRegistry) All() []schema.Table { return s.inner.All() }
+
+// Freeze is Prepare's alone; a declarer freezing the registry early would
+// lock out every declarer after it.
+func (s *scopedSchemaRegistry) Freeze() error {
+	return behemotherr.NewConfigurationError("SchemaRegistry.Freeze", fmt.Sprintf("%q cannot freeze the schema registry", s.owner), nil)
+}
+
 func newScopedInitContext(
 	hooks *DefaultHookCatalog,
 	tokens *DefaultTokenCatalog,
-	rl *DefaultRateLimitCatalog, owner string,
+	rl *DefaultRateLimitCatalog,
+	schemas schema.Registry,
+	owner string,
 ) *types.PluginInitContext {
 	return &types.PluginInitContext{
 		Hooks:      &scopedHookCatalog{inner: hooks, owner: owner},
 		Tokens:     &scopedTokenCatalog{inner: tokens, owner: owner},
 		RateLimits: &scopedRateLimitCatalog{inner: rl, owner: owner},
+		Schemas:    &scopedSchemaRegistry{inner: schemas, owner: owner},
 	}
 }
 
@@ -675,6 +734,12 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 	return nil
 }
 
+// CoreDeclareSchema declares the tables core itself owns.
+func CoreDeclareSchema(ic *types.PluginInitContext) error {
+	// users, sessions, tokens, ... declared here once their TableSchemas exist
+	return nil
+}
+
 func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
 	//Declare HookPointRateLimitRules
 	// Declare RouteRateLimitRules
@@ -688,6 +753,7 @@ func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
 			Algorithm: nil,
 			Action:    types.ActionReject,
 			Owner:     "core",
+			Disabled:  true,
 		},
 		// analogous baseline declared for /sign-up/email, /forgot-password
 	}

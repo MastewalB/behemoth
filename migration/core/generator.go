@@ -13,6 +13,7 @@ import (
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 type DefaultMigrationGenerator struct{}
@@ -369,7 +370,7 @@ func LatestMigrationID(cfg MigrationConfig) (string, error) {
 // correction: PathManaged diffs its own canonical snapshot (no live DB
 // call, standing behavior after onboarding); PathGenerateOnly always
 // introspects live, since it owns no snapshot of its own to trust.
-func buildReport(ctx context.Context, cfg MigrationConfig, current SchemaRegistry, deps GenerateDeps) (*IntrospectionReport, error) {
+func buildReport(ctx context.Context, cfg MigrationConfig, current schema.Registry, deps GenerateDeps) (*IntrospectionReport, error) {
 	switch cfg.Path {
 	case PathManaged:
 		snapshot, err := deps.Runner.LoadSnapshot(ctx)
@@ -512,7 +513,7 @@ func RejectAmbiguousTypes(report *IntrospectionReport) error {
 func buildMigrationPlan(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current SchemaRegistry,
+	current schema.Registry,
 	deps GenerateDeps,
 	interactive bool,
 ) (*Migration, error) {
@@ -544,7 +545,7 @@ func buildMigrationPlan(
 func RunGenerate(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current SchemaRegistry,
+	current schema.Registry,
 	deps GenerateDeps,
 	interactive bool,
 ) (*Migration, error) {

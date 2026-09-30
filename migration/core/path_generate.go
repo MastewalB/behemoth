@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 const StatusGenerated RunStatus = "generated" // Path II's terminal state - file written
@@ -17,7 +18,7 @@ const StatusGenerated RunStatus = "generated" // Path II's terminal state - file
 // no such permanence: re-running it always reflects current live/canonical
 // truth fresh, so a drift between the preview call and the confirm call
 // self-corrects automatically rather than needing to be detected.
-func RunGenerateCLI(ctx context.Context, cfg MigrationConfig, current SchemaRegistry, deps GenerateDeps, confirmWrite bool) (*RunResult, error) {
+func RunGenerateCLI(ctx context.Context, cfg MigrationConfig, current schema.Registry, deps GenerateDeps, confirmWrite bool) (*RunResult, error) {
 	m, err := buildMigrationPlan(ctx, cfg, current, deps, true)
 	if err != nil {
 		if behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationNothingToGenerate) {

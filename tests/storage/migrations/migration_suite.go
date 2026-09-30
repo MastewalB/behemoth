@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -64,7 +65,7 @@ type ForeignKeyInfo struct {
 	Columns    []string
 	RefTable   string
 	RefColumns []string
-	OnDelete   core.ForeignKeyAction
+	OnDelete   schema.ForeignKeyAction
 }
 
 // DriverTestSuite is the database-agnostic contract every core.SchemaDriver
@@ -99,34 +100,34 @@ func (s *DriverTestSuite) TearDownSuite() {
 
 // ---- Fixtures & helpers ----
 
-func usersTable() core.TableSchema {
-	return core.TableSchema{
+func usersTable() schema.Table {
+	return schema.Table{
 		Name: "users",
-		Columns: []core.Column{
-			{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true},
-			{Name: "email", Type: core.ColTypeString, Length: 255, Unique: true},
-			{Name: "name", Type: core.ColTypeText, Nullable: true},
-			{Name: "status", Type: core.ColTypeString, Length: 32, Default: "active"},
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "email", Type: schema.ColTypeString, Length: 255, Unique: true},
+			{Name: "name", Type: schema.ColTypeText, Nullable: true},
+			{Name: "status", Type: schema.ColTypeString, Length: 32, Default: "active"},
 		},
 	}
 }
 
-func postsTable() core.TableSchema {
-	return core.TableSchema{
+func postsTable() schema.Table {
+	return schema.Table{
 		Name: "posts",
-		Columns: []core.Column{
-			{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true},
-			{Name: "user_id", Type: core.ColTypeInteger, Nullable: true},
-			{Name: "title", Type: core.ColTypeText},
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "user_id", Type: schema.ColTypeInteger, Nullable: true},
+			{Name: "title", Type: schema.ColTypeText},
 		},
 	}
 }
 
-func postsUserFK(onDelete core.ForeignKeyAction) core.ForeignKey {
-	return core.ForeignKey{Name: "fk_posts_user", Columns: []string{"user_id"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: onDelete}
+func postsUserFK(onDelete schema.ForeignKeyAction) schema.ForeignKey {
+	return schema.ForeignKey{Name: "fk_posts_user", Columns: []string{"user_id"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: onDelete}
 }
 
-func createTableOp(t core.TableSchema) core.SchemaOperation {
+func createTableOp(t schema.Table) core.SchemaOperation {
 	return core.SchemaOperation{ID: "create_table_" + t.Name, Kind: core.OpCreateTable, Table: t.Name, NewTable: &t}
 }
 
@@ -134,7 +135,7 @@ func dropTableOp(table string) core.SchemaOperation {
 	return core.SchemaOperation{ID: "drop_table_" + table, Kind: core.OpDropTable, Table: table, Confirmed: true}
 }
 
-func addColumnOp(table string, col core.Column) core.SchemaOperation {
+func addColumnOp(table string, col schema.Column) core.SchemaOperation {
 	return core.SchemaOperation{ID: "add_column_" + table + "_" + col.Name, Kind: core.OpAddColumn, Table: table, Column: &col}
 }
 
@@ -146,11 +147,11 @@ func renameColumnOp(table, from, to string) core.SchemaOperation {
 	return core.SchemaOperation{ID: "rename_column_" + table + "_" + from, Kind: core.OpRenameColumn, Table: table, ColumnName: from, NewColumnName: to, Confirmed: true}
 }
 
-func alterColumnOp(table string, col core.Column) core.SchemaOperation {
+func alterColumnOp(table string, col schema.Column) core.SchemaOperation {
 	return core.SchemaOperation{ID: "alter_column_" + table + "_" + col.Name, Kind: core.OpAlterColumn, Table: table, Column: &col}
 }
 
-func addIndexOp(table string, idx core.Index) core.SchemaOperation {
+func addIndexOp(table string, idx schema.Index) core.SchemaOperation {
 	return core.SchemaOperation{ID: "add_index_" + idx.Name, Kind: core.OpAddIndex, Table: table, Index: &idx}
 }
 
@@ -158,7 +159,7 @@ func dropIndexOp(table, name string) core.SchemaOperation {
 	return core.SchemaOperation{ID: "drop_index_" + name, Kind: core.OpDropIndex, Table: table, IndexName: name, Confirmed: true}
 }
 
-func addForeignKeyOp(table string, fk core.ForeignKey) core.SchemaOperation {
+func addForeignKeyOp(table string, fk schema.ForeignKey) core.SchemaOperation {
 	return core.SchemaOperation{ID: "add_fk_" + fk.Name, Kind: core.OpAddForeignKey, Table: table, ForeignKey: &fk}
 }
 
@@ -171,9 +172,9 @@ func (s *DriverTestSuite) nextMigration(ops ...core.SchemaOperation) core.Migrat
 	return core.Migration{ID: fmt.Sprintf("%04d_test", s.seq), Name: "test", Up: ops, CreatedAt: time.Now()}
 }
 
-func request(m core.Migration, tables map[string]core.TableSchema) core.MigrationRequest {
+func request(m core.Migration, tables map[string]schema.Table) core.MigrationRequest {
 	if tables == nil {
-		tables = map[string]core.TableSchema{}
+		tables = map[string]schema.Table{}
 	}
 	return core.MigrationRequest{
 		Migration:      m,
@@ -261,7 +262,7 @@ func (s *DriverTestSuite) seedUsers() {
 }
 
 // seedUsersAndPosts creates users and posts linked by fk_posts_user.
-func (s *DriverTestSuite) seedUsersAndPosts(onDelete core.ForeignKeyAction) {
+func (s *DriverTestSuite) seedUsersAndPosts(onDelete schema.ForeignKeyAction) {
 	s.seedUsers()
 	s.mustApply(createTableOp(postsTable()), addForeignKeyOp("posts", postsUserFK(onDelete)))
 	s.insert("posts", map[string]any{"id": 10, "user_id": 1, "title": "first"})
@@ -336,12 +337,12 @@ func (s *DriverTestSuite) TestCreateTableEnforcesConstraints() {
 }
 
 func (s *DriverTestSuite) TestCreateTableCompositePrimaryKey() {
-	s.mustApply(createTableOp(core.TableSchema{
+	s.mustApply(createTableOp(schema.Table{
 		Name: "memberships",
-		Columns: []core.Column{
-			{Name: "user_id", Type: core.ColTypeInteger, PrimaryKey: true},
-			{Name: "group_id", Type: core.ColTypeInteger, PrimaryKey: true},
-			{Name: "role", Type: core.ColTypeString, Length: 16, Nullable: true},
+		Columns: []schema.Column{
+			{Name: "user_id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "group_id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "role", Type: schema.ColTypeString, Length: 16, Nullable: true},
 		},
 	}))
 
@@ -356,11 +357,11 @@ func (s *DriverTestSuite) TestCreateTableCompositePrimaryKey() {
 }
 
 func (s *DriverTestSuite) TestCreateTableAutoIncrement() {
-	s.mustApply(createTableOp(core.TableSchema{
+	s.mustApply(createTableOp(schema.Table{
 		Name: "events",
-		Columns: []core.Column{
-			{Name: "id", Type: core.ColTypeBigInt, PrimaryKey: true, AutoInc: true},
-			{Name: "kind", Type: core.ColTypeString, Length: 32},
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeBigInt, PrimaryKey: true, AutoInc: true},
+			{Name: "kind", Type: schema.ColTypeString, Length: 32},
 		},
 	}))
 
@@ -394,7 +395,7 @@ func (s *DriverTestSuite) TestDropMissingTableFails() {
 
 func (s *DriverTestSuite) TestAddNullableColumn() {
 	s.seedUsers()
-	s.mustApply(addColumnOp("users", core.Column{Name: "bio", Type: core.ColTypeText, Nullable: true}))
+	s.mustApply(addColumnOp("users", schema.Column{Name: "bio", Type: schema.ColTypeText, Nullable: true}))
 
 	cols := s.columns("users")
 	s.Require().Contains(cols, "bio")
@@ -406,7 +407,7 @@ func (s *DriverTestSuite) TestAddNullableColumn() {
 
 func (s *DriverTestSuite) TestAddNotNullColumnWithDefault() {
 	s.seedUsers()
-	s.mustApply(addColumnOp("users", core.Column{Name: "score", Type: core.ColTypeInteger, Default: 7}))
+	s.mustApply(addColumnOp("users", schema.Column{Name: "score", Type: schema.ColTypeInteger, Default: 7}))
 
 	s.False(s.columns("users")["score"].Nullable)
 	for _, r := range s.rows("users", "id") {
@@ -417,7 +418,7 @@ func (s *DriverTestSuite) TestAddNotNullColumnWithDefault() {
 
 func (s *DriverTestSuite) TestAddUniqueColumn() {
 	s.seedUsers()
-	s.mustApply(addColumnOp("users", core.Column{Name: "handle", Type: core.ColTypeString, Length: 64, Nullable: true, Unique: true}))
+	s.mustApply(addColumnOp("users", schema.Column{Name: "handle", Type: schema.ColTypeString, Length: 64, Nullable: true, Unique: true}))
 
 	s.Contains(s.columns("users"), "handle")
 	s.Equal(int64(2), s.rowCount("users"), "existing rows are preserved")
@@ -427,7 +428,7 @@ func (s *DriverTestSuite) TestAddUniqueColumn() {
 
 func (s *DriverTestSuite) TestAddNotNullColumnWithoutDefaultOnPopulatedTableFails() {
 	s.seedUsers()
-	s.Error(s.apply(addColumnOp("users", core.Column{Name: "required", Type: core.ColTypeText})))
+	s.Error(s.apply(addColumnOp("users", schema.Column{Name: "required", Type: schema.ColTypeText})))
 	s.NotContains(s.columns("users"), "required", "failed migration must leave no trace")
 	s.Equal(int64(2), s.rowCount("users"))
 }
@@ -451,8 +452,8 @@ func (s *DriverTestSuite) TestDropColumn() {
 func (s *DriverTestSuite) TestDropIndexedColumnDropsItsIndexes() {
 	s.seedUsers()
 	s.mustApply(
-		addIndexOp("users", core.Index{Name: "idx_users_name", Columns: []string{"name"}}),
-		addIndexOp("users", core.Index{Name: "idx_users_status", Columns: []string{"status"}}),
+		addIndexOp("users", schema.Index{Name: "idx_users_name", Columns: []string{"name"}}),
+		addIndexOp("users", schema.Index{Name: "idx_users_status", Columns: []string{"status"}}),
 	)
 	s.mustApply(dropColumnOp("users", "name"))
 
@@ -471,7 +472,7 @@ func (s *DriverTestSuite) TestDropMissingColumnFails() {
 
 func (s *DriverTestSuite) TestRenameColumn() {
 	s.seedUsers()
-	s.mustApply(addIndexOp("users", core.Index{Name: "idx_users_name", Columns: []string{"name"}}))
+	s.mustApply(addIndexOp("users", schema.Index{Name: "idx_users_name", Columns: []string{"name"}}))
 	s.mustApply(renameColumnOp("users", "name", "full_name"))
 
 	cols := s.columns("users")
@@ -490,19 +491,19 @@ func (s *DriverTestSuite) TestRenameColumn() {
 
 func (s *DriverTestSuite) TestAlterColumnNullability() {
 	s.seedUsers()
-	s.mustApply(alterColumnOp("users", core.Column{Name: "status", Type: core.ColTypeString, Length: 32, Nullable: true, Default: "active"}))
+	s.mustApply(alterColumnOp("users", schema.Column{Name: "status", Type: schema.ColTypeString, Length: 32, Nullable: true, Default: "active"}))
 	s.True(s.columns("users")["status"].Nullable)
 	s.insert("users", map[string]any{"id": 3, "email": "c@example.com", "status": nil})
 
 	s.Require().NoError(s.tm.Delete(s.ctx, "users", "id", 3))
-	s.mustApply(alterColumnOp("users", core.Column{Name: "status", Type: core.ColTypeString, Length: 32, Default: "active"}))
+	s.mustApply(alterColumnOp("users", schema.Column{Name: "status", Type: schema.ColTypeString, Length: 32, Default: "active"}))
 	s.False(s.columns("users")["status"].Nullable)
 	s.Error(s.tm.Insert(s.ctx, "users", map[string]any{"id": 4, "email": "d@example.com", "status": nil}))
 }
 
 func (s *DriverTestSuite) TestAlterColumnToNotNullWithNullsFails() {
 	s.seedUsers() // user 2 has a NULL name
-	s.Error(s.apply(alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText})))
+	s.Error(s.apply(alterColumnOp("users", schema.Column{Name: "name", Type: schema.ColTypeText})))
 
 	s.True(s.columns("users")["name"].Nullable, "failed alter must be rolled back")
 	s.Equal(int64(2), s.rowCount("users"))
@@ -510,7 +511,7 @@ func (s *DriverTestSuite) TestAlterColumnToNotNullWithNullsFails() {
 
 func (s *DriverTestSuite) TestAlterColumnDefault() {
 	s.seedUsers()
-	s.mustApply(alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "anonymous"}))
+	s.mustApply(alterColumnOp("users", schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Default: "anonymous"}))
 
 	s.insert("users", map[string]any{"id": 3, "email": "c@example.com"})
 	rows := s.rows("users", "id")
@@ -518,13 +519,13 @@ func (s *DriverTestSuite) TestAlterColumnDefault() {
 	s.Equal("Ada", asString(rows[0]["name"]), "existing values are preserved")
 	s.Equal("anonymous", asString(rows[2]["name"]), "new default applies")
 
-	s.mustApply(alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true}))
+	s.mustApply(alterColumnOp("users", schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true}))
 	s.False(s.columns("users")["name"].HasDefault, "default is dropped")
 }
 
 func (s *DriverTestSuite) TestAlterColumnType() {
 	s.seedUsers()
-	s.mustApply(alterColumnOp("users", core.Column{Name: "status", Type: core.ColTypeText, Default: "active"}))
+	s.mustApply(alterColumnOp("users", schema.Column{Name: "status", Type: schema.ColTypeText, Default: "active"}))
 
 	rows := s.rows("users", "id")
 	s.Require().Len(rows, 2)
@@ -533,8 +534,8 @@ func (s *DriverTestSuite) TestAlterColumnType() {
 
 func (s *DriverTestSuite) TestAlterColumnPreservesIndexesAndConstraints() {
 	s.seedUsers()
-	s.mustApply(addIndexOp("users", core.Index{Name: "idx_users_status", Columns: []string{"status"}}))
-	s.mustApply(alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "x"}))
+	s.mustApply(addIndexOp("users", schema.Index{Name: "idx_users_status", Columns: []string{"status"}}))
+	s.mustApply(alterColumnOp("users", schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Default: "x"}))
 
 	_, found := s.index("users", "idx_users_status")
 	s.True(found, "explicit index survives")
@@ -543,11 +544,11 @@ func (s *DriverTestSuite) TestAlterColumnPreservesIndexesAndConstraints() {
 }
 
 func (s *DriverTestSuite) TestAlterColumnPreservesForeignKeys() {
-	s.seedUsersAndPosts(core.FKCascade)
+	s.seedUsersAndPosts(schema.FKCascade)
 
 	// Alter the child table, then the parent table.
-	s.mustApply(alterColumnOp("posts", core.Column{Name: "title", Type: core.ColTypeText, Default: "untitled"}))
-	s.mustApply(alterColumnOp("users", core.Column{Name: "status", Type: core.ColTypeString, Length: 64, Default: "active"}))
+	s.mustApply(alterColumnOp("posts", schema.Column{Name: "title", Type: schema.ColTypeText, Default: "untitled"}))
+	s.mustApply(alterColumnOp("users", schema.Column{Name: "status", Type: schema.ColTypeString, Length: 64, Default: "active"}))
 
 	_, found := s.foreignKey("posts", "fk_posts_user")
 	s.Require().True(found, "foreign key survives both alters")
@@ -559,14 +560,14 @@ func (s *DriverTestSuite) TestAlterColumnPreservesForeignKeys() {
 
 func (s *DriverTestSuite) TestAlterMissingColumnFails() {
 	s.seedUsers()
-	s.Error(s.apply(alterColumnOp("users", core.Column{Name: "does_not_exist", Type: core.ColTypeText, Nullable: true})))
+	s.Error(s.apply(alterColumnOp("users", schema.Column{Name: "does_not_exist", Type: schema.ColTypeText, Nullable: true})))
 }
 
 // ---- OpAddIndex / OpDropIndex ----
 
 func (s *DriverTestSuite) TestAddIndex() {
 	s.seedUsers()
-	s.mustApply(addIndexOp("users", core.Index{Name: "idx_users_name_status", Columns: []string{"name", "status"}}))
+	s.mustApply(addIndexOp("users", schema.Index{Name: "idx_users_name_status", Columns: []string{"name", "status"}}))
 
 	idx, found := s.index("users", "idx_users_name_status")
 	s.Require().True(found)
@@ -576,7 +577,7 @@ func (s *DriverTestSuite) TestAddIndex() {
 
 func (s *DriverTestSuite) TestAddUniqueIndex() {
 	s.seedUsers()
-	s.mustApply(addIndexOp("users", core.Index{Name: "uq_users_name", Columns: []string{"name"}, Unique: true}))
+	s.mustApply(addIndexOp("users", schema.Index{Name: "uq_users_name", Columns: []string{"name"}, Unique: true}))
 
 	idx, found := s.index("users", "uq_users_name")
 	s.Require().True(found)
@@ -586,14 +587,14 @@ func (s *DriverTestSuite) TestAddUniqueIndex() {
 
 func (s *DriverTestSuite) TestAddUniqueIndexOnDuplicateDataFails() {
 	s.seedUsers()
-	s.Error(s.apply(addIndexOp("users", core.Index{Name: "uq_users_status", Columns: []string{"status"}, Unique: true})))
+	s.Error(s.apply(addIndexOp("users", schema.Index{Name: "uq_users_status", Columns: []string{"status"}, Unique: true})))
 	_, found := s.index("users", "uq_users_status")
 	s.False(found)
 }
 
 func (s *DriverTestSuite) TestDropIndex() {
 	s.seedUsers()
-	s.mustApply(addIndexOp("users", core.Index{Name: "idx_users_name", Columns: []string{"name"}}))
+	s.mustApply(addIndexOp("users", schema.Index{Name: "idx_users_name", Columns: []string{"name"}}))
 	s.mustApply(dropIndexOp("users", "idx_users_name"))
 
 	_, found := s.index("users", "idx_users_name")
@@ -608,14 +609,14 @@ func (s *DriverTestSuite) TestDropMissingIndexFails() {
 // ---- OpAddForeignKey / OpDropForeignKey ----
 
 func (s *DriverTestSuite) TestAddForeignKey() {
-	s.seedUsersAndPosts(core.FKRestrict)
+	s.seedUsersAndPosts(schema.FKRestrict)
 
 	fk, found := s.foreignKey("posts", "fk_posts_user")
 	s.Require().True(found)
 	s.Equal([]string{"user_id"}, fk.Columns)
 	s.Equal("users", fk.RefTable)
 	s.Equal([]string{"id"}, fk.RefColumns)
-	s.Equal(core.FKRestrict, fk.OnDelete)
+	s.Equal(schema.FKRestrict, fk.OnDelete)
 
 	s.Equal(int64(2), s.rowCount("posts"), "existing rows are preserved")
 	s.Error(s.tm.Insert(s.ctx, "posts", map[string]any{"id": 12, "user_id": 99, "title": "orphan"}))
@@ -623,7 +624,7 @@ func (s *DriverTestSuite) TestAddForeignKey() {
 }
 
 func (s *DriverTestSuite) TestAddForeignKeyCascade() {
-	s.seedUsersAndPosts(core.FKCascade)
+	s.seedUsersAndPosts(schema.FKCascade)
 	s.Require().NoError(s.tm.Delete(s.ctx, "users", "id", 1))
 
 	rows := s.rows("posts", "id")
@@ -632,7 +633,7 @@ func (s *DriverTestSuite) TestAddForeignKeyCascade() {
 }
 
 func (s *DriverTestSuite) TestAddForeignKeySetNull() {
-	s.seedUsersAndPosts(core.FKSetNull)
+	s.seedUsersAndPosts(schema.FKSetNull)
 	s.Require().NoError(s.tm.Delete(s.ctx, "users", "id", 1))
 
 	rows := s.rows("posts", "id")
@@ -645,14 +646,14 @@ func (s *DriverTestSuite) TestAddForeignKeyWithOrphanRowsFails() {
 	s.mustApply(createTableOp(postsTable()))
 	s.insert("posts", map[string]any{"id": 10, "user_id": 99, "title": "orphan"})
 
-	s.Error(s.apply(addForeignKeyOp("posts", postsUserFK(core.FKCascade))))
+	s.Error(s.apply(addForeignKeyOp("posts", postsUserFK(schema.FKCascade))))
 	_, found := s.foreignKey("posts", "fk_posts_user")
 	s.False(found, "failed migration must be rolled back")
 	s.Equal(int64(1), s.rowCount("posts"))
 }
 
 func (s *DriverTestSuite) TestDropForeignKey() {
-	s.seedUsersAndPosts(core.FKCascade)
+	s.seedUsersAndPosts(schema.FKCascade)
 	s.mustApply(dropForeignKeyOp("posts", "fk_posts_user"))
 
 	_, found := s.foreignKey("posts", "fk_posts_user")
@@ -672,7 +673,7 @@ func (s *DriverTestSuite) TestDropMissingForeignKeyFails() {
 func (s *DriverTestSuite) TestApplyRecordsLedgerAndSnapshot() {
 	users := usersTable()
 	first := s.nextMigration(createTableOp(users))
-	s.Require().NoError(s.driver.ApplyMigration(s.ctx, request(first, map[string]core.TableSchema{"users": users})))
+	s.Require().NoError(s.driver.ApplyMigration(s.ctx, request(first, map[string]schema.Table{"users": users})))
 
 	s.Equal([]string{first.ID}, s.ledgerIDs())
 	snap, found, err := s.tm.Snapshot(s.ctx, snapshotTable)
@@ -684,7 +685,7 @@ func (s *DriverTestSuite) TestApplyRecordsLedgerAndSnapshot() {
 
 	posts := postsTable()
 	second := s.nextMigration(createTableOp(posts))
-	s.Require().NoError(s.driver.ApplyMigration(s.ctx, request(second, map[string]core.TableSchema{"users": users, "posts": posts})))
+	s.Require().NoError(s.driver.ApplyMigration(s.ctx, request(second, map[string]schema.Table{"users": users, "posts": posts})))
 
 	s.Equal([]string{first.ID, second.ID}, s.ledgerIDs())
 	snap, found, err = s.tm.Snapshot(s.ctx, snapshotTable)
@@ -701,7 +702,7 @@ func (s *DriverTestSuite) TestApplyIsAtomic() {
 
 	err := s.apply(
 		createTableOp(usersTable()),
-		addColumnOp("does_not_exist", core.Column{Name: "x", Type: core.ColTypeText, Nullable: true}),
+		addColumnOp("does_not_exist", schema.Column{Name: "x", Type: schema.ColTypeText, Nullable: true}),
 	)
 	s.Error(err)
 	s.False(s.tableExists("users"), "DDL before the failing operation is rolled back")
@@ -728,7 +729,7 @@ func (s *DriverTestSuite) TestRecordBaselineExecutesNoDDL() {
 	users := usersTable()
 	m := s.nextMigration(createTableOp(users))
 	m.IsBaseline = true
-	s.Require().NoError(s.driver.RecordBaseline(s.ctx, request(m, map[string]core.TableSchema{"users": users})))
+	s.Require().NoError(s.driver.RecordBaseline(s.ctx, request(m, map[string]schema.Table{"users": users})))
 
 	s.False(s.tableExists("users"), "baseline must not execute Up")
 	s.Equal([]string{m.ID}, s.ledgerIDs())
@@ -761,11 +762,11 @@ func (s *DriverTestSuite) TestUnknownOperationKindFails() {
 // TestUpThenDownRoundTrip applies a migration and then its inverse (built the
 // way MigrationGenerator's invertOperation does), and expects the original shape back.
 func (s *DriverTestSuite) TestUpThenDownRoundTrip() {
-	s.seedUsersAndPosts(core.FKCascade)
+	s.seedUsersAndPosts(schema.FKCascade)
 	before := s.columns("users")
 
-	bio := core.Column{Name: "bio", Type: core.ColTypeText, Nullable: true}
-	idx := core.Index{Name: "idx_users_bio", Columns: []string{"bio"}}
+	bio := schema.Column{Name: "bio", Type: schema.ColTypeText, Nullable: true}
+	idx := schema.Index{Name: "idx_users_bio", Columns: []string{"bio"}}
 	s.mustApply(
 		addColumnOp("users", bio),
 		addIndexOp("users", idx),
@@ -773,7 +774,7 @@ func (s *DriverTestSuite) TestUpThenDownRoundTrip() {
 		dropForeignKeyOp("posts", "fk_posts_user"),
 	)
 	s.mustApply(
-		addForeignKeyOp("posts", postsUserFK(core.FKCascade)),
+		addForeignKeyOp("posts", postsUserFK(schema.FKCascade)),
 		renameColumnOp("users", "display_name", "name"),
 		dropIndexOp("users", idx.Name),
 		dropColumnOp("users", bio.Name),
@@ -799,13 +800,13 @@ func (s *DriverTestSuite) renderer() core.MigrationRenderer {
 // must leave schema, data and ledger exactly as they were.
 func (s *DriverTestSuite) TestRenderMigrationHasNoSideEffects() {
 	r := s.renderer()
-	s.seedUsersAndPosts(core.FKCascade)
+	s.seedUsersAndPosts(schema.FKCascade)
 	beforeUsers, beforePosts, beforeLedger := s.columns("users"), s.columns("posts"), s.ledgerIDs()
 
 	m := s.nextMigration(
-		createTableOp(core.TableSchema{Name: "tags", Columns: []core.Column{{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true}}}),
-		addColumnOp("users", core.Column{Name: "bio", Type: core.ColTypeText, Nullable: true}),
-		alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "x"}),
+		createTableOp(schema.Table{Name: "tags", Columns: []schema.Column{{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true}}}),
+		addColumnOp("users", schema.Column{Name: "bio", Type: schema.ColTypeText, Nullable: true}),
+		alterColumnOp("users", schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Default: "x"}),
 		dropForeignKeyOp("posts", "fk_posts_user"),
 	)
 	script, err := r.RenderMigration(s.ctx, m)
@@ -860,9 +861,9 @@ func (s *DriverTestSuite) TestResolverMapsPhysicalNames() {
 
 	s.mustApply(createTableOp(usersTable()), createTableOp(postsTable()))
 	s.mustApply(
-		addIndexOp("users", core.Index{Name: "idx_users_email", Columns: []string{"email"}}),
-		addForeignKeyOp("posts", postsUserFK(core.FKCascade)),
-		alterColumnOp("users", core.Column{Name: "email", Type: core.ColTypeString, Length: 320, Unique: true}),
+		addIndexOp("users", schema.Index{Name: "idx_users_email", Columns: []string{"email"}}),
+		addForeignKeyOp("posts", postsUserFK(schema.FKCascade)),
+		alterColumnOp("users", schema.Column{Name: "email", Type: schema.ColTypeString, Length: 320, Unique: true}),
 	)
 
 	s.False(s.tableExists("users"))

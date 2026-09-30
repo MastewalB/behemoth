@@ -14,6 +14,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
+	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,16 +135,16 @@ func (m *PostgresTestManager) ForeignKeys(ctx context.Context, table string) ([]
 }
 
 // pgFKAction maps pg_constraint.confdeltype codes.
-func pgFKAction(code string) core.ForeignKeyAction {
+func pgFKAction(code string) schema.ForeignKeyAction {
 	switch code {
 	case "c":
-		return core.FKCascade
+		return schema.FKCascade
 	case "n":
-		return core.FKSetNull
+		return schema.FKSetNull
 	case "r":
-		return core.FKRestrict
+		return schema.FKRestrict
 	default:
-		return core.ForeignKeyAction("no_action")
+		return schema.ForeignKeyAction("no_action")
 	}
 }
 
@@ -232,7 +233,7 @@ func (m *PostgresTestManager) CleanupDatabase(ctx context.Context) {
 
 // ---- Postgres-specific: core.SchemaIntrospector ----
 
-// tableModel is the minimal behemoth.Model the SchemaRegistry needs to accept
+// tableModel is the minimal behemoth.Model the schema.Registry needs to accept
 // a declaration; only SchemaName is ever called.
 type tableModel struct {
 	behemoth.Model
@@ -243,30 +244,30 @@ func (m tableModel) SchemaName() string { return m.name }
 
 // allTypesTable exercises every canonical type the driver renders distinctly,
 // plus the column features the introspector has to map back.
-func allTypesTable() core.TableSchema {
-	return core.TableSchema{
+func allTypesTable() schema.Table {
+	return schema.Table{
 		Name: "all_types",
-		Columns: []core.Column{
-			{Name: "id", Type: core.ColTypeBigInt, PrimaryKey: true, AutoInc: true},
-			{Name: "s", Type: core.ColTypeString, Length: 40, Unique: true},
-			{Name: "t", Type: core.ColTypeText, Nullable: true, Default: "it's"},
-			{Name: "i", Type: core.ColTypeInteger, Default: 7},
-			{Name: "r", Type: core.ColTypeReal, Nullable: true},
-			{Name: "n", Type: core.ColTypeNumeric, Nullable: true},
-			{Name: "b", Type: core.ColTypeBoolean, Default: true},
-			{Name: "dt", Type: core.ColTypeDateTime, Nullable: true},
-			{Name: "ts", Type: core.ColTypeTimestamp, Overrides: map[string]core.ColumnOverride{postgres.DriverName: {Default: "now()"}}},
-			{Name: "u", Type: core.ColTypeUuid, Nullable: true},
-			{Name: "j", Type: core.ColTypeJson, Nullable: true},
-			{Name: "by", Type: core.ColTypeBytes, Nullable: true},
-			{Name: "owner_id", Type: core.ColTypeInteger, Nullable: true},
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeBigInt, PrimaryKey: true, AutoInc: true},
+			{Name: "s", Type: schema.ColTypeString, Length: 40, Unique: true},
+			{Name: "t", Type: schema.ColTypeText, Nullable: true, Default: "it's"},
+			{Name: "i", Type: schema.ColTypeInteger, Default: 7},
+			{Name: "r", Type: schema.ColTypeReal, Nullable: true},
+			{Name: "n", Type: schema.ColTypeNumeric, Nullable: true},
+			{Name: "b", Type: schema.ColTypeBoolean, Default: true},
+			{Name: "dt", Type: schema.ColTypeDateTime, Nullable: true},
+			{Name: "ts", Type: schema.ColTypeTimestamp, Overrides: map[string]schema.ColumnOverride{postgres.DriverName: {Default: "now()"}}},
+			{Name: "u", Type: schema.ColTypeUuid, Nullable: true},
+			{Name: "j", Type: schema.ColTypeJson, Nullable: true},
+			{Name: "by", Type: schema.ColTypeBytes, Nullable: true},
+			{Name: "owner_id", Type: schema.ColTypeInteger, Nullable: true},
 		},
-		Indexes: []core.Index{
+		Indexes: []schema.Index{
 			{Name: "idx_all_types_i_b", Columns: []string{"i", "b"}},
 			{Name: "uq_all_types_r_n", Columns: []string{"r", "n"}, Unique: true},
 		},
-		ForeignKeys: []core.ForeignKey{
-			{Name: "fk_all_types_owner", Columns: []string{"owner_id"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: core.FKSetNull},
+		ForeignKeys: []schema.ForeignKey{
+			{Name: "fk_all_types_owner", Columns: []string{"owner_id"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: schema.FKSetNull},
 		},
 	}
 }
@@ -280,7 +281,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 	setup := func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		var ops []core.SchemaOperation
-		for _, table := range []core.TableSchema{usersTable(), allTypesTable()} {
+		for _, table := range []schema.Table{usersTable(), allTypesTable()} {
 			bare := table
 			bare.Indexes, bare.ForeignKeys = nil, nil
 			ops = append(ops, createTableOp(bare))
@@ -312,11 +313,11 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 			assert.Equal(t, want.PrimaryKey, got.PrimaryKey, want.Name)
 			assert.Equal(t, want.Unique, got.Unique, want.Name)
 			assert.Equal(t, want.AutoInc, got.AutoInc, want.Name)
-			if want.Type == core.ColTypeString {
+			if want.Type == schema.ColTypeString {
 				assert.Equal(t, want.Length, got.Length, want.Name)
 			}
 		}
-		byName := map[string]core.Column{}
+		byName := map[string]schema.Column{}
 		for _, c := range live.Schema.Columns {
 			byName[c.Name] = c
 		}
@@ -334,8 +335,8 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 	// with no divergence, so a generate-only run right after produces nothing.
 	t.Run("NoDivergenceAgainstDeclaredRegistry", func(t *testing.T) {
 		setup(t)
-		registry := core.NewSchemaRegistry()
-		for _, table := range []core.TableSchema{usersTable(), allTypesTable()} {
+		registry := schema.NewRegistry()
+		for _, table := range []schema.Table{usersTable(), allTypesTable()} {
 			require.NoError(t, registry.Declare(tableModel{name: table.Name}, table))
 		}
 		require.NoError(t, registry.Freeze())
@@ -369,7 +370,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		live, err := driver.Introspect(ctx, "legacy")
 		require.NoError(t, err)
 		assert.Empty(t, live.Ambiguities)
-		cols := map[string]core.Column{}
+		cols := map[string]schema.Column{}
 		for _, c := range live.Schema.Columns {
 			cols[c.Name] = c
 		}
@@ -377,7 +378,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		assert.True(t, cols["b"].PrimaryKey)
 		assert.True(t, cols["seq"].AutoInc, "serial maps to AutoInc")
 		assert.Nil(t, cols["seq"].Overrides)
-		assert.Equal(t, core.ColTypeText, cols["note"].Type, "unbounded VARCHAR is TEXT")
+		assert.Equal(t, schema.ColTypeText, cols["note"].Type, "unbounded VARCHAR is TEXT")
 		assert.Empty(t, live.Schema.Indexes, "expression indexes can't be represented")
 	})
 
@@ -403,35 +404,35 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 			CREATE TABLE feelings (id INTEGER PRIMARY KEY, m mood, p POINT, note TEXT)`)
 		require.NoError(t, err)
 
-		introspect := func(t *testing.T, cols []core.Column, trackExtra bool) (*core.IntrospectionReport, error) {
-			registry := core.NewSchemaRegistry()
-			require.NoError(t, registry.Declare(tableModel{name: "feelings"}, core.TableSchema{Name: "feelings", Columns: cols}))
+		introspect := func(t *testing.T, cols []schema.Column, trackExtra bool) (*core.IntrospectionReport, error) {
+			registry := schema.NewRegistry()
+			require.NoError(t, registry.Declare(tableModel{name: "feelings"}, schema.Table{Name: "feelings", Columns: cols}))
 			report, err := core.RunIntrospection(ctx, registry, driver, trackExtra)
 			require.NoError(t, err)
 			return report, core.RejectAmbiguousTypes(report)
 		}
-		id := core.Column{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true}
-		note := core.Column{Name: "note", Type: core.ColTypeText, Nullable: true}
+		id := schema.Column{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true}
+		note := schema.Column{Name: "note", Type: schema.ColTypeText, Nullable: true}
 
 		// m is declared (as text), p is not.
-		_, err = introspect(t, []core.Column{id, {Name: "m", Type: core.ColTypeText, Nullable: true}, note}, true)
+		_, err = introspect(t, []schema.Column{id, {Name: "m", Type: schema.ColTypeText, Nullable: true}, note}, true)
 		require.Error(t, err)
 		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationUnmappableColumnType))
 		assert.Contains(t, err.Error(), "feelings.m")
 		assert.Contains(t, err.Error(), "feelings.p", "undeclared column recorded by a baseline is rejected too")
 
-		_, err = introspect(t, []core.Column{id, {Name: "m", Type: core.ColTypeText, Nullable: true}, note}, false)
+		_, err = introspect(t, []schema.Column{id, {Name: "m", Type: schema.ColTypeText, Nullable: true}, note}, false)
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), "feelings.p", "undeclared columns are ignored when extras aren't tracked")
 
 		// A declared-only text column would pair with m's guessed text type as a rename.
-		report, err := introspect(t, []core.Column{id, {Name: "feeling", Type: core.ColTypeText, Nullable: true}, note}, true)
+		report, err := introspect(t, []schema.Column{id, {Name: "feeling", Type: schema.ColTypeText, Nullable: true}, note}, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "feelings.m")
 		assert.Empty(t, report.Tables["feelings"].Renames, "an unmappable column is never a rename candidate")
 
 		// Only mappable columns: nothing to reject.
-		_, err = introspect(t, []core.Column{id, note}, false)
+		_, err = introspect(t, []schema.Column{id, note}, false)
 		assert.NoError(t, err)
 	})
 
@@ -442,25 +443,25 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 	t.Run("PhysicalNamesMapBackToCanonical", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 
-		users := core.TableSchema{
+		users := schema.Table{
 			Name: "users", PhysicalName: "app_users",
-			Columns: []core.Column{
-				{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true},
-				{Name: "email", PhysicalName: "email_address", Type: core.ColTypeString, Length: 255, Unique: true},
-				{Name: "name", Type: core.ColTypeText, Nullable: true},
+			Columns: []schema.Column{
+				{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+				{Name: "email", PhysicalName: "email_address", Type: schema.ColTypeString, Length: 255, Unique: true},
+				{Name: "name", Type: schema.ColTypeText, Nullable: true},
 			},
-			Indexes: []core.Index{{Name: "idx_users_email_name", Columns: []string{"email", "name"}}},
+			Indexes: []schema.Index{{Name: "idx_users_email_name", Columns: []string{"email", "name"}}},
 		}
-		posts := core.TableSchema{
+		posts := schema.Table{
 			Name: "posts", PhysicalName: "app_posts",
-			Columns: []core.Column{
-				{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true},
-				{Name: "user_id", PhysicalName: "author_id", Type: core.ColTypeInteger, Nullable: true},
+			Columns: []schema.Column{
+				{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+				{Name: "user_id", PhysicalName: "author_id", Type: schema.ColTypeInteger, Nullable: true},
 			},
-			ForeignKeys: []core.ForeignKey{{Name: "fk_posts_user", Columns: []string{"user_id"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: core.FKCascade}},
+			ForeignKeys: []schema.ForeignKey{{Name: "fk_posts_user", Columns: []string{"user_id"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: schema.FKCascade}},
 		}
 
-		registry := core.NewSchemaRegistry()
+		registry := schema.NewRegistry()
 		require.NoError(t, registry.Declare(tableModel{name: "users"}, users))
 		require.NoError(t, registry.Declare(tableModel{name: "posts"}, posts))
 		require.NoError(t, registry.Freeze())
@@ -543,8 +544,8 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 
 	t.Run("AlterColumnUsesPrevColumnForConstraints", func(t *testing.T) {
 		setup(t)
-		prev := core.Column{Name: "name", Type: core.ColTypeText, Nullable: true}
-		next := core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Unique: true, Check: "length(name) > 1"}
+		prev := schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true}
+		next := schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Unique: true, Check: "length(name) > 1"}
 		op := alterColumnOp("users", next)
 		op.PrevColumn = &prev
 		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0002_test", Up: []core.SchemaOperation{op}}, nil)))
