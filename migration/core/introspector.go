@@ -14,6 +14,7 @@ func RunIntrospection(
 	trackExtraColumns bool,
 ) (*IntrospectionReport, error) {
 	report := &IntrospectionReport{Tables: map[string]TableIntrospection{}}
+	names := newCanonicalNames(current.All())
 
 	for _, declared := range current.All() {
 		exists, err := introspector.TableExists(ctx, declared.Name)
@@ -38,6 +39,7 @@ func RunIntrospection(
 			continue
 		}
 
+		live = names.canonicalize(declared.Name, live)
 		cols, renames := diffColumns(declared.Columns, live.Schema.Columns, live.Ambiguities, trackExtraColumns)
 		report.Tables[declared.Name] = TableIntrospection{
 			Table:       declared.Name,
@@ -49,6 +51,92 @@ func RunIntrospection(
 		}
 	}
 	return report, nil
+}
+
+// canonicalNames maps physical names back to canonical ones.
+//
+// An introspector only sees the live database, i.e. physical names, and
+// SchemaResolver maps canonical -> physical only. Without translating back,
+// a column declared {Name: "email", PhysicalName: "email_address"} would be
+// diffed as a missing "email" plus an extra "email_address" — a spurious
+// rename (or a destructive drop+add). The mapping comes from the declared
+// schema's own PhysicalName fields, the same source BuildSchemaResolverTable
+// derives the forward mapping from, so every driver gets this for free.
+type canonicalNames struct {
+	tables  map[string]string            // physical table -> canonical table
+	columns map[string]map[string]string // canonical table -> physical column -> canonical column
+}
+
+func newCanonicalNames(declared []TableSchema) canonicalNames {
+	n := canonicalNames{tables: map[string]string{}, columns: map[string]map[string]string{}}
+	for _, t := range declared {
+		n.tables[orDefault(t.PhysicalName, t.Name)] = t.Name
+		cols := map[string]string{}
+		for _, c := range t.Columns {
+			if c.PhysicalName != "" && c.PhysicalName != c.Name {
+				cols[c.PhysicalName] = c.Name
+			}
+		}
+		n.columns[t.Name] = cols
+	}
+	return n
+}
+
+func (n canonicalNames) table(physical string) string {
+	if canonical, ok := n.tables[physical]; ok {
+		return canonical
+	}
+	return physical // not a declared table — nothing to map back to
+}
+
+func (n canonicalNames) column(canonicalTable, physical string) string {
+	if canonical, ok := n.columns[canonicalTable][physical]; ok {
+		return canonical
+	}
+	return physical
+}
+
+func (n canonicalNames) columnList(canonicalTable string, physical []string) []string {
+	out := make([]string, len(physical))
+	for i, c := range physical {
+		out[i] = n.column(canonicalTable, c)
+	}
+	return out
+}
+
+// canonicalize rewrites every name in an introspected table (whose own name
+// is canonicalTable) from physical to canonical. A renamed column keeps its
+// live name in PhysicalName, so nothing is lost. live is never mutated in place.
+func (n canonicalNames) canonicalize(canonicalTable string, live IntrospectedTable) IntrospectedTable {
+	out := live
+	out.Schema.Columns = make([]Column, len(live.Schema.Columns))
+	for i, c := range live.Schema.Columns {
+		if canonical := n.column(canonicalTable, c.Name); canonical != c.Name {
+			c.PhysicalName, c.Name = c.Name, canonical // only set when it differs, matching how columns are declared
+		}
+		out.Schema.Columns[i] = c
+	}
+
+	out.Ambiguities = make([]ColumnAmbiguity, len(live.Ambiguities))
+	for i, a := range live.Ambiguities {
+		a.Column = n.column(canonicalTable, a.Column)
+		out.Ambiguities[i] = a
+	}
+
+	out.Schema.Indexes = make([]Index, len(live.Schema.Indexes))
+	for i, idx := range live.Schema.Indexes {
+		idx.Columns = n.columnList(canonicalTable, idx.Columns)
+		out.Schema.Indexes[i] = idx
+	}
+
+	out.Schema.ForeignKeys = make([]ForeignKey, len(live.Schema.ForeignKeys))
+	for i, fk := range live.Schema.ForeignKeys {
+		fk.Columns = n.columnList(canonicalTable, fk.Columns)
+		fk.RefTable = n.table(fk.RefTable)
+		fk.RefColumns = n.columnList(fk.RefTable, fk.RefColumns)
+		out.Schema.ForeignKeys[i] = fk
+	}
+	return out
 }
 
 // PartitionForBaseline splits current's declared tables into ones that
@@ -108,7 +196,7 @@ func diffColumns(declared, other []Column, ambiguities []ColumnAmbiguity, trackE
 	declaredByName := indexColumnsByName(declared)
 	otherByName := indexColumnsByName(other)
 	ambigByCol := make(map[string]ColumnAmbiguity, len(ambiguities))
-	
+
 	for _, a := range ambiguities {
 		ambigByCol[a.Column] = a
 	}

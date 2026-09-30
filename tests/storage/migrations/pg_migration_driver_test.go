@@ -435,6 +435,80 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		assert.NoError(t, err)
 	})
 
+	// Tables and columns whose physical names differ from their canonical ones
+	// must still diff as matches: RunIntrospection maps live (physical) names
+	// back through the declared PhysicalName fields — the same fields the
+	// DefaultSchemaResolver that created them was built from.
+	t.Run("PhysicalNamesMapBackToCanonical", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+
+		users := core.TableSchema{
+			Name: "users", PhysicalName: "app_users",
+			Columns: []core.Column{
+				{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true},
+				{Name: "email", PhysicalName: "email_address", Type: core.ColTypeString, Length: 255, Unique: true},
+				{Name: "name", Type: core.ColTypeText, Nullable: true},
+			},
+			Indexes: []core.Index{{Name: "idx_users_email_name", Columns: []string{"email", "name"}}},
+		}
+		posts := core.TableSchema{
+			Name: "posts", PhysicalName: "app_posts",
+			Columns: []core.Column{
+				{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true},
+				{Name: "user_id", PhysicalName: "author_id", Type: core.ColTypeInteger, Nullable: true},
+			},
+			ForeignKeys: []core.ForeignKey{{Name: "fk_posts_user", Columns: []string{"user_id"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: core.FKCascade}},
+		}
+
+		registry := core.NewSchemaRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "users"}, users))
+		require.NoError(t, registry.Declare(tableModel{name: "posts"}, posts))
+		require.NoError(t, registry.Freeze())
+		resolver := core.NewSchemaResolver()
+		resolver.Freeze(core.BuildSchemaResolverTable(registry, core.NewMigrationConfig(core.MigrationConfig{})))
+		mapped := postgres.NewPostgreSQLDriver(db, resolver)
+
+		bareUsers, barePosts := users, posts
+		bareUsers.Indexes, barePosts.ForeignKeys = nil, nil
+		require.NoError(t, mapped.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: []core.SchemaOperation{
+			createTableOp(bareUsers), createTableOp(barePosts),
+			addIndexOp("users", users.Indexes[0]),
+			addForeignKeyOp("posts", posts.ForeignKeys[0]),
+		}}, nil)))
+
+		// Physically, only the physical names exist.
+		exists, err := tm.TableExists(ctx, "app_users")
+		require.NoError(t, err)
+		require.True(t, exists)
+		cols, err := tm.Columns(ctx, "app_posts")
+		require.NoError(t, err)
+		assert.Equal(t, "author_id", cols[1].Name)
+
+		report, err := core.RunIntrospection(ctx, registry, mapped, true)
+		require.NoError(t, err)
+		require.Len(t, report.Tables, 2)
+		for name, ti := range report.Tables {
+			assert.True(t, ti.ExistsLive, name)
+			assert.Empty(t, ti.Renames, "%s: a physical name must not look like a rename", name)
+			for _, f := range ti.Columns {
+				assert.Equal(t, core.ColMatch, f.Kind, "%s.%s", name, f.Name)
+			}
+			for _, f := range ti.Indexes {
+				assert.Equal(t, core.IdxMatch, f.Kind, "%s index %s", name, f.Name)
+			}
+			for _, f := range ti.ForeignKeys {
+				assert.Equal(t, core.FKMatch, f.Kind, "%s fk %s", name, f.Name)
+			}
+		}
+
+		// The live physical name is kept, not lost.
+		for _, f := range report.Tables["users"].Columns {
+			if f.Name == "email" {
+				assert.Equal(t, "email_address", f.Live.PhysicalName)
+			}
+		}
+	})
+
 	t.Run("ViewsAndMissingTables", func(t *testing.T) {
 		setup(t)
 		_, err := db.ExecContext(ctx, `CREATE VIEW active_users AS SELECT * FROM users`)
