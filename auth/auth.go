@@ -66,8 +66,11 @@ func InitDatabase(
 ) (behemoth.Database, error) {
 	switch cfg.Name {
 	case behemoth.SQLite:
+		// TODO: pass the SchemaResolver once Boot builds it (BuildSchemaResolverTable);
+		// until then canonical names are used as physical names.
 		return adapters.NewSQLiteAdapter(
 			cfg.DB,
+			nil,
 		), nil
 
 	default:

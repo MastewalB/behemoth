@@ -10,6 +10,8 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
+	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -170,4 +172,68 @@ func readBackThroughAdapter(t *testing.T, driver core.SchemaDriver, database beh
 func TestSQLiteLedgerReadsBackThroughAdapter(t *testing.T) {
 	db := openSQLite(t)
 	readBackThroughAdapter(t, sqlite.NewSQLiteDriver(db, nil), testutils.SetupSQLiteAdapter(t, db))
+}
+
+// TestSQLiteRunnerUsesConfiguredTables is the end-to-end path with the default
+// config: the driver writes the ledger/snapshot under cfg.TableName, and the
+// runner reads them back through an adapter that resolves the models'
+// canonical names (behemoth_migration_ledger, behemoth_schema_snapshot) with
+// the resolver Boot builds.
+func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
+	ctx := context.Background()
+	db := openSQLite(t)
+	cfg := core.NewMigrationConfig(core.MigrationConfig{})
+	require.NotEqual(t, core.LedgerCanonicalName, cfg.TableName, "the test needs physical names that differ")
+
+	resolver := core.NewSchemaResolver()
+	resolver.Freeze(core.BuildSchemaResolverTable(core.NewSchemaRegistry(), cfg))
+	driver := sqlite.NewSQLiteDriver(db, resolver)
+	runner := core.NewMigrationRunner(adapters.NewSQLiteAdapter(db, resolver), driver, cfg, types.NewTelemetry(nil, nil, nil))
+
+	users, posts := usersTable(), postsTable()
+	first := core.Migration{ID: "0001_users", Up: []core.SchemaOperation{createTableOp(users)}}
+	second := core.Migration{ID: "0002_posts", Up: []core.SchemaOperation{createTableOp(posts)}, DependsOn: []string{first.ID}}
+
+	// The runner can't record the very first migration on a fresh database
+	// (it reads the bookkeeping tables before the driver creates them), so the
+	// first one is recorded directly through the driver, into cfg's tables.
+	require.NoError(t, driver.ApplyMigration(ctx, core.MigrationRequest{
+		Migration:      first,
+		LedgerEntry:    core.MigrationLedgerEntry{ID: first.ID, AppliedAt: time.Now()},
+		SnapshotUpdate: core.SchemaSnapshot{Version: first.ID, Tables: map[string]core.TableSchema{"users": users}},
+		LedgerTable:    cfg.TableName,
+		SnapshotTable:  cfg.TableName + "_snapshot",
+	}))
+
+	pending, err := runner.Pending(ctx, []core.Migration{first, second})
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the ledger in cfg.TableName is read through the resolver")
+	assert.Equal(t, second.ID, pending[0].ID)
+
+	require.NoError(t, runner.Apply(ctx, pending))
+
+	pending, err = runner.Pending(ctx, []core.Migration{first, second})
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+
+	snap, err := runner.LoadSnapshot(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, second.ID, snap.Version)
+	assert.ElementsMatch(t, []string{"users", "posts"}, keysOf(snap.Tables), "Apply projected the snapshot it loaded")
+
+	// Nothing was written under the canonical names.
+	tm := NewSQLiteTestManager(db)
+	for _, canonical := range []string{core.LedgerCanonicalName, core.SnapshotCanonicalName} {
+		exists, err := tm.TableExists(ctx, canonical)
+		require.NoError(t, err)
+		assert.False(t, exists, canonical)
+	}
+}
+
+func keysOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

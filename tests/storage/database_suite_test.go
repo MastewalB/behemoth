@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/uptrace/bun"
@@ -15,8 +16,9 @@ import (
 )
 
 type SQLiteAdapterTestManager struct {
-	t  *testing.T
-	db *sql.DB
+	t     *testing.T
+	db    *sql.DB
+	table string // physical users table; "users" when empty
 }
 
 func (sqtm *SQLiteAdapterTestManager) Create(id string) behemoth.Model {
@@ -71,7 +73,11 @@ func (sqtm *SQLiteAdapterTestManager) CleanupTables() {
 	// }
 	// _, _ = sqtm.db.ExecContext(ctx, `PRAGMA foreign_keys = ON;`)
 
-	if _, err := sqtm.db.ExecContext(ctx, "DELETE FROM users;"); err != nil {
+	table := sqtm.table
+	if table == "" {
+		table = "users"
+	}
+	if _, err := sqtm.db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 		sqtm.t.Fatal(err)
 	}
 }
@@ -92,6 +98,37 @@ func TestSQLiteAdapter(t *testing.T) {
 	suite := NewDatabaseTestSuite(t, adapter, manager)
 	suite.Run()
 }
+// TestSQLiteAdapterWithPhysicalNames runs the whole suite against a table
+// whose physical table and column names all differ from the model's canonical
+// ones: every statement the adapter builds has to resolve every name.
+func TestSQLiteAdapterWithPhysicalNames(t *testing.T) {
+	db := testutils.SetupSQLiteTestDBWithSchema(t, `
+		CREATE TABLE app_users (
+			user_id TEXT PRIMARY KEY,
+			email_address TEXT NOT NULL,
+			handle TEXT UNIQUE NOT NULL
+		);`)
+
+	registry := core.NewSchemaRegistry()
+	err := registry.Declare(&testutils.TestUser{}, core.TableSchema{
+		Name: "users", PhysicalName: "app_users",
+		Columns: []core.Column{
+			{Name: "id", PhysicalName: "user_id", Type: core.ColTypeText, PrimaryKey: true},
+			{Name: "email", PhysicalName: "email_address", Type: core.ColTypeText},
+			{Name: "username", PhysicalName: "handle", Type: core.ColTypeText, Unique: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := core.NewSchemaResolver()
+	resolver.Freeze(core.BuildSchemaResolverTable(registry, core.NewMigrationConfig(core.MigrationConfig{})))
+
+	manager := &SQLiteAdapterTestManager{t: t, db: db, table: "app_users"}
+	suite := NewDatabaseTestSuite(t, adapters.NewSQLiteAdapter(db, resolver), manager)
+	suite.Run()
+}
+
 func TestMongoAdapter(t *testing.T) {
 	ctx := t.Context()
 	mongoClient, cleanupDatabase := testutils.SetupMongoTestDB(ctx, t)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/types"
 )
@@ -307,10 +308,9 @@ type MigrationConfig struct {
 // the user never asked for.
 func (c MigrationConfig) snapshotTableName() string { return c.TableName + "_snapshot" }
 
-type SchemaResolver interface {
-	Resolve(canonicalName string) string // returns the physical name; canonicalName itself if nothing overrides it
-	ResolveColumn(canonicalTable, canonicalColumn string) string
-}
+// SchemaResolver is defined next to behemoth.Model so storage adapters can
+// resolve physical names without depending on the migration package.
+type SchemaResolver = behemoth.SchemaResolver
 
 // ConditionValueTransformer provides a way to customize clause conditions.
 // If models have fields that have different operator semantics at database level, they can change the clause
