@@ -3,16 +3,6 @@ package core
 import "context"
 
 type SchemaDriver interface {
-	CreateTable(ctx context.Context, t TableSchema) error
-	DropTable(ctx context.Context, name string) error
-	AddColumn(ctx context.Context, table string, col Column) error
-	DropColumn(ctx context.Context, table, column string) error
-	RenameColumn(ctx context.Context, table, oldName, newName string) error
-	AlterColumn(ctx context.Context, table string, col Column) error
-	AddIndex(ctx context.Context, table string, idx Index) error
-	DropIndex(ctx context.Context, table, indexName string) error
-	AddForeignKey(ctx context.Context, table string, fk ForeignKey) error
-	DropForeignKey(ctx context.Context, table, fkName string) error
 
 	// ApplyOperation is the one method MigrationRunner calls:
 	// dispatches to the right method above by op.Kind, so the big switch

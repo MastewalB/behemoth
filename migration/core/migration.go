@@ -2,37 +2,13 @@ package core
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 )
-
-// type Driver interface {
-// 	CreateTable(ctx context.Context, name string, schema *TableSchema) error
-// 	DropTable(ctx context.Context, name string) error
-// 	AddColumn(ctx context.Context, table, column, columnType string) error
-// 	RemoveColumn(ctx context.Context, table, column string) error
-
-// 	CreateMigrationTable(ctx context.Context) error
-
-// 	Open(config *Config) (Driver, error)
-
-// 	// Run executes raw migration string
-// 	Run(ctx context.Context, migration string) error
-
-// 	// Version returns the currently active version.
-// 	// When no migration has been applied, it must return version -1.
-// 	Version(ctx context.Context) (version int, err error)
-
-// 	SetVersion(ctx context.Context, version int) error
-
-// 	Close() error
-// 	Ping(ctx context.Context) error
-
-// 	Name() string
-// }
 
 type Config struct {
 	DB                    any
@@ -69,6 +45,18 @@ type DefaultSchemaRegistry struct {
 	foreignKeyExts map[string][]ForeignKeyContribution
 	frozen         bool
 }
+
+func NewSchemaRegistry() *DefaultSchemaRegistry {
+	return &DefaultSchemaRegistry{
+		tables:         map[string]TableSchema{},
+		models:         map[string]behemoth.Model{},
+		columnExts:     map[string][]ColumnContribution{},
+		indexExts:      map[string][]IndexContribution{},
+		foreignKeyExts: map[string][]ForeignKeyContribution{},
+	}
+}
+
+var _ SchemaRegistry = (*DefaultSchemaRegistry)(nil)
 
 // Declare rejects a duplicate table name from a different owner
 // A plugin re-declaring its own table across repeated Declare calls is equally rejected
@@ -116,9 +104,31 @@ func (r *DefaultSchemaRegistry) ExtendColumn(c ColumnContribution) error {
 	return nil
 }
 
+func (r *DefaultSchemaRegistry) ExtendIndex(c IndexContribution) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return behemotherr.NewConfigurationError("SchemaRegistry.ExtendIndex", "cannot extend after boot has completed", nil)
+	}
+	// Same deferred table-existence check as ExtendColumn — enforced in Freeze.
+	for _, existing := range r.indexExts[c.Table] {
+		if existing.Index.Name == c.Index.Name {
+			return behemotherr.NewConfigurationError("SchemaRegistry.ExtendIndex",
+				fmt.Sprintf("table %q index %q already contributed by %q", c.Table, c.Index.Name, existing.Owner), nil)
+		}
+	}
+	r.indexExts[c.Table] = append(r.indexExts[c.Table], c)
+	return nil
+}
+
 func (r *DefaultSchemaRegistry) Lookup(name string) (TableSchema, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.lookupLocked(name)
+}
+
+// lookupLocked merges the base shape with its contributions; callers hold r.mu.
+func (r *DefaultSchemaRegistry) lookupLocked(name string) (TableSchema, bool) {
 	base, ok := r.tables[name]
 	if !ok {
 		return TableSchema{}, false
@@ -137,7 +147,27 @@ func (r *DefaultSchemaRegistry) LookupModel(name string) (behemoth.Model, bool) 
 	return m, ok
 }
 
-func (r *DefaultSchemaRegistry) All() []TableSchema { return nil }
+// All returns every declared table in its merged form (same shape as Lookup),
+// sorted by name so every consumer — diffing, baseline generation, resolver
+// building — sees a deterministic order.
+func (r *DefaultSchemaRegistry) All() []TableSchema {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	names := make([]string, 0, len(r.tables))
+	for name := range r.tables {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]TableSchema, 0, len(names))
+	for _, name := range names {
+		t, _ := r.lookupLocked(name)
+		out = append(out, t)
+	}
+	return out
+}
+
 func (r *DefaultSchemaRegistry) Freeze() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -147,7 +177,12 @@ func (r *DefaultSchemaRegistry) Freeze() error {
 				fmt.Sprintf("table %q was never declared, but %q attempted to extend it", table, contributions[0].Owner), nil)
 		}
 	}
-	// identical check for indexExts
+	for table, contributions := range r.indexExts {
+		if _, ok := r.tables[table]; !ok {
+			return behemotherr.NewConfigurationError("SchemaRegistry.Freeze",
+				fmt.Sprintf("table %q was never declared, but %q attempted to extend it", table, contributions[0].Owner), nil)
+		}
+	}
 	r.frozen = true
 	return nil
 }
@@ -171,30 +206,49 @@ func NewMigrationConfig(cfg MigrationConfig) MigrationConfig {
 	return cfg
 }
 
+// SchemaResolverTable is the canonical -> physical name mapping a
+// DefaultSchemaResolver serves after Freeze.
+type SchemaResolverTable struct {
+	Tables  map[string]string            // canonical table -> physical table
+	Columns map[string]map[string]string // canonical table -> canonical column -> physical column
+}
+
 type DefaultSchemaResolver struct {
 	mu     sync.RWMutex
-	table  map[string]string
+	table  SchemaResolverTable
 	frozen bool
 }
 
 func NewSchemaResolver() *DefaultSchemaResolver {
-	return &DefaultSchemaResolver{table: map[string]string{}} // empty — Resolve degrades to identity until Freeze runs
+	return &DefaultSchemaResolver{} // empty — Resolve/ResolveColumn degrade to identity until Freeze runs
 }
 
 func (r *DefaultSchemaResolver) Resolve(canonical string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if phys, ok := r.table[canonical]; ok {
+	if phys, ok := r.table.Tables[canonical]; ok {
 		return phys
 	}
 	return canonical // exactly today's behavior — a developer who never configures anything sees zero change
+}
+
+// ResolveColumn implements [SchemaResolver]. Columns are keyed by their
+// CANONICAL table name, so renaming a table's physical name never changes
+// how its columns resolve. Unknown tables/columns resolve to themselves.
+func (r *DefaultSchemaResolver) ResolveColumn(canonicalTable string, canonicalColumn string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if phys, ok := r.table.Columns[canonicalTable][canonicalColumn]; ok {
+		return phys
+	}
+	return canonicalColumn
 }
 
 // Freeze is called exactly once, by Boot, after SchemaRegistry.Freeze()
 // has run — same "construct empty, populate in place, every early holder
 // of the reference sees the populated state automatically" pattern as
 // Dispatcher.Freeze.
-func (r *DefaultSchemaResolver) Freeze(table map[string]string) {
+func (r *DefaultSchemaResolver) Freeze(table SchemaResolverTable) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.table, r.frozen = table, true
@@ -203,43 +257,58 @@ func (r *DefaultSchemaResolver) Freeze(table map[string]string) {
 // BuildSchemaResolverTable runs INSIDE Boot, after SchemaRegistry.Freeze() —
 // derived from already-declared tables, never independently authored. This
 // is what makes "default to SchemaName() if unset" automatic: a TableSchema
-// with no PhysicalName override simply maps to itself.
-func BuildSchemaResolverTable(registry SchemaRegistry, cfg MigrationConfig) map[string]string {
-	table := map[string]string{}
+// with no PhysicalName override simply maps to itself; the same holds for
+// every Column, including ones contributed via ExtendColumn.
+func BuildSchemaResolverTable(registry SchemaRegistry, cfg MigrationConfig) SchemaResolverTable {
+	table := SchemaResolverTable{
+		Tables:  map[string]string{},
+		Columns: map[string]map[string]string{},
+	}
 	for _, t := range registry.All() {
-		phys := t.PhysicalName
-		if phys == "" {
-			phys = t.Name
+		table.Tables[t.Name] = orDefault(t.PhysicalName, t.Name)
+
+		cols := make(map[string]string, len(t.Columns))
+		for _, c := range t.Columns {
+			cols[c.Name] = orDefault(c.PhysicalName, c.Name)
 		}
-		table[t.Name] = phys
+		table.Columns[t.Name] = cols
 	}
 	// Ledger/snapshot aren't plugin-declared tables at all — they're
 	// framework-internal bookkeeping, sourced from MigrationConfig instead.
-	table[LedgerCanonicalName] = cfg.TableName
-	table[SnapshotCanonicalName] = cfg.snapshotTableName()
+	table.Tables[LedgerCanonicalName] = cfg.TableName
+	table.Tables[SnapshotCanonicalName] = cfg.snapshotTableName()
 	return table
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 func extractColumns(cc []ColumnContribution) []Column {
 	columns := make([]Column, len(cc))
-	for _, c := range cc {
-		columns = append(columns, c.Column)
+	for i, c := range cc {
+		columns[i] = c.Column
 	}
 	return columns
 }
 
 func extractIndexes(ic []IndexContribution) []Index {
 	indexes := make([]Index, len(ic))
-	for _, i := range ic {
-		indexes = append(indexes, i.Index)
+	for i, ind := range ic {
+		indexes[i] = ind.Index
 	}
 	return indexes
 }
 
 func extractForeignKeys(fkc []ForeignKeyContribution) []ForeignKey {
 	foreignKeys := make([]ForeignKey, len(fkc))
-	for _, fk := range fkc {
-		foreignKeys = append(foreignKeys, fk.ForeignKey)
+	for i, fk := range fkc {
+		foreignKeys[i] = fk.ForeignKey
 	}
 	return foreignKeys
 }
+
+var _ SchemaResolver = (*DefaultSchemaResolver)(nil)
