@@ -1,53 +1,29 @@
 package migrations
 
-// import (
-// 	"context"
-// 	"database/sql"
-// 	"testing"
+import (
+	"testing"
 
-// 	"github.com/MastewalB/behemoth/migration/core"
-// 	_ "github.com/MastewalB/behemoth/migration/plugins/postgres"
-// 	_ "github.com/MastewalB/behemoth/migration/plugins/sqlite"
-// 	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
+)
 
-// 	_ "github.com/mattn/go-sqlite3"
+// TestSQLiteDriver runs the database-agnostic suite against SQLite.
+func TestSQLiteDriver(t *testing.T) {
+	db := openSQLite(t)
+	RunDriverTests(t,
+		func(r core.SchemaResolver) core.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
+		NewSQLiteTestManager(db),
+	)
+}
 
-// 	_ "github.com/lib/pq"
-// )
-
-// // TestSQLiteDriver runs tests against SQLite
-// func TestSQLiteDriver(t *testing.T) {
-// 	db, err := sql.Open("sqlite3", ":memory:")
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	config := &core.Config{
-// 		DB: db,
-// 	}
-
-// 	driver, err := core.Open("sqlite", config)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	driverTestManager := NewSQLiteTestHelpers(db)
-// 	RunDriverTests(t, driver, driverTestManager)
-// }
-
-// func TestPostgreSQLDriver(t *testing.T) {
-// 	ctx := context.Background()
-// 	db, cleanup := testutils.SetupPostgresTestDB(t, ctx)
-
-// 	config := &core.Config{
-// 		DB: db,
-// 	}
-
-// 	driver, err := core.Open("postgres", config)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	driverTestManager := NewPostgresTestManager(db, cleanup)
-// 	RunDriverTests(t, driver, driverTestManager)
-// }
+// TestPostgreSQLDriver runs the same suite against Postgres once the
+// postgres plugin is on par with core.SchemaDriver. Intended wiring:
+//
+//	db, cleanup := testutils.SetupPostgresTestDB(t, ctx)
+//	RunDriverTests(t,
+//		func(r core.SchemaResolver) core.SchemaDriver { return postgres.NewPostgreSQLDriver(db, r) },
+//		NewPostgresTestManager(db, cleanup),
+//	)
+func TestPostgreSQLDriver(t *testing.T) {
+	t.Skip("postgres plugin has no constructor and does not create its ledger/snapshot tables yet")
+}
