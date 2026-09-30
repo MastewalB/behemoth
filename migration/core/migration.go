@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -22,11 +23,17 @@ type Config struct {
 type SchemaRegistry interface {
 	Declare(model behemoth.Model, table TableSchema) error
 
+	// ExtendColumn, ExtendIndex and ExtendForeignKey add to a table another
+	// plugin declares. The table may be declared before or after the
+	// contribution; either way a name that clashes with the base table or with
+	// another contribution is rejected, and Freeze rejects contributions to a
+	// table that was never declared.
 	ExtendColumn(contribution ColumnContribution) error
 	ExtendIndex(contribution IndexContribution) error
+	ExtendForeignKey(contribution ForeignKeyContribution) error
 
 	// Lookup returns the fully merged table i.e. base Declare() shape plus
-	// every accepted ExtendColumn/ExtendIndex contributions. Every
+	// every accepted ExtendColumn/ExtendIndex/ExtendForeignKey contribution. Every
 	// consumer downstream (the differ, the generator) sees one resolved
 	// TableSchema per table name; nothing downstream needs to know or care
 	// which parts came from Declare vs. Extend.
@@ -77,6 +84,23 @@ func (r *DefaultSchemaRegistry) Declare(model behemoth.Model, table TableSchema)
 		return behemotherr.NewConfigurationError("SchemaRegistry.Declare",
 			fmt.Sprintf("table %q already declared by %q", table.Name, existing.Owner), nil)
 	}
+	// Contributions may have arrived before this Declare — check them against
+	// the base shape now, the same check Extend* runs when the table exists first.
+	for _, c := range r.columnExts[table.Name] {
+		if err := checkBaseClash("SchemaRegistry.Declare", "column", table, c.Column.Name, c.Owner, columnNames(table.Columns)); err != nil {
+			return err
+		}
+	}
+	for _, c := range r.indexExts[table.Name] {
+		if err := checkBaseClash("SchemaRegistry.Declare", "index", table, c.Index.Name, c.Owner, indexNames(table.Indexes)); err != nil {
+			return err
+		}
+	}
+	for _, c := range r.foreignKeyExts[table.Name] {
+		if err := checkBaseClash("SchemaRegistry.Declare", "foreign key", table, c.ForeignKey.Name, c.Owner, foreignKeyNames(table.ForeignKeys)); err != nil {
+			return err
+		}
+	}
 
 	r.tables[table.Name] = table
 	r.models[table.Name] = model
@@ -86,17 +110,22 @@ func (r *DefaultSchemaRegistry) Declare(model behemoth.Model, table TableSchema)
 func (r *DefaultSchemaRegistry) ExtendColumn(c ColumnContribution) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	const op = "SchemaRegistry.ExtendColumn"
 	if r.frozen {
-		return behemotherr.NewConfigurationError("SchemaRegistry.ExtendColumn", "cannot extend after boot has completed", nil)
+		return behemotherr.NewConfigurationError(op, "cannot extend after boot has completed", nil)
 	}
 	// Table need not exist YET at the moment of this call — plugin
 	// dependency order guarantees the owning plugin's Declare ran first if
-	// a real dependency edge was declared, but this check is deferred to
-	// Freeze (below) rather than enforced here, for the reason explained
-	// next.
+	// a real dependency edge was declared, but the existence check is
+	// deferred to Freeze, and the base-clash check to Declare, when it doesn't.
+	if base, ok := r.tables[c.Table]; ok {
+		if err := checkBaseClash(op, "column", base, c.Column.Name, c.Owner, columnNames(base.Columns)); err != nil {
+			return err
+		}
+	}
 	for _, existing := range r.columnExts[c.Table] {
 		if existing.Column.Name == c.Column.Name {
-			return behemotherr.NewConfigurationError("SchemaRegistry.ExtendColumn",
+			return behemotherr.NewConfigurationError(op,
 				fmt.Sprintf("table %q column %q already contributed by %q", c.Table, c.Column.Name, existing.Owner), nil)
 		}
 	}
@@ -107,18 +136,84 @@ func (r *DefaultSchemaRegistry) ExtendColumn(c ColumnContribution) error {
 func (r *DefaultSchemaRegistry) ExtendIndex(c IndexContribution) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	const op = "SchemaRegistry.ExtendIndex"
 	if r.frozen {
-		return behemotherr.NewConfigurationError("SchemaRegistry.ExtendIndex", "cannot extend after boot has completed", nil)
+		return behemotherr.NewConfigurationError(op, "cannot extend after boot has completed", nil)
 	}
-	// Same deferred table-existence check as ExtendColumn — enforced in Freeze.
+	// Same deferred checks as ExtendColumn.
+	if base, ok := r.tables[c.Table]; ok {
+		if err := checkBaseClash(op, "index", base, c.Index.Name, c.Owner, indexNames(base.Indexes)); err != nil {
+			return err
+		}
+	}
 	for _, existing := range r.indexExts[c.Table] {
 		if existing.Index.Name == c.Index.Name {
-			return behemotherr.NewConfigurationError("SchemaRegistry.ExtendIndex",
+			return behemotherr.NewConfigurationError(op,
 				fmt.Sprintf("table %q index %q already contributed by %q", c.Table, c.Index.Name, existing.Owner), nil)
 		}
 	}
 	r.indexExts[c.Table] = append(r.indexExts[c.Table], c)
 	return nil
+}
+
+// ExtendForeignKey adds a foreign key to a table another plugin declares —
+// e.g. a plugin linking its own contributed column to a table it doesn't own.
+// Planning emits it as its own OpAddForeignKey, like every other foreign key.
+func (r *DefaultSchemaRegistry) ExtendForeignKey(c ForeignKeyContribution) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	const op = "SchemaRegistry.ExtendForeignKey"
+	if r.frozen {
+		return behemotherr.NewConfigurationError(op, "cannot extend after boot has completed", nil)
+	}
+	// Same deferred checks as ExtendColumn.
+	if base, ok := r.tables[c.Table]; ok {
+		if err := checkBaseClash(op, "foreign key", base, c.ForeignKey.Name, c.Owner, foreignKeyNames(base.ForeignKeys)); err != nil {
+			return err
+		}
+	}
+	for _, existing := range r.foreignKeyExts[c.Table] {
+		if existing.ForeignKey.Name == c.ForeignKey.Name {
+			return behemotherr.NewConfigurationError(op,
+				fmt.Sprintf("table %q foreign key %q already contributed by %q", c.Table, c.ForeignKey.Name, existing.Owner), nil)
+		}
+	}
+	r.foreignKeyExts[c.Table] = append(r.foreignKeyExts[c.Table], c)
+	return nil
+}
+
+// checkBaseClash rejects a contribution whose name the declaring plugin
+// already uses on the base table — a contribution may add, never redefine.
+func checkBaseClash(op, kind string, base TableSchema, name, owner string, baseNames []string) error {
+	if slices.Contains(baseNames, name) {
+		return behemotherr.NewConfigurationError(op,
+			fmt.Sprintf("table %q %s %q is declared by %q and cannot also be contributed by %q", base.Name, kind, name, base.Owner, owner), nil)
+	}
+	return nil
+}
+
+func columnNames(cols []Column) []string {
+	names := make([]string, len(cols))
+	for i, c := range cols {
+		names[i] = c.Name
+	}
+	return names
+}
+
+func indexNames(idxs []Index) []string {
+	names := make([]string, len(idxs))
+	for i, idx := range idxs {
+		names[i] = idx.Name
+	}
+	return names
+}
+
+func foreignKeyNames(fks []ForeignKey) []string {
+	names := make([]string, len(fks))
+	for i, fk := range fks {
+		names[i] = fk.Name
+	}
+	return names
 }
 
 func (r *DefaultSchemaRegistry) Lookup(name string) (TableSchema, bool) {
@@ -172,18 +267,29 @@ func (r *DefaultSchemaRegistry) Freeze() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for table, contributions := range r.columnExts {
-		if _, ok := r.tables[table]; !ok {
-			return behemotherr.NewConfigurationError("SchemaRegistry.Freeze",
-				fmt.Sprintf("table %q was never declared, but %q attempted to extend it", table, contributions[0].Owner), nil)
+		if err := r.checkDeclared(table, contributions[0].Owner); err != nil {
+			return err
 		}
 	}
 	for table, contributions := range r.indexExts {
-		if _, ok := r.tables[table]; !ok {
-			return behemotherr.NewConfigurationError("SchemaRegistry.Freeze",
-				fmt.Sprintf("table %q was never declared, but %q attempted to extend it", table, contributions[0].Owner), nil)
+		if err := r.checkDeclared(table, contributions[0].Owner); err != nil {
+			return err
+		}
+	}
+	for table, contributions := range r.foreignKeyExts {
+		if err := r.checkDeclared(table, contributions[0].Owner); err != nil {
+			return err
 		}
 	}
 	r.frozen = true
+	return nil
+}
+
+func (r *DefaultSchemaRegistry) checkDeclared(table, owner string) error {
+	if _, ok := r.tables[table]; !ok {
+		return behemotherr.NewConfigurationError("SchemaRegistry.Freeze",
+			fmt.Sprintf("table %q was never declared, but %q attempted to extend it", table, owner), nil)
+	}
 	return nil
 }
 
