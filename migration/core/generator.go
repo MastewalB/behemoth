@@ -206,7 +206,7 @@ func computeDown(sortedIDs []string, nodeByID map[string]planNode) ([]SchemaOper
 
 func invertOperation(op SchemaOperation) (*SchemaOperation, bool) {
 	base := func(kind OperationKind) SchemaOperation {
-		return SchemaOperation{ID: "down_" + op.ID, Kind: kind, Table: op.Table}
+		return SchemaOperation{ID: downID(op.ID), Kind: kind, Table: op.Table}
 	}
 
 	switch op.Kind {

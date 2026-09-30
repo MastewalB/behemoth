@@ -327,7 +327,7 @@ func BuildBaselineMigration(tables map[string]TableSchema) Migration {
 		bare := schema
 		bare.ForeignKeys = nil // never inline, per checkNoInlineForeignKeys' invariant
 		up = append(up, SchemaOperation{
-			ID:        "baseline_table_" + table,
+			ID:        baselineTableID(table),
 			Kind:      OpCreateTable,
 			Table:     table,
 			NewTable:  &bare,
@@ -336,7 +336,7 @@ func BuildBaselineMigration(tables map[string]TableSchema) Migration {
 
 		for _, idx := range schema.Indexes {
 			up = append(up, SchemaOperation{
-				ID:        "baseline_index_" + table + "_" + idx.Name,
+				ID:        baselineIndexID(table, idx.Name),
 				Kind:      OpAddIndex,
 				Table:     table,
 				Index:     &idx,
@@ -346,7 +346,7 @@ func BuildBaselineMigration(tables map[string]TableSchema) Migration {
 
 		for _, fk := range schema.ForeignKeys {
 			up = append(up, SchemaOperation{
-				ID:         "baseline_fk_" + table + "_" + fk.Name,
+				ID:         baselineForeignKeyID(table, fk.Name),
 				Kind:       OpAddForeignKey,
 				Table:      table,
 				ForeignKey: &fk,
