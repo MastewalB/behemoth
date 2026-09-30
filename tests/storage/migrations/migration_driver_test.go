@@ -42,4 +42,9 @@ func TestPostgreSQLDriver(t *testing.T) {
 		tm,
 	)
 	runPostgresIntrospectorTests(t, db, tm)
+
+	t.Run("LedgerReadsBackThroughAdapter", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		readBackThroughAdapter(t, postgres.NewPostgreSQLDriver(db, nil), testutils.SetupPostgresAdapter(db))
+	})
 }

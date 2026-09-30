@@ -204,7 +204,7 @@ func (r *DefaultMigrationRunner) loadLedger(ctx context.Context) ([]MigrationLed
 
 func (r *DefaultMigrationRunner) LoadSnapshot(ctx context.Context) (SchemaSnapshot, error) {
 	m := &SchemaSnapshot{}
-	found, err := r.db.FindOne(ctx, m, clause.Expression{}) // single-row table, no WHERE needed
+	found, err := r.db.FindOne(ctx, m, byPrimaryKey(m))
 	if err != nil {
 		if behemotherr.IsNotFound(err) {
 			return SchemaSnapshot{Tables: map[string]TableSchema{}}, nil // no snapshot yet — greenfield
@@ -212,6 +212,15 @@ func (r *DefaultMigrationRunner) LoadSnapshot(ctx context.Context) (SchemaSnapsh
 		return SchemaSnapshot{}, behemotherr.WrapOp("MigrationRunner.LoadSnapshot", "schema_snapshot", err)
 	}
 	return *found.(*SchemaSnapshot), nil
+}
+
+// byPrimaryKey selects the one row of m's table whose primary key is
+// m.PrimaryKeyField() — for the snapshot, its singleton row.
+func byPrimaryKey(m behemoth.Model) clause.Expression {
+	return clause.Expression{
+		Logic:      clause.OpAnd,
+		Conditions: []clause.Condition{{Field: m.PrimaryKeyName(), Operator: clause.OpEqual, Value: m.PrimaryKeyField()}},
+	}
 }
 
 func removeFn[T any](l []T, fn func(T) bool) []T {
