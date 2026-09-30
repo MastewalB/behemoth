@@ -11,6 +11,7 @@ import (
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/storage/adapters"
 )
 
 // DriverName is the key used for per-database Column.Overrides lookups.
@@ -34,10 +35,7 @@ type PostgreSQLDriver struct {
 // connection's current_schema(). A nil resolver maps every canonical
 // table/column name to itself.
 func NewPostgreSQLDriver(db *sql.DB, resolver core.SchemaResolver) *PostgreSQLDriver {
-	if resolver == nil {
-		resolver = identityResolver{}
-	}
-	return &PostgreSQLDriver{db: db, resolver: resolver}
+	return &PostgreSQLDriver{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
 }
 
 var (
@@ -45,11 +43,6 @@ var (
 	_ core.MigrationRenderer  = (*PostgreSQLDriver)(nil)
 	_ core.SchemaIntrospector = (*PostgreSQLDriver)(nil)
 )
-
-type identityResolver struct{}
-
-func (identityResolver) Resolve(canonical string) string                 { return canonical }
-func (identityResolver) ResolveColumn(_ string, canonical string) string { return canonical }
 
 // AtomicityLevel implements [core.SchemaDriver]. Postgres DDL is fully transactional.
 func (d *PostgreSQLDriver) AtomicityLevel() core.AtomicityLevel { return core.AtomicityFull }

@@ -13,7 +13,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/migration/plugins/postgres"
+	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

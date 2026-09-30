@@ -1,11 +1,8 @@
-module github.com/MastewalB/behemoth/storage/adapters/bun
+module github.com/MastewalB/behemoth/storage/adapters/postgres
 
 go 1.26.4
 
-require (
-	github.com/MastewalB/behemoth v0.0.0
-	github.com/uptrace/bun v1.2.18
-)
+require github.com/MastewalB/behemoth v0.0.0
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -22,12 +19,8 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/microsoft/go-mssqldb v1.10.0 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
-	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
 	github.com/redis/go-redis/v9 v9.20.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	github.com/tmthrgd/go-hex v0.0.0-20190904060850-447a3041c3bc // indirect
-	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
-	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
@@ -37,7 +30,6 @@ require (
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/oauth2 v0.28.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	gorm.io/gorm v1.31.1 // indirect
 )

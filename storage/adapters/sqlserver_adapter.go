@@ -43,12 +43,12 @@ func NewSQLServerAdapter(db Querier, resolver behemoth.SchemaResolver) *SQLServe
 }
 
 func (ms *SQLServerAdapter) names() behemoth.SchemaResolver {
-	return resolverOrIdentity(ms.Resolver)
+	return ResolverOrIdentity(ms.Resolver)
 }
 
 // where renders expr with its fields resolved to physical columns.
 func (ms *SQLServerAdapter) where(m behemoth.Model, expr *clause.Expression, options *ClauseOptions) (string, []any) {
-	return BuildSQLWhereClause(physicalExpression(ms.names(), m, expr), options)
+	return BuildSQLWhereClause(PhysicalExpression(ms.names(), m, expr), options)
 }
 
 // SQL Server uses @p1, @p2, … positional named parameters. The counter N
@@ -78,8 +78,8 @@ func (ms *SQLServerAdapter) Create(ctx context.Context, m behemoth.Model) error 
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s)",
-		physicalTable(ms.names(), m),
-		strings.Join(physicalColumns(ms.names(), m, columns), ", "),
+		PhysicalTable(ms.names(), m),
+		strings.Join(PhysicalColumns(ms.names(), m, columns), ", "),
 		strings.Join(placeholders, ", "),
 	)
 
@@ -104,8 +104,8 @@ func (ms *SQLServerAdapter) FindOne(
 	// SQL Server uses SELECT TOP 1 instead of appending LIMIT 1.
 	query := fmt.Sprintf(
 		"SELECT TOP 1 %s FROM %s",
-		strings.Join(physicalColumns(ms.names(), m, columns), ", "),
-		physicalTable(ms.names(), m),
+		strings.Join(PhysicalColumns(ms.names(), m, columns), ", "),
+		PhysicalTable(ms.names(), m),
 	)
 	whereClause, args := ms.where(m, &whereExpression, defaultMSSQLClauseOptions)
 	if whereClause != "" {
@@ -154,8 +154,8 @@ func (ms *SQLServerAdapter) FindMany(
 	query := fmt.Sprintf(
 		"SELECT %s%s FROM %s",
 		distinctClause,
-		strings.Join(physicalColumns(ms.names(), m, columns), ", "),
-		physicalTable(ms.names(), m),
+		strings.Join(PhysicalColumns(ms.names(), m, columns), ", "),
+		PhysicalTable(ms.names(), m),
 	)
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -164,7 +164,7 @@ func (ms *SQLServerAdapter) FindMany(
 	if options != nil {
 		orderBy := ""
 		if options.OrderBy.Field != "" {
-			orderBy = physicalColumn(ms.names(), m, options.OrderBy.Field)
+			orderBy = PhysicalColumn(ms.names(), m, options.OrderBy.Field)
 		}
 		query = appendMSSQLPagination(query, orderBy, options)
 	}
@@ -198,14 +198,14 @@ func (ms *SQLServerAdapter) Update(ctx context.Context, m behemoth.Model) error 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
 
 	// SET clause uses @p1 ... @pN; the PK placeholder follows immediately after.
-	setClause := mssqlSETClause(physicalColumns(ms.names(), m, columns), 1)
+	setClause := mssqlSETClause(PhysicalColumns(ms.names(), m, columns), 1)
 	pkPlaceholder := fmt.Sprintf("@p%d", len(columns)+1)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = %s",
-		physicalTable(ms.names(), m),
+		PhysicalTable(ms.names(), m),
 		setClause,
-		physicalColumn(ms.names(), m, m.PrimaryKeyName()),
+		PhysicalColumn(ms.names(), m, m.PrimaryKeyName()),
 		pkPlaceholder,
 	)
 
@@ -226,10 +226,10 @@ func (ms *SQLServerAdapter) UpdateOne(
 	columns, values := utils.MapToSlice(updates)
 
 	// SET args occupy @p1 … @pN; WHERE args start at @p(N+1).
-	setClause := mssqlSETClause(physicalColumns(ms.names(), m, columns), 1)
+	setClause := mssqlSETClause(PhysicalColumns(ms.names(), m, columns), 1)
 	whereClause, whereArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(values)+1))
-	table := physicalTable(ms.names(), m)
-	pk := physicalColumn(ms.names(), m, m.PrimaryKeyName())
+	table := PhysicalTable(ms.names(), m)
+	pk := PhysicalColumn(ms.names(), m, m.PrimaryKeyName())
 
 	// SQL Server allows a plain subquery on the same table in an UPDATE.
 	subQuery := fmt.Sprintf(
@@ -262,12 +262,12 @@ func (ms *SQLServerAdapter) UpdateMany(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	setClause := mssqlSETClause(physicalColumns(ms.names(), m, columns), 1)
+	setClause := mssqlSETClause(PhysicalColumns(ms.names(), m, columns), 1)
 	whereClause, whereArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(values)+1))
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
-		physicalTable(ms.names(), m),
+		PhysicalTable(ms.names(), m),
 		setClause,
 		whereClause,
 	)
@@ -280,8 +280,8 @@ func (ms *SQLServerAdapter) UpdateMany(
 func (ms *SQLServerAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = @p1",
-		physicalTable(ms.names(), m),
-		physicalColumn(ms.names(), m, m.PrimaryKeyName()),
+		PhysicalTable(ms.names(), m),
+		PhysicalColumn(ms.names(), m, m.PrimaryKeyName()),
 	)
 	_, err := ms.DB.ExecContext(ctx, query, m.PrimaryKeyField())
 	return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
@@ -297,8 +297,8 @@ func (ms *SQLServerAdapter) DeleteOne(
 		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
-	table := physicalTable(ms.names(), m)
-	pk := physicalColumn(ms.names(), m, m.PrimaryKeyName())
+	table := PhysicalTable(ms.names(), m)
+	pk := PhysicalColumn(ms.names(), m, m.PrimaryKeyName())
 
 	subQuery := fmt.Sprintf(
 		"SELECT TOP 1 %s FROM %s WHERE %s",
@@ -330,7 +330,7 @@ func (ms *SQLServerAdapter) DeleteMany(
 
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s",
-		physicalTable(ms.names(), m),
+		PhysicalTable(ms.names(), m),
 		whereClause,
 	)
 
@@ -339,7 +339,7 @@ func (ms *SQLServerAdapter) DeleteMany(
 }
 
 func (ms *SQLServerAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
-	query := fmt.Sprintf("DELETE FROM %s", physicalTable(ms.names(), m))
+	query := fmt.Sprintf("DELETE FROM %s", PhysicalTable(ms.names(), m))
 	_, err := ms.DB.ExecContext(ctx, query)
 	return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 }
@@ -353,7 +353,7 @@ func (ms *SQLServerAdapter) Count(
 
 	query := fmt.Sprintf(
 		"SELECT COUNT(*) FROM %s",
-		physicalTable(ms.names(), m),
+		PhysicalTable(ms.names(), m),
 	)
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -463,7 +463,7 @@ func mapMSSQLError(op, entity string, err error) error {
 	if mssqlErr, ok := errors.AsType[mssql.Error](err); ok {
 		switch mssqlErr.Number {
 		case 208:
-			return classify(op, entity, sentinelUndefinedTable, err)
+			return Classify(op, entity, SentinelUndefinedTable, err)
 		case 2627, 2601:
 			return behemotherr.NewDuplicateKey(op, entity, err)
 		case 547:

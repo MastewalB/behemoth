@@ -12,6 +12,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/uptrace/bun"
 	"go.mongodb.org/mongo-driver/bson"
@@ -327,7 +328,7 @@ func TestPostgresAdapter(t *testing.T) {
 			t.Fatal(err)
 		}
 		manager := &PostgresAdapterTestManager{t: t, db: db, cleanup: func() {}}
-		NewDatabaseTestSuite(t, adapters.NewPostgresAdapter(db, physicalNamesResolver(t)), manager).Run()
+		NewDatabaseTestSuite(t, pgAdapter.NewPostgresAdapter(db, physicalNamesResolver(t)), manager).Run()
 	})
 
 	manager := &PostgresAdapterTestManager{

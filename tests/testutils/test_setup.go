@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	_ "github.com/MastewalB/behemoth/migration/plugins/postgres"
 	_ "github.com/MastewalB/behemoth/migration/plugins/sqlite"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
+	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/sqliteshim"
 
@@ -353,8 +353,8 @@ func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *adapt
 	return adapters.NewMongoAdapter(client, dbName, nil)
 }
 
-func SetupPostgresAdapter(db *sql.DB) *adapters.PostgresAdapter {
-	return adapters.NewPostgresAdapter(db, nil)
+func SetupPostgresAdapter(db *sql.DB) *pgAdapter.PostgresAdapter {
+	return pgAdapter.NewPostgresAdapter(db, nil)
 }
 
 func SetupMySQLAdapter(db *sql.DB) *adapters.MySQLAdapter {

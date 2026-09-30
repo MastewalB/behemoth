@@ -36,28 +36,28 @@ func NewMongoAdapter(client *mongo.Client, dbName string, resolver behemoth.Sche
 }
 
 func (mdb *MongoAdapter) names() behemoth.SchemaResolver {
-	return resolverOrIdentity(mdb.Resolver)
+	return ResolverOrIdentity(mdb.Resolver)
 }
 
 func (mdb *MongoAdapter) collection(m behemoth.Model) *mongo.Collection {
-	return mdb.db.Collection(physicalTable(mdb.names(), m))
+	return mdb.db.Collection(PhysicalTable(mdb.names(), m))
 }
 
 // filter renders expr with its fields resolved to physical field names.
 func (mdb *MongoAdapter) filter(m behemoth.Model, expr *clause.Expression) bson.M {
-	return BuildMongoFilter(physicalExpression(mdb.names(), m, expr))
+	return BuildMongoFilter(PhysicalExpression(mdb.names(), m, expr))
 }
 
 // byPrimaryKey matches m's own document.
 func (mdb *MongoAdapter) byPrimaryKey(m behemoth.Model) bson.M {
-	return bson.M{physicalColumn(mdb.names(), m, m.PrimaryKeyName()): m.PrimaryKeyField()}
+	return bson.M{PhysicalColumn(mdb.names(), m, m.PrimaryKeyName()): m.PrimaryKeyField()}
 }
 
 // decode turns a stored document into a new model, mapping physical keys back
 // to the canonical ones FromMap expects.
 func (mdb *MongoAdapter) decode(m behemoth.Model, canonical map[string]string, raw map[string]any) (behemoth.Model, error) {
 	model := m.New()
-	if err := model.(behemoth.Serializable).FromMap(canonicalDocument(canonical, raw)); err != nil {
+	if err := model.(behemoth.Serializable).FromMap(CanonicalDocument(canonical, raw)); err != nil {
 		return nil, err
 	}
 	return model, nil
@@ -74,7 +74,7 @@ func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 		return err
 	}
 
-	_, err = mdb.collection(m).InsertOne(ctx, physicalDocument(mdb.names(), m, doc))
+	_, err = mdb.collection(m).InsertOne(ctx, PhysicalDocument(mdb.names(), m, doc))
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
@@ -95,7 +95,7 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 		return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
 
-	return mdb.decode(m, canonicalFields(mdb.names(), m), raw)
+	return mdb.decode(m, CanonicalFields(mdb.names(), m), raw)
 }
 
 func (mdb *MongoAdapter) FindMany(
@@ -128,7 +128,7 @@ func (mdb *MongoAdapter) FindMany(
 	}
 	defer cursor.Close(ctx) // only once cursor is known to be non-nil
 
-	canonical := canonicalFields(mdb.names(), m)
+	canonical := CanonicalFields(mdb.names(), m)
 	var results []behemoth.Model
 	for cursor.Next(ctx) {
 		var raw map[string]any
@@ -154,10 +154,10 @@ func (mdb *MongoAdapter) physicalQueryOptions(m behemoth.Model, options *behemot
 	}
 	out := *options
 	if out.OrderBy.Field != "" {
-		out.OrderBy.Field = physicalColumn(mdb.names(), m, out.OrderBy.Field)
+		out.OrderBy.Field = PhysicalColumn(mdb.names(), m, out.OrderBy.Field)
 	}
 	if len(out.Select) > 0 {
-		out.Select = physicalColumns(mdb.names(), m, out.Select)
+		out.Select = PhysicalColumns(mdb.names(), m, out.Select)
 	}
 	return &out
 }
@@ -174,7 +174,7 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	}
 
 	update := bson.M{
-		"$set": physicalDocument(mdb.names(), m, doc),
+		"$set": PhysicalDocument(mdb.names(), m, doc),
 	}
 
 	_, err = mdb.collection(m).UpdateOne(ctx, mdb.byPrimaryKey(m), update)
@@ -192,7 +192,7 @@ func (mdb *MongoAdapter) UpdateOne(
 	}
 
 	update := bson.M{
-		"$set": physicalDocument(mdb.names(), m, updates),
+		"$set": PhysicalDocument(mdb.names(), m, updates),
 	}
 
 	_, err := mdb.collection(m).UpdateOne(ctx, mdb.filter(m, &expr), update)
@@ -214,7 +214,7 @@ func (mdb *MongoAdapter) UpdateMany(
 		ctx,
 		mdb.filter(m, &expr),
 		bson.M{
-			"$set": physicalDocument(mdb.names(), m, updates),
+			"$set": PhysicalDocument(mdb.names(), m, updates),
 		},
 	)
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
@@ -369,13 +369,13 @@ func mapMongoErrors(op, entity string, err error) error {
 
 	switch {
 	case errors.Is(err, mongo.ErrNoDocuments):
-		return classify(op, entity, sentinelNotFound, err)
+		return Classify(op, entity, SentinelNotFound, err)
 	case mongo.IsDuplicateKeyError(err): // E11000, from a unique index
-		return classify(op, entity, sentinelDuplicateKey, err)
+		return Classify(op, entity, SentinelDuplicateKey, err)
 	case errors.Is(err, mongo.ErrEmptySlice) || errors.Is(err, mongo.ErrNilValue) || errors.Is(err, mongo.ErrNilDocument):
 		return behemotherr.NewValidationError(op, entity, err)
 	default:
-		return classify(op, entity, sentinelUnknown, err)
+		return Classify(op, entity, SentinelUnknown, err)
 	}
 }
 

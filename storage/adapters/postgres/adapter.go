@@ -1,4 +1,4 @@
-package adapters
+package postgres
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -20,21 +21,21 @@ import (
 // generated SQL goes through Resolver first. A nil Resolver maps every name to
 // itself.
 type PostgresAdapter struct {
-	DB       Querier
+	DB       adapters.Querier
 	Resolver behemoth.SchemaResolver
 }
 
-func NewPostgresAdapter(db Querier, resolver behemoth.SchemaResolver) *PostgresAdapter {
+func NewPostgresAdapter(db adapters.Querier, resolver behemoth.SchemaResolver) *PostgresAdapter {
 	return &PostgresAdapter{DB: db, Resolver: resolver}
 }
 
 func (pg *PostgresAdapter) names() behemoth.SchemaResolver {
-	return resolverOrIdentity(pg.Resolver)
+	return adapters.ResolverOrIdentity(pg.Resolver)
 }
 
 // where renders expr with its fields resolved to physical columns.
-func (pg *PostgresAdapter) where(m behemoth.Model, expr *clause.Expression, options *ClauseOptions) (string, []any) {
-	return BuildSQLWhereClause(physicalExpression(pg.names(), m, expr), options)
+func (pg *PostgresAdapter) where(m behemoth.Model, expr *clause.Expression, options *adapters.ClauseOptions) (string, []any) {
+	return adapters.BuildSQLWhereClause(adapters.PhysicalExpression(pg.names(), m, expr), options)
 }
 
 // sqlStater is implemented by both lib/pq's *pq.Error and pgx's
@@ -47,38 +48,38 @@ type sqlStater interface {
 // mapPostgresErrors classifies Postgres errors by SQLSTATE
 // (https://www.postgresql.org/docs/current/errcodes-appendix.html).
 func mapPostgresErrors(op, entity string, err error) error {
-	if classified, ok := mapStdSQLErrors(op, entity, err); ok {
+	if classified, ok := adapters.MapStdSQLErrors(op, entity, err); ok {
 		return classified
 	}
 
 	pgErr, ok := errors.AsType[sqlStater](err)
 	if !ok {
-		return classify(op, entity, sentinelUnknown, err)
+		return adapters.Classify(op, entity, adapters.SentinelUnknown, err)
 	}
 	switch code := pgErr.SQLState(); code {
 	case "23505": // unique_violation
-		return classify(op, entity, sentinelDuplicateKey, err)
+		return adapters.Classify(op, entity, adapters.SentinelDuplicateKey, err)
 	case "23503": // foreign_key_violation
-		return classify(op, entity, sentinelForeignKey, err)
+		return adapters.Classify(op, entity, adapters.SentinelForeignKey, err)
 	case "42P01": // undefined_table
-		return classify(op, entity, sentinelUndefinedTable, err)
+		return adapters.Classify(op, entity, adapters.SentinelUndefinedTable, err)
 	default:
 		if len(code) == 5 && code[:2] == "23" { // class 23: any other integrity constraint (not_null, check, exclusion)
-			return classify(op, entity, sentinelConstraintViolation, err)
+			return adapters.Classify(op, entity, adapters.SentinelConstraintViolation, err)
 		}
-		return classify(op, entity, sentinelUnknown, err)
+		return adapters.Classify(op, entity, adapters.SentinelUnknown, err)
 	}
 }
 
-var defaultPostgresClauseOptions = &ClauseOptions{
+var defaultPostgresClauseOptions = &adapters.ClauseOptions{
 	Placeholder:            "$",
 	UseNumberedPlaceholder: true,
 	Number:                 1,
 }
 
-// Create a Postgres ClauseOptions with a specified starting number for numbered placeholderes.
-func NewPostgresClauseOptions(N int) *ClauseOptions {
-	return &ClauseOptions{
+// Create a Postgres adapters.ClauseOptions with a specified starting number for numbered placeholderes.
+func NewPostgresClauseOptions(N int) *adapters.ClauseOptions {
+	return &adapters.ClauseOptions{
 		Placeholder:            "$",
 		UseNumberedPlaceholder: true,
 		Number:                 N,
@@ -92,7 +93,7 @@ func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
-	placeholders := GeneratePlaceholdersSlice(
+	placeholders := adapters.GeneratePlaceholdersSlice(
 		defaultPostgresClauseOptions.Number,
 		len(columns),
 		defaultPostgresClauseOptions.Placeholder,
@@ -101,13 +102,13 @@ func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES %s",
-		physicalTable(pg.names(), m),
-		strings.Join(physicalColumns(pg.names(), m, columns), ", "),
+		adapters.PhysicalTable(pg.names(), m),
+		strings.Join(adapters.PhysicalColumns(pg.names(), m, columns), ", "),
 		placeholders,
 	)
 	_, err := pg.DB.ExecContext(ctx, query, values...)
 
-	return WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
 func (pg *PostgresAdapter) FindOne(
@@ -125,8 +126,8 @@ func (pg *PostgresAdapter) FindOne(
 
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s",
-		strings.Join(physicalColumns(pg.names(), m, columns), ", "),
-		physicalTable(pg.names(), m),
+		strings.Join(adapters.PhysicalColumns(pg.names(), m, columns), ", "),
+		adapters.PhysicalTable(pg.names(), m),
 	)
 	whereClause, args := pg.where(m, &whereExpression, defaultPostgresClauseOptions)
 	if whereClause != "" {
@@ -138,7 +139,7 @@ func (pg *PostgresAdapter) FindOne(
 	row := pg.DB.QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -177,8 +178,8 @@ func (pg *PostgresAdapter) FindMany(
 	query = fmt.Sprintf(
 		"SELECT %s%s FROM %s",
 		distinctClause,
-		strings.Join(physicalColumns(pg.names(), m, columns), ", "),
-		physicalTable(pg.names(), m),
+		strings.Join(adapters.PhysicalColumns(pg.names(), m, columns), ", "),
+		adapters.PhysicalTable(pg.names(), m),
 	)
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -186,7 +187,7 @@ func (pg *PostgresAdapter) FindMany(
 
 	if options != nil {
 		if options.OrderBy.Field != "" {
-			query += fmt.Sprintf(" ORDER BY %s %s", physicalColumn(pg.names(), m, options.OrderBy.Field), options.OrderBy.Direction)
+			query += fmt.Sprintf(" ORDER BY %s %s", adapters.PhysicalColumn(pg.names(), m, options.OrderBy.Field), options.OrderBy.Direction)
 		}
 		if options.Limit != 0 {
 			query += fmt.Sprintf(" LIMIT %d", options.Limit)
@@ -201,7 +202,7 @@ func (pg *PostgresAdapter) FindMany(
 
 	rows, err := pg.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
 
 	defer rows.Close()
@@ -209,7 +210,7 @@ func (pg *PostgresAdapter) FindMany(
 	var results []behemoth.Model
 	for rows.Next() {
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -231,19 +232,19 @@ func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = $%d",
-		physicalTable(pg.names(), m),
-		GenerateSQLSETClause(physicalColumns(pg.names(), m, columns),
+		adapters.PhysicalTable(pg.names(), m),
+		adapters.GenerateSQLSETClause(adapters.PhysicalColumns(pg.names(), m, columns),
 			defaultPostgresClauseOptions.Number,
 			defaultPostgresClauseOptions.Placeholder,
 			defaultPostgresClauseOptions.UseNumberedPlaceholder,
 		),
-		physicalColumn(pg.names(), m, m.PrimaryKeyName()),
+		adapters.PhysicalColumn(pg.names(), m, m.PrimaryKeyName()),
 		len(values)+1,
 	)
 	fmt.Println(query, values)
 
 	_, err := pg.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
 func (pg *PostgresAdapter) UpdateOne(
@@ -259,8 +260,8 @@ func (pg *PostgresAdapter) UpdateOne(
 
 	columns, values := utils.MapToSlice(updates)
 	whereClause, args := pg.where(m, &expr, NewPostgresClauseOptions(len(values)+1))
-	table := physicalTable(pg.names(), m)
-	pk := physicalColumn(pg.names(), m, m.PrimaryKeyName())
+	table := adapters.PhysicalTable(pg.names(), m)
+	pk := adapters.PhysicalColumn(pg.names(), m, m.PrimaryKeyName())
 
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
@@ -272,7 +273,7 @@ func (pg *PostgresAdapter) UpdateOne(
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = (%s)",
 		table,
-		GenerateSQLSETClause(physicalColumns(pg.names(), m, columns),
+		adapters.GenerateSQLSETClause(adapters.PhysicalColumns(pg.names(), m, columns),
 			defaultPostgresClauseOptions.Number,
 			defaultPostgresClauseOptions.Placeholder,
 			defaultPostgresClauseOptions.UseNumberedPlaceholder,
@@ -283,7 +284,7 @@ func (pg *PostgresAdapter) UpdateOne(
 	)
 
 	_, err := pg.DB.ExecContext(ctx, query, append(values, args...)...)
-	return WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
 func (pg *PostgresAdapter) UpdateMany(
@@ -302,8 +303,8 @@ func (pg *PostgresAdapter) UpdateMany(
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
-		physicalTable(pg.names(), m),
-		GenerateSQLSETClause(physicalColumns(pg.names(), m, columns),
+		adapters.PhysicalTable(pg.names(), m),
+		adapters.GenerateSQLSETClause(adapters.PhysicalColumns(pg.names(), m, columns),
 			defaultPostgresClauseOptions.Number,
 			defaultPostgresClauseOptions.Placeholder,
 			defaultPostgresClauseOptions.UseNumberedPlaceholder,
@@ -315,29 +316,29 @@ func (pg *PostgresAdapter) UpdateMany(
 	fmt.Println("Executing query ", query)
 	_, err := pg.DB.ExecContext(ctx, query, append(values, args...)...)
 
-	return WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
 func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = $1",
-		physicalTable(pg.names(), m),
-		physicalColumn(pg.names(), m, m.PrimaryKeyName()),
+		adapters.PhysicalTable(pg.names(), m),
+		adapters.PhysicalColumn(pg.names(), m, m.PrimaryKeyName()),
 	)
 
 	_, err := pg.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
 func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 
 	whereClause, args := pg.where(m, &expr, defaultPostgresClauseOptions)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
+		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 
-	table := physicalTable(pg.names(), m)
-	pk := physicalColumn(pg.names(), m, m.PrimaryKeyName())
+	table := adapters.PhysicalTable(pg.names(), m)
+	pk := adapters.PhysicalColumn(pg.names(), m, m.PrimaryKeyName())
 
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
@@ -354,34 +355,34 @@ func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 	)
 
 	_, err := pg.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
 func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	whereClause, args := pg.where(m, &expr, defaultPostgresClauseOptions)
 
 	if whereClause == "" {
-		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
+		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s",
-		physicalTable(pg.names(), m),
+		adapters.PhysicalTable(pg.names(), m),
 		whereClause,
 	)
 
 	_, err := pg.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
 func (pg *PostgresAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s",
-		physicalTable(pg.names(), m),
+		adapters.PhysicalTable(pg.names(), m),
 	)
 
 	_, err := pg.DB.ExecContext(ctx, query)
-	return WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
 func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
@@ -389,7 +390,7 @@ func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 
 	query := fmt.Sprintf(
 		"SELECT COUNT(*) FROM %s",
-		physicalTable(pg.names(), m),
+		adapters.PhysicalTable(pg.names(), m),
 	)
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -397,14 +398,14 @@ func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 
 	row, err := pg.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
 
 	defer row.Close()
 	var count int64
 	if row.Next() {
 		if err := row.Scan(&count); err != nil {
-			return 0, WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+			return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 		}
 	}
 

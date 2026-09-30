@@ -7,9 +7,8 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/migration/plugins/postgres"
 	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/require"
 
@@ -49,7 +48,7 @@ func TestPostgreSQLDriver(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		runnerUsesConfiguredTables(t,
 			func(r behemoth.SchemaResolver) core.SchemaDriver { return postgres.NewPostgreSQLDriver(db, r) },
-			func(r behemoth.SchemaResolver) behemoth.Database { return adapters.NewPostgresAdapter(db, r) },
+			func(r behemoth.SchemaResolver) behemoth.Database { return postgres.NewPostgresAdapter(db, r) },
 			tm,
 		)
 	})
