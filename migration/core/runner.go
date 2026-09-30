@@ -192,6 +192,12 @@ func (r *DefaultMigrationRunner) Pending(ctx context.Context, onDisk []Migration
 
 func (r *DefaultMigrationRunner) loadLedger(ctx context.Context) ([]MigrationLedgerEntry, error) {
 	found, err := r.db.FindMany(ctx, &MigrationLedgerEntry{}, clause.Expression{}, nil)
+	if behemotherr.IsUndefinedTable(err) {
+		// The driver creates the ledger with the first migration it records:
+		// no table means nothing applied yet — the same reading
+		// DetermineRunState gives a missing ledger table.
+		return nil, nil
+	}
 	if err != nil {
 		return nil, behemotherr.WrapOp("MigrationRunner.loadLedger", "migration_ledger", err)
 	}
@@ -206,8 +212,10 @@ func (r *DefaultMigrationRunner) LoadSnapshot(ctx context.Context) (SchemaSnapsh
 	m := &SchemaSnapshot{}
 	found, err := r.db.FindOne(ctx, m, byPrimaryKey(m))
 	if err != nil {
-		if behemotherr.IsNotFound(err) {
-			return SchemaSnapshot{Tables: map[string]TableSchema{}}, nil // no snapshot yet — greenfield
+		// No snapshot row, or no snapshot table at all (the driver creates it
+		// with the first migration it records): nothing applied yet.
+		if behemotherr.IsNotFound(err) || behemotherr.IsUndefinedTable(err) {
+			return SchemaSnapshot{Tables: map[string]TableSchema{}}, nil
 		}
 		return SchemaSnapshot{}, behemotherr.WrapOp("MigrationRunner.LoadSnapshot", "schema_snapshot", err)
 	}

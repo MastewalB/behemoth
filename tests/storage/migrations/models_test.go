@@ -175,8 +175,8 @@ func TestSQLiteLedgerReadsBackThroughAdapter(t *testing.T) {
 }
 
 // TestSQLiteRunnerUsesConfiguredTables is the end-to-end path with the default
-// config: the driver writes the ledger/snapshot under cfg.TableName, and the
-// runner reads them back through an adapter that resolves the models'
+// config, starting from a fresh database: the driver writes the ledger/snapshot
+// under cfg.TableName, and the runner reads them back through an adapter that resolves the models'
 // canonical names (behemoth_migration_ledger, behemoth_schema_snapshot) with
 // the resolver Boot builds.
 func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
@@ -194,29 +194,33 @@ func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
 	first := core.Migration{ID: "0001_users", Up: []core.SchemaOperation{createTableOp(users)}}
 	second := core.Migration{ID: "0002_posts", Up: []core.SchemaOperation{createTableOp(posts)}, DependsOn: []string{first.ID}}
 
-	// The runner can't record the very first migration on a fresh database
-	// (it reads the bookkeeping tables before the driver creates them), so the
-	// first one is recorded directly through the driver, into cfg's tables.
-	require.NoError(t, driver.ApplyMigration(ctx, core.MigrationRequest{
-		Migration:      first,
-		LedgerEntry:    core.MigrationLedgerEntry{ID: first.ID, AppliedAt: time.Now()},
-		SnapshotUpdate: core.SchemaSnapshot{Version: first.ID, Tables: map[string]core.TableSchema{"users": users}},
-		LedgerTable:    cfg.TableName,
-		SnapshotTable:  cfg.TableName + "_snapshot",
-	}))
+	// Fresh database: no bookkeeping tables yet. That reads as "nothing applied".
+	snap, err := runner.LoadSnapshot(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, snap.Version)
+	assert.NotNil(t, snap.Tables)
 
-	pending, err := runner.Pending(ctx, []core.Migration{first, second})
+	disk := []core.Migration{first, second}
+	pending, err := runner.Pending(ctx, disk)
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+	assert.Equal(t, []string{first.ID, second.ID}, []string{pending[0].ID, pending[1].ID})
+
+	// The first Apply creates the bookkeeping tables (in cfg's names) with the migration.
+	require.NoError(t, runner.Apply(ctx, pending[:1]))
+
+	pending, err = runner.Pending(ctx, disk)
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "the ledger in cfg.TableName is read through the resolver")
 	assert.Equal(t, second.ID, pending[0].ID)
 
 	require.NoError(t, runner.Apply(ctx, pending))
 
-	pending, err = runner.Pending(ctx, []core.Migration{first, second})
+	pending, err = runner.Pending(ctx, disk)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 
-	snap, err := runner.LoadSnapshot(ctx)
+	snap, err = runner.LoadSnapshot(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, second.ID, snap.Version)
 	assert.ElementsMatch(t, []string{"users", "posts"}, keysOf(snap.Tables), "Apply projected the snapshot it loaded")
@@ -236,4 +240,29 @@ func keysOf[V any](m map[string]V) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// A missing table is classified as undefined_table, never as not-found: only
+// the runner's bookkeeping reads may treat it as "nothing applied yet".
+func TestSQLiteAdapterClassifiesMissingTable(t *testing.T) {
+	ctx := context.Background()
+	adapter := adapters.NewSQLiteAdapter(openSQLite(t), nil)
+
+	_, err := adapter.FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
+	assert.True(t, behemotherr.IsUndefinedTable(err), "FindOne: %v", err)
+	assert.False(t, behemotherr.IsNotFound(err))
+
+	_, err = adapter.FindMany(ctx, &core.MigrationLedgerEntry{}, clause.Expression{}, nil)
+	assert.True(t, behemotherr.IsUndefinedTable(err), "FindMany: %v", err)
+
+	_, err = adapter.Count(ctx, &core.MigrationLedgerEntry{}, clause.Expression{})
+	assert.True(t, behemotherr.IsUndefinedTable(err), "Count: %v", err)
+
+	// A table that exists but has no matching row is still plain not-found.
+	db := openSQLite(t)
+	_, err = db.ExecContext(ctx, `CREATE TABLE behemoth_schema_snapshot (id INTEGER PRIMARY KEY, version TEXT, tables TEXT)`)
+	require.NoError(t, err)
+	_, err = adapters.NewSQLiteAdapter(db, nil).FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
+	assert.True(t, behemotherr.IsNotFound(err), "empty table: %v", err)
+	assert.False(t, behemotherr.IsUndefinedTable(err))
 }
