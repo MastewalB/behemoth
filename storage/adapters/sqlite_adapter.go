@@ -60,7 +60,7 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, values...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) FindOne(
@@ -91,7 +91,7 @@ func (sqlt *SQLiteAdapter) FindOne(
 	row := sqlt.DB.QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -153,7 +153,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	fmt.Println("Executing query:", query, "with args:", args)
 	rows, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
 
 	defer rows.Close()
@@ -162,7 +162,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	for rows.Next() {
 		err := rows.Scan(valuePtrs...)
 		if err != nil {
-			return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+			return nil, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -194,7 +194,7 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) UpdateOne(
@@ -233,7 +233,7 @@ func (sqlt *SQLiteAdapter) UpdateOne(
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, args...)...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) UpdateMany(
@@ -265,7 +265,7 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 	fmt.Println("Executing query ", query)
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, args...)...)
 
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
@@ -275,7 +275,7 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		physicalColumn(sqlt.names(), m, m.PrimaryKeyName()),
 	)
 	_, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
@@ -303,7 +303,7 @@ func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
@@ -320,7 +320,7 @@ func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
@@ -330,7 +330,7 @@ func (sqlt *SQLiteAdapter) DeleteAll(ctx context.Context, m behemoth.Model) erro
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
@@ -346,14 +346,14 @@ func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 
 	row, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return 0, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
 
 	defer row.Close()
 	var count int64
 	if row.Next() {
 		if err := row.Scan(&count); err != nil {
-			return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+			return 0, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 		}
 	}
 
@@ -386,16 +386,13 @@ func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 	return tx.Commit()
 }
 
-func mapSQLErrors(op, entity string, err error) error {
-	if err == nil {
-		return nil
+// mapSQLiteErrors classifies mattn/go-sqlite3 errors by result code.
+func mapSQLiteErrors(op, entity string, err error) error {
+	if classified, ok := mapStdSQLErrors(op, entity, err); ok {
+		return classified
 	}
 
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return classify(op, entity, sentinelNotFound, err)
-	case errors.Is(err, sql.ErrTxDone):
-		return classify(op, entity, sentinelTxDone, err)
 	case isSQLiteMissingTable(err):
 		return classify(op, entity, sentinelUndefinedTable, err)
 	case isSQLiteConstraintViolation(err):
@@ -422,14 +419,14 @@ func isSQLiteMissingTable(err error) bool {
 }
 
 func isSQLiteConstraintViolation(err error) bool {
-	if sqliteErr, ok := errors.AsType[*sqlite3.Error](err); ok {
+	if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok { // mattn returns sqlite3.Error by value
 		return sqliteErr.Code == sqlite3.ErrConstraint
 	}
 	return false
 }
 
 func isUniqueConstraint(err error) bool {
-	if sqliteErr, ok := errors.AsType[*sqlite3.Error](err); ok {
+	if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok { // mattn returns sqlite3.Error by value
 		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique ||
 			sqliteErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey
 	}

@@ -1,6 +1,11 @@
 package adapters
 
-import behemotherr "github.com/MastewalB/behemoth/errors"
+import (
+	"database/sql"
+	"errors"
+
+	behemotherr "github.com/MastewalB/behemoth/errors"
+)
 
 type sentinelKind int
 
@@ -31,5 +36,20 @@ func classify(op, entity string, sentinel sentinelKind, cause error) error {
 		return behemotherr.NewUndefinedTable(op, entity, cause)
 	default:
 		return behemotherr.NewDatabaseError(op, cause)
+	}
+}
+
+// mapStdSQLErrors classifies the errors database/sql itself returns, the same
+// for every SQL adapter. ok is false when err needs driver-specific mapping.
+func mapStdSQLErrors(op, entity string, err error) (classified error, ok bool) {
+	switch {
+	case err == nil:
+		return nil, true
+	case errors.Is(err, sql.ErrNoRows):
+		return classify(op, entity, sentinelNotFound, err), true
+	case errors.Is(err, sql.ErrTxDone):
+		return classify(op, entity, sentinelTxDone, err), true
+	default:
+		return nil, false
 	}
 }

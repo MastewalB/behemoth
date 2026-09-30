@@ -61,3 +61,55 @@ func physicalExpression(r behemoth.SchemaResolver, m behemoth.Model, expr *claus
 	}
 	return out
 }
+
+// physicalDocument returns a copy of doc (canonical keys, e.g. from ToMap or
+// an update map) keyed by physical field names — for document stores, where
+// the stored keys are the names.
+func physicalDocument(r behemoth.SchemaResolver, m behemoth.Model, doc map[string]any) map[string]any {
+	out := make(map[string]any, len(doc))
+	for k, v := range doc {
+		out[physicalColumn(r, m, k)] = v
+	}
+	return out
+}
+
+// canonicalFields maps m's physical field names back to canonical ones.
+//
+// The resolver only maps canonical -> physical, so the canonical side comes
+// from the model itself: the keys of an empty model's ToMap(), the same
+// source the SQL adapters derive their column lists from. Only renamed fields
+// are included.
+func canonicalFields(r behemoth.SchemaResolver, m behemoth.Model) map[string]string {
+	out := map[string]string{}
+	ser, ok := m.New().(behemoth.Serializable)
+	if !ok {
+		return out
+	}
+	fields, err := ser.ToMap()
+	if err != nil {
+		return out
+	}
+	for canonical := range fields {
+		if physical := physicalColumn(r, m, canonical); physical != canonical {
+			out[physical] = canonical
+		}
+	}
+	return out
+}
+
+// canonicalDocument rewrites a stored document's physical keys to canonical
+// ones before it is handed to FromMap. Keys the model doesn't declare (e.g.
+// Mongo's _id) pass through unchanged. raw is not modified.
+func canonicalDocument(canonical map[string]string, raw map[string]any) map[string]any {
+	if len(canonical) == 0 {
+		return raw
+	}
+	out := make(map[string]any, len(raw))
+	for k, v := range raw {
+		if c, ok := canonical[k]; ok {
+			k = c
+		}
+		out[k] = v
+	}
+	return out
+}

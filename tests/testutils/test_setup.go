@@ -350,17 +350,17 @@ func SetupBunAdapter(t *testing.T, db *bun.DB) *bunAdapter.BunAdapter {
 }
 
 func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *adapters.MongoAdapter {
-	return adapters.NewMongoAdapter(client, dbName)
+	return adapters.NewMongoAdapter(client, dbName, nil)
 }
 
 func SetupPostgresAdapter(db *sql.DB) *adapters.PostgresAdapter {
-	return adapters.NewPostgresAdapter(db)
+	return adapters.NewPostgresAdapter(db, nil)
 }
 
 func SetupMySQLAdapter(db *sql.DB) *adapters.MySQLAdapter {
-	return adapters.NewMySQLAdapter(db)
+	return adapters.NewMySQLAdapter(db, nil)
 }
 
 func SetupMSSQLAdapter(db *sql.DB) *adapters.SQLServerAdapter {
-	return adapters.NewSQLServerAdapter(db)
+	return adapters.NewSQLServerAdapter(db, nil)
 }

@@ -11,8 +11,8 @@ import (
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
 	"github.com/MastewalB/behemoth/storage/adapters"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -180,15 +180,30 @@ func TestSQLiteLedgerReadsBackThroughAdapter(t *testing.T) {
 // canonical names (behemoth_migration_ledger, behemoth_schema_snapshot) with
 // the resolver Boot builds.
 func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
-	ctx := context.Background()
 	db := openSQLite(t)
+	runnerUsesConfiguredTables(t,
+		func(r behemoth.SchemaResolver) core.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
+		func(r behemoth.SchemaResolver) behemoth.Database { return adapters.NewSQLiteAdapter(db, r) },
+		NewSQLiteTestManager(db),
+	)
+}
+
+// runnerUsesConfiguredTables drives the real MigrationRunner from a fresh
+// database: a driver and an adapter for the same database, both given the
+// resolver Boot builds from the default config.
+func runnerUsesConfiguredTables(
+	t *testing.T,
+	newDriver func(behemoth.SchemaResolver) core.SchemaDriver,
+	newAdapter func(behemoth.SchemaResolver) behemoth.Database,
+	tm DriverTestManager,
+) {
+	ctx := context.Background()
 	cfg := core.NewMigrationConfig(core.MigrationConfig{})
 	require.NotEqual(t, core.LedgerCanonicalName, cfg.TableName, "the test needs physical names that differ")
 
 	resolver := core.NewSchemaResolver()
 	resolver.Freeze(core.BuildSchemaResolverTable(core.NewSchemaRegistry(), cfg))
-	driver := sqlite.NewSQLiteDriver(db, resolver)
-	runner := core.NewMigrationRunner(adapters.NewSQLiteAdapter(db, resolver), driver, cfg, types.NewTelemetry(nil, nil, nil))
+	runner := core.NewMigrationRunner(newAdapter(resolver), newDriver(resolver), cfg, types.NewTelemetry(nil, nil, nil))
 
 	users, posts := usersTable(), postsTable()
 	first := core.Migration{ID: "0001_users", Up: []core.SchemaOperation{createTableOp(users)}}
@@ -225,8 +240,12 @@ func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
 	assert.Equal(t, second.ID, snap.Version)
 	assert.ElementsMatch(t, []string{"users", "posts"}, keysOf(snap.Tables), "Apply projected the snapshot it loaded")
 
-	// Nothing was written under the canonical names.
-	tm := NewSQLiteTestManager(db)
+	// Everything was written under cfg's names, nothing under the canonical ones.
+	for _, physical := range []string{cfg.TableName, cfg.TableName + "_snapshot"} {
+		exists, err := tm.TableExists(ctx, physical)
+		require.NoError(t, err)
+		assert.True(t, exists, physical)
+	}
 	for _, canonical := range []string{core.LedgerCanonicalName, core.SnapshotCanonicalName} {
 		exists, err := tm.TableExists(ctx, canonical)
 		require.NoError(t, err)

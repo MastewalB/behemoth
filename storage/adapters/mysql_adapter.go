@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,15 +12,55 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/utils"
+	"github.com/go-sql-driver/mysql"
 )
 
 // MySQLAdapter implements the behemoth.Database interface for MySQL.
+//
+// Models are addressed by canonical names; every table and column name in the
+// generated SQL goes through Resolver first. A nil Resolver maps every name to
+// itself.
 type MySQLAdapter struct {
-	DB Querier
+	DB       Querier
+	Resolver behemoth.SchemaResolver
 }
 
-func NewMySQLAdapter(db Querier) *MySQLAdapter {
-	return &MySQLAdapter{DB: db}
+func NewMySQLAdapter(db Querier, resolver behemoth.SchemaResolver) *MySQLAdapter {
+	return &MySQLAdapter{DB: db, Resolver: resolver}
+}
+
+func (my *MySQLAdapter) names() behemoth.SchemaResolver {
+	return resolverOrIdentity(my.Resolver)
+}
+
+// where renders expr with its fields resolved to physical columns.
+func (my *MySQLAdapter) where(m behemoth.Model, expr *clause.Expression) (string, []any) {
+	return BuildSQLWhereClause(physicalExpression(my.names(), m, expr), DefaultClauseOption)
+}
+
+// mapMySQLErrors classifies MySQL server errors by error number
+// (https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html).
+func mapMySQLErrors(op, entity string, err error) error {
+	if classified, ok := mapStdSQLErrors(op, entity, err); ok {
+		return classified
+	}
+
+	myErr, ok := errors.AsType[*mysql.MySQLError](err)
+	if !ok {
+		return classify(op, entity, sentinelUnknown, err)
+	}
+	switch myErr.Number {
+	case 1062: // ER_DUP_ENTRY
+		return classify(op, entity, sentinelDuplicateKey, err)
+	case 1451, 1452, 1216, 1217: // ER_ROW_IS_REFERENCED_2, ER_NO_REFERENCED_ROW_2, and their pre-5.1 forms
+		return classify(op, entity, sentinelForeignKey, err)
+	case 1146: // ER_NO_SUCH_TABLE
+		return classify(op, entity, sentinelUndefinedTable, err)
+	case 1048, 3819: // ER_BAD_NULL_ERROR, ER_CHECK_CONSTRAINT_VIOLATED
+		return classify(op, entity, sentinelConstraintViolation, err)
+	default:
+		return classify(op, entity, sentinelUnknown, err)
+	}
 }
 
 // generateMySQLPlaceholders returns a VALUES clause with n '?' placeholders: (?, ?, ?)
@@ -50,13 +91,13 @@ func (my *MySQLAdapter) Create(ctx context.Context, m behemoth.Model) error {
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES %s",
-		m.SchemaName(),
-		strings.Join(columns, ", "),
+		physicalTable(my.names(), m),
+		strings.Join(physicalColumns(my.names(), m, columns), ", "),
 		placeholders,
 	)
 
 	_, err := my.DB.ExecContext(ctx, query, values...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
 func (my *MySQLAdapter) FindOne(
@@ -68,19 +109,23 @@ func (my *MySQLAdapter) FindOne(
 		return nil, behemotherr.SerializableNotImplemented()
 	}
 
+	// columns stay canonical: they key the map handed to FromMap.
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
-	whereClause, args := BuildSQLWhereClause(&whereExpression, DefaultClauseOption)
 
 	query := fmt.Sprintf(
-		"SELECT %s FROM %s WHERE %s LIMIT 1",
-		strings.Join(columns, ", "),
-		m.SchemaName(),
-		whereClause,
+		"SELECT %s FROM %s",
+		strings.Join(physicalColumns(my.names(), m, columns), ", "),
+		physicalTable(my.names(), m),
 	)
+	whereClause, args := my.where(m, &whereExpression)
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
+	query += " LIMIT 1"
 
 	row := my.DB.QueryRowContext(ctx, query, args...)
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -105,6 +150,7 @@ func (my *MySQLAdapter) FindMany(
 		query          string
 	)
 
+	// columns stay canonical: they key the map handed to FromMap.
 	if options != nil && len(options.Select) > 0 {
 		columns, values, valuePtrs = models.GenerateColumnValuePairsWithSelectFilter(m, options.Select)
 	} else {
@@ -115,28 +161,21 @@ func (my *MySQLAdapter) FindMany(
 		distinctClause = "DISTINCT "
 	}
 
-	whereClause, args := BuildSQLWhereClause(&whereExpression, DefaultClauseOption)
+	whereClause, args := my.where(m, &whereExpression)
 
+	query = fmt.Sprintf(
+		"SELECT %s%s FROM %s",
+		distinctClause,
+		strings.Join(physicalColumns(my.names(), m, columns), ", "),
+		physicalTable(my.names(), m),
+	)
 	if whereClause != "" {
-		query = fmt.Sprintf(
-			"SELECT %s%s FROM %s WHERE %s",
-			distinctClause,
-			strings.Join(columns, ", "),
-			m.SchemaName(),
-			whereClause,
-		)
-	} else {
-		query = fmt.Sprintf(
-			"SELECT %s%s FROM %s",
-			distinctClause,
-			strings.Join(columns, ", "),
-			m.SchemaName(),
-		)
+		query += " WHERE " + whereClause
 	}
 
 	if options != nil {
 		if options.OrderBy.Field != "" {
-			query += fmt.Sprintf(" ORDER BY %s %s", options.OrderBy.Field, options.OrderBy.Direction)
+			query += fmt.Sprintf(" ORDER BY %s %s", physicalColumn(my.names(), m, options.OrderBy.Field), options.OrderBy.Direction)
 		}
 		// MySQL supports LIMIT / OFFSET in the same way as SQLite.
 		if options.Limit != 0 {
@@ -150,14 +189,14 @@ func (my *MySQLAdapter) FindMany(
 	fmt.Println(query, args)
 	rows, err := my.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
 	defer rows.Close()
 
 	var results []behemoth.Model
 	for rows.Next() {
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+			return nil, WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -179,13 +218,13 @@ func (my *MySQLAdapter) Update(ctx context.Context, m behemoth.Model) error {
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = ?",
-		m.SchemaName(),
-		generateMySQLSETClause(columns),
-		m.PrimaryKeyName(),
+		physicalTable(my.names(), m),
+		generateMySQLSETClause(physicalColumns(my.names(), m, columns)),
+		physicalColumn(my.names(), m, m.PrimaryKeyName()),
 	)
 
 	_, err := my.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
 func (my *MySQLAdapter) UpdateOne(
@@ -199,29 +238,31 @@ func (my *MySQLAdapter) UpdateOne(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereClause, whereArgs := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, whereArgs := my.where(m, &expr)
+	table := physicalTable(my.names(), m)
+	pk := physicalColumn(my.names(), m, m.PrimaryKeyName())
 
 	// MySQL forbids "UPDATE t SET ... WHERE pk = (SELECT pk FROM t WHERE ...)"
 	// when the subquery references the same table. We work around this by
 	// wrapping the subquery in a derived table aliased as `_sub`.
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
-		m.PrimaryKeyName(),
-		m.SchemaName(),
+		pk,
+		table,
 		whereClause,
 	)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = (SELECT %s FROM (%s) AS _sub)",
-		m.SchemaName(),
-		generateMySQLSETClause(columns),
-		m.PrimaryKeyName(),
-		m.PrimaryKeyName(),
+		table,
+		generateMySQLSETClause(physicalColumns(my.names(), m, columns)),
+		pk,
+		pk,
 		selectQuery,
 	)
 
 	_, err := my.DB.ExecContext(ctx, query, append(values, whereArgs...)...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 
 }
 
@@ -236,104 +277,101 @@ func (my *MySQLAdapter) UpdateMany(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereClause, whereArgs := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, whereArgs := my.where(m, &expr)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
-		m.SchemaName(),
-		generateMySQLSETClause(columns),
+		physicalTable(my.names(), m),
+		generateMySQLSETClause(physicalColumns(my.names(), m, columns)),
 		whereClause,
 	)
 
 	_, err := my.DB.ExecContext(ctx, query, append(values, whereArgs...)...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 
 }
 
 func (my *MySQLAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = ?",
-		m.SchemaName(),
-		m.PrimaryKeyName(),
+		physicalTable(my.names(), m),
+		physicalColumn(my.names(), m, m.PrimaryKeyName()),
 	)
 	_, err := my.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
 func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, args := my.where(m, &expr)
 	if whereClause == "" {
 		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
+	table := physicalTable(my.names(), m)
+	pk := physicalColumn(my.names(), m, m.PrimaryKeyName())
+
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
-		m.PrimaryKeyName(),
-		m.SchemaName(),
+		pk,
+		table,
 		whereClause,
 	)
 
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = (SELECT %s FROM (%s) AS _sub)",
-		m.SchemaName(),
-		m.PrimaryKeyName(),
-		m.PrimaryKeyName(),
+		table,
+		pk,
+		pk,
 		selectQuery,
 	)
 
 	_, err := my.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
 func (my *MySQLAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, args := my.where(m, &expr)
 	if whereClause == "" {
 		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s",
-		m.SchemaName(),
+		physicalTable(my.names(), m),
 		whereClause,
 	)
 
 	_, err := my.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
 func (my *MySQLAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
-	query := fmt.Sprintf("DELETE FROM %s", m.SchemaName())
+	query := fmt.Sprintf("DELETE FROM %s", physicalTable(my.names(), m))
 	_, err := my.DB.ExecContext(ctx, query)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
 func (my *MySQLAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
-	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, args := my.where(m, &expr)
 
-	var query string
+	query := fmt.Sprintf(
+		"SELECT COUNT(*) FROM %s",
+		physicalTable(my.names(), m),
+	)
 	if whereClause != "" {
-		query = fmt.Sprintf(
-			"SELECT COUNT(*) FROM %s WHERE %s",
-			m.SchemaName(),
-			whereClause,
-		)
-	} else {
-		query = fmt.Sprintf(
-			"SELECT COUNT(*) FROM %s",
-			m.SchemaName(),
-		)
+		query += " WHERE " + whereClause
 	}
 
 	row, err := my.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return 0, WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
 	defer row.Close()
 
 	var count int64
 	if row.Next() {
 		if err := row.Scan(&count); err != nil {
-			return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+			return 0, WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 		}
 	}
 
@@ -353,7 +391,7 @@ func (my *MySQLAdapter) Transaction(ctx context.Context, fn behemoth.Transaction
 		}
 	}()
 
-	txAdapter := NewMySQLAdapter(tx)
+	txAdapter := NewMySQLAdapter(tx, my.Resolver)
 	_, err = fn(ctx, txAdapter)
 
 	if err != nil {
