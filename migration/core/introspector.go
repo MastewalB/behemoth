@@ -108,6 +108,16 @@ func diffColumns(declared, other []Column, ambiguities []ColumnAmbiguity, trackE
 	declaredByName := indexColumnsByName(declared)
 	otherByName := indexColumnsByName(other)
 	ambigByCol := make(map[string]ColumnAmbiguity, len(ambiguities))
+	
+	for _, a := range ambiguities {
+		ambigByCol[a.Column] = a
+	}
+	ambiguityOf := func(name string) *ColumnAmbiguity {
+		if a, ok := ambigByCol[name]; ok {
+			return &a
+		}
+		return nil
+	}
 
 	var findings []ColumnFinding
 	var otherOnly, declaredOnly []Column
@@ -126,24 +136,28 @@ func diffColumns(declared, other []Column, ambiguities []ColumnAmbiguity, trackE
 			kind = ColDiffers
 		}
 
-		var amb *ColumnAmbiguity
-		if a, ok := ambigByCol[name]; ok {
-			amb = &a
-		}
-
 		findings = append(findings,
 			ColumnFinding{
 				Name:          name,
 				Kind:          kind,
 				Declared:      &d,
 				Live:          &o,
-				TypeAmbiguity: amb,
+				TypeAmbiguity: ambiguityOf(name),
 			})
 	}
 
-	// Add columns only in live
+	// Add columns only in live. A live column whose type couldn't be mapped
+	// never takes part in rename matching: its canonical type is only a guess,
+	// so pairing it by structural signature would be a guess too — and would
+	// move it out of the findings RejectAmbiguousTypes inspects.
+	var ambiguousOtherOnly []Column
 	for name, o := range otherByName {
-		if _, ok := declaredByName[name]; !ok {
+		if _, ok := declaredByName[name]; ok {
+			continue
+		}
+		if ambiguityOf(name) != nil {
+			ambiguousOtherOnly = append(ambiguousOtherOnly, o)
+		} else {
 			otherOnly = append(otherOnly, o)
 		}
 	}
@@ -168,9 +182,13 @@ func diffColumns(declared, other []Column, ambiguities []ColumnAmbiguity, trackE
 		findings = append(findings, ColumnFinding{Name: d.Name, Kind: ColMissingLive, Declared: &d})
 	}
 
+	// An undeclared live column is only tracked when trackExtraColumns is set
+	// (baseline / managed path, where it becomes part of the recorded schema);
+	// an unmappable one then carries its ambiguity so it is rejected like any
+	// other. Otherwise behemoth never reads or writes it, so it's ignored.
 	if trackExtraColumns {
-		for _, o := range unmatchedOther {
-			findings = append(findings, ColumnFinding{Name: o.Name, Kind: ColExtraLive, Live: &o})
+		for _, o := range append(unmatchedOther, ambiguousOtherOnly...) {
+			findings = append(findings, ColumnFinding{Name: o.Name, Kind: ColExtraLive, Live: &o, TypeAmbiguity: ambiguityOf(o.Name)})
 		}
 	}
 

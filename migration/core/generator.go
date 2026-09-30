@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -500,6 +501,7 @@ func RejectAmbiguousTypes(report *IntrospectionReport) error {
 		}
 	}
 	if len(problems) > 0 {
+		sort.Strings(problems) // report.Tables is a map; keep the message stable
 		return behemotherr.NewMigrationError("Migration.RejectAmbiguousTypes", "unmappable_column_type",
 			fmt.Errorf(`cannot generate a migration - unmappable column type(s) found:\n%s\n\nThe core model cannot represent these columns. 
 			Supply a custom Model implementation for the affected table, or extend the driver's type mapping if this should be a recognized type.`, strings.Join(problems, "\n")))

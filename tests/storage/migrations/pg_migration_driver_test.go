@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/migration/plugins/postgres"
 	"github.com/stretchr/testify/assert"
@@ -391,6 +392,47 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		assert.Equal(t, "m", live.Ambiguities[0].Column)
 		assert.Contains(t, live.Ambiguities[0].Reason, `"mood"`)
 		assert.Equal(t, "p", live.Ambiguities[1].Column)
+	})
+
+	// An unmappable live column must stop generation — whether it's declared,
+	// an undeclared column the baseline would record, or one that a guessed
+	// type would otherwise pair up as a rename.
+	t.Run("UnmappableColumnsAreRejected", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		_, err := db.ExecContext(ctx, `CREATE TYPE mood AS ENUM ('ok', 'meh');
+			CREATE TABLE feelings (id INTEGER PRIMARY KEY, m mood, p POINT, note TEXT)`)
+		require.NoError(t, err)
+
+		introspect := func(t *testing.T, cols []core.Column, trackExtra bool) (*core.IntrospectionReport, error) {
+			registry := core.NewSchemaRegistry()
+			require.NoError(t, registry.Declare(tableModel{name: "feelings"}, core.TableSchema{Name: "feelings", Columns: cols}))
+			report, err := core.RunIntrospection(ctx, registry, driver, trackExtra)
+			require.NoError(t, err)
+			return report, core.RejectAmbiguousTypes(report)
+		}
+		id := core.Column{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true}
+		note := core.Column{Name: "note", Type: core.ColTypeText, Nullable: true}
+
+		// m is declared (as text), p is not.
+		_, err = introspect(t, []core.Column{id, {Name: "m", Type: core.ColTypeText, Nullable: true}, note}, true)
+		require.Error(t, err)
+		assert.True(t, behemotherr.IsCode(err, "unmappable_column_type"))
+		assert.Contains(t, err.Error(), "feelings.m")
+		assert.Contains(t, err.Error(), "feelings.p", "undeclared column recorded by a baseline is rejected too")
+
+		_, err = introspect(t, []core.Column{id, {Name: "m", Type: core.ColTypeText, Nullable: true}, note}, false)
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "feelings.p", "undeclared columns are ignored when extras aren't tracked")
+
+		// A declared-only text column would pair with m's guessed text type as a rename.
+		report, err := introspect(t, []core.Column{id, {Name: "feeling", Type: core.ColTypeText, Nullable: true}, note}, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "feelings.m")
+		assert.Empty(t, report.Tables["feelings"].Renames, "an unmappable column is never a rename candidate")
+
+		// Only mappable columns: nothing to reject.
+		_, err = introspect(t, []core.Column{id, note}, false)
+		assert.NoError(t, err)
 	})
 
 	t.Run("ViewsAndMissingTables", func(t *testing.T) {
