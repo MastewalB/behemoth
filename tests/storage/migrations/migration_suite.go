@@ -785,6 +785,51 @@ func (s *DriverTestSuite) TestUpThenDownRoundTrip() {
 	s.Equal("Ada", asString(s.rows("users", "id")[0]["name"]))
 }
 
+// ---- core.MigrationRenderer (optional) ----
+
+func (s *DriverTestSuite) renderer() core.MigrationRenderer {
+	r, ok := s.driver.(core.MigrationRenderer)
+	if !ok {
+		s.T().Skip("driver does not implement core.MigrationRenderer")
+	}
+	return r
+}
+
+// TestRenderMigrationHasNoSideEffects: rendering happens before Apply, so it
+// must leave schema, data and ledger exactly as they were.
+func (s *DriverTestSuite) TestRenderMigrationHasNoSideEffects() {
+	r := s.renderer()
+	s.seedUsersAndPosts(core.FKCascade)
+	beforeUsers, beforePosts, beforeLedger := s.columns("users"), s.columns("posts"), s.ledgerIDs()
+
+	m := s.nextMigration(
+		createTableOp(core.TableSchema{Name: "tags", Columns: []core.Column{{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true}}}),
+		addColumnOp("users", core.Column{Name: "bio", Type: core.ColTypeText, Nullable: true}),
+		alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "x"}),
+		dropForeignKeyOp("posts", "fk_posts_user"),
+	)
+	script, err := r.RenderMigration(s.ctx, m)
+	s.Require().NoError(err)
+	s.NotEmpty(strings.TrimSpace(script))
+	s.True(strings.HasPrefix(r.FileExtension(), "."), "extension includes the dot")
+
+	s.False(s.tableExists("tags"))
+	s.Equal(beforeUsers, s.columns("users"))
+	s.Equal(beforePosts, s.columns("posts"))
+	_, found := s.foreignKey("posts", "fk_posts_user")
+	s.True(found)
+	s.Equal(int64(2), s.rowCount("users"))
+	s.Equal(beforeLedger, s.ledgerIDs())
+
+	s.Require().NoError(s.driver.ApplyMigration(s.ctx, request(m, nil)), "the rendered migration still applies")
+}
+
+func (s *DriverTestSuite) TestRenderMigrationFailsLikeApply() {
+	r := s.renderer()
+	_, err := r.RenderMigration(s.ctx, s.nextMigration(core.SchemaOperation{ID: "no_table", Kind: core.OpCreateTable, Table: "t"}))
+	s.Error(err)
+}
+
 // ---- Physical names ----
 
 // mapResolver maps canonical names to physical ones; unmapped names pass through.
