@@ -409,6 +409,59 @@ func writeMigrationFile(cfg MigrationConfig, m Migration) error {
 	return nil
 }
 
+// renderedDDL is a migration's script, rendered but not yet written.
+type renderedDDL struct {
+	body string
+	ext  string
+}
+
+// renderMigrationDDL renders m through the driver's native script language.
+// A nil renderer (the driver can't express migrations as a script) yields a
+// nil result and no error. Must run before m is applied — see MigrationRenderer.
+func renderMigrationDDL(ctx context.Context, m Migration, renderer MigrationRenderer) (*renderedDDL, error) {
+	if renderer == nil {
+		return nil, nil
+	}
+	body, err := renderer.RenderMigration(ctx, m)
+	if err != nil {
+		return nil, behemotherr.NewMigrationError("Migration.RenderDDL", "render_failed", err)
+	}
+	ext := renderer.FileExtension()
+	if ext == "" {
+		return nil, behemotherr.NewMigrationError("Migration.RenderDDL", "missing_file_extension", fmt.Errorf("renderer %T returned an empty file extension", renderer))
+	}
+	if !strings.HasPrefix(ext, ".") {
+		ext = "." + ext
+	}
+	return &renderedDDL{body: body, ext: ext}, nil
+}
+
+// write puts the script next to the migration's .json file. A nil receiver
+// (no renderer) is a no-op.
+func (r *renderedDDL) write(cfg MigrationConfig, m Migration) error {
+	if r == nil {
+		return nil
+	}
+	if err := os.WriteFile(migrationDDLPath(cfg, m, r.ext), []byte(r.body), 0644); err != nil {
+		return behemotherr.NewMigrationError("Migration.WriteDDL", "write_failed", err)
+	}
+	return nil
+}
+
+// writeMigrationDDL renders and writes the script sibling of a migration's
+// .json file. Never called instead of writeMigrationFile — always alongside it.
+func writeMigrationDDL(ctx context.Context, cfg MigrationConfig, m Migration, renderer MigrationRenderer) error {
+	r, err := renderMigrationDDL(ctx, m, renderer)
+	if err != nil {
+		return err
+	}
+	return r.write(cfg, m)
+}
+
+func migrationDDLPath(cfg MigrationConfig, m Migration, ext string) string {
+	return filepath.Join(cfg.FolderPath, m.ID+"_"+m.Name+ext)
+}
+
 // checkNoUnappliedMigrations compares the snapshot's recorded Version
 // against the latest migration file on disk. If they differ, some
 // on-disk migration exists that the snapshot doesn't yet reflect — either

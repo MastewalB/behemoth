@@ -9,7 +9,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/types"
 )
 
 type RunState string
@@ -166,7 +168,7 @@ func runFirstTimeAwaitingConfirm(
 			Message:   fmt.Sprintf("Baseline migration %s is unchanged and ready. Re-run with --confirm to apply.", existing.ID),
 		}, nil
 	}
-	if err := deps.Runner.Apply(ctx, []Migration{existing}); err != nil {
+	if err := applyWithDDL(ctx, cfg, deps, existing); err != nil {
 		return nil, err
 	}
 	return &RunResult{
@@ -211,7 +213,7 @@ func runOngoing(
 			return &RunResult{Status: StatusAwaitingConfirmation, Migration: &next,
 				Message: fmt.Sprintf("Migration %s is pending review. Re-run with --confirm to apply.", next.ID)}, nil
 		}
-		if err := deps.Runner.Apply(ctx, []Migration{next}); err != nil {
+		if err := applyWithDDL(ctx, cfg, deps, next); err != nil {
 			return nil, err
 		}
 		return &RunResult{
@@ -242,6 +244,36 @@ func runOngoing(
 	// separate opt-in flag, not a side effect of confirmApply.
 	return &RunResult{Status: StatusAwaitingConfirmation, Migration: m,
 		Message: fmt.Sprintf("Migration %s written to %s. Review it, then re-run with --confirm to apply.", m.ID, migrationFilePath(cfg, *m))}, nil
+}
+
+// applyWithDDL applies m and writes its script next to its .json file.
+//
+// The script is rendered BEFORE Apply — some renderers derive statements from
+// the live schema, which must still be in its pre-migration state — but only
+// written AFTER Apply succeeds, so a script only ever exists for a migration
+// that actually ran. Rendering and writing are both non-fatal: once Apply has
+// committed, a missing script must not be reported as if the migration failed.
+func applyWithDDL(ctx context.Context, cfg MigrationConfig, deps MigrationDeps, m Migration) error {
+	ddl, renderErr := renderMigrationDDL(ctx, m, deps.GenerateDeps.Renderer)
+
+	if err := deps.Runner.Apply(ctx, []Migration{m}); err != nil {
+		return err
+	}
+
+	if renderErr != nil {
+		warn(ctx, deps.Telemetry, "failed to render migration script", behemoth.M{"id": m.ID, "error": renderErr.Error()})
+		return nil
+	}
+	if err := ddl.write(cfg, m); err != nil {
+		warn(ctx, deps.Telemetry, "failed to write migration script", behemoth.M{"id": m.ID, "error": err.Error()})
+	}
+	return nil
+}
+
+func warn(ctx context.Context, tel *types.Telemetry, msg string, fields behemoth.M) {
+	if tel != nil && tel.Logger != nil {
+		tel.Logger.Warn(ctx, msg, fields)
+	}
 }
 
 // DetermineRunState
