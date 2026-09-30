@@ -10,6 +10,7 @@ const (
 	sentinelForeignKey
 	sentinelConstraintViolation
 	sentinelTxDone
+	sentinelUndefinedTable
 	sentinelUnknown
 )
 
@@ -26,6 +27,8 @@ func classify(op, entity string, sentinel sentinelKind, cause error) error {
 		return behemotherr.NewForeignKeyViolation(op, entity, cause)
 	case sentinelTxDone:
 		return behemotherr.NewTransactionError(op, cause)
+	case sentinelUndefinedTable:
+		return behemotherr.NewUndefinedTable(op, entity, cause)
 	default:
 		return behemotherr.NewDatabaseError(op, cause)
 	}

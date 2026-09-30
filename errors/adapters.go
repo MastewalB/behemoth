@@ -19,6 +19,24 @@ func NewNotFound(op, entity string, original error) error {
 	}
 }
 
+// NewUndefinedTable classifies a query against a table that doesn't exist.
+// Deliberately distinct from NotFound: callers treating NotFound as "no such
+// row" must not mistake a missing (e.g. not-yet-migrated) table for an empty
+// one. Only a caller that knows a missing table is a legitimate state — like
+// the migration runner reading its own bookkeeping tables before the first
+// migration — should handle it.
+func NewUndefinedTable(op, entity string, original error) error {
+	return &DomainError{
+		Category:        CategoryUndefinedTable,
+		Op:              op,
+		Entity:          entity,
+		Code:            "undefined_table",
+		PublicMessage:   "an internal error occurred", // a schema problem, never client-facing detail
+		InternalMessage: fmt.Sprintf("%s: table for %s does not exist", op, entity),
+		Original:        original,
+	}
+}
+
 func NewDuplicateKey(op, entity string, original error) error {
 	return &DomainError{
 		Category:        CategoryDuplicateKey,
@@ -140,6 +158,8 @@ func SerializableNotImplemented() error {
 }
 
 func IsNotFound(err error) bool { return Is(err, CategoryNotFound) }
+
+func IsUndefinedTable(err error) bool { return Is(err, CategoryUndefinedTable) }
 
 func IsDuplicateKey(err error) bool { return Is(err, CategoryDuplicateKey) }
 

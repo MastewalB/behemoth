@@ -396,6 +396,8 @@ func mapSQLErrors(op, entity string, err error) error {
 		return classify(op, entity, sentinelNotFound, err)
 	case errors.Is(err, sql.ErrTxDone):
 		return classify(op, entity, sentinelTxDone, err)
+	case isSQLiteMissingTable(err):
+		return classify(op, entity, sentinelUndefinedTable, err)
 	case isSQLiteConstraintViolation(err):
 		if isUniqueConstraint(err) {
 			return classify(op, entity, sentinelDuplicateKey, err)
@@ -408,6 +410,15 @@ func mapSQLErrors(op, entity string, err error) error {
 		return classify(op, entity, sentinelUnknown, err)
 	}
 
+}
+
+// isSQLiteMissingTable matches "no such table: x". SQLite reports it with the
+// generic SQLITE_ERROR code, so the message is the only distinguishing signal.
+func isSQLiteMissingTable(err error) bool {
+	if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok {
+		return sqliteErr.Code == sqlite3.ErrError && strings.HasPrefix(sqliteErr.Error(), "no such table")
+	}
+	return false
 }
 
 func isSQLiteConstraintViolation(err error) bool {

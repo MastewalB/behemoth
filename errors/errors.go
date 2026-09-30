@@ -12,6 +12,7 @@ type Category string
 const (
 	CategoryValidation     Category = "validation"
 	CategoryNotFound       Category = "not_found"
+	CategoryUndefinedTable Category = "undefined_table" // the table itself doesn't exist — a schema condition, never "no rows"
 	CategoryDuplicateKey   Category = "duplicate_key"
 	CategoryForeignKey     Category = "foreign_key_violation"
 	CategoryConflict       Category = "conflict"     // optimistic-lock / concurrent-update collisions
@@ -114,16 +115,17 @@ func NewMigrationError(op, code string, original error) *DomainError {
 }
 
 var categoryToStatus = map[Category]int{
-	CategoryValidation:   http.StatusBadRequest,
-	CategoryNotFound:     http.StatusNotFound,
-	CategoryDuplicateKey: http.StatusConflict,
-	CategoryForeignKey:   http.StatusConflict,
-	CategoryConflict:     http.StatusConflict,
-	CategoryUnauthorized: http.StatusUnauthorized,
-	CategoryForbidden:    http.StatusForbidden,
-	CategoryRateLimited:  http.StatusTooManyRequests,
-	CategorySession:      http.StatusUnauthorized,
-	CategoryToken:        http.StatusUnauthorized,
-	CategoryTransaction:  http.StatusInternalServerError,
-	CategoryDatabase:     http.StatusInternalServerError,
+	CategoryValidation:     http.StatusBadRequest,
+	CategoryNotFound:       http.StatusNotFound,
+	CategoryDuplicateKey:   http.StatusConflict,
+	CategoryForeignKey:     http.StatusConflict,
+	CategoryConflict:       http.StatusConflict,
+	CategoryUnauthorized:   http.StatusUnauthorized,
+	CategoryForbidden:      http.StatusForbidden,
+	CategoryRateLimited:    http.StatusTooManyRequests,
+	CategorySession:        http.StatusUnauthorized,
+	CategoryToken:          http.StatusUnauthorized,
+	CategoryTransaction:    http.StatusInternalServerError,
+	CategoryDatabase:       http.StatusInternalServerError,
+	CategoryUndefinedTable: http.StatusInternalServerError,
 }
