@@ -453,3 +453,85 @@ func TestSQLiteAutoIncrementRequiresSinglePrimaryKey(t *testing.T) {
 	}))
 	assert.Error(t, err)
 }
+
+// schemaDump returns sqlite_master's definitions of user tables, indexes and
+// triggers (bookkeeping tables excluded), keyed by name.
+func schemaDump(t *testing.T, ctx context.Context, db *sql.DB) map[string]string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, `SELECT name, sql FROM sqlite_master
+		WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND tbl_name NOT LIKE 'behemoth_%'`)
+	require.NoError(t, err)
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var name, def string
+		require.NoError(t, rows.Scan(&name, &def))
+		out[name] = def
+	}
+	return out
+}
+
+// TestSQLiteRenderedScriptReproducesApply: running the rendered script on one
+// database must produce exactly the schema ApplyMigration produces on an
+// identical one — including the statements of a table rebuild.
+func TestSQLiteRenderedScriptReproducesApply(t *testing.T) {
+	ctx := context.Background()
+	seed := []core.SchemaOperation{createTableOp(usersTable()), createTableOp(postsTable())}
+	m := core.Migration{ID: "0002_test", Name: "test", Up: []core.SchemaOperation{
+		addForeignKeyOp("posts", postsUserFK(core.FKCascade)),
+		alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "it's"}),
+		addIndexOp("users", core.Index{Name: "idx_users_status", Columns: []string{"status"}}),
+		renameColumnOp("posts", "title", "headline"),
+	}}
+
+	applied, scripted := openSQLite(t), openSQLite(t)
+	for _, db := range []*sql.DB{applied, scripted} {
+		require.NoError(t, sqlite.NewSQLiteDriver(db, nil).ApplyMigration(ctx, request(core.Migration{ID: "0001_seed", Up: seed}, nil)))
+		_, err := db.ExecContext(ctx, `INSERT INTO users (id, email) VALUES (1, 'a@example.com'); INSERT INTO posts (id, user_id, title) VALUES (1, 1, 't')`)
+		require.NoError(t, err)
+	}
+
+	script, err := sqlite.NewSQLiteDriver(scripted, nil).RenderMigration(ctx, m)
+	require.NoError(t, err)
+	assert.Contains(t, script, "-- Migration: 0002_test")
+	assert.Contains(t, script, "PRAGMA foreign_keys = OFF", "rebuild note is present")
+	assert.Contains(t, script, "_behemoth_rebuild_users")
+
+	require.NoError(t, sqlite.NewSQLiteDriver(applied, nil).ApplyMigration(ctx, request(m, nil)))
+
+	conn, err := scripted.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "BEGIN; "+script+" COMMIT;")
+	require.NoError(t, err, script)
+
+	assert.Equal(t, schemaDump(t, ctx, applied), schemaDump(t, ctx, scripted))
+	var headline string
+	require.NoError(t, scripted.QueryRowContext(ctx, "SELECT headline FROM posts WHERE id = 1").Scan(&headline))
+	assert.Equal(t, "t", headline, "script preserves data through the rebuild")
+}
+
+func TestSQLiteRenderBaselineDumpsExistingSchema(t *testing.T) {
+	ctx, db, driver, apply := newSQLiteFixture(t)
+	require.NoError(t, apply(createTableOp(usersTable()), createTableOp(postsTable())))
+	require.NoError(t, apply(
+		addIndexOp("users", core.Index{Name: "idx_users_status", Columns: []string{"status"}}),
+		addForeignKeyOp("posts", postsUserFK(core.FKCascade)),
+	))
+
+	users, posts := usersTable(), postsTable()
+	baseline := core.BuildBaselineMigration(map[string]core.TableSchema{"users": users, "posts": posts})
+	script, err := driver.RenderMigration(ctx, baseline)
+	require.NoError(t, err)
+
+	assert.Contains(t, script, "Baseline")
+	for _, def := range schemaDump(t, ctx, db) {
+		assert.Contains(t, script, def+";")
+	}
+
+	baseline.Up = append(baseline.Up, createTableOp(core.TableSchema{Name: "missing"}))
+	_, err = driver.RenderMigration(ctx, baseline)
+	assert.Error(t, err, "a baseline table that isn't live is an error")
+}

@@ -10,6 +10,9 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 )
 
+// rebuildTablePrefix names the temporary table a rebuild copies rows into.
+const rebuildTablePrefix = "_behemoth_rebuild_"
+
 // rebuildTable performs SQLite's generalized ALTER TABLE procedure
 // (https://www.sqlite.org/lang_altertable.html#otheralter):
 //
@@ -70,7 +73,7 @@ func (d *SQLiteDriver) rebuildTable(
 		return behemotherr.NewMigrationError(op, "query_failed", err)
 	}
 
-	tmp := "_behemoth_rebuild_" + phys
+	tmp := rebuildTablePrefix + phys
 	if err := execDDL(ctx, tx, op, s.render(tmp)); err != nil {
 		return err
 	}

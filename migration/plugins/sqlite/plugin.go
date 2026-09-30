@@ -59,7 +59,7 @@ func (d *SQLiteDriver) AtomicityLevel() core.AtomicityLevel { return core.Atomic
 // ApplyMigration implements [core.SchemaDriver]: every Up operation, the
 // ledger row and the snapshot upsert commit or roll back together.
 func (d *SQLiteDriver) ApplyMigration(ctx context.Context, req core.MigrationRequest) error {
-	return d.inMigrationTx(ctx, "SQLiteDriver.ApplyMigration", func(tx *sql.Tx) error {
+	return d.inMigrationTx(ctx, "SQLiteDriver.ApplyMigration", false, func(tx *sql.Tx) error {
 		for _, op := range req.Migration.Up {
 			if err := d.applyOperation(ctx, tx, op); err != nil {
 				return behemotherr.WrapOp("SQLiteDriver.ApplyMigration", fmt.Sprintf("operation %q (%s on %s)", op.ID, op.Kind, op.Table), err)
@@ -72,7 +72,7 @@ func (d *SQLiteDriver) ApplyMigration(ctx context.Context, req core.MigrationReq
 // RecordBaseline implements [core.SchemaDriver]: the same ledger+snapshot
 // write as ApplyMigration, with no DDL executed.
 func (d *SQLiteDriver) RecordBaseline(ctx context.Context, req core.MigrationRequest) error {
-	return d.inMigrationTx(ctx, "SQLiteDriver.RecordBaseline", func(tx *sql.Tx) error {
+	return d.inMigrationTx(ctx, "SQLiteDriver.RecordBaseline", false, func(tx *sql.Tx) error {
 		return d.recordTx(ctx, tx, req)
 	})
 }
@@ -84,7 +84,10 @@ func (d *SQLiteDriver) RecordBaseline(ctx context.Context, req core.MigrationReq
 // tables that other rows may reference. If enforcement was on, the whole
 // database is checked with PRAGMA foreign_key_check before committing, so a
 // migration can never commit data that violates a foreign key.
-func (d *SQLiteDriver) inMigrationTx(ctx context.Context, op string, fn func(tx *sql.Tx) error) (err error) {
+//
+// With dryRun, fn runs under exactly the same conditions but the transaction
+// is always rolled back — this is how RenderMigration observes statements.
+func (d *SQLiteDriver) inMigrationTx(ctx context.Context, op string, dryRun bool, fn func(tx *sql.Tx) error) (err error) {
 	conn, err := d.db.Conn(ctx)
 	if err != nil {
 		return behemotherr.NewMigrationError(op, "conn_failed", err)
@@ -122,6 +125,12 @@ func (d *SQLiteDriver) inMigrationTx(ctx context.Context, op string, fn func(tx 
 	if err := fn(tx); err != nil {
 		tx.Rollback()
 		return err
+	}
+	if dryRun {
+		if err := tx.Rollback(); err != nil {
+			return behemotherr.NewMigrationError(op, "rollback_failed", err)
+		}
+		return nil
 	}
 	if fkEnabled {
 		if err := checkForeignKeys(ctx, tx); err != nil {
