@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
@@ -16,7 +17,7 @@ type draftEntry struct {
 	Description string   `json:"description"`
 	Options     []string `json:"options"`         // labels only — the actual Operations stay in-process, never serialized to the draft, per the "developer picks an option, never hand-authors an operation" boundary
 	Chosen      *int     `json:"chosen"`          // null = pending
-	Stale       bool     `json:"stale,omitempty"` // set when a confirmed decision's option set has since changed — see Identity Stability
+	Stale       bool     `json:"stale,omitempty"` // set when a recorded decision's options have since changed; the decision is not applied until the developer removes it — see Identity Stability
 	StaleNote   string   `json:"stale_note,omitempty"`
 }
 
@@ -53,16 +54,21 @@ func (p *FilePresenter) Present(ctx context.Context, issues []PlanIssue, priorDe
 		if prior, ok := existingByID[issue.ID]; ok {
 			// Identity Stability: prior decision found for this stable ID.
 			if prior.Chosen != nil {
-				stale := len(labels) != len(prior.Options) // cheap heuristic: option set shape changed
-				out.Entries = append(out.Entries, draftEntry{
+				entry := draftEntry{
 					ID:          issue.ID,
 					Table:       issue.Table,
 					Description: issue.Description,
 					Options:     labels,
 					Chosen:      prior.Chosen,
-					Stale:       stale,
-					StaleNote:   staleNote(),
-				})
+				}
+				// Sticky: once flagged, an entry stays stale until the
+				// developer deletes the flag. Comparing only against the
+				// options written on the previous run would clear it on the
+				// next one, applying the decision without a review.
+				if prior.Stale || IsStale(prior.Options, labels) {
+					entry.Stale, entry.StaleNote = true, staleNote()
+				}
+				out.Entries = append(out.Entries, entry)
 				continue
 			}
 		}
@@ -86,24 +92,38 @@ func (p *FilePresenter) Present(ctx context.Context, issues []PlanIssue, priorDe
 }
 
 func staleNote() string {
-	return "resolved previously; the set of candidate options has since changed — review recommended"
+	return `the options changed since this decision was recorded, so "chosen" may now point at a different option. ` +
+		`Review it against the current options, then delete "stale" to confirm — until then this issue stays unresolved.`
 }
 
+// IsStale reports whether an issue's options changed since a decision was
+// recorded against them (old: the labels in the draft, new: the labels the
+// planner produces now).
+//
+// The comparison is positional, not just set membership: a decision is stored
+// as Chosen, an index into the options, so the same labels in a new order
+// would make that index select a different option — e.g. a confirmed rename
+// silently becoming a destructive drop+add. Equal length and equal entries at
+// every position is the only shape under which the recorded index still means
+// what the developer chose.
 func IsStale(old, new []string) bool {
-	// Check length equality
-	// Check that all entries in old are also found in new, and vice versa
-	return true
+	return !slices.Equal(old, new)
 }
 
 func (p *FilePresenter) Collect(ctx context.Context) (map[string]int, error) {
 	draft, err := p.readDraft()
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("FilePresenter.Collect", "draft_read_failed", err)
+		return nil, behemotherr.NewMigrationError("FilePresenter.Collect", behemotherr.ErrorCodeMigrationDraftReadFailed, err)
 	}
 	decisions := map[string]int{}
 	for _, e := range draft.Entries {
 		if e.Chosen == nil {
 			continue // still pending: not an error here; ResolveIssues (below) is what enforces fail-closed
+		}
+		if e.Stale {
+			// Recorded against options that have since changed: the index may
+			// now select a different option. Pending until reviewed.
+			continue
 		}
 		if *e.Chosen < 0 || *e.Chosen >= len(e.Options) {
 			// Manifesto's Input Validation branch: malformed entry treated
@@ -185,7 +205,7 @@ func ResolveIssues(
 		// contexts at THIS point; an interactive CLI is expected to have
 		// already looped edit-then-retry before ever calling this in a way
 		// that reaches here with unresolved entries still present.
-		return nil, behemotherr.NewMigrationError("Resolution.ResolveIssues", "unresolved_issues",
+		return nil, behemotherr.NewMigrationError("Resolution.ResolveIssues", behemotherr.ErrorCodeMigrationUnresolvedIssues,
 			fmt.Errorf("unresolved: %s", strings.Join(unresolved, ", ")))
 	}
 	return resolved, nil

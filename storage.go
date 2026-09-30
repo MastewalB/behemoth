@@ -170,6 +170,22 @@ type KeyValueStorage interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// SchemaResolver maps canonical names — a Model's SchemaName() and the keys
+// of its ToMap() — to the physical names used in the database. Every storage
+// adapter and migration driver resolves names through it, so a table or
+// column can be renamed physically without touching model code.
+type SchemaResolver interface {
+	Resolve(canonicalName string) string // returns the physical name; canonicalName itself if nothing overrides it
+	ResolveColumn(canonicalTable, canonicalColumn string) string
+}
+
+// IdentityResolver maps every name to itself: the resolver to use when no
+// physical names are configured.
+type IdentityResolver struct{}
+
+func (IdentityResolver) Resolve(canonical string) string                 { return canonical }
+func (IdentityResolver) ResolveColumn(_ string, canonical string) string { return canonical }
+
 type Serializable interface {
 	ToMap() (map[string]any, error)
 	FromMap(map[string]any) error

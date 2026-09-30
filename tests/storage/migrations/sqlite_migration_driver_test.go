@@ -3,170 +3,535 @@ package migrations
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
+	"testing"
+
+	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
-// SQLiteTestHelpers implements the DriverTestManager interface.
+// openSQLite opens a file-backed database (":memory:" would give every pooled
+// connection its own empty database) with foreign key enforcement on.
+func openSQLite(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := "file:" + filepath.Join(t.TempDir(), "migrations.db") + "?_foreign_keys=on"
+	db, err := sql.Open("sqlite3", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+// SQLiteTestManager implements DriverTestManager for SQLite.
 type SQLiteTestManager struct {
 	db *sql.DB
 }
 
-func NewSQLiteTestHelpers(db *sql.DB) *SQLiteTestManager {
+func NewSQLiteTestManager(db *sql.DB) *SQLiteTestManager {
 	return &SQLiteTestManager{db: db}
 }
 
-func (h *SQLiteTestManager) TableExists(ctx context.Context, tableName string) (bool, error) {
-	query := `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
-	var name string
-	err := h.db.QueryRowContext(ctx, query, tableName).Scan(&name)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+func (h *SQLiteTestManager) TableExists(ctx context.Context, table string) (bool, error) {
+	var n int
+	err := h.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&n)
+	return n > 0, err
 }
 
-func (h *SQLiteTestManager) ColumnExists(ctx context.Context, tableName, columnName string) (bool, error) {
-	query := fmt.Sprintf("PRAGMA table_info(%s)", tableName)
-	rows, err := h.db.QueryContext(ctx, query)
+func (h *SQLiteTestManager) Columns(ctx context.Context, table string) ([]ColumnInfo, error) {
+	rows, err := h.db.QueryContext(ctx, `SELECT name, "notnull", pk, dflt_value IS NOT NULL FROM pragma_table_info(?) ORDER BY cid`, table)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer rows.Close()
 
+	var out []ColumnInfo
 	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return false, err
+		var c ColumnInfo
+		var notNull, pk int
+		if err := rows.Scan(&c.Name, &notNull, &pk, &c.HasDefault); err != nil {
+			return nil, err
 		}
-		if name == columnName {
-			return true, nil
-		}
+		c.Nullable, c.PrimaryKey = notNull == 0, pk > 0
+		out = append(out, c)
 	}
-	return false, nil
+	return out, rows.Err()
 }
 
-func (h *SQLiteTestManager) IndexExists(ctx context.Context, tableName, indexName string) (bool, error) {
-	query := `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND name=?`
-	var name string
-	err := h.db.QueryRowContext(ctx, query, tableName, indexName).Scan(&name)
-	if err == sql.ErrNoRows {
-		return false, nil
+func (h *SQLiteTestManager) Indexes(ctx context.Context, table string) ([]IndexInfo, error) {
+	rows, err := h.db.QueryContext(ctx, `SELECT name, "unique" FROM pragma_index_list(?)`, table)
+	if err != nil {
+		return nil, err
+	}
+	var out []IndexInfo
+	for rows.Next() {
+		var idx IndexInfo
+		if err := rows.Scan(&idx.Name, &idx.Unique); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, idx)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range out {
+		cols, err := h.strings(ctx, "SELECT name FROM pragma_index_info(?) ORDER BY seqno", out[i].Name)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Columns = cols
+	}
+	return out, nil
+}
+
+// fkNamePattern recovers constraint names from the stored CREATE TABLE,
+// since PRAGMA foreign_key_list doesn't report them. It matches the form the
+// driver emits: CONSTRAINT "name" FOREIGN KEY ("col", ...).
+var fkNamePattern = regexp.MustCompile(`(?i)CONSTRAINT\s+"((?:[^"]|"")+)"\s+FOREIGN\s+KEY\s*\(([^)]*)\)`)
+
+func (h *SQLiteTestManager) ForeignKeys(ctx context.Context, table string) ([]ForeignKeyInfo, error) {
+	var createSQL string
+	if err := h.db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&createSQL); err != nil {
+		return nil, err
+	}
+	namesByCols := map[string]string{}
+	for _, m := range fkNamePattern.FindAllStringSubmatch(createSQL, -1) {
+		namesByCols[normalizeColList(m[2])] = strings.ReplaceAll(m[1], `""`, `"`)
+	}
+
+	rows, err := h.db.QueryContext(ctx, `SELECT id, "table", "from", "to", on_delete FROM pragma_foreign_key_list(?) ORDER BY id, seq`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byID := map[int]*ForeignKeyInfo{}
+	var order []int
+	for rows.Next() {
+		var id int
+		var refTable, from, onDelete string
+		var to sql.NullString
+		if err := rows.Scan(&id, &refTable, &from, &to, &onDelete); err != nil {
+			return nil, err
+		}
+		fk, ok := byID[id]
+		if !ok {
+			fk = &ForeignKeyInfo{RefTable: refTable, OnDelete: sqliteFKAction(onDelete)}
+			byID[id] = fk
+			order = append(order, id)
+		}
+		fk.Columns = append(fk.Columns, from)
+		fk.RefColumns = append(fk.RefColumns, to.String)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]ForeignKeyInfo, 0, len(order))
+	for _, id := range order {
+		fk := byID[id]
+		fk.Name = namesByCols[strings.ToLower(strings.Join(fk.Columns, ","))]
+		out = append(out, *fk)
+	}
+	return out, nil
+}
+
+func normalizeColList(list string) string {
+	parts := strings.Split(list, ",")
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		p = strings.Trim(p, "\"`[]")
+		parts[i] = strings.ToLower(p)
+	}
+	return strings.Join(parts, ",")
+}
+
+func sqliteFKAction(a string) core.ForeignKeyAction {
+	switch strings.ToUpper(a) {
+	case "CASCADE":
+		return core.FKCascade
+	case "SET NULL":
+		return core.FKSetNull
+	case "RESTRICT":
+		return core.FKRestrict
+	default:
+		return core.ForeignKeyAction(strings.ToLower(a))
+	}
+}
+
+func (h *SQLiteTestManager) Insert(ctx context.Context, table string, row map[string]any) error {
+	cols := make([]string, 0, len(row))
+	for c := range row {
+		cols = append(cols, c)
+	}
+	sort.Strings(cols)
+
+	quoted := make([]string, len(cols))
+	marks := make([]string, len(cols))
+	args := make([]any, len(cols))
+	for i, c := range cols {
+		quoted[i], marks[i], args[i] = quote(c), "?", row[c]
+	}
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", quote(table), strings.Join(quoted, ", "), strings.Join(marks, ", "))
+	_, err := h.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (h *SQLiteTestManager) Delete(ctx context.Context, table, column string, value any) error {
+	_, err := h.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quote(table), quote(column)), value)
+	return err
+}
+
+func (h *SQLiteTestManager) Rows(ctx context.Context, table, orderBy string) ([]map[string]any, error) {
+	return scanRows(h.db.QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s ORDER BY %s", quote(table), quote(orderBy))))
+}
+
+func (h *SQLiteTestManager) RowCount(ctx context.Context, table string) (int64, error) {
+	var n int64
+	err := h.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+quote(table)).Scan(&n)
+	return n, err
+}
+
+func (h *SQLiteTestManager) LedgerIDs(ctx context.Context, ledgerTable string) ([]string, error) {
+	if exists, err := h.TableExists(ctx, ledgerTable); err != nil || !exists {
+		return nil, err
+	}
+	return h.strings(ctx, "SELECT id FROM "+quote(ledgerTable)+" ORDER BY id")
+}
+
+func (h *SQLiteTestManager) Snapshot(ctx context.Context, snapshotTable string) (core.SchemaSnapshot, bool, error) {
+	if exists, err := h.TableExists(ctx, snapshotTable); err != nil || !exists {
+		return core.SchemaSnapshot{}, false, err
+	}
+	var snap core.SchemaSnapshot
+	var tables string
+	err := h.db.QueryRowContext(ctx, "SELECT version, tables FROM "+quote(snapshotTable)+" WHERE id = 1").Scan(&snap.Version, &tables)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.SchemaSnapshot{}, false, nil
 	}
 	if err != nil {
-		return false, err
+		return core.SchemaSnapshot{}, false, err
 	}
-	return true, nil
-}
-
-func (h *SQLiteTestManager) TableRowCount(ctx context.Context, tableName string) (int64, error) {
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
-	var count int64
-	err := h.db.QueryRowContext(ctx, query).Scan(&count)
-	return count, err
-}
-
-func (h *SQLiteTestManager) MigrationTableExists(ctx context.Context) (bool, error) {
-	return h.TableExists(ctx, "schema_migrations")
-}
-
-func (h *SQLiteTestManager) GetMigrationVersion(ctx context.Context) (int, error) {
-	var version int
-	err := h.db.QueryRowContext(ctx, "SELECT version FROM schema_migrations LIMIT 1").Scan(&version)
-	if err == sql.ErrNoRows {
-		return 0, nil
+	if err := json.Unmarshal([]byte(tables), &snap.Tables); err != nil {
+		return core.SchemaSnapshot{}, false, err
 	}
-	return version, err
+	return snap, true, nil
 }
 
-func (h *SQLiteTestManager) Cleanup(ctx context.Context) error {
-	return h.DropAllTables(ctx)
-}
-
+// DropAllTables disables foreign keys on a dedicated connection so tables can
+// be dropped in any order.
 func (h *SQLiteTestManager) DropAllTables(ctx context.Context) error {
-	tables, err := h.db.QueryContext(ctx, `
-			SELECT name 
-			FROM sqlite_master 
-			WHERE type='table' 
-				AND name NOT LIKE 'sqlite_%'
-	`)
-
+	conn, err := h.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer tables.Close()
+	defer conn.Close()
 
-	for tables.Next() {
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON")
+
+	rows, err := conn.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+	if err != nil {
+		return err
+	}
+	var tables []string
+	for rows.Next() {
 		var name string
-		if err := tables.Scan(&name); err != nil {
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
 			return err
 		}
-		if _, err := h.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", name)); err != nil {
+		tables = append(tables, name)
+	}
+	rows.Close()
+
+	for _, name := range tables {
+		if _, err := conn.ExecContext(ctx, "DROP TABLE "+quote(name)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (h *SQLiteTestManager) InsertTestData(ctx context.Context, tableName string, data map[string]interface{}) error {
-	columns := make([]string, 0, len(data))
-	placeholders := make([]string, 0, len(data))
-	values := make([]any, 0, len(data))
+func (h *SQLiteTestManager) CleanupDatabase(ctx context.Context) {}
 
-	for col, val := range data {
-		columns = append(columns, col)
-		placeholders = append(placeholders, "?")
-		values = append(values, val)
+func (h *SQLiteTestManager) strings(ctx context.Context, query string, args ...any) ([]string, error) {
+	rows, err := h.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
-
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		tableName,
-		strings.Join(columns, ", "),
-		strings.Join(placeholders, ", "))
-
-	_, err := h.db.ExecContext(ctx, query, values...)
-	return err
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v sql.NullString
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v.String)
+	}
+	return out, rows.Err()
 }
 
-func (h *SQLiteTestManager) QueryTable(ctx context.Context, tableName string, query string) ([]map[string]interface{}, error) {
-	rows, err := h.db.QueryContext(ctx, query)
+func quote(ident string) string {
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+}
+
+func scanRows(rows *sql.Rows, err error) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	columns, err := rows.Columns()
+	cols, err := rows.Columns()
 	if err != nil {
 		return nil, err
 	}
-
-	var results []map[string]any
+	var out []map[string]any
 	for rows.Next() {
-		values := make([]any, len(columns))
-		valuePtrs := make([]any, len(columns))
+		values := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
 		for i := range values {
-			valuePtrs[i] = &values[i]
+			ptrs[i] = &values[i]
 		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
+		if err := rows.Scan(ptrs...); err != nil {
 			return nil, err
 		}
-
-		row := make(map[string]interface{})
-		for i, col := range columns {
-			row[col] = values[i]
+		row := make(map[string]any, len(cols))
+		for i, c := range cols {
+			row[c] = values[i]
 		}
-		results = append(results, row)
+		out = append(out, row)
 	}
-	return results, nil
+	return out, rows.Err()
 }
 
-func (h *SQLiteTestManager) CleanupDatabase(ctx context.Context) {
+// ---- SQLite-specific behavior ----
+//
+// The agnostic suite covers every operation; these pin down details only the
+// SQLite table-rebuild path can get wrong.
 
+func newSQLiteFixture(t *testing.T) (context.Context, *sql.DB, *sqlite.SQLiteDriver, func(...core.SchemaOperation) error) {
+	ctx := context.Background()
+	db := openSQLite(t)
+	driver := sqlite.NewSQLiteDriver(db, nil)
+	seq := 0
+	apply := func(ops ...core.SchemaOperation) error {
+		seq++
+		return driver.ApplyMigration(ctx, request(core.Migration{ID: fmt.Sprintf("%04d_test", seq), Up: ops}, nil))
+	}
+	return ctx, db, driver, apply
+}
+
+func TestSQLiteRebuildPreservesUnmanagedSchema(t *testing.T) {
+	ctx, db, _, apply := newSQLiteFixture(t)
+
+	// A hand-written table with things the driver never emits itself.
+	_, err := db.ExecContext(ctx, `CREATE TABLE accounts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		code TEXT COLLATE NOCASE NOT NULL CHECK (length(code) = 3), -- comment, with a comma
+		balance NUMERIC NOT NULL DEFAULT 0,
+		note TEXT,
+		CONSTRAINT balance_positive CHECK (balance >= 0)
+	)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE TABLE audit (account_id INTEGER, what TEXT)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE TRIGGER accounts_audit AFTER INSERT ON accounts BEGIN INSERT INTO audit VALUES (NEW.id, 'insert'); END`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO accounts (code, balance) VALUES ('abc', 1), ('def', 2)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `DELETE FROM accounts WHERE id = 2`) // sequence stays at 2
+	require.NoError(t, err)
+
+	require.NoError(t, apply(alterColumnOp("accounts", core.Column{Name: "note", Type: core.ColTypeText, Nullable: true, Default: "n/a"})))
+
+	var createSQL string
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE name = 'accounts'").Scan(&createSQL))
+	assert.Contains(t, createSQL, "AUTOINCREMENT")
+	assert.Contains(t, createSQL, "COLLATE NOCASE")
+	assert.Contains(t, createSQL, "length(code) = 3")
+	assert.Contains(t, createSQL, "balance_positive")
+
+	_, err = db.ExecContext(ctx, `INSERT INTO accounts (code, balance) VALUES ('toolong', 1)`)
+	assert.Error(t, err, "column CHECK survives")
+	_, err = db.ExecContext(ctx, `INSERT INTO accounts (code, balance) VALUES ('ghi', -1)`)
+	assert.Error(t, err, "table CHECK survives")
+
+	_, err = db.ExecContext(ctx, `INSERT INTO accounts (code, balance) VALUES ('ghi', 1)`)
+	require.NoError(t, err)
+	var id int64
+	var note string
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT id, note FROM accounts WHERE code = 'GHI'").Scan(&id, &note))
+	assert.Equal(t, int64(3), id, "AUTOINCREMENT does not reuse the deleted id")
+	assert.Equal(t, "n/a", note, "new default applies")
+
+	var audits int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit").Scan(&audits))
+	assert.Equal(t, 3, audits, "trigger survives the rebuild")
+}
+
+func TestSQLiteRebuildLeavesNoTemporaryTable(t *testing.T) {
+	ctx, db, _, apply := newSQLiteFixture(t)
+	require.NoError(t, apply(createTableOp(usersTable())))
+	require.NoError(t, apply(alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "x"})))
+
+	var n int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '_behemoth_rebuild_%'").Scan(&n))
+	assert.Zero(t, n)
+}
+
+func TestSQLiteRestoresForeignKeyEnforcement(t *testing.T) {
+	ctx, db, _, apply := newSQLiteFixture(t)
+	db.SetMaxOpenConns(1) // the driver's connection is the only one; it must come back with FKs on
+
+	require.NoError(t, apply(createTableOp(usersTable()), createTableOp(postsTable())))
+	require.NoError(t, apply(addForeignKeyOp("posts", postsUserFK(core.FKCascade))))
+
+	var enabled bool
+	require.NoError(t, db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&enabled))
+	assert.True(t, enabled)
+}
+
+func TestSQLiteDeclaredTypes(t *testing.T) {
+	ctx, db, _, apply := newSQLiteFixture(t)
+	require.NoError(t, apply(createTableOp(core.TableSchema{
+		Name: "typed",
+		Columns: []core.Column{
+			{Name: "id", Type: core.ColTypeInteger, PrimaryKey: true},
+			{Name: "s", Type: core.ColTypeString, Length: 40},
+			{Name: "flag", Type: core.ColTypeBoolean},
+			{Name: "at", Type: core.ColTypeTimestamp},
+			{Name: "doc", Type: core.ColTypeJson},
+			{Name: "uid", Type: core.ColTypeUuid, Overrides: map[string]core.ColumnOverride{
+				sqlite.DriverName: {Type: core.ColTypeText},
+			}},
+			{Name: "created", Type: core.ColTypeDateTime, Overrides: map[string]core.ColumnOverride{
+				sqlite.DriverName: {Default: "CURRENT_TIMESTAMP"},
+			}},
+		},
+	})))
+
+	rows, err := db.QueryContext(ctx, "SELECT name, type, dflt_value FROM pragma_table_info('typed')")
+	require.NoError(t, err)
+	defer rows.Close()
+	types, defaults := map[string]string{}, map[string]string{}
+	for rows.Next() {
+		var name, typ string
+		var dflt sql.NullString
+		require.NoError(t, rows.Scan(&name, &typ, &dflt))
+		types[name], defaults[name] = typ, dflt.String
+	}
+
+	assert.Equal(t, map[string]string{
+		"id": "INTEGER", "s": "VARCHAR(40)", "flag": "BOOLEAN", "at": "TIMESTAMP",
+		"doc": "TEXT", "uid": "TEXT", "created": "DATETIME",
+	}, types)
+	assert.Equal(t, "CURRENT_TIMESTAMP", defaults["created"], "override default is a raw expression")
+}
+
+func TestSQLiteAutoIncrementRequiresSinglePrimaryKey(t *testing.T) {
+	_, _, _, apply := newSQLiteFixture(t)
+	err := apply(createTableOp(core.TableSchema{
+		Name: "bad",
+		Columns: []core.Column{
+			{Name: "a", Type: core.ColTypeInteger, PrimaryKey: true, AutoInc: true},
+			{Name: "b", Type: core.ColTypeInteger, PrimaryKey: true},
+		},
+	}))
+	assert.Error(t, err)
+}
+
+// schemaDump returns sqlite_master's definitions of user tables, indexes and
+// triggers (bookkeeping tables excluded), keyed by name.
+func schemaDump(t *testing.T, ctx context.Context, db *sql.DB) map[string]string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, `SELECT name, sql FROM sqlite_master
+		WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND tbl_name NOT LIKE 'behemoth_%'`)
+	require.NoError(t, err)
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var name, def string
+		require.NoError(t, rows.Scan(&name, &def))
+		out[name] = def
+	}
+	return out
+}
+
+// TestSQLiteRenderedScriptReproducesApply: running the rendered script on one
+// database must produce exactly the schema ApplyMigration produces on an
+// identical one — including the statements of a table rebuild.
+func TestSQLiteRenderedScriptReproducesApply(t *testing.T) {
+	ctx := context.Background()
+	seed := []core.SchemaOperation{createTableOp(usersTable()), createTableOp(postsTable())}
+	m := core.Migration{ID: "0002_test", Name: "test", Up: []core.SchemaOperation{
+		addForeignKeyOp("posts", postsUserFK(core.FKCascade)),
+		alterColumnOp("users", core.Column{Name: "name", Type: core.ColTypeText, Nullable: true, Default: "it's"}),
+		addIndexOp("users", core.Index{Name: "idx_users_status", Columns: []string{"status"}}),
+		renameColumnOp("posts", "title", "headline"),
+	}}
+
+	applied, scripted := openSQLite(t), openSQLite(t)
+	for _, db := range []*sql.DB{applied, scripted} {
+		require.NoError(t, sqlite.NewSQLiteDriver(db, nil).ApplyMigration(ctx, request(core.Migration{ID: "0001_seed", Up: seed}, nil)))
+		_, err := db.ExecContext(ctx, `INSERT INTO users (id, email) VALUES (1, 'a@example.com'); INSERT INTO posts (id, user_id, title) VALUES (1, 1, 't')`)
+		require.NoError(t, err)
+	}
+
+	script, err := sqlite.NewSQLiteDriver(scripted, nil).RenderMigration(ctx, m)
+	require.NoError(t, err)
+	assert.Contains(t, script, "-- Migration: 0002_test")
+	assert.Contains(t, script, "PRAGMA foreign_keys = OFF", "rebuild note is present")
+	assert.Contains(t, script, "_behemoth_rebuild_users")
+
+	require.NoError(t, sqlite.NewSQLiteDriver(applied, nil).ApplyMigration(ctx, request(m, nil)))
+
+	conn, err := scripted.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "BEGIN; "+script+" COMMIT;")
+	require.NoError(t, err, script)
+
+	assert.Equal(t, schemaDump(t, ctx, applied), schemaDump(t, ctx, scripted))
+	var headline string
+	require.NoError(t, scripted.QueryRowContext(ctx, "SELECT headline FROM posts WHERE id = 1").Scan(&headline))
+	assert.Equal(t, "t", headline, "script preserves data through the rebuild")
+}
+
+func TestSQLiteRenderBaselineDumpsExistingSchema(t *testing.T) {
+	ctx, db, driver, apply := newSQLiteFixture(t)
+	require.NoError(t, apply(createTableOp(usersTable()), createTableOp(postsTable())))
+	require.NoError(t, apply(
+		addIndexOp("users", core.Index{Name: "idx_users_status", Columns: []string{"status"}}),
+		addForeignKeyOp("posts", postsUserFK(core.FKCascade)),
+	))
+
+	users, posts := usersTable(), postsTable()
+	baseline := core.BuildBaselineMigration(map[string]core.TableSchema{"users": users, "posts": posts})
+	script, err := driver.RenderMigration(ctx, baseline)
+	require.NoError(t, err)
+
+	assert.Contains(t, script, "Baseline")
+	for _, def := range schemaDump(t, ctx, db) {
+		assert.Contains(t, script, def+";")
+	}
+
+	baseline.Up = append(baseline.Up, createTableOp(core.TableSchema{Name: "missing"}))
+	_, err = driver.RenderMigration(ctx, baseline)
+	assert.Error(t, err, "a baseline table that isn't live is an error")
 }

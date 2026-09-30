@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/MastewalB/behemoth v0.0.0
 	github.com/MastewalB/behemoth/storage/adapters/bun v0.0.0
+	github.com/MastewalB/behemoth/storage/adapters/postgres v0.0.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/lib/pq v1.10.9
 	github.com/mattn/go-sqlite3 v1.14.44
@@ -109,3 +110,5 @@ require (
 replace github.com/MastewalB/behemoth v0.0.0 => ../
 
 replace github.com/MastewalB/behemoth/storage/adapters/bun v0.0.0 => ../storage/adapters/bun
+
+replace github.com/MastewalB/behemoth/storage/adapters/postgres v0.0.0 => ../storage/adapters/postgres

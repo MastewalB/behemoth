@@ -27,14 +27,28 @@ import (
 //     Offset or Limit without an OrderBy we inject
 //     ORDER BY (SELECT NULL) so the query is valid.
 //  4. SET clause     — placeholders must also be ?-style.
-//  5. Error mapping  — go-mssqldb surfaces *mssql.Error with a numeric
+//  5. Error mapping  — go-mssqldb surfaces mssql.Error with a numeric
 //     error code rather than SQLSTATE strings.
+//
+// Models are addressed by canonical names; every table and column name in the
+// generated SQL goes through Resolver first. A nil Resolver maps every name to
+// itself.
 type SQLServerAdapter struct {
-	DB Querier
+	DB       Querier
+	Resolver behemoth.SchemaResolver
 }
 
-func NewSQLServerAdapter(db Querier) *SQLServerAdapter {
-	return &SQLServerAdapter{DB: db}
+func NewSQLServerAdapter(db Querier, resolver behemoth.SchemaResolver) *SQLServerAdapter {
+	return &SQLServerAdapter{DB: db, Resolver: resolver}
+}
+
+func (ms *SQLServerAdapter) names() behemoth.SchemaResolver {
+	return ResolverOrIdentity(ms.Resolver)
+}
+
+// where renders expr with its fields resolved to physical columns.
+func (ms *SQLServerAdapter) where(m behemoth.Model, expr *clause.Expression, options *ClauseOptions) (string, []any) {
+	return BuildSQLWhereClause(PhysicalExpression(ms.names(), m, expr), options)
 }
 
 // SQL Server uses @p1, @p2, … positional named parameters. The counter N
@@ -64,8 +78,8 @@ func (ms *SQLServerAdapter) Create(ctx context.Context, m behemoth.Model) error 
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s)",
-		m.SchemaName(),
-		strings.Join(columns, ", "),
+		PhysicalTable(ms.names(), m),
+		strings.Join(PhysicalColumns(ms.names(), m, columns), ", "),
 		strings.Join(placeholders, ", "),
 	)
 
@@ -84,16 +98,19 @@ func (ms *SQLServerAdapter) FindOne(
 		return nil, behemotherr.SerializableNotImplemented()
 	}
 
+	// columns stay canonical: they key the map handed to FromMap.
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
-	whereClause, args := BuildSQLWhereClause(&whereExpression, defaultMSSQLClauseOptions)
 
 	// SQL Server uses SELECT TOP 1 instead of appending LIMIT 1.
 	query := fmt.Sprintf(
-		"SELECT TOP 1 %s FROM %s WHERE %s",
-		strings.Join(columns, ", "),
-		m.SchemaName(),
-		whereClause,
+		"SELECT TOP 1 %s FROM %s",
+		strings.Join(PhysicalColumns(ms.names(), m, columns), ", "),
+		PhysicalTable(ms.names(), m),
 	)
+	whereClause, args := ms.where(m, &whereExpression, defaultMSSQLClauseOptions)
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
 
 	fmt.Println(query, args)
 	row := ms.DB.QueryRowContext(ctx, query, args...)
@@ -121,6 +138,7 @@ func (ms *SQLServerAdapter) FindMany(
 		distinctClause string
 	)
 
+	// columns stay canonical: they key the map handed to FromMap.
 	if options != nil && len(options.Select) > 0 {
 		columns, values, valuePtrs = models.GenerateColumnValuePairsWithSelectFilter(m, options.Select)
 	} else {
@@ -131,28 +149,24 @@ func (ms *SQLServerAdapter) FindMany(
 		distinctClause = "DISTINCT "
 	}
 
-	whereClause, args := BuildSQLWhereClause(&whereExpression, defaultMSSQLClauseOptions)
+	whereClause, args := ms.where(m, &whereExpression, defaultMSSQLClauseOptions)
 
-	var query string
+	query := fmt.Sprintf(
+		"SELECT %s%s FROM %s",
+		distinctClause,
+		strings.Join(PhysicalColumns(ms.names(), m, columns), ", "),
+		PhysicalTable(ms.names(), m),
+	)
 	if whereClause != "" {
-		query = fmt.Sprintf(
-			"SELECT %s%s FROM %s WHERE %s",
-			distinctClause,
-			strings.Join(columns, ", "),
-			m.SchemaName(),
-			whereClause,
-		)
-	} else {
-		query = fmt.Sprintf(
-			"SELECT %s%s FROM %s",
-			distinctClause,
-			strings.Join(columns, ", "),
-			m.SchemaName(),
-		)
+		query += " WHERE " + whereClause
 	}
 
 	if options != nil {
-		query = appendMSSQLPagination(query, options)
+		orderBy := ""
+		if options.OrderBy.Field != "" {
+			orderBy = PhysicalColumn(ms.names(), m, options.OrderBy.Field)
+		}
+		query = appendMSSQLPagination(query, orderBy, options)
 	}
 
 	rows, err := ms.DB.QueryContext(ctx, query, args...)
@@ -184,14 +198,14 @@ func (ms *SQLServerAdapter) Update(ctx context.Context, m behemoth.Model) error 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
 
 	// SET clause uses @p1 ... @pN; the PK placeholder follows immediately after.
-	setClause := mssqlSETClause(columns, 1)
+	setClause := mssqlSETClause(PhysicalColumns(ms.names(), m, columns), 1)
 	pkPlaceholder := fmt.Sprintf("@p%d", len(columns)+1)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = %s",
-		m.SchemaName(),
+		PhysicalTable(ms.names(), m),
 		setClause,
-		m.PrimaryKeyName(),
+		PhysicalColumn(ms.names(), m, m.PrimaryKeyName()),
 		pkPlaceholder,
 	)
 
@@ -212,22 +226,24 @@ func (ms *SQLServerAdapter) UpdateOne(
 	columns, values := utils.MapToSlice(updates)
 
 	// SET args occupy @p1 … @pN; WHERE args start at @p(N+1).
-	setClause := mssqlSETClause(columns, 1)
-	whereClause, whereArgs := BuildSQLWhereClause(&expr, NewMSSQLClauseOptions(len(values)+1))
+	setClause := mssqlSETClause(PhysicalColumns(ms.names(), m, columns), 1)
+	whereClause, whereArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(values)+1))
+	table := PhysicalTable(ms.names(), m)
+	pk := PhysicalColumn(ms.names(), m, m.PrimaryKeyName())
 
 	// SQL Server allows a plain subquery on the same table in an UPDATE.
 	subQuery := fmt.Sprintf(
 		"SELECT TOP 1 %s FROM %s WHERE %s",
-		m.PrimaryKeyName(),
-		m.SchemaName(),
+		pk,
+		table,
 		whereClause,
 	)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = (%s)",
-		m.SchemaName(),
+		table,
 		setClause,
-		m.PrimaryKeyName(),
+		pk,
 		subQuery,
 	)
 
@@ -246,12 +262,12 @@ func (ms *SQLServerAdapter) UpdateMany(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	setClause := mssqlSETClause(columns, 1)
-	whereClause, whereArgs := BuildSQLWhereClause(&expr, NewMSSQLClauseOptions(len(values)+1))
+	setClause := mssqlSETClause(PhysicalColumns(ms.names(), m, columns), 1)
+	whereClause, whereArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(values)+1))
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
-		m.SchemaName(),
+		PhysicalTable(ms.names(), m),
 		setClause,
 		whereClause,
 	)
@@ -264,8 +280,8 @@ func (ms *SQLServerAdapter) UpdateMany(
 func (ms *SQLServerAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = @p1",
-		m.SchemaName(),
-		m.PrimaryKeyName(),
+		PhysicalTable(ms.names(), m),
+		PhysicalColumn(ms.names(), m, m.PrimaryKeyName()),
 	)
 	_, err := ms.DB.ExecContext(ctx, query, m.PrimaryKeyField())
 	return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
@@ -276,22 +292,25 @@ func (ms *SQLServerAdapter) DeleteOne(
 	m behemoth.Model,
 	expr clause.Expression,
 ) error {
-	whereClause, args := BuildSQLWhereClause(&expr, defaultMSSQLClauseOptions)
+	whereClause, args := ms.where(m, &expr, defaultMSSQLClauseOptions)
 	if whereClause == "" {
 		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
+	table := PhysicalTable(ms.names(), m)
+	pk := PhysicalColumn(ms.names(), m, m.PrimaryKeyName())
+
 	subQuery := fmt.Sprintf(
 		"SELECT TOP 1 %s FROM %s WHERE %s",
-		m.PrimaryKeyName(),
-		m.SchemaName(),
+		pk,
+		table,
 		whereClause,
 	)
 
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = (%s)",
-		m.SchemaName(),
-		m.PrimaryKeyName(),
+		table,
+		pk,
 		subQuery,
 	)
 
@@ -304,14 +323,14 @@ func (ms *SQLServerAdapter) DeleteMany(
 	m behemoth.Model,
 	expr clause.Expression,
 ) error {
-	whereClause, args := BuildSQLWhereClause(&expr, defaultMSSQLClauseOptions)
+	whereClause, args := ms.where(m, &expr, defaultMSSQLClauseOptions)
 	if whereClause == "" {
 		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s",
-		m.SchemaName(),
+		PhysicalTable(ms.names(), m),
 		whereClause,
 	)
 
@@ -320,7 +339,7 @@ func (ms *SQLServerAdapter) DeleteMany(
 }
 
 func (ms *SQLServerAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
-	query := fmt.Sprintf("DELETE FROM %s", m.SchemaName())
+	query := fmt.Sprintf("DELETE FROM %s", PhysicalTable(ms.names(), m))
 	_, err := ms.DB.ExecContext(ctx, query)
 	return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 }
@@ -330,20 +349,14 @@ func (ms *SQLServerAdapter) Count(
 	m behemoth.Model,
 	expr clause.Expression,
 ) (int64, error) {
-	whereClause, args := BuildSQLWhereClause(&expr, defaultMSSQLClauseOptions)
+	whereClause, args := ms.where(m, &expr, defaultMSSQLClauseOptions)
 
-	var query string
+	query := fmt.Sprintf(
+		"SELECT COUNT(*) FROM %s",
+		PhysicalTable(ms.names(), m),
+	)
 	if whereClause != "" {
-		query = fmt.Sprintf(
-			"SELECT COUNT(*) FROM %s WHERE %s",
-			m.SchemaName(),
-			whereClause,
-		)
-	} else {
-		query = fmt.Sprintf(
-			"SELECT COUNT(*) FROM %s",
-			m.SchemaName(),
-		)
+		query += " WHERE " + whereClause
 	}
 
 	row, err := ms.DB.QueryContext(ctx, query, args...)
@@ -375,7 +388,7 @@ func (ms *SQLServerAdapter) Transaction(ctx context.Context, fn behemoth.Transac
 		}
 	}()
 
-	txAdapter := NewSQLServerAdapter(tx)
+	txAdapter := NewSQLServerAdapter(tx, ms.Resolver)
 	_, err = fn(ctx, txAdapter)
 
 	if err != nil {
@@ -398,11 +411,14 @@ func (ms *SQLServerAdapter) Transaction(ctx context.Context, fn behemoth.Transac
 //     no-op sort that satisfies the syntax requirement.
 //   - When only Limit is given (no Offset) we still emit OFFSET 0 ROWS
 //     because FETCH NEXT requires a preceding OFFSET clause.
-func appendMSSQLPagination(query string, options *behemoth.QueryOptions) string {
+//
+// orderBy is the physical column to sort on ("" for none); the caller
+// resolves options.OrderBy.Field.
+func appendMSSQLPagination(query, orderBy string, options *behemoth.QueryOptions) string {
 	needsPagination := options.Limit != 0 || options.Offset != 0
 
-	if options.OrderBy.Field != "" {
-		query += fmt.Sprintf(" ORDER BY %s %s", options.OrderBy.Field, options.OrderBy.Direction)
+	if orderBy != "" {
+		query += fmt.Sprintf(" ORDER BY %s %s", orderBy, options.OrderBy.Direction)
 	} else if needsPagination {
 		// OFFSET ... FETCH is syntactically invalid without ORDER BY.
 		query += " ORDER BY (SELECT NULL)"
@@ -428,7 +444,7 @@ func appendMSSQLPagination(query string, options *behemoth.QueryOptions) string 
 //	2627 / 2601 — unique constraint / unique index violation
 //	547         — foreign key, check constraint, or column default violation
 //	515 / 245   — cannot insert NULL / conversion failed (validation)
-//	208         — invalid object name (table not found — treated as DB error)
+//	208         — invalid object name (table not found — undefined_table)
 //
 // sql.ErrNoRows is returned by QueryRowContext when no row is found,
 // and sql.ErrTxDone signals a completed or rolled-back transaction.
@@ -444,9 +460,10 @@ func mapMSSQLError(op, entity string, err error) error {
 		return behemotherr.NewTransactionError(op, err)
 	}
 
-	var mssqlErr mssql.Error
-	if errors.As(err, &mssqlErr) {
+	if mssqlErr, ok := errors.AsType[mssql.Error](err); ok {
 		switch mssqlErr.Number {
+		case 208:
+			return Classify(op, entity, SentinelUndefinedTable, err)
 		case 2627, 2601:
 			return behemotherr.NewDuplicateKey(op, entity, err)
 		case 547:

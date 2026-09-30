@@ -15,12 +15,27 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
+// SQLiteAdapter implements behemoth.Database for SQLite.
+//
+// Models are addressed by canonical names; every table and column name in the
+// generated SQL goes through Resolver first. A nil Resolver maps every name to
+// itself.
 type SQLiteAdapter struct {
-	DB Querier
+	DB       Querier
+	Resolver behemoth.SchemaResolver
 }
 
-func NewSQLiteAdapter(db Querier) *SQLiteAdapter {
-	return &SQLiteAdapter{DB: db}
+func NewSQLiteAdapter(db Querier, resolver behemoth.SchemaResolver) *SQLiteAdapter {
+	return &SQLiteAdapter{DB: db, Resolver: resolver}
+}
+
+func (sqlt *SQLiteAdapter) names() behemoth.SchemaResolver {
+	return ResolverOrIdentity(sqlt.Resolver)
+}
+
+// where renders expr with its fields resolved to physical columns.
+func (sqlt *SQLiteAdapter) where(m behemoth.Model, expr *clause.Expression) (string, []any) {
+	return BuildSQLWhereClause(PhysicalExpression(sqlt.names(), m, expr), DefaultClauseOption)
 }
 
 func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
@@ -39,13 +54,13 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES %s",
-		m.SchemaName(),
-		strings.Join(columns, ", "),
+		PhysicalTable(sqlt.names(), m),
+		strings.Join(PhysicalColumns(sqlt.names(), m, columns), ", "),
 		placeholders,
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, values...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) FindOne(
@@ -58,21 +73,25 @@ func (sqlt *SQLiteAdapter) FindOne(
 		return nil, behemotherr.SerializableNotImplemented()
 	}
 
+	// columns stay canonical: they key the map handed to FromMap.
 	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
 
-	whereClause, args := BuildSQLWhereClause(&whereExpression, DefaultClauseOption)
 	query := fmt.Sprintf(
-		"SELECT %s FROM %s WHERE %s LIMIT 1",
-		strings.Join(columns, ", "),
-		m.SchemaName(),
-		whereClause,
+		"SELECT %s FROM %s",
+		strings.Join(PhysicalColumns(sqlt.names(), m, columns), ", "),
+		PhysicalTable(sqlt.names(), m),
 	)
+	whereClause, args := sqlt.where(m, &whereExpression)
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
+	query += " LIMIT 1"
 
 	fmt.Println("Executing query:", query, "with args:", args)
 	row := sqlt.DB.QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -95,6 +114,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 		query          string
 	)
 
+	// columns stay canonical: they key the map handed to FromMap.
 	if options != nil && len(options.Select) > 0 {
 		columns, values, valuePtrs = models.GenerateColumnValuePairsWithSelectFilter(m, options.Select)
 	} else {
@@ -105,28 +125,21 @@ func (sqlt *SQLiteAdapter) FindMany(
 		distinctClause = "DISTINCT "
 	}
 
-	whereClause, args := BuildSQLWhereClause(&whereExpression, DefaultClauseOption)
+	whereClause, args := sqlt.where(m, &whereExpression)
 
+	query = fmt.Sprintf(
+		"SELECT %s%s FROM %s",
+		distinctClause,
+		strings.Join(PhysicalColumns(sqlt.names(), m, columns), ", "),
+		PhysicalTable(sqlt.names(), m),
+	)
 	if whereClause != "" {
-		query = fmt.Sprintf(
-			"SELECT %s%s FROM %s WHERE %s",
-			distinctClause,
-			strings.Join(columns, ", "),
-			m.SchemaName(),
-			whereClause,
-		)
-	} else {
-		query = fmt.Sprintf(
-			"SELECT %s%s FROM %s",
-			distinctClause,
-			strings.Join(columns, ", "),
-			m.SchemaName(),
-		)
+		query += " WHERE " + whereClause
 	}
 
 	if options != nil {
 		if options.OrderBy.Field != "" {
-			query += fmt.Sprintf(" ORDER BY %s %s", options.OrderBy.Field, options.OrderBy.Direction)
+			query += fmt.Sprintf(" ORDER BY %s %s", PhysicalColumn(sqlt.names(), m, options.OrderBy.Field), options.OrderBy.Direction)
 		}
 		if options.Limit != 0 {
 			query += fmt.Sprintf(" LIMIT %d", options.Limit)
@@ -140,7 +153,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	fmt.Println("Executing query:", query, "with args:", args)
 	rows, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return nil, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
 
 	defer rows.Close()
@@ -149,7 +162,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	for rows.Next() {
 		err := rows.Scan(valuePtrs...)
 		if err != nil {
-			return nil, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+			return nil, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -170,18 +183,18 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	columns, values, _ := models.GenerateColumnValuePairs(m)
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = ?",
-		m.SchemaName(),
+		PhysicalTable(sqlt.names(), m),
 		GenerateSQLSETClause(
-			columns,
+			PhysicalColumns(sqlt.names(), m, columns),
 			DefaultClauseOption.Number,
 			DefaultClauseOption.Placeholder,
 			DefaultClauseOption.UseNumberedPlaceholder,
 		),
-		m.PrimaryKeyName(),
+		PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName()),
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) UpdateOne(
@@ -195,30 +208,32 @@ func (sqlt *SQLiteAdapter) UpdateOne(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, args := sqlt.where(m, &expr)
+	table := PhysicalTable(sqlt.names(), m)
+	pk := PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName())
 
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
-		m.PrimaryKeyName(),
-		m.SchemaName(),
+		pk,
+		table,
 		whereClause,
 	)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s = (%s)",
-		m.SchemaName(),
+		table,
 		GenerateSQLSETClause(
-			columns,
+			PhysicalColumns(sqlt.names(), m, columns),
 			DefaultClauseOption.Number,
 			DefaultClauseOption.Placeholder,
 			DefaultClauseOption.UseNumberedPlaceholder,
 		),
-		m.PrimaryKeyName(),
+		pk,
 		selectQuery,
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, args...)...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) UpdateMany(
@@ -233,13 +248,13 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 	}
 
 	columns, values := utils.MapToSlice(updates)
-	whereExpression, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereExpression, args := sqlt.where(m, &expr)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
-		m.SchemaName(),
+		PhysicalTable(sqlt.names(), m),
 		GenerateSQLSETClause(
-			columns,
+			PhysicalColumns(sqlt.names(), m, columns),
 			DefaultClauseOption.Number,
 			DefaultClauseOption.Placeholder,
 			DefaultClauseOption.UseNumberedPlaceholder,
@@ -250,46 +265,49 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 	fmt.Println("Executing query ", query)
 	_, err := sqlt.DB.ExecContext(ctx, query, append(values, args...)...)
 
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = ?",
-		m.SchemaName(),
-		m.PrimaryKeyName(),
+		PhysicalTable(sqlt.names(), m),
+		PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName()),
 	)
 	_, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 
-	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, args := sqlt.where(m, &expr)
 	if whereClause == "" {
 		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
 
+	table := PhysicalTable(sqlt.names(), m)
+	pk := PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName())
+
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
-		m.PrimaryKeyName(),
-		m.SchemaName(),
+		pk,
+		table,
 		whereClause,
 	)
 
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = (%s)",
-		m.SchemaName(),
-		m.PrimaryKeyName(),
+		table,
+		pk,
 		selectQuery,
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, args := sqlt.where(m, &expr)
 
 	if whereClause == "" {
 		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
@@ -297,52 +315,45 @@ func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s",
-		m.SchemaName(),
+		PhysicalTable(sqlt.names(), m),
 		whereClause,
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s",
-		m.SchemaName(),
+		PhysicalTable(sqlt.names(), m),
 	)
 
 	_, err := sqlt.DB.ExecContext(ctx, query)
-	return WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+	return WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
 func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
-	var query string
-	whereClause, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
+	whereClause, args := sqlt.where(m, &expr)
 
+	query := fmt.Sprintf(
+		"SELECT COUNT(*) FROM %s",
+		PhysicalTable(sqlt.names(), m),
+	)
 	if whereClause != "" {
-
-		query = fmt.Sprintf(
-			"SELECT COUNT(*) FROM %s WHERE %s",
-			m.SchemaName(),
-			whereClause,
-		)
-	} else {
-		query = fmt.Sprintf(
-			"SELECT COUNT(*) FROM %s",
-			m.SchemaName(),
-		)
+		query += " WHERE " + whereClause
 	}
 
 	row, err := sqlt.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+		return 0, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
 
 	defer row.Close()
 	var count int64
 	if row.Next() {
 		if err := row.Scan(&count); err != nil {
-			return 0, WrapWithCaller(err, m.SchemaName(), mapSQLErrors)
+			return 0, WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 		}
 	}
 
@@ -362,7 +373,7 @@ func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 		}
 	}()
 
-	txAdapter := NewSQLiteAdapter(tx)
+	txAdapter := NewSQLiteAdapter(tx, sqlt.Resolver)
 	_, err = fn(ctx, txAdapter)
 
 	if err != nil {
@@ -375,41 +386,47 @@ func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 	return tx.Commit()
 }
 
-func mapSQLErrors(op, entity string, err error) error {
-	if err == nil {
-		return nil
+// mapSQLiteErrors classifies mattn/go-sqlite3 errors by result code.
+func mapSQLiteErrors(op, entity string, err error) error {
+	if classified, ok := MapStdSQLErrors(op, entity, err); ok {
+		return classified
 	}
 
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return classify(op, entity, sentinelNotFound, err)
-	case errors.Is(err, sql.ErrTxDone):
-		return classify(op, entity, sentinelTxDone, err)
+	case isSQLiteMissingTable(err):
+		return Classify(op, entity, SentinelUndefinedTable, err)
 	case isSQLiteConstraintViolation(err):
 		if isUniqueConstraint(err) {
-			return classify(op, entity, sentinelDuplicateKey, err)
+			return Classify(op, entity, SentinelDuplicateKey, err)
 		}
 		if isForeignKeyConstraint(err) {
-			return classify(op, entity, sentinelForeignKey, err)
+			return Classify(op, entity, SentinelForeignKey, err)
 		}
-		return classify(op, entity, sentinelConstraintViolation, err)
+		return Classify(op, entity, SentinelConstraintViolation, err)
 	default:
-		return classify(op, entity, sentinelUnknown, err)
+		return Classify(op, entity, SentinelUnknown, err)
 	}
 
 }
 
+// isSQLiteMissingTable matches "no such table: x". SQLite reports it with the
+// generic SQLITE_ERROR code, so the message is the only distinguishing signal.
+func isSQLiteMissingTable(err error) bool {
+	if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok {
+		return sqliteErr.Code == sqlite3.ErrError && strings.HasPrefix(sqliteErr.Error(), "no such table")
+	}
+	return false
+}
+
 func isSQLiteConstraintViolation(err error) bool {
-	var sqliteErr *sqlite3.Error
-	if errors.As(err, &sqliteErr) {
+	if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok { // mattn returns sqlite3.Error by value
 		return sqliteErr.Code == sqlite3.ErrConstraint
 	}
 	return false
 }
 
 func isUniqueConstraint(err error) bool {
-	var sqliteErr *sqlite3.Error
-	if errors.As(err, &sqliteErr) {
+	if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok { // mattn returns sqlite3.Error by value
 		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique ||
 			sqliteErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey
 	}
@@ -417,8 +434,7 @@ func isUniqueConstraint(err error) bool {
 }
 
 func isForeignKeyConstraint(err error) bool {
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) {
+	if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok {
 		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintForeignKey
 	}
 	return false

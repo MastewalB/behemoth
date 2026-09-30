@@ -4,7 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	"github.com/MastewalB/behemoth/types"
 )
 
 type ColumnType string
@@ -284,6 +286,7 @@ type GenerateDeps struct {
 	Runner       MigrationRunner    // required for PathManaged; unused for PathGenerateOnly
 	Presenter    ResolutionPresenter
 	Generator    MigrationGenerator
+	Renderer     MigrationRenderer // optional; nil = no script file next to each migration's .json
 }
 
 type MigrationDeps struct {
@@ -291,6 +294,7 @@ type MigrationDeps struct {
 	Runner       MigrationRunner
 	GenerateDeps GenerateDeps        // reused as-is from the Path I/II round. Presenter/Generator live here
 	Presenter    ResolutionPresenter // duplicated reference for baseline's own resolve call — same underlying FilePresenter instance as GenerateDeps.Presenter, not a second one
+	Telemetry    *types.Telemetry    // optional; used for non-fatal warnings (e.g. a script file that couldn't be written after Apply)
 }
 
 type MigrationConfig struct {
@@ -304,10 +308,9 @@ type MigrationConfig struct {
 // the user never asked for.
 func (c MigrationConfig) snapshotTableName() string { return c.TableName + "_snapshot" }
 
-type SchemaResolver interface {
-	Resolve(canonicalName string) string // returns the physical name; canonicalName itself if nothing overrides it
-	ResolveColumn(canonicalTable, canonicalColumn string) string
-}
+// SchemaResolver is defined next to behemoth.Model so storage adapters can
+// resolve physical names without depending on the migration package.
+type SchemaResolver = behemoth.SchemaResolver
 
 // ConditionValueTransformer provides a way to customize clause conditions.
 // If models have fields that have different operator semantics at database level, they can change the clause

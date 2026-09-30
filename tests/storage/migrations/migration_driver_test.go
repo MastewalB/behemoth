@@ -1,53 +1,60 @@
 package migrations
 
-// import (
-// 	"context"
-// 	"database/sql"
-// 	"testing"
+import (
+	"context"
+	"testing"
+	"time"
 
-// 	"github.com/MastewalB/behemoth/migration/core"
-// 	_ "github.com/MastewalB/behemoth/migration/plugins/postgres"
-// 	_ "github.com/MastewalB/behemoth/migration/plugins/sqlite"
-// 	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
+	"github.com/MastewalB/behemoth/storage/adapters/postgres"
+	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/stretchr/testify/require"
 
-// 	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq"
+)
 
-// 	_ "github.com/lib/pq"
-// )
+// TestSQLiteDriver runs the database-agnostic suite against SQLite.
+func TestSQLiteDriver(t *testing.T) {
+	db := openSQLite(t)
+	RunDriverTests(t,
+		func(r core.SchemaResolver) core.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
+		NewSQLiteTestManager(db),
+	)
+}
 
-// // TestSQLiteDriver runs tests against SQLite
-// func TestSQLiteDriver(t *testing.T) {
-// 	db, err := sql.Open("sqlite3", ":memory:")
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+// TestPostgreSQLDriver runs the database-agnostic suite, then the
+// Postgres-specific introspector tests, against one Postgres container.
+func TestPostgreSQLDriver(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a Postgres container")
+	}
+	ctx := context.Background()
+	db, cleanup := testutils.SetupPostgresTestDB(t, ctx)
+	t.Cleanup(cleanup)
 
-// 	config := &core.Config{
-// 		DB: db,
-// 	}
+	// The container's port opens before Postgres finishes its init restart.
+	require.Eventually(t, func() bool { return db.PingContext(ctx) == nil }, 30*time.Second, 200*time.Millisecond)
 
-// 	driver, err := core.Open("sqlite", config)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+	tm := NewPostgresTestManager(db, nil) // the container is torn down by t.Cleanup, after every subtest
+	RunDriverTests(t,
+		func(r core.SchemaResolver) core.SchemaDriver { return postgres.NewPostgreSQLDriver(db, r) },
+		tm,
+	)
+	runPostgresIntrospectorTests(t, db, tm)
 
-// 	driverTestManager := NewSQLiteTestHelpers(db)
-// 	RunDriverTests(t, driver, driverTestManager)
-// }
+	t.Run("RunnerUsesConfiguredTables", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		runnerUsesConfiguredTables(t,
+			func(r behemoth.SchemaResolver) core.SchemaDriver { return postgres.NewPostgreSQLDriver(db, r) },
+			func(r behemoth.SchemaResolver) behemoth.Database { return postgres.NewPostgresAdapter(db, r) },
+			tm,
+		)
+	})
 
-// func TestPostgreSQLDriver(t *testing.T) {
-// 	ctx := context.Background()
-// 	db, cleanup := testutils.SetupPostgresTestDB(t, ctx)
-
-// 	config := &core.Config{
-// 		DB: db,
-// 	}
-
-// 	driver, err := core.Open("postgres", config)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	driverTestManager := NewPostgresTestManager(db, cleanup)
-// 	RunDriverTests(t, driver, driverTestManager)
-// }
+	t.Run("LedgerReadsBackThroughAdapter", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		readBackThroughAdapter(t, postgres.NewPostgreSQLDriver(db, nil), testutils.SetupPostgresAdapter(db))
+	})
+}

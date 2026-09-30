@@ -13,14 +13,54 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// MongoAdapter implements behemoth.Database for MongoDB.
+//
+// Models are addressed by canonical names; collection names and document
+// field names go through Resolver first. Unlike the SQL adapters — which read
+// rows back by column position — stored documents come back keyed by their
+// physical field names, so reads map those keys back to canonical ones before
+// FromMap. A nil Resolver maps every name to itself.
+//
+// There is no "missing table" condition: querying a collection that doesn't
+// exist simply returns no documents.
 type MongoAdapter struct {
-	db *mongo.Database
+	db       *mongo.Database
+	Resolver behemoth.SchemaResolver
 }
 
-func NewMongoAdapter(client *mongo.Client, dbName string) *MongoAdapter {
+func NewMongoAdapter(client *mongo.Client, dbName string, resolver behemoth.SchemaResolver) *MongoAdapter {
 	return &MongoAdapter{
-		db: client.Database(dbName),
+		db:       client.Database(dbName),
+		Resolver: resolver,
 	}
+}
+
+func (mdb *MongoAdapter) names() behemoth.SchemaResolver {
+	return ResolverOrIdentity(mdb.Resolver)
+}
+
+func (mdb *MongoAdapter) collection(m behemoth.Model) *mongo.Collection {
+	return mdb.db.Collection(PhysicalTable(mdb.names(), m))
+}
+
+// filter renders expr with its fields resolved to physical field names.
+func (mdb *MongoAdapter) filter(m behemoth.Model, expr *clause.Expression) bson.M {
+	return BuildMongoFilter(PhysicalExpression(mdb.names(), m, expr))
+}
+
+// byPrimaryKey matches m's own document.
+func (mdb *MongoAdapter) byPrimaryKey(m behemoth.Model) bson.M {
+	return bson.M{PhysicalColumn(mdb.names(), m, m.PrimaryKeyName()): m.PrimaryKeyField()}
+}
+
+// decode turns a stored document into a new model, mapping physical keys back
+// to the canonical ones FromMap expects.
+func (mdb *MongoAdapter) decode(m behemoth.Model, canonical map[string]string, raw map[string]any) (behemoth.Model, error) {
+	model := m.New()
+	if err := model.(behemoth.Serializable).FromMap(CanonicalDocument(canonical, raw)); err != nil {
+		return nil, err
+	}
+	return model, nil
 }
 
 func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
@@ -34,9 +74,7 @@ func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 		return err
 	}
 
-	collection := mdb.db.Collection(m.SchemaName())
-	_, err = collection.InsertOne(ctx, doc)
-
+	_, err = mdb.collection(m).InsertOne(ctx, PhysicalDocument(mdb.names(), m, doc))
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
@@ -47,10 +85,7 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 		return nil, errors.New("model must implement Serializable")
 	}
 
-	filter := BuildMongoFilter(&expr)
-	collection := mdb.db.Collection(m.SchemaName())
-
-	result := collection.FindOne(ctx, filter)
+	result := mdb.collection(m).FindOne(ctx, mdb.filter(m, &expr))
 	if result.Err() != nil {
 		return nil, WrapWithCaller(result.Err(), m.SchemaName(), mapMongoErrors)
 	}
@@ -60,12 +95,7 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 		return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
 
-	model := m.New()
-	if err := model.(behemoth.Serializable).FromMap(raw); err != nil {
-		return nil, err
-	}
-
-	return model, nil
+	return mdb.decode(m, CanonicalFields(mdb.names(), m), raw)
 }
 
 func (mdb *MongoAdapter) FindMany(
@@ -80,34 +110,33 @@ func (mdb *MongoAdapter) FindMany(
 	}
 	var cursor *mongo.Cursor
 	var err error
-	filter := BuildMongoFilter(&expr)
-	collection := mdb.db.Collection(m.SchemaName())
-
-	defer func() {
-		cursor.Close(ctx)
-	}()
+	filter := mdb.filter(m, &expr)
+	collection := mdb.collection(m)
+	physicalOptions := mdb.physicalQueryOptions(m, options)
 
 	if options != nil && options.Distinct {
-		pipeline := buildDistinctPipeline(filter, options)
+		pipeline := buildDistinctPipeline(filter, physicalOptions)
 		cursor, err = collection.Aggregate(ctx, pipeline)
 
 	} else {
-		mongoOpts := optionsToMongoFindOptions(options)
+		mongoOpts := optionsToMongoFindOptions(physicalOptions)
 		cursor, err = collection.Find(ctx, filter, mongoOpts)
 	}
 
 	if err != nil {
 		return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
+	defer cursor.Close(ctx) // only once cursor is known to be non-nil
 
+	canonical := CanonicalFields(mdb.names(), m)
 	var results []behemoth.Model
 	for cursor.Next(ctx) {
 		var raw map[string]any
 		if err := cursor.Decode(&raw); err != nil {
 			return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 		}
-		model := m.New()
-		if err := model.(behemoth.Serializable).FromMap(raw); err != nil {
+		model, err := mdb.decode(m, canonical, raw)
+		if err != nil {
 			return nil, err
 		}
 		results = append(results, model)
@@ -117,15 +146,26 @@ func (mdb *MongoAdapter) FindMany(
 
 }
 
+// physicalQueryOptions returns a copy of options with the sort field and the
+// selected fields resolved to physical names.
+func (mdb *MongoAdapter) physicalQueryOptions(m behemoth.Model, options *behemoth.QueryOptions) *behemoth.QueryOptions {
+	if options == nil {
+		return nil
+	}
+	out := *options
+	if out.OrderBy.Field != "" {
+		out.OrderBy.Field = PhysicalColumn(mdb.names(), m, out.OrderBy.Field)
+	}
+	if len(out.Select) > 0 {
+		out.Select = PhysicalColumns(mdb.names(), m, out.Select)
+	}
+	return &out
+}
+
 func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
-	collection := mdb.db.Collection(m.SchemaName())
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
 		return behemotherr.SerializableNotImplemented()
-	}
-
-	filter := bson.M{
-		m.PrimaryKeyName(): m.PrimaryKeyField(),
 	}
 
 	doc, err := ser.ToMap()
@@ -134,10 +174,10 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	}
 
 	update := bson.M{
-		"$set": doc,
+		"$set": PhysicalDocument(mdb.names(), m, doc),
 	}
 
-	_, err = collection.UpdateOne(ctx, filter, update)
+	_, err = mdb.collection(m).UpdateOne(ctx, mdb.byPrimaryKey(m), update)
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
@@ -151,14 +191,11 @@ func (mdb *MongoAdapter) UpdateOne(
 		return nil
 	}
 
-	collection := mdb.db.Collection(m.SchemaName())
-	filter := BuildMongoFilter(&expr)
-
 	update := bson.M{
-		"$set": updates,
+		"$set": PhysicalDocument(mdb.names(), m, updates),
 	}
 
-	_, err := collection.UpdateOne(ctx, filter, update)
+	_, err := mdb.collection(m).UpdateOne(ctx, mdb.filter(m, &expr), update)
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
@@ -173,63 +210,48 @@ func (mdb *MongoAdapter) UpdateMany(
 		return nil
 	}
 
-	collection := mdb.db.Collection(m.SchemaName())
-	filter := BuildMongoFilter(&expr)
-
-	_, err := collection.UpdateMany(
+	_, err := mdb.collection(m).UpdateMany(
 		ctx,
-		filter,
+		mdb.filter(m, &expr),
 		bson.M{
-			"$set": updates,
+			"$set": PhysicalDocument(mdb.names(), m, updates),
 		},
 	)
-	return err
+	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
-	collection := mdb.db.Collection(m.SchemaName())
-	filter := bson.M{
-		m.PrimaryKeyName(): m.PrimaryKeyField(),
-	}
-
-	_, err := collection.DeleteOne(ctx, filter)
+	_, err := mdb.collection(m).DeleteOne(ctx, mdb.byPrimaryKey(m))
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	collection := mdb.db.Collection(m.SchemaName())
-	filter := BuildMongoFilter(&expr)
+	filter := mdb.filter(m, &expr)
 
 	if len(filter) == 0 {
 		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
-	_, err := collection.DeleteOne(ctx, filter)
+	_, err := mdb.collection(m).DeleteOne(ctx, filter)
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	collection := mdb.db.Collection(m.SchemaName())
-	filter := BuildMongoFilter(&expr)
+	filter := mdb.filter(m, &expr)
 
 	if len(filter) == 0 {
 		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
 	}
-	_, err := collection.DeleteMany(ctx, filter)
+	_, err := mdb.collection(m).DeleteMany(ctx, filter)
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
-	collection := mdb.db.Collection(m.SchemaName())
-
-	_, err := collection.DeleteMany(ctx, bson.M{})
+	_, err := mdb.collection(m).DeleteMany(ctx, bson.M{})
 	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
-	collection := mdb.db.Collection(m.SchemaName())
-	filter := BuildMongoFilter(&expr)
-
-	count, err := collection.CountDocuments(ctx, filter)
+	count, err := mdb.collection(m).CountDocuments(ctx, mdb.filter(m, &expr))
 	if err != nil {
 		return 0, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
@@ -347,14 +369,18 @@ func mapMongoErrors(op, entity string, err error) error {
 
 	switch {
 	case errors.Is(err, mongo.ErrNoDocuments):
-		return behemotherr.NewNotFound(op, entity, err)
+		return Classify(op, entity, SentinelNotFound, err)
+	case mongo.IsDuplicateKeyError(err): // E11000, from a unique index
+		return Classify(op, entity, SentinelDuplicateKey, err)
 	case errors.Is(err, mongo.ErrEmptySlice) || errors.Is(err, mongo.ErrNilValue) || errors.Is(err, mongo.ErrNilDocument):
 		return behemotherr.NewValidationError(op, entity, err)
 	default:
-		return behemotherr.NewDatabaseError(op, err)
+		return Classify(op, entity, SentinelUnknown, err)
 	}
 }
 
+// optionsToMongoFindOptions converts query options whose field names are
+// already physical (see MongoAdapter.physicalQueryOptions).
 func optionsToMongoFindOptions(queryOptions *behemoth.QueryOptions) *options.FindOptions {
 	if queryOptions == nil {
 		return nil
@@ -386,6 +412,8 @@ func optionsToMongoFindOptions(queryOptions *behemoth.QueryOptions) *options.Fin
 	return findOptions
 }
 
+// buildDistinctPipeline builds a DISTINCT aggregation from a physical filter
+// and query options whose field names are already physical.
 func buildDistinctPipeline(filter bson.M, options *behemoth.QueryOptions) mongo.Pipeline {
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: filter}},

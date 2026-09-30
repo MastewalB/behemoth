@@ -39,7 +39,7 @@ func BuildPlan(report *IntrospectionReport, current SchemaRegistry) (*MigrationP
 			bare.ForeignKeys = nil
 			plan.Operations = append(plan.Operations, PlannedOperation{
 				Operation: SchemaOperation{
-					ID:       "create_table_" + table,
+					ID:       createTableID(table),
 					Kind:     OpCreateTable,
 					Table:    table,
 					NewTable: &bare,
@@ -50,7 +50,7 @@ func BuildPlan(report *IntrospectionReport, current SchemaRegistry) (*MigrationP
 			for _, fk := range declared.ForeignKeys {
 				plan.Operations = append(plan.Operations, PlannedOperation{
 					Operation: SchemaOperation{
-						ID:         "add_fk_" + table + "_" + fk.Name,
+						ID:         addForeignKeyID(table, fk.Name),
 						Kind:       OpAddForeignKey,
 						Table:      table,
 						ForeignKey: &fk,
@@ -64,7 +64,7 @@ func BuildPlan(report *IntrospectionReport, current SchemaRegistry) (*MigrationP
 		if ti.IncompatibleObject {
 			// This is a blocking issue and no candidate option is generated
 			// Must be resolved manually.
-			return nil, nil, behemotherr.NewMigrationError("Planning.BuildPlan", "incompatible_object",
+			return nil, nil, behemotherr.NewMigrationError("Planning.BuildPlan", behemotherr.ErrorCodeMigrationIncompatibleObject,
 				fmt.Errorf("table %q exists live as a non-table object; resolve manually before continuing", table))
 		}
 
@@ -93,7 +93,7 @@ func planColumns(table string, findings []ColumnFinding) ([]PlannedOperation, []
 		case ColMissingLive:
 			ops = append(ops, PlannedOperation{
 				Operation: SchemaOperation{
-					ID:     "add_column_" + table + "_" + f.Name,
+					ID:     addColumnID(table, f.Name),
 					Kind:   OpAddColumn,
 					Table:  table,
 					Column: f.Declared,
@@ -104,7 +104,7 @@ func planColumns(table string, findings []ColumnFinding) ([]PlannedOperation, []
 			// extra live column that reached here (i.e.
 			// trackExtraColumns was true for this source) is a real drop
 			// candidate. But requires manual confirmation.
-			opID := "drop_column_" + table + "_" + f.Name
+			opID := dropColumnID(table, f.Name)
 			issues = append(issues, PlanIssue{
 				ID: opID, Table: table,
 				Description: fmt.Sprintf("Column %q exists in the database but is no longer declared.", f.Name),
@@ -132,7 +132,7 @@ func planColumns(table string, findings []ColumnFinding) ([]PlannedOperation, []
 
 		case ColDiffers:
 			isNarrowing := isNarrowingChange(*f.Declared, *f.Live)
-			opID := "alter_column_" + table + "_" + f.Name
+			opID := alterColumnID(table, f.Name)
 			if !isNarrowing {
 				ops = append(ops, PlannedOperation{
 					Operation: SchemaOperation{
@@ -212,7 +212,7 @@ func planRenames(table string, renames []RenameCandidate) []PlanIssue {
 			byGroup[r.GroupID] = append(byGroup[r.GroupID], r)
 			continue
 		}
-		opID := "rename_column_" + table + "_" + r.From.Name + "_to_" + r.To.Name
+		opID := renameColumnID(table, r.From.Name, r.To.Name)
 		issues = append(issues, PlanIssue{
 			ID:          opID,
 			Table:       table,
@@ -234,7 +234,7 @@ func planRenames(table string, renames []RenameCandidate) []PlanIssue {
 					Label: "Drop old, add new independently",
 					Operations: []SchemaOperation{
 						{
-							ID:         opID + "_drop",
+							ID:         renameFallbackDropID(opID),
 							Kind:       OpDropColumn,
 							Table:      table,
 							ColumnName: r.From.Name,
@@ -242,7 +242,7 @@ func planRenames(table string, renames []RenameCandidate) []PlanIssue {
 							Confirmed:  true,
 						},
 						{
-							ID:        opID + "_add",
+							ID:        renameFallbackAddID(opID),
 							Kind:      OpAddColumn,
 							Table:     table,
 							Column:    &r.To,
@@ -266,7 +266,7 @@ func planRenames(table string, renames []RenameCandidate) []PlanIssue {
 			}
 		}
 		issues = append(issues, PlanIssue{
-			ID: "rename_group_" + table + "_" + groupID, Table: table,
+			ID: renameGroupIssueID(table, groupID), Table: table,
 			Description: fmt.Sprintf("Multiple equally-plausible rename candidates found among columns: %s.", strings.Join(names, ", ")),
 			Options: []ResolutionOption{
 				{
@@ -302,7 +302,7 @@ func planIndexes(table string, findings []IndexFinding) []PlannedOperation {
 			idx := *f.Declared
 			ops = append(ops, PlannedOperation{
 				Operation: SchemaOperation{
-					ID:        "add_index_" + table + "_" + f.Name,
+					ID:        addIndexID(table, f.Name),
 					Kind:      OpAddIndex,
 					Table:     table,
 					Index:     &idx,
@@ -315,7 +315,7 @@ func planIndexes(table string, findings []IndexFinding) []PlannedOperation {
 			idx := *f.Live
 			ops = append(ops, PlannedOperation{
 				Operation: SchemaOperation{
-					ID:        "drop_index_" + table + "_" + f.Name,
+					ID:        dropIndexID(table, f.Name),
 					Kind:      OpDropIndex,
 					Table:     table,
 					IndexName: f.Name,
@@ -334,7 +334,7 @@ func planIndexes(table string, findings []IndexFinding) []PlannedOperation {
 			liveIdx, declaredIdx := *f.Live, *f.Declared
 			ops = append(ops,
 				PlannedOperation{Operation: SchemaOperation{
-					ID:        "drop_index_" + table + "_" + f.Name,
+					ID:        dropIndexID(table, f.Name),
 					Kind:      OpDropIndex,
 					Table:     table,
 					IndexName: f.Name,
@@ -342,7 +342,7 @@ func planIndexes(table string, findings []IndexFinding) []PlannedOperation {
 					Confirmed: true,
 				}, Source: "generated"},
 				PlannedOperation{Operation: SchemaOperation{
-					ID:        "add_index_" + table + "_" + f.Name,
+					ID:        addIndexID(table, f.Name),
 					Kind:      OpAddIndex,
 					Table:     table,
 					Index:     &declaredIdx,
@@ -367,7 +367,7 @@ func planForeignKeys(table string, findings []ForeignKeyFinding) []PlannedOperat
 			fk := *f.Declared
 			ops = append(ops, PlannedOperation{
 				Operation: SchemaOperation{
-					ID:         "add_fk_" + table + "_" + f.Name,
+					ID:         addForeignKeyID(table, f.Name),
 					Kind:       OpAddForeignKey,
 					Table:      table,
 					ForeignKey: &fk,
@@ -380,7 +380,7 @@ func planForeignKeys(table string, findings []ForeignKeyFinding) []PlannedOperat
 			fk := *f.Live
 			ops = append(ops, PlannedOperation{
 				Operation: SchemaOperation{
-					ID:             "drop_fk_" + table + "_" + f.Name,
+					ID:             dropForeignKeyID(table, f.Name),
 					Kind:           OpDropForeignKey,
 					Table:          table,
 					ForeignKeyName: f.Name,
@@ -394,7 +394,7 @@ func planForeignKeys(table string, findings []ForeignKeyFinding) []PlannedOperat
 			liveFK, declaredFK := *f.Live, *f.Declared
 			ops = append(ops,
 				PlannedOperation{Operation: SchemaOperation{
-					ID:             "drop_fk_" + table + "_" + f.Name,
+					ID:             dropForeignKeyID(table, f.Name),
 					Kind:           OpDropForeignKey,
 					Table:          table,
 					ForeignKeyName: f.Name,
@@ -402,7 +402,7 @@ func planForeignKeys(table string, findings []ForeignKeyFinding) []PlannedOperat
 					Confirmed:      true,
 				}, Source: "generated"},
 				PlannedOperation{Operation: SchemaOperation{
-					ID:         "add_fk_" + table + "_" + f.Name,
+					ID:         addForeignKeyID(table, f.Name),
 					Kind:       OpAddForeignKey,
 					Table:      table,
 					ForeignKey: &declaredFK,
@@ -444,7 +444,7 @@ func buildFallbackOps(table string, members []RenameCandidate) []SchemaOperation
 			seen["add:"+m.To.Name] = true
 			col := m.To
 			ops = append(ops, SchemaOperation{
-				ID:        "add_column_" + table + "_" + col.Name,
+				ID:        addColumnID(table, col.Name),
 				Kind:      OpAddColumn,
 				Table:     table,
 				Column:    &col,
@@ -455,7 +455,7 @@ func buildFallbackOps(table string, members []RenameCandidate) []SchemaOperation
 			seen["drop:"+m.From.Name] = true
 			col := m.From
 			ops = append(ops, SchemaOperation{
-				ID:         "drop_column_" + table + "_" + col.Name,
+				ID:         dropColumnID(table, col.Name),
 				Kind:       OpDropColumn,
 				Table:      table,
 				ColumnName: col.Name,
@@ -589,154 +589,3 @@ func isNarrowingChange(a, b Column) bool {
 	// 	(a.AutoInc == true && b.AutoInc == false) ||
 	// 	a.Length > b.Length
 }
-
-// func (p *DefaultMigrationPlanner) diffColumns(table string, prev, curr []Column) ([]PlannedOperation, error) {
-// 	prevByName, currByName := indexColumnsByName(prev), indexColumnsByName(curr)
-
-// 	var added, dropped []Column
-// 	for name, col := range currByName {
-// 		if _, ok := prevByName[name]; !ok {
-// 			added = append(added, col)
-// 		}
-// 	}
-
-// 	for name, col := range prevByName {
-// 		if _, ok := currByName[name]; !ok {
-// 			dropped = append(dropped, col)
-// 		}
-// 	}
-
-// 	renamePairs, unmatchedAdded, unmatchedDropped := matchRenameCandidates(dropped, added)
-
-// 	var ops []PlannedOperation
-// 	for _, pair := range renamePairs {
-// 		ops = append(ops, PlannedOperation{
-// 			Operation: SchemaOperation{
-// 				ID:            fmt.Sprintf("rename_column_%s_%s_to_%s", table, pair.From.Name, pair.To.Name),
-// 				Kind:          OpRenameColumn,
-// 				Table:         table,
-// 				ColumnName:    pair.From.Name,
-// 				NewColumnName: pair.To.Name,
-// 				Confirmed:     false, // starts unconfirmed; since a structural match is only a hint
-// 			},
-// 			Source: "generated",
-// 		})
-// 	}
-
-// 	for _, col := range unmatchedAdded {
-// 		ops = append(ops, PlannedOperation{
-// 			Operation: SchemaOperation{
-// 				ID:        "add_column_" + table + "_" + col.Name,
-// 				Kind:      OpAddColumn,
-// 				Table:     table,
-// 				Column:    &col,
-// 				Confirmed: true,
-// 			}, // purely additive if safe to auto-confirm
-// 			Source: "generated",
-// 		})
-// 	}
-// 	for _, col := range unmatchedDropped {
-// 		ops = append(ops, PlannedOperation{
-// 			Operation: SchemaOperation{
-// 				ID:         "drop_column_" + table + "_" + col.Name,
-// 				Kind:       OpDropColumn,
-// 				Table:      table,
-// 				ColumnName: col.Name,
-// 				Confirmed:  false,
-// 			},
-// 			Source: "generated",
-// 		})
-// 	}
-
-// 	// Column property changes (type/nullable/default) on columns present in both.
-// 	for name, currCol := range currByName {
-// 		prevCol, existed := prevByName[name]
-// 		if !existed || columnsEqual(prevCol, currCol) {
-// 			continue
-// 		}
-// 		ops = append(ops, PlannedOperation{
-// 			Operation: SchemaOperation{
-// 				ID:        "alter_column_" + table + "_" + name,
-// 				Kind:      OpAlterColumn,
-// 				Table:     table,
-// 				Column:    &currCol,
-// 				Confirmed: !isNarrowingChange(prevCol, currCol), // widening operations are (nullable->true, varchar grows) auto-confirming
-// 			},
-// 			Source: "generated",
-// 		})
-// 	}
-// 	return ops, nil
-// }
-
-// func diffIndexes(table string, prev, curr []Index) []PlannedOperation {
-// 	prevByName, currByName := indexIndexesByName(prev), indexIndexesByName(curr)
-// 	var ops []PlannedOperation
-// 	for name, idx := range currByName {
-// 		if _, existed := prevByName[name]; !existed {
-// 			idx := idx
-// 			ops = append(ops, PlannedOperation{
-// 				Operation: SchemaOperation{
-// 					ID:        "add_index_" + table + "_" + name,
-// 					Kind:      OpAddIndex,
-// 					Table:     table,
-// 					Index:     &idx,
-// 					Confirmed: true,
-// 				}, Source: "generated",
-// 			})
-// 		}
-// 	}
-// 	for name, idx := range prevByName {
-// 		if _, stillExists := currByName[name]; !stillExists {
-// 			idx := idx
-// 			ops = append(ops,
-// 				PlannedOperation{
-// 					Operation: SchemaOperation{
-// 						ID:        "drop_index_" + table + "_" + name,
-// 						Kind:      OpDropIndex,
-// 						Table:     table,
-// 						IndexName: name,
-// 						Index:     &idx,
-// 						Confirmed: true,
-// 					},
-// 					Source: "generated",
-// 				})
-// 		}
-// 	}
-// 	return ops
-// }
-
-// func diffForeignKeys(table string, prev, curr []ForeignKey) []PlannedOperation {
-// 	prevByName, currByName := indexFKsByName(prev), indexFKsByName(curr)
-// 	var ops []PlannedOperation
-// 	for name, fk := range currByName {
-// 		if _, existed := prevByName[name]; !existed {
-// 			fk := fk
-// 			ops = append(ops, PlannedOperation{
-// 				Operation: SchemaOperation{
-// 					ID:         "add_fk_" + table + "_" + name,
-// 					Kind:       OpAddForeignKey,
-// 					Table:      table,
-// 					ForeignKey: &fk,
-// 					Confirmed:  true,
-// 				}, Source: "generated"})
-// 		}
-// 	}
-// 	for name, fk := range prevByName {
-// 		if _, stillExists := currByName[name]; !stillExists {
-// 			fk := fk
-// 			// Confirmed:true per the tiering table.
-// 			// even though dropping a constraint isn't data loss, ForeignKey is populated,
-// 			// since the Generator needs RefTable for edge inference.
-// 			ops = append(ops, PlannedOperation{
-// 				Operation: SchemaOperation{
-// 					ID:             "drop_fk_" + table + "_" + name,
-// 					Kind:           OpDropForeignKey,
-// 					Table:          table,
-// 					ForeignKeyName: name,
-// 					ForeignKey:     &fk,
-// 					Confirmed:      true,
-// 				}, Source: "generated"})
-// 		}
-// 	}
-// 	return ops
-// }

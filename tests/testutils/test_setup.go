@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	_ "github.com/MastewalB/behemoth/migration/plugins/postgres"
 	_ "github.com/MastewalB/behemoth/migration/plugins/sqlite"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
+	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/sqliteshim"
 
@@ -350,17 +350,17 @@ func SetupBunAdapter(t *testing.T, db *bun.DB) *bunAdapter.BunAdapter {
 }
 
 func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *adapters.MongoAdapter {
-	return adapters.NewMongoAdapter(client, dbName)
+	return adapters.NewMongoAdapter(client, dbName, nil)
 }
 
-func SetupPostgresAdapter(db *sql.DB) *adapters.PostgresAdapter {
-	return adapters.NewPostgresAdapter(db)
+func SetupPostgresAdapter(db *sql.DB) *pgAdapter.PostgresAdapter {
+	return pgAdapter.NewPostgresAdapter(db, nil)
 }
 
 func SetupMySQLAdapter(db *sql.DB) *adapters.MySQLAdapter {
-	return adapters.NewMySQLAdapter(db)
+	return adapters.NewMySQLAdapter(db, nil)
 }
 
 func SetupMSSQLAdapter(db *sql.DB) *adapters.SQLServerAdapter {
-	return adapters.NewSQLServerAdapter(db)
+	return adapters.NewSQLServerAdapter(db, nil)
 }

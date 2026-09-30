@@ -39,6 +39,9 @@ func (r *snapshotRegistry) ExtendColumn(ColumnContribution) error {
 func (r *snapshotRegistry) ExtendIndex(IndexContribution) error {
 	return behemotherr.NewInternalError("snapshotRegistry.ExtendIndex", fmt.Errorf("read-only registry"))
 }
+func (r *snapshotRegistry) ExtendForeignKey(ForeignKeyContribution) error {
+	return behemotherr.NewInternalError("snapshotRegistry.ExtendForeignKey", fmt.Errorf("read-only registry"))
+}
 func (r *snapshotRegistry) Lookup(name string) (TableSchema, bool) {
 	t, ok := r.tables[name]
 	return t, ok
