@@ -19,7 +19,7 @@ type DefaultMigrationGenerator struct{}
 
 func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, previousMigrationID string) (*Migration, error) {
 	if len(resolvedPlan.Operations) == 0 && len(resolvedPlan.Custom) == 0 {
-		return nil, behemotherr.NewMigrationError("MigrationGenerator.Generate", "nothing_to_generate",
+		return nil, behemotherr.NewMigrationError("MigrationGenerator.Generate", behemotherr.ErrorCodeMigrationNothingToGenerate,
 			fmt.Errorf("resolved operation set is empty"))
 	}
 
@@ -331,7 +331,7 @@ func dependsOnList(previous string) []string {
 // every generate invocation, identically for both Paths.
 func EnsureMigrationFolder(cfg MigrationConfig) error {
 	if err := os.MkdirAll(cfg.FolderPath, 0755); err != nil {
-		return behemotherr.NewMigrationError("Migration.EnsureFolder", "mkdir_failed", err)
+		return behemotherr.NewMigrationError("Migration.EnsureFolder", behemotherr.ErrorCodeMigrationMkdirFailed, err)
 	}
 	return nil
 }
@@ -346,7 +346,7 @@ var migrationFilePattern = regexp.MustCompile(`^(\d{4})_.*\.json$`)
 func LatestMigrationID(cfg MigrationConfig) (string, error) {
 	entries, err := os.ReadDir(cfg.FolderPath)
 	if err != nil {
-		return "", behemotherr.NewMigrationError("Migration.LatestID", "read_dir_failed", err)
+		return "", behemotherr.NewMigrationError("Migration.LatestID", behemotherr.ErrorCodeMigrationReadDirFailed, err)
 	}
 
 	latest := ""
@@ -401,11 +401,11 @@ func buildReport(ctx context.Context, cfg MigrationConfig, current SchemaRegistr
 func writeMigrationFile(cfg MigrationConfig, m Migration) error {
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return behemotherr.NewMigrationError("Migration.Write", "marshal_failed", err)
+		return behemotherr.NewMigrationError("Migration.Write", behemotherr.ErrorCodeMigrationMarshalFailed, err)
 	}
 	path := filepath.Join(cfg.FolderPath, m.ID+"_"+m.Name+".json")
 	if err := os.WriteFile(path, b, 0644); err != nil {
-		return behemotherr.NewMigrationError("Migration.Write", "write_failed", err)
+		return behemotherr.NewMigrationError("Migration.Write", behemotherr.ErrorCodeMigrationWriteFailed, err)
 	}
 	return nil
 }
@@ -425,11 +425,11 @@ func renderMigrationDDL(ctx context.Context, m Migration, renderer MigrationRend
 	}
 	body, err := renderer.RenderMigration(ctx, m)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("Migration.RenderDDL", "render_failed", err)
+		return nil, behemotherr.NewMigrationError("Migration.RenderDDL", behemotherr.ErrorCodeMigrationRenderFailed, err)
 	}
 	ext := renderer.FileExtension()
 	if ext == "" {
-		return nil, behemotherr.NewMigrationError("Migration.RenderDDL", "missing_file_extension", fmt.Errorf("renderer %T returned an empty file extension", renderer))
+		return nil, behemotherr.NewMigrationError("Migration.RenderDDL", behemotherr.ErrorCodeMigrationMissingFileExtension, fmt.Errorf("renderer %T returned an empty file extension", renderer))
 	}
 	if !strings.HasPrefix(ext, ".") {
 		ext = "." + ext
@@ -444,7 +444,7 @@ func (r *renderedDDL) write(cfg MigrationConfig, m Migration) error {
 		return nil
 	}
 	if err := os.WriteFile(migrationDDLPath(cfg, m, r.ext), []byte(r.body), 0644); err != nil {
-		return behemotherr.NewMigrationError("Migration.WriteDDL", "write_failed", err)
+		return behemotherr.NewMigrationError("Migration.WriteDDL", behemotherr.ErrorCodeMigrationWriteFailed, err)
 	}
 	return nil
 }
@@ -478,7 +478,7 @@ func checkNoUnappliedMigrations(cfg MigrationConfig, snapshot SchemaSnapshot) er
 		return nil // no files at disk
 	}
 	if snapshot.Version != latestOnDisk {
-		return behemotherr.NewMigrationError("Migration.checkNoUnappliedMigrations", "unapplied_migrations_pending",
+		return behemotherr.NewMigrationError("Migration.checkNoUnappliedMigrations", behemotherr.ErrorCodeMigrationUnappliedPending,
 			fmt.Errorf("migration %q exists on disk but the snapshot is at %q — run Apply before generating a new migration", latestOnDisk, snapshot.Version))
 	}
 	return nil
@@ -502,7 +502,7 @@ func RejectAmbiguousTypes(report *IntrospectionReport) error {
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems) // report.Tables is a map; keep the message stable
-		return behemotherr.NewMigrationError("Migration.RejectAmbiguousTypes", "unmappable_column_type",
+		return behemotherr.NewMigrationError("Migration.RejectAmbiguousTypes", behemotherr.ErrorCodeMigrationUnmappableColumnType,
 			fmt.Errorf(`cannot generate a migration - unmappable column type(s) found:\n%s\n\nThe core model cannot represent these columns. 
 			Supply a custom Model implementation for the affected table, or extend the driver's type mapping if this should be a recognized type.`, strings.Join(problems, "\n")))
 	}

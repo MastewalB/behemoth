@@ -113,7 +113,7 @@ func IsStale(old, new []string) bool {
 func (p *FilePresenter) Collect(ctx context.Context) (map[string]int, error) {
 	draft, err := p.readDraft()
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("FilePresenter.Collect", "draft_read_failed", err)
+		return nil, behemotherr.NewMigrationError("FilePresenter.Collect", behemotherr.ErrorCodeMigrationDraftReadFailed, err)
 	}
 	decisions := map[string]int{}
 	for _, e := range draft.Entries {
@@ -205,7 +205,7 @@ func ResolveIssues(
 		// contexts at THIS point; an interactive CLI is expected to have
 		// already looped edit-then-retry before ever calling this in a way
 		// that reaches here with unresolved entries still present.
-		return nil, behemotherr.NewMigrationError("Resolution.ResolveIssues", "unresolved_issues",
+		return nil, behemotherr.NewMigrationError("Resolution.ResolveIssues", behemotherr.ErrorCodeMigrationUnresolvedIssues,
 			fmt.Errorf("unresolved: %s", strings.Join(unresolved, ", ")))
 	}
 	return resolved, nil

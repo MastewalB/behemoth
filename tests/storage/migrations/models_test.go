@@ -54,7 +54,7 @@ func TestLedgerEntrySerializable(t *testing.T) {
 		"non-text id":   {"id": 42, "applied_at": applied},
 	} {
 		err := (&core.MigrationLedgerEntry{}).FromMap(bad)
-		assert.True(t, behemotherr.IsCode(err, "invalid_ledger_entry"), "%s: %v", name, err)
+		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationInvalidLedgerEntry), "%s: %v", name, err)
 	}
 
 	assert.Equal(t, core.LedgerCanonicalName, entry.SchemaName())
@@ -106,7 +106,7 @@ func TestSchemaSnapshotSerializable(t *testing.T) {
 		"wrong shape":    {"version": "v", "tables": "[1, 2]"},
 	} {
 		err := (&core.SchemaSnapshot{}).FromMap(bad)
-		assert.True(t, behemotherr.IsCode(err, "invalid_snapshot"), "%s: %v", name, err)
+		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationInvalidSnapshot), "%s: %v", name, err)
 	}
 
 	assert.Equal(t, core.SnapshotCanonicalName, snap.SchemaName())

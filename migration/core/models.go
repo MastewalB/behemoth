@@ -46,11 +46,11 @@ func (m *MigrationLedgerEntry) ToMap() (map[string]any, error) {
 func (m *MigrationLedgerEntry) FromMap(data map[string]any) error {
 	id, err := stringValue(data["id"])
 	if err != nil || id == "" {
-		return behemotherr.NewMigrationError("MigrationLedgerEntry.FromMap", "invalid_ledger_entry", fmt.Errorf("id: %v (got %T)", err, data["id"]))
+		return behemotherr.NewMigrationError("MigrationLedgerEntry.FromMap", behemotherr.ErrorCodeMigrationInvalidLedgerEntry, fmt.Errorf("id: %v (got %T)", err, data["id"]))
 	}
 	appliedAt, err := timeValue(data["applied_at"])
 	if err != nil {
-		return behemotherr.NewMigrationError("MigrationLedgerEntry.FromMap", "invalid_ledger_entry", fmt.Errorf("migration %q applied_at: %w", id, err))
+		return behemotherr.NewMigrationError("MigrationLedgerEntry.FromMap", behemotherr.ErrorCodeMigrationInvalidLedgerEntry, fmt.Errorf("migration %q applied_at: %w", id, err))
 	}
 	m.ID, m.AppliedAt = id, appliedAt
 	return nil
@@ -78,7 +78,7 @@ func (s *SchemaSnapshot) ToMap() (map[string]any, error) {
 	}
 	data, err := json.Marshal(tables)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SchemaSnapshot.ToMap", "marshal_failed", err)
+		return nil, behemotherr.NewMigrationError("SchemaSnapshot.ToMap", behemotherr.ErrorCodeMigrationMarshalFailed, err)
 	}
 	return map[string]any{
 		"id":      snapshotRowID,
@@ -96,13 +96,13 @@ func (s *SchemaSnapshot) ToMap() (map[string]any, error) {
 func (s *SchemaSnapshot) FromMap(data map[string]any) error {
 	version, err := stringValue(data["version"])
 	if err != nil {
-		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", "invalid_snapshot", fmt.Errorf("version: %w", err))
+		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("version: %w", err))
 	}
 
 	var raw []byte
 	switch v := data["tables"].(type) {
 	case nil:
-		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", "invalid_snapshot", fmt.Errorf("tables is missing"))
+		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("tables is missing"))
 	case string:
 		raw = []byte(v)
 	case []byte:
@@ -111,13 +111,13 @@ func (s *SchemaSnapshot) FromMap(data map[string]any) error {
 		// Already decoded (map[string]any, bson.M, ...): re-encode so the
 		// TableSchema field mapping stays json's, in one place.
 		if raw, err = json.Marshal(v); err != nil {
-			return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", "invalid_snapshot", fmt.Errorf("tables (%T): %w", v, err))
+			return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("tables (%T): %w", v, err))
 		}
 	}
 
 	var tables map[string]TableSchema
 	if err := json.Unmarshal(raw, &tables); err != nil {
-		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", "invalid_snapshot", fmt.Errorf("tables: %w", err))
+		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("tables: %w", err))
 	}
 	if tables == nil {
 		tables = map[string]TableSchema{} // stored "null"

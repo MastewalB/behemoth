@@ -416,7 +416,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		// m is declared (as text), p is not.
 		_, err = introspect(t, []core.Column{id, {Name: "m", Type: core.ColTypeText, Nullable: true}, note}, true)
 		require.Error(t, err)
-		assert.True(t, behemotherr.IsCode(err, "unmappable_column_type"))
+		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationUnmappableColumnType))
 		assert.Contains(t, err.Error(), "feelings.m")
 		assert.Contains(t, err.Error(), "feelings.p", "undeclared column recorded by a baseline is rejected too")
 

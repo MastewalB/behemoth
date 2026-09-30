@@ -82,7 +82,7 @@ func (d *PostgreSQLDriver) RecordBaseline(ctx context.Context, req core.Migratio
 func (d *PostgreSQLDriver) inMigrationTx(ctx context.Context, op string, req core.MigrationRequest, fn func(tx *sql.Tx) error) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, "begin_tx_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationBeginTxFailed, err)
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -93,7 +93,7 @@ func (d *PostgreSQLDriver) inMigrationTx(ctx context.Context, op string, req cor
 
 	run := func() error {
 		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", advisoryLockKey(req.LedgerTable)); err != nil {
-			return behemotherr.NewMigrationError(op, "lock_failed", err)
+			return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationLockFailed, err)
 		}
 		if err := fn(tx); err != nil {
 			return err
@@ -105,7 +105,7 @@ func (d *PostgreSQLDriver) inMigrationTx(ctx context.Context, op string, req cor
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return behemotherr.NewMigrationError(op, "commit_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationCommitFailed, err)
 	}
 	return nil
 }
@@ -123,7 +123,7 @@ func (d *PostgreSQLDriver) applyOperationTx(ctx context.Context, tx *sql.Tx, op 
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return behemotherr.NewMigrationError("PostgresDriver.applyOperationTx", "exec_failed", fmt.Errorf("%w (sql: %s)", err, stmt))
+			return behemotherr.NewMigrationError("PostgresDriver.applyOperationTx", behemotherr.ErrorCodeMigrationExecFailed, fmt.Errorf("%w (sql: %s)", err, stmt))
 		}
 	}
 	return nil
@@ -153,7 +153,7 @@ func (d *PostgreSQLDriver) ensureBookkeepingTables(ctx context.Context, tx *sql.
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return behemotherr.NewMigrationError("PostgresDriver.ensureBookkeepingTables", "exec_failed", err)
+			return behemotherr.NewMigrationError("PostgresDriver.ensureBookkeepingTables", behemotherr.ErrorCodeMigrationExecFailed, err)
 		}
 	}
 	return nil
@@ -162,7 +162,7 @@ func (d *PostgreSQLDriver) ensureBookkeepingTables(ctx context.Context, tx *sql.
 func (d *PostgreSQLDriver) insertLedgerTx(ctx context.Context, tx *sql.Tx, table string, entry core.MigrationLedgerEntry) error {
 	query := fmt.Sprintf("INSERT INTO %s (id, applied_at) VALUES ($1, $2)", quoteIdent(table))
 	if _, err := tx.ExecContext(ctx, query, entry.ID, entry.AppliedAt); err != nil {
-		return behemotherr.NewMigrationError("PostgresDriver.insertLedger", "exec_failed", err)
+		return behemotherr.NewMigrationError("PostgresDriver.insertLedger", behemotherr.ErrorCodeMigrationExecFailed, err)
 	}
 	return nil
 }
@@ -170,13 +170,13 @@ func (d *PostgreSQLDriver) insertLedgerTx(ctx context.Context, tx *sql.Tx, table
 func (d *PostgreSQLDriver) upsertSnapshotTx(ctx context.Context, tx *sql.Tx, table string, snap core.SchemaSnapshot) error {
 	data, err := json.Marshal(snap.Tables)
 	if err != nil {
-		return behemotherr.NewMigrationError("PostgresDriver.upsertSnapshot", "marshal_failed", err)
+		return behemotherr.NewMigrationError("PostgresDriver.upsertSnapshot", behemotherr.ErrorCodeMigrationMarshalFailed, err)
 	}
 	// Passed as text and cast: a []byte parameter would be sent as bytea.
 	query := fmt.Sprintf(`INSERT INTO %s (id, version, tables) VALUES (1, $1, $2::jsonb)
 		ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, tables = EXCLUDED.tables`, quoteIdent(table))
 	if _, err := tx.ExecContext(ctx, query, snap.Version, string(data)); err != nil {
-		return behemotherr.NewMigrationError("PostgresDriver.upsertSnapshot", "exec_failed", err)
+		return behemotherr.NewMigrationError("PostgresDriver.upsertSnapshot", behemotherr.ErrorCodeMigrationExecFailed, err)
 	}
 	return nil
 }
@@ -384,7 +384,7 @@ func (d *PostgreSQLDriver) buildAlterColumn(table string, raw core.Column, prevR
 
 func (d *PostgreSQLDriver) buildAddIndex(table string, idx core.Index) (string, error) {
 	if len(idx.Columns) == 0 {
-		return "", behemotherr.NewMigrationError("PostgresDriver.AddIndex", "invalid_index", fmt.Errorf("index %q has no columns", idx.Name))
+		return "", behemotherr.NewMigrationError("PostgresDriver.AddIndex", behemotherr.ErrorCodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
 	}
 	cols := make([]string, len(idx.Columns))
 	for i, c := range idx.Columns {
@@ -405,7 +405,7 @@ func (d *PostgreSQLDriver) buildDropIndex(indexName string) string {
 
 func (d *PostgreSQLDriver) buildAddForeignKey(table string, fk core.ForeignKey) (string, error) {
 	if len(fk.Columns) == 0 || len(fk.Columns) != len(fk.RefColumns) {
-		return "", behemotherr.NewMigrationError("PostgresDriver.AddForeignKey", "invalid_foreign_key",
+		return "", behemotherr.NewMigrationError("PostgresDriver.AddForeignKey", behemotherr.ErrorCodeMigrationInvalidForeignKey,
 			fmt.Errorf("foreign key %q: %d column(s) vs %d referenced column(s)", fk.Name, len(fk.Columns), len(fk.RefColumns)))
 	}
 	cols := make([]string, len(fk.Columns))
@@ -463,7 +463,7 @@ func (d *PostgreSQLDriver) renderColumnDefinition(table string, raw core.Column)
 	parts := []string{quoteIdent(physCol), nativeType}
 	if col.AutoInc {
 		if col.Type != core.ColTypeInteger && col.Type != core.ColTypeBigInt {
-			return "", behemotherr.NewMigrationError("PostgresDriver.renderColumnDefinition", "unsupported_autoincrement",
+			return "", behemotherr.NewMigrationError("PostgresDriver.renderColumnDefinition", behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
 				fmt.Errorf("column %q: AutoInc requires an integer column, got %q", col.Name, col.Type))
 		}
 		// Identity columns are the recommended replacement for serial
@@ -528,7 +528,7 @@ func renderLiteral(v any) (string, error) {
 	case float32, float64:
 		return fmt.Sprintf("%v", val), nil
 	default:
-		return "", behemotherr.NewMigrationError("PostgresDriver.renderLiteral", "unsupported_default_type", fmt.Errorf("cannot render default value of type %T", v))
+		return "", behemotherr.NewMigrationError("PostgresDriver.renderLiteral", behemotherr.ErrorCodeMigrationUnsupportedDefaultType, fmt.Errorf("cannot render default value of type %T", v))
 	}
 }
 
@@ -565,7 +565,7 @@ func renderPgType(ct core.ColumnType, length int) (string, error) {
 	case core.ColTypeBytes, core.ColTypeBlob:
 		return "BYTEA", nil
 	default:
-		return "", behemotherr.NewMigrationError("PostgresDriver.renderPgType", "unsupported_canonical_type", fmt.Errorf("no Postgres rendering for canonical type %q", ct))
+		return "", behemotherr.NewMigrationError("PostgresDriver.renderPgType", behemotherr.ErrorCodeMigrationUnsupportedCanonicalType, fmt.Errorf("no Postgres rendering for canonical type %q", ct))
 	}
 }
 

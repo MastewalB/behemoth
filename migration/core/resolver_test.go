@@ -153,7 +153,7 @@ func TestStaleDecisionRequiresReview(t *testing.T) {
 	reordered := issueWith(dropAdd, rename, leave)
 	for run := 1; run <= 2; run++ {
 		_, err := resolve(reordered)
-		if !behemotherr.IsCode(err, "unresolved_issues") {
+		if !behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationUnresolvedIssues) {
 			t.Fatalf("run %d after the options changed: want unresolved_issues, got %v", run, err)
 		}
 	}

@@ -20,7 +20,7 @@ const StatusGenerated RunStatus = "generated" // Path II's terminal state - file
 func RunGenerateCLI(ctx context.Context, cfg MigrationConfig, current SchemaRegistry, deps GenerateDeps, confirmWrite bool) (*RunResult, error) {
 	m, err := buildMigrationPlan(ctx, cfg, current, deps, true)
 	if err != nil {
-		if behemotherr.IsCode(err, "nothing_to_generate") {
+		if behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationNothingToGenerate) {
 			return &RunResult{Status: StatusNoChanges, Message: "No schema changes detected."}, nil
 		}
 		return nil, err

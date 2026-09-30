@@ -65,7 +65,7 @@ func (d *PostgreSQLDriver) TableExists(ctx context.Context, name string) (bool, 
 			WHERE n.nspname = current_schema() AND c.relname = $1
 		)`, d.resolver.Resolve(name)).Scan(&exists)
 	if err != nil {
-		return false, behemotherr.NewMigrationError("PostgresIntrospector.TableExists", "query_failed", err)
+		return false, behemotherr.NewMigrationError("PostgresIntrospector.TableExists", behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	return exists, nil
 }
@@ -82,7 +82,7 @@ func (d *PostgreSQLDriver) relKind(ctx context.Context, physical string) (kind c
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, behemotherr.NewMigrationError("PostgresIntrospector.relKind", "query_failed", err)
+		return "", false, behemotherr.NewMigrationError("PostgresIntrospector.relKind", behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	switch relkind {
 	case "r", "p": // ordinary table, or partitioned-table parent
@@ -148,7 +148,7 @@ func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical strin
 		WHERE table_schema = current_schema() AND table_name = $1
 		ORDER BY ordinal_position`, physical)
 	if err != nil {
-		return nil, nil, behemotherr.NewMigrationError("PostgresIntrospector.columns", "query_failed", err)
+		return nil, nil, behemotherr.NewMigrationError("PostgresIntrospector.columns", behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -161,7 +161,7 @@ func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical strin
 		var length sql.NullInt64
 		var defaultExpr sql.NullString
 		if err := rows.Scan(&name, &dataType, &udtName, &length, &isNullable, &defaultExpr, &isIdentity); err != nil {
-			return nil, nil, behemotherr.NewMigrationError("PostgresIntrospector.columns", "scan_failed", err)
+			return nil, nil, behemotherr.NewMigrationError("PostgresIntrospector.columns", behemotherr.ErrorCodeMigrationScanFailed, err)
 		}
 
 		ct, ambig := mapPgType(dataType, udtName)
@@ -259,7 +259,7 @@ func (d *PostgreSQLDriver) primaryKeyColumns(ctx context.Context, physical strin
 		WHERE n.nspname = current_schema() AND t.relname = $1 AND c.contype = 'p'
 		ORDER BY k.ord`, physical)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("PostgresIntrospector.primaryKey", "query_failed", err)
+		return nil, behemotherr.NewMigrationError("PostgresIntrospector.primaryKey", behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 	return scanStrings(rows)
@@ -279,7 +279,7 @@ func (d *PostgreSQLDriver) uniqueConstraints(ctx context.Context, physical strin
 		WHERE n.nspname = current_schema() AND t.relname = $1 AND c.contype = 'u'
 		ORDER BY c.conname, k.ord`, physical)
 	if err != nil {
-		return nil, nil, behemotherr.NewMigrationError("PostgresIntrospector.unique", "query_failed", err)
+		return nil, nil, behemotherr.NewMigrationError("PostgresIntrospector.unique", behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -288,7 +288,7 @@ func (d *PostgreSQLDriver) uniqueConstraints(ctx context.Context, physical strin
 	for rows.Next() {
 		var constraintName, colName string
 		if err := rows.Scan(&constraintName, &colName); err != nil {
-			return nil, nil, behemotherr.NewMigrationError("PostgresIntrospector.unique", "scan_failed", err)
+			return nil, nil, behemotherr.NewMigrationError("PostgresIntrospector.unique", behemotherr.ErrorCodeMigrationScanFailed, err)
 		}
 		if _, seen := grouped[constraintName]; !seen {
 			order = append(order, constraintName)
@@ -325,7 +325,7 @@ func (d *PostgreSQLDriver) introspectIndexes(ctx context.Context, physical strin
 			AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = ix.oid AND c.contype IN ('p', 'u', 'x'))
 		ORDER BY ix.relname, k.ord`, physical)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("PostgresIntrospector.indexes", "query_failed", err)
+		return nil, behemotherr.NewMigrationError("PostgresIntrospector.indexes", behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -334,7 +334,7 @@ func (d *PostgreSQLDriver) introspectIndexes(ctx context.Context, physical strin
 		var idxName, colName string
 		var isUnique bool
 		if err := rows.Scan(&idxName, &colName, &isUnique); err != nil {
-			return nil, behemotherr.NewMigrationError("PostgresIntrospector.indexes", "scan_failed", err)
+			return nil, behemotherr.NewMigrationError("PostgresIntrospector.indexes", behemotherr.ErrorCodeMigrationScanFailed, err)
 		}
 		if n := len(indexes); n > 0 && indexes[n-1].Name == idxName {
 			indexes[n-1].Columns = append(indexes[n-1].Columns, colName)
@@ -361,7 +361,7 @@ func (d *PostgreSQLDriver) introspectForeignKeys(ctx context.Context, physical s
 		WHERE n.nspname = current_schema() AND t.relname = $1 AND c.contype = 'f'
 		ORDER BY c.conname, k.ord`, physical)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("PostgresIntrospector.foreignKeys", "query_failed", err)
+		return nil, behemotherr.NewMigrationError("PostgresIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -369,7 +369,7 @@ func (d *PostgreSQLDriver) introspectForeignKeys(ctx context.Context, physical s
 	for rows.Next() {
 		var name, action, refTable, col, refCol string
 		if err := rows.Scan(&name, &action, &refTable, &col, &refCol); err != nil {
-			return nil, behemotherr.NewMigrationError("PostgresIntrospector.foreignKeys", "scan_failed", err)
+			return nil, behemotherr.NewMigrationError("PostgresIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationScanFailed, err)
 		}
 		if n := len(fks); n > 0 && fks[n-1].Name == name {
 			fks[n-1].Columns = append(fks[n-1].Columns, col)

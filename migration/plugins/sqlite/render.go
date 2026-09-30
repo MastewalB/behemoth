@@ -84,10 +84,10 @@ func (d *SQLiteDriver) renderBaseline(ctx context.Context, m core.Migration) ([]
 			WHERE tbl_name = ? COLLATE NOCASE AND sql IS NOT NULL
 			ORDER BY type = 'table' DESC, type, name`, phys)
 		if err != nil {
-			return nil, behemotherr.NewMigrationError("SQLiteDriver.RenderMigration", "query_failed", err)
+			return nil, behemotherr.NewMigrationError("SQLiteDriver.RenderMigration", behemotherr.ErrorCodeMigrationQueryFailed, err)
 		}
 		if len(defs) == 0 {
-			return nil, behemotherr.NewMigrationError("SQLiteDriver.RenderMigration", "table_not_found",
+			return nil, behemotherr.NewMigrationError("SQLiteDriver.RenderMigration", behemotherr.ErrorCodeMigrationTableNotFound,
 				fmt.Errorf("baseline table %q does not exist", phys))
 		}
 		stmts = append(stmts, defs...)

@@ -47,7 +47,7 @@ func (r *DefaultMigrationRunner) Apply(ctx context.Context, migrations []Migrati
 func (r *DefaultMigrationRunner) applyOne(ctx context.Context, m Migration, snapshot *SchemaSnapshot) error {
 	nextTables, err := applyOperationsToSnapshot(snapshot.Tables, m.Up)
 	if err != nil {
-		return behemotherr.NewMigrationError("MigrationRunner.applyOne", "snapshot_projection_failed", err)
+		return behemotherr.NewMigrationError("MigrationRunner.applyOne", behemotherr.ErrorCodeMigrationSnapshotProjectionFailed, err)
 	}
 
 	req := MigrationRequest{
@@ -65,7 +65,7 @@ func (r *DefaultMigrationRunner) applyOne(ctx context.Context, m Migration, snap
 		applyErr = r.driver.ApplyMigration(ctx, req)
 	}
 	if applyErr != nil {
-		return behemotherr.NewMigrationError("MigrationRunner.applyOne", "apply_failed", applyErr)
+		return behemotherr.NewMigrationError("MigrationRunner.applyOne", behemotherr.ErrorCodeMigrationApplyFailed, applyErr)
 	}
 
 	snapshot.Version, snapshot.Tables = m.ID, nextTables
@@ -179,7 +179,7 @@ func (r *DefaultMigrationRunner) Pending(ctx context.Context, onDisk []Migration
 	alphabetical := func(a, b string) bool { return a < b } // alphabetical is chronological here since migration IDs are timestamp/sequence-prefixed
 	sortedIDs, cyclePath, ok := types.KahnSort(graphMap, alphabetical)
 	if !ok {
-		return nil, behemotherr.NewMigrationError("MigrationRunner.Pending", "dependency_cycle",
+		return nil, behemotherr.NewMigrationError("MigrationRunner.Pending", behemotherr.ErrorCodeMigrationDependencyCycle,
 			fmt.Errorf("circular migration dependency: %s", strings.Join(cyclePath, " -> ")))
 	}
 
@@ -276,160 +276,3 @@ func deepCopyTables(tables map[string]TableSchema) map[string]TableSchema {
 }
 
 var _ MigrationRunner = (*DefaultMigrationRunner)(nil)
-
-// func BuildBaselineIssues(report *IntrospectionReport) (map[string]TableSchema, []BaselineIssue, error) {
-// 	autoResolved := map[string]TableSchema{}
-// 	var issues []BaselineIssue
-
-// 	for table, ti := range report.Tables {
-// 		if !ti.ExistsLive {
-// 			continue //
-// 		}
-
-// 		if ti.IncompatibleObject {
-// 			return nil, nil, behemotherr.NewMigrationError("Baseline.BuildIssues", "incompatible_object",
-// 				fmt.Errorf("table %q exists live as a non-table object; resolve manually before baselining", table))
-// 		}
-
-// 		var cols []Column
-// 		for _, f := range ti.Columns {
-// 			if f.Live == nil {
-// 				continue // ColMissingLive at baseline time simply isn't part of the live shape being recorded
-// 			}
-
-// 			if f.TypeAmbiguity == nil {
-// 				cols = append(cols, *f.Live)
-// 				continue
-// 			}
-
-// 			live := *f.Live
-// 			issues = append(issues, BaselineIssue{
-// 				ID:          "baseline_type_" + table + "_" + f.Name,
-// 				Table:       table,
-// 				Description: fmt.Sprintf("Column %q: %s", f.Name, f.TypeAmbiguity.Reason),
-// 				Options: []BaselineFieldOption{
-// 					{Label: "Accept guessed type (" + fmt.Sprint(live.Type) + ")", Column: &live},
-// 					// [Deferred] "Override with a specified type" needs a
-// 					// free-text field the current option-index draft format
-// 					// can't carry — same deferred note as the ordinary
-// 					// type-ambiguity issue in planColumns. Intent: add once
-// 					// the draft format supports free-text entries.
-// 				},
-// 				Default: 0,
-// 			})
-// 			cols = append(cols, live) // provisional; ResolveBaselineIssues overwrites with the chosen option below
-// 		}
-// 		autoResolved[table] = TableSchema{
-// 			Name:        table,
-// 			Columns:     cols,
-// 			Indexes:     liveIndexesOf(ti),
-// 			ForeignKeys: liveForeignKeysOf(ti),
-// 		}
-// 	}
-
-// 	return autoResolved, issues, nil
-// }
-
-// ResolveBaselineIssues is the direct structural counterpart to
-// ResolveIssues — same Present/Collect/fail-closed shape, over
-// BaselineIssue instead of PlanIssue.
-// func ResolveBaselineIssues(
-// 	ctx context.Context,
-// 	provisional map[string]TableSchema,
-// 	issues []BaselineIssue,
-// 	presenter ResolutionPresenter,
-// 	interactive bool,
-// ) (*ResolvedBaseline, error) {
-
-// 	planIssues := make([]PlanIssue, len(issues)) // adapted only for reuse of the existing Presenter wire format — see note below
-// 	for i, bi := range issues {
-// 		var opts []ResolutionOption
-// 		for _, o := range bi.Options {
-// 			opts = append(opts, ResolutionOption{Label: o.Label}) // Operations intentionally left nil. Presenter only serializes labels, per draftEntry's shape from the FilePresenter round
-// 		}
-// 		planIssues[i] = PlanIssue{
-// 			ID:          bi.ID,
-// 			Table:       bi.Table,
-// 			Description: bi.Description,
-// 			Options:     opts,
-// 			Default:     bi.Default,
-// 		}
-// 	}
-
-// 	prior, _ := presenter.Collect(ctx)
-// 	if err := presenter.Present(ctx, planIssues, prior); err != nil {
-// 		return nil, err
-// 	}
-// 	if interactive {
-// 		// same pause-for-editor contract as ResolveIssues — CLI-layer concern
-// 	}
-// 	decisions, err := presenter.Collect(ctx)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	result := &ResolvedBaseline{Tables: map[string]TableSchema{}}
-// 	// tables with zero issues pass through untouched
-// 	maps.Copy(result.Tables, provisional)
-
-// 	byID := map[string]BaselineIssue{}
-// 	for _, i := range issues {
-// 		byID[i.ID] = i
-// 	}
-
-// 	var unresolved []string
-// 	for _, i := range issues {
-// 		idx, ok := decisions[i.ID]
-// 		if !ok {
-// 			unresolved = append(unresolved, i.ID)
-// 			continue
-// 		}
-// 		chosen := i.Options[idx]
-// 		t := result.Tables[i.Table]
-// 		replaceColumn(&t, chosen.Column) // overwrites the provisional entry with the developer's actual choice
-// 		result.Tables[i.Table] = t
-// 	}
-
-// 	if len(unresolved) > 0 {
-// 		return nil, behemotherr.NewMigrationError("Baseline.ResolveIssues", "unresolved_issues",
-// 			fmt.Errorf("unresolved: %s", strings.Join(unresolved, ", ")))
-// 	}
-// 	return result, nil
-
-// }
-
-// func liveIndexesOf(t TableIntrospection) []Index {
-// 	var indexes []Index
-// 	for _, ind := range t.Indexes {
-// 		indexes = append(indexes, *ind.Live)
-// 	}
-
-// 	return indexes
-// }
-
-// func liveForeignKeysOf(t TableIntrospection) []ForeignKey {
-// 	var foreignKeys []ForeignKey
-// 	for _, fk := range t.ForeignKeys {
-// 		foreignKeys = append(foreignKeys, *fk.Live)
-// 	}
-
-// 	return foreignKeys
-// }
-
-// func remove[T comparable](l []T, item T) []T {
-// 	for i, other := range l {
-// 		if other == item {
-// 			return append(l[:i], l[i+1:]...)
-// 		}
-// 	}
-// 	return l
-// }
-
-// func replaceColumn(schema *TableSchema, col *Column) {
-// 	for i, c := range schema.Columns {
-// 		if c.Name == col.Name {
-// 			schema.Columns[i] = *col
-// 			break
-// 		}
-// 	}
-// }

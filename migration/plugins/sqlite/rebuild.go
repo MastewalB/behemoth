@@ -41,36 +41,36 @@ func (d *SQLiteDriver) rebuildTable(
 	var createSQL string
 	err := tx.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", phys).Scan(&createSQL)
 	if errors.Is(err, sql.ErrNoRows) {
-		return behemotherr.NewMigrationError(op, "table_not_found", fmt.Errorf("table %q does not exist", phys))
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationTableNotFound, fmt.Errorf("table %q does not exist", phys))
 	}
 	if err != nil {
-		return behemotherr.NewMigrationError(op, "query_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 
 	s, err := parseCreateTable(createSQL)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, "parse_failed", fmt.Errorf("table %q: %w", phys, err))
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationParseFailed, fmt.Errorf("table %q: %w", phys, err))
 	}
 	if err := mutate(s); err != nil {
-		return behemotherr.NewMigrationError(op, "rebuild_failed", fmt.Errorf("table %q: %w", phys, err))
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationRebuildFailed, fmt.Errorf("table %q: %w", phys, err))
 	}
 
 	// Everything attached to the old table is captured before it is dropped.
 	indexes, err := loadIndexes(ctx, tx, phys)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, "query_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	triggers, err := querySQLColumn(ctx, tx, "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE", phys)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, "query_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	seq, hasSeq, err := loadSequence(ctx, tx, phys)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, "query_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 	oldCols, err := insertableColumns(ctx, tx, phys)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, "query_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 
 	tmp := rebuildTablePrefix + phys
@@ -79,7 +79,7 @@ func (d *SQLiteDriver) rebuildTable(
 	}
 	newCols, err := insertableColumns(ctx, tx, tmp)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, "query_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationQueryFailed, err)
 	}
 
 	var shared []string
@@ -119,7 +119,7 @@ func (d *SQLiteDriver) rebuildTable(
 	// high-water mark so AUTOINCREMENT never reuses ids of deleted rows.
 	if hasSeq {
 		if _, err := tx.ExecContext(ctx, "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?", seq, phys); err != nil {
-			return behemotherr.NewMigrationError(op, "exec_failed", err)
+			return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationExecFailed, err)
 		}
 	}
 	return nil
@@ -133,7 +133,7 @@ func renameTableLegacy(ctx context.Context, tx execQuerier, from, to string) err
 	const op = "SQLiteDriver.rebuildTable"
 	var legacy bool
 	if err := tx.QueryRowContext(ctx, "PRAGMA legacy_alter_table").Scan(&legacy); err != nil {
-		return behemotherr.NewMigrationError(op, "pragma_failed", err)
+		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationPragmaFailed, err)
 	}
 	if !legacy {
 		if err := execDDL(ctx, tx, op, "PRAGMA legacy_alter_table = ON"); err != nil {
