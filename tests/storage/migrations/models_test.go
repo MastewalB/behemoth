@@ -9,8 +9,7 @@ import (
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -184,7 +183,7 @@ func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
 	db := openSQLite(t)
 	runnerUsesConfiguredTables(t,
 		func(r behemoth.SchemaResolver) core.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
-		func(r behemoth.SchemaResolver) behemoth.Database { return adapters.NewSQLiteAdapter(db, r) },
+		func(r behemoth.SchemaResolver) behemoth.Database { return sqlite.NewSQLiteAdapter(db, r) },
 		NewSQLiteTestManager(db),
 	)
 }
@@ -266,7 +265,7 @@ func keysOf[V any](m map[string]V) []string {
 // the runner's bookkeeping reads may treat it as "nothing applied yet".
 func TestSQLiteAdapterClassifiesMissingTable(t *testing.T) {
 	ctx := context.Background()
-	adapter := adapters.NewSQLiteAdapter(openSQLite(t), nil)
+	adapter := sqlite.NewSQLiteAdapter(openSQLite(t), nil)
 
 	_, err := adapter.FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
 	assert.True(t, behemotherr.IsUndefinedTable(err), "FindOne: %v", err)
@@ -282,7 +281,7 @@ func TestSQLiteAdapterClassifiesMissingTable(t *testing.T) {
 	db := openSQLite(t)
 	_, err = db.ExecContext(ctx, `CREATE TABLE behemoth_schema_snapshot (id INTEGER PRIMARY KEY, version TEXT, tables TEXT)`)
 	require.NoError(t, err)
-	_, err = adapters.NewSQLiteAdapter(db, nil).FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
+	_, err = sqlite.NewSQLiteAdapter(db, nil).FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
 	assert.True(t, behemotherr.IsNotFound(err), "empty table: %v", err)
 	assert.False(t, behemotherr.IsUndefinedTable(err))
 }

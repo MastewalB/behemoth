@@ -7,8 +7,8 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
+	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/require"
 

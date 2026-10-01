@@ -9,13 +9,15 @@ import (
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
 // DriverName is the key used for per-database Column.Overrides lookups.
 const DriverName = "sqlite"
 
-// SQLiteDriver implements [core.SchemaDriver] for SQLite.
+// SQLiteDriver implements [core.SchemaDriver], [core.MigrationRenderer]
+// and [core.SchemaIntrospector] for SQLite.
 //
 // The driver never imports a database/sql driver itself: the caller picks one
 // (mattn/go-sqlite3, modernc.org/sqlite, ...) and hands over an opened *sql.DB.
@@ -33,18 +35,14 @@ type SQLiteDriver struct {
 // NewSQLiteDriver returns a driver bound to db. A nil resolver maps every
 // canonical table/column name to itself.
 func NewSQLiteDriver(db *sql.DB, resolver core.SchemaResolver) *SQLiteDriver {
-	if resolver == nil {
-		resolver = identityResolver{}
-	}
-	return &SQLiteDriver{db: db, resolver: resolver}
+	return &SQLiteDriver{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
 }
 
-var _ core.SchemaDriver = (*SQLiteDriver)(nil)
-
-type identityResolver struct{}
-
-func (identityResolver) Resolve(canonical string) string                 { return canonical }
-func (identityResolver) ResolveColumn(_ string, canonical string) string { return canonical }
+var (
+	_ core.SchemaDriver       = (*SQLiteDriver)(nil)
+	_ core.MigrationRenderer  = (*SQLiteDriver)(nil)
+	_ core.SchemaIntrospector = (*SQLiteDriver)(nil)
+)
 
 // execQuerier is satisfied by *sql.Tx — every DDL helper runs inside the
 // migration's transaction, since rebuilds need to read the live schema too.

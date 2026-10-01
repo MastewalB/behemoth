@@ -11,8 +11,6 @@ import (
 	"github.com/MastewalB/behemoth/migration/core"
 )
 
-var _ core.MigrationRenderer = (*SQLiteDriver)(nil)
-
 // FileExtension implements [core.MigrationRenderer].
 func (d *SQLiteDriver) FileExtension() string { return ".sql" }
 

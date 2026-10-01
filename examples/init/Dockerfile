@@ -27,15 +27,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cd examples/init && go mod download
 
 COPY . .
-# cgo is required: storage/adapters links github.com/mattn/go-sqlite3, even
-# for an application that only uses PostgreSQL.
+# No cgo: SQLite (the only cgo dependency) lives in its own module, which a
+# PostgreSQL application never imports. The binary is fully static.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    cd examples/init && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/app . \
+    cd examples/init && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app . \
     && mkdir /out/migrations
 
-# distroless base (not static): the cgo binary needs glibc, matching bookworm.
-FROM gcr.io/distroless/base-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 # /app/migrations is owned by the nonroot user so `migrate -confirm` can write
 # there; mount a volume on it to keep the generated files.

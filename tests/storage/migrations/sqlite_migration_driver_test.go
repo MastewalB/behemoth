@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
+	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

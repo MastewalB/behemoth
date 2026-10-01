@@ -13,6 +13,7 @@ import (
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
+	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/uptrace/bun"
@@ -108,7 +109,7 @@ func TestSQLiteAdapter(t *testing.T) {
 		if _, err := fkDB.Exec(testutils.TestUserSchema); err != nil {
 			t.Fatal(err)
 		}
-		assertConstraintClassification(t, adapters.NewSQLiteAdapter(fkDB, nil), fkDB,
+		assertConstraintClassification(t, sqliteAdapter.NewSQLiteAdapter(fkDB, nil), fkDB,
 			`CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id))`)
 	})
 
@@ -133,7 +134,7 @@ func TestSQLiteAdapterWithPhysicalNames(t *testing.T) {
 		);`)
 
 	manager := &SQLiteAdapterTestManager{t: t, db: db, table: "app_users"}
-	suite := NewDatabaseTestSuite(t, adapters.NewSQLiteAdapter(db, physicalNamesResolver(t)), manager)
+	suite := NewDatabaseTestSuite(t, sqliteAdapter.NewSQLiteAdapter(db, physicalNamesResolver(t)), manager)
 	suite.Run()
 }
 

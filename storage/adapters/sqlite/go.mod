@@ -1,8 +1,11 @@
-module github.com/MastewalB/behemoth/storage/adapters/postgres
+module github.com/MastewalB/behemoth/storage/adapters/sqlite
 
 go 1.26.4
 
-require github.com/MastewalB/behemoth v0.0.0
+require (
+	github.com/MastewalB/behemoth v0.0.0
+	github.com/mattn/go-sqlite3 v1.14.22
+)
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect

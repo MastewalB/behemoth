@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	_ "github.com/MastewalB/behemoth/migration/plugins/sqlite"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
+	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/sqliteshim"
 
@@ -330,8 +330,8 @@ func SetupRedisClient(t *testing.T, ctx context.Context) (*goredis.Client, func(
 
 // Adapter Setups
 
-func SetupSQLiteAdapter(t *testing.T, db *sql.DB) *adapters.SQLiteAdapter {
-	adapter := &adapters.SQLiteAdapter{DB: db}
+func SetupSQLiteAdapter(t *testing.T, db *sql.DB) *sqliteAdapter.SQLiteAdapter {
+	adapter := &sqliteAdapter.SQLiteAdapter{DB: db}
 	return adapter
 }
 
