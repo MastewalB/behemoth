@@ -1,4 +1,4 @@
-module example.com/behemoth/gin
+module github.com/MastewalB/behemoth/plugins/adapters/gin
 
 go 1.26.4
 

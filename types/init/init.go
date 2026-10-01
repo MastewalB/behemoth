@@ -159,6 +159,15 @@ type BootConfig struct {
 	RateLimit types.RateLimitConfig
 	Session   types.SessionConfig
 	Token     types.TokenConfig
+
+	// Router configures behemoth's routes: base path, error mapping and
+	// client-IP resolution. Zero value = documented defaults.
+	Router types.RouterConfig
+
+	// HTTP mounts behemoth's routes onto the application's framework
+	// instance, e.g. ginadapter.New(engine). nil = routes are built and
+	// checked but not served (workers, CLIs).
+	HTTP types.FrameworkDriver
 }
 
 // Boot turns a PreparedApp into a running AuthContext. db must have been
@@ -224,42 +233,42 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		Crypto:          cryptoSuite,
 		Telemetry:       *tel,
 	}
-	routerCfg := struct {
-		BasePath    string
-		ErrorMapper types.ErrorMapper
-	}{
-		BasePath:    "api/auth",
-		ErrorMapper: nil,
+	// Init before routing, so Routes() and Middlewares() may rely on
+	// anything a plugin sets up in Init.
+	for _, name := range order {
+		p := lookup(plugins, name)
+		if err := p.Init(ac); err != nil {
+			return nil, fmt.Errorf("plugin %q Init failed: %w", name, err)
+		}
 	}
-	// Mount every plugin's endpoints, now that ac is fully populated —
-	// any handler closure built inside Endpoints() (or earlier, inside New())
-	// that reads ac.SessionManager/ac.TokenManager now sees real values.
-	router := types.NewRouter(types.RouterConfig{BasePath: routerCfg.BasePath, ErrorMapper: routerCfg.ErrorMapper})
+
+	// The route table is built and conflict-checked even without an HTTP
+	// driver, so a misconfiguration surfaces the same way in every process.
+	router := types.NewRouter(cfg.Router, ac)
+	var globalMiddleware []types.Middleware
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if err := router.Mount(name, p.Meta().MountPath, p.Routes()); err != nil {
 			return nil, err
 		}
+		globalMiddleware = append(globalMiddleware, p.Middlewares()...)
 	}
 
 	// // --- JWKS, if external JWT is configured (Crypto round) ---
 	// if jwks := crypto.JWTRoutes(); jwks != nil {
-	// 	router.MountAbsolute(jwks...)
+	// 	router.MountAbsolute("core", jwks...)
 	// }
 
-	// // --- Bake in route-scoped rate limiting, once, before any driver sees the routes ---
-	// ipCfg, err := ratelimit.NewClientIPConfig(cfg.TrustedProxies, cfg.ClientIPHeader)
-	// if err != nil {
-	// 	return nil, nil, err
-	// }
-	// router.ApplyRateLimiting(rateLimiter, rateLimitCatalog, ipCfg)
+	// Route-scoped rate limiting is baked in once, before any driver sees the routes.
+	ipCfg, err := types.NewClientConfig(cfg.Router.TrustedProxies, cfg.Router.ClientIPHeader)
+	if err != nil {
+		return nil, err
+	}
+	router.ApplyRateLimiting(rateLimiter, app.RateLimits, ipCfg)
 
-	// return ac, router, nil
-
-	for _, name := range order {
-		p := lookup(plugins, name)
-		if err := p.Init(ac); err != nil {
-			return nil, fmt.Errorf("plugin %q Init failed: %w", name, err)
+	if cfg.HTTP != nil {
+		if err := router.Build(cfg.HTTP, globalMiddleware...); err != nil {
+			return nil, err
 		}
 	}
 	return ac, nil

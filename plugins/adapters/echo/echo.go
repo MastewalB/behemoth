@@ -1,6 +1,12 @@
+// Package echo mounts behemoth's routes onto an application's *echo.Echo:
+//
+//	e := echo.New()
+//	ac, err := binit.Boot(ctx, app, db, binit.BootConfig{HTTP: echoadapter.New(e), ...})
 package echo
 
 import (
+	"fmt"
+	"net/http"
 	"regexp"
 
 	"github.com/MastewalB/behemoth"
@@ -9,33 +15,43 @@ import (
 )
 
 type EchoDriver struct {
-	e           *echo.Echo
-	errorMapper types.ErrorMapper
+	e *echo.Echo
 }
 
-func New(e *echo.Echo, errorMapper types.ErrorMapper) *EchoDriver {
-	return &EchoDriver{
-		e:           e,
-		errorMapper: errorMapper,
-	}
+func New(e *echo.Echo) *EchoDriver {
+	return &EchoDriver{e: e}
 }
 
-func (ed *EchoDriver) Mount(endpoints ...types.Route) {
-	for _, ep := range endpoints {
-		handler := ep.Handler
-		ed.e.Add(ep.Method, toEchoPath(ep.Path), func(c *echo.Context) error {
-			requestContext := buildRequestContext(c)
+var pathParam = regexp.MustCompile(`\{(\w+)\}`)
 
-			if err := handler(requestContext); err != nil {
-				status, body := ed.errorMapper.Map(err)
-				return requestContext.Response.JSON(status, body)
-				// return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-			}
+// toEchoPath converts behemoth's {param} path parameters to echo's :param.
+func toEchoPath(path string) string {
+	return pathParam.ReplaceAllString(path, ":$1")
+}
 
-			requestContext.Response.Flush(c.Response())
-			return nil
+// Mount implements [types.FrameworkDriver].
+func (ed *EchoDriver) Mount(routes ...types.Route) error {
+	for _, rt := range routes {
+		handler := rt.Handler
+		_, err := ed.e.AddRoute(echo.Route{
+			Method: rt.Method,
+			Path:   toEchoPath(rt.Path),
+			Handler: func(c *echo.Context) error {
+				rctx := buildRequestContext(c)
+				if err := handler(rctx); err != nil {
+					// Routes arrive with errors already mapped to responses; an
+					// error here means the response itself could not be built.
+					return c.NoContent(http.StatusInternalServerError)
+				}
+				rctx.Response.Flush(c.Response())
+				return nil
+			},
 		})
+		if err != nil {
+			return fmt.Errorf("echo: cannot mount %s %s: %w", rt.Method, rt.Path, err)
+		}
 	}
+	return nil
 }
 
 func buildRequestContext(c *echo.Context) *types.RequestContext {
@@ -53,7 +69,4 @@ func buildRequestContext(c *echo.Context) *types.RequestContext {
 	}
 }
 
-func toEchoPath(path string) string {
-	// Echo uses :param for path parameters, while Behemoth uses {param}. This function converts Behemoth-style paths to Echo-style paths.
-	return regexp.MustCompile(`\{(\w+)\}`).ReplaceAllString(path, ":$1")
-}
+var _ types.FrameworkDriver = (*EchoDriver)(nil)

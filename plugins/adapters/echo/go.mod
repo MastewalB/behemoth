@@ -1,4 +1,4 @@
-module example.com/behemoth/echo
+module github.com/MastewalB/behemoth/plugins/adapters/echo
 
 go 1.26.4
 

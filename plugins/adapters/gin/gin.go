@@ -1,6 +1,14 @@
+// Package gin mounts behemoth's routes onto an application's *gin.Engine:
+//
+//	engine := gin.New()
+//	ac, err := binit.Boot(ctx, app, db, binit.BootConfig{HTTP: ginadapter.New(engine), ...})
+//
+// Behemoth's routes then live on engine next to the application's own.
 package gin
 
 import (
+	"fmt"
+	"net/http"
 	"regexp"
 
 	"github.com/MastewalB/behemoth"
@@ -9,70 +17,57 @@ import (
 )
 
 type GinDriver struct {
-	errorMapper types.ErrorMapper
-	router      *gin.Engine
+	router gin.IRoutes
 }
 
-func New(router *gin.Engine, errorMapper types.ErrorMapper) *GinDriver {
-	return &GinDriver{
-		router:      router,
-		errorMapper: errorMapper,
-	}
+// New returns a driver mounting onto router: a *gin.Engine, or a
+// *gin.RouterGroup to put behemoth's routes behind the group's prefix and
+// middleware.
+func New(router gin.IRoutes) *GinDriver {
+	return &GinDriver{router: router}
 }
 
+var pathParam = regexp.MustCompile(`\{(\w+)\}`)
+
+// toGinPath converts behemoth's {param} path parameters to gin's :param.
 func toGinPath(path string) string {
-	// Gin uses :param for path parameters, while Behemoth uses {param}. This function converts Behemoth-style paths to Gin-style paths.
-	return regexp.MustCompile(`\{(\w+)\}`).ReplaceAllString(path, ":$1")
+	return pathParam.ReplaceAllString(path, ":$1")
 }
 
-func (gd *GinDriver) Mount(endpoints ...types.Route) {
-
-	for _, ep := range endpoints {
-		handler := ep.Handler
-		gd.router.Handle(ep.Method, toGinPath(ep.Path), func(c *gin.Context) {
-
-			requestContext := buildRequestContext(c)
-
-			if err := handler(requestContext); err != nil {
-				status, body := gd.errorMapper.Map(err)
-				requestContext.Response.JSON(status, body)
-				// c.AbortWithError(http.StatusInternalServerError, err)
-				return
-			}
-
-			requestContext.Response.Flush(c.Writer)
-		},
-		)
+// Mount implements [types.FrameworkDriver]. gin panics on a route it
+// already has; that panic is returned as an error instead.
+func (gd *GinDriver) Mount(routes ...types.Route) error {
+	for _, rt := range routes {
+		if err := gd.handle(rt); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (gd *GinDriver) MountMiddleware(middlewares ...types.Middleware) {
+func (gd *GinDriver) handle(rt types.Route) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("gin: cannot mount %s %s: %v", rt.Method, rt.Path, r)
+		}
+	}()
 
-	ginMiddlewares := make([]gin.HandlerFunc, len(middlewares))
-	for _, mw := range middlewares {
-
-		ginMiddlewares = append(ginMiddlewares, func(c *gin.Context) {
-			ginNextCaller := func() { c.Next() }
-			requestContext := buildRequestContext(c)
-
-			if err := mw(func(rctx *types.RequestContext) error {
-				ginNextCaller()
-				return nil
-			})(requestContext); err != nil {
-				status, body := gd.errorMapper.Map(err)
-				requestContext.Response.JSON(status, body)
-				// c.AbortWithError(http.StatusInternalServerError, err)
-				return
-			}
-
-		})
-	}
-
-	gd.router.Use(ginMiddlewares...)
+	handler := rt.Handler
+	gd.router.Handle(rt.Method, toGinPath(rt.Path), func(c *gin.Context) {
+		rctx := buildRequestContext(c)
+		if err := handler(rctx); err != nil {
+			// Routes arrive with errors already mapped to responses; an
+			// error here means the response itself could not be built.
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		rctx.Response.Flush(c.Writer)
+	})
+	return nil
 }
 
 func buildRequestContext(c *gin.Context) *types.RequestContext {
-	params := make(map[string]string)
+	params := make(map[string]string, len(c.Params))
 	for _, p := range c.Params {
 		params[p.Key] = p.Value
 	}
@@ -85,3 +80,5 @@ func buildRequestContext(c *gin.Context) *types.RequestContext {
 		Params:   params,
 	}
 }
+
+var _ types.FrameworkDriver = (*GinDriver)(nil)
