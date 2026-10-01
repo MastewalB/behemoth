@@ -54,6 +54,35 @@ func mapPgType(dataType, udtName string) (schema.ColumnType, *core.ColumnAmbigui
 	return schema.ColTypeText, &core.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized Postgres type %q — defaulted to text; verify manually", native)}
 }
 
+// NormalizeColumn implements [core.ColumnNormalizer]: col as Introspect
+// reports it once renderColumnDefinition has created it. It replays every
+// change the DDL makes to a declaration, so it must change together with
+// renderColumnDefinition and renderPgType:
+//   - the postgres override's Type and AutoInc replace the declared ones
+//   - a string without a length is created as VARCHAR(255)
+//   - blob and bytes are both BYTEA, which reads back as bytes
+//   - only VARCHAR carries a length; every other type reads back without one
+//   - a primary key column is always NOT NULL, and never also UNIQUE
+func (d *PostgreSQLDriver) NormalizeColumn(_ string, col schema.Column) schema.Column {
+	col = applyOverride(col)
+	switch col.Type {
+	case schema.ColTypeString:
+		if col.Length <= 0 {
+			col.Length = 255
+		}
+	case schema.ColTypeBlob:
+		col.Type = schema.ColTypeBytes
+	}
+	if col.Type != schema.ColTypeString {
+		col.Length = 0
+	}
+	if col.PrimaryKey {
+		col.Nullable = false
+		col.Unique = false
+	}
+	return col
+}
+
 // TableExists implements [core.SchemaIntrospector]. Any relation counts —
 // a view or sequence of the same name is reported by Introspect as an
 // incompatible object rather than hidden here.

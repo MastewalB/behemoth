@@ -62,9 +62,15 @@ const (
 )
 
 type ColumnFinding struct {
-	Name          string
-	Kind          ColumnDivergenceKind
-	Declared      *schema.Column
+	Name     string
+	Kind     ColumnDivergenceKind
+	Declared *schema.Column
+	// Normalized is Declared as the driver reports it once created (see
+	// ColumnNormalizer) — what Live was compared against. Set whenever both
+	// Declared and Live are; equal to Declared when the driver doesn't
+	// normalize. Judging a change (e.g. narrowing) uses it; operations are
+	// always built from Declared.
+	Normalized    *schema.Column
 	Live          *schema.Column
 	TypeAmbiguity *ColumnAmbiguity // set only when Kind != ColMissingLive and the reverse type mapping was a guess
 }

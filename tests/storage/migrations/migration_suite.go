@@ -532,6 +532,69 @@ func (s *DriverTestSuite) TestAlterColumnType() {
 	s.Equal("active", asString(rows[0]["status"]), "data survives a compatible type change")
 }
 
+// introspect reads a table back through the driver's own introspector.
+func (s *DriverTestSuite) introspect(table string) map[string]schema.Column {
+	introspector, ok := s.driver.(core.SchemaIntrospector)
+	s.Require().True(ok, "driver does not implement core.SchemaIntrospector")
+	live, err := introspector.Introspect(s.ctx, table)
+	s.Require().NoError(err)
+	cols := map[string]schema.Column{}
+	for _, c := range live.Schema.Columns {
+		cols[c.Name] = c
+	}
+	return cols
+}
+
+func (s *DriverTestSuite) TestAlterColumnAddAutoIncrement() {
+	plain := schema.Column{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true}
+	s.mustApply(createTableOp(schema.Table{Name: "counters", Columns: []schema.Column{
+		plain, {Name: "kind", Type: schema.ColTypeString, Length: 32},
+	}}))
+	s.insert("counters", map[string]any{"id": 7, "kind": "a"})
+	s.insert("counters", map[string]any{"id": 3, "kind": "b"})
+
+	serial := plain
+	serial.AutoInc = true
+	op := alterColumnOp("counters", serial)
+	op.PrevColumn = &plain
+	s.mustApply(op)
+
+	s.True(s.introspect("counters")["id"].AutoInc)
+	s.insert("counters", map[string]any{"kind": "c"})
+	rows := s.rows("counters", "id")
+	s.Require().Len(rows, 3)
+	s.Equal(int64(8), asInt64(rows[2]["id"]), "the new sequence continues past existing values instead of colliding with them")
+}
+
+func (s *DriverTestSuite) TestAlterColumnRemoveAutoIncrement() {
+	serial := schema.Column{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true, AutoInc: true}
+	s.mustApply(createTableOp(schema.Table{Name: "counters", Columns: []schema.Column{
+		serial, {Name: "kind", Type: schema.ColTypeString, Length: 32},
+	}}))
+	s.insert("counters", map[string]any{"kind": "a"})
+	s.insert("counters", map[string]any{"kind": "b"})
+
+	plain := serial
+	plain.AutoInc = false
+	op := alterColumnOp("counters", plain)
+	op.PrevColumn = &serial
+	s.mustApply(op)
+
+	s.False(s.introspect("counters")["id"].AutoInc)
+	s.insert("counters", map[string]any{"id": 10, "kind": "c"})
+	s.Equal(int64(3), s.rowCount("counters"), "existing rows survive")
+}
+
+func (s *DriverTestSuite) TestAlterColumnAutoIncrementRequiresInteger() {
+	s.seedUsers()
+	prev := schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true}
+	next := prev
+	next.AutoInc = true
+	op := alterColumnOp("users", next)
+	op.PrevColumn = &prev
+	s.Error(s.apply(op))
+}
+
 func (s *DriverTestSuite) TestAlterColumnPreservesIndexesAndConstraints() {
 	s.seedUsers()
 	s.mustApply(addIndexOp("users", schema.Index{Name: "idx_users_status", Columns: []string{"status"}}))

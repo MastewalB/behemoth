@@ -45,7 +45,6 @@ type Column struct {
 	PrimaryKey   bool
 
 	Default any
-	Check   string
 	AutoInc bool
 
 	// optional per-db overrides
@@ -84,7 +83,6 @@ type ForeignKey struct {
 type ColumnOverride struct {
 	Type    ColumnType
 	Default string
-	Check   string
 	AutoInc *bool
 }
 

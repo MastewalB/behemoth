@@ -42,6 +42,7 @@ var (
 	_ core.SchemaDriver       = (*SQLiteDriver)(nil)
 	_ core.MigrationRenderer  = (*SQLiteDriver)(nil)
 	_ core.SchemaIntrospector = (*SQLiteDriver)(nil)
+	_ core.ColumnNormalizer   = (*SQLiteDriver)(nil)
 )
 
 // execQuerier is satisfied by *sql.Tx — every DDL helper runs inside the
@@ -366,7 +367,7 @@ func (d *SQLiteDriver) renameColumn(ctx context.Context, tx execQuerier, table, 
 }
 
 // alterColumn replaces the column's definition wholesale via a rebuild —
-// type, nullability, uniqueness, default and check all take the new value.
+// type, nullability, uniqueness and default all take the new value.
 func (d *SQLiteDriver) alterColumn(ctx context.Context, tx execQuerier, table string, col schema.Column) error {
 	physCol := d.resolver.ResolveColumn(table, col.Name)
 	return d.rebuildTable(ctx, tx, table, func(s *tableSQL) error {
@@ -455,9 +456,6 @@ func applyOverride(col schema.Column) schema.Column {
 	if ov.Type != "" {
 		col.Type = ov.Type
 	}
-	if ov.Check != "" {
-		col.Check = ov.Check
-	}
 	if ov.AutoInc != nil {
 		col.AutoInc = *ov.AutoInc
 	}
@@ -515,9 +513,6 @@ func (d *SQLiteDriver) renderColumnDefinition(table string, raw schema.Column, i
 		if defClause != "" {
 			parts = append(parts, defClause)
 		}
-	}
-	if col.Check != "" {
-		parts = append(parts, "CHECK ("+col.Check+")")
 	}
 	return strings.Join(parts, " "), nil
 }

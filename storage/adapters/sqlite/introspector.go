@@ -23,7 +23,8 @@ import (
 // Several canonical types render to the same declared type — TEXT for text
 // and json, BLOB for uuid, blob and bytes — so those read back as the first
 // of each group. That is a lossy mapping, not an ambiguity: the column is
-// fully usable as the type reported.
+// fully usable as the type reported, and NormalizeColumn maps declarations the
+// same way so an unchanged column still compares equal.
 var sqliteTypeMapping = map[string]schema.ColumnType{
 	// string family: with a length, ColTypeString; without, ColTypeText
 	"VARCHAR": schema.ColTypeString, "CHAR": schema.ColTypeString, "CHARACTER": schema.ColTypeString,
@@ -69,6 +70,42 @@ func mapSQLiteType(declared string) (schema.ColumnType, int, *core.ColumnAmbigui
 		return schema.ColTypeText, 0, &core.ColumnAmbiguity{Reason: "column has no declared type (any value is accepted); defaulted to text — verify manually"}
 	}
 	return schema.ColTypeText, 0, &core.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized SQLite type %q — defaulted to text; verify manually", declared)}
+}
+
+// NormalizeColumn implements [core.ColumnNormalizer]: col as Introspect
+// reports it once renderColumnDefinition has created it. It replays every
+// change the DDL makes to a declaration, so it must change together with
+// renderColumnDefinition and renderSQLiteType:
+//   - the sqlite override's Type and AutoInc replace the declared ones
+//   - uuid and bytes are created as BLOB, json as TEXT: they read back as blob and text
+//   - a string without a length is created as VARCHAR(255)
+//   - only VARCHAR carries a length; every other type reads back without one
+//   - an AUTOINCREMENT column is always declared INTEGER, so bigint reads back as integer
+//   - a primary key column is never NULL — NOT NULL is rendered, or it is a
+//     rowid alias — and never also UNIQUE
+func (d *SQLiteDriver) NormalizeColumn(_ string, col schema.Column) schema.Column {
+	col = applyOverride(col)
+	switch col.Type {
+	case schema.ColTypeUuid, schema.ColTypeBytes:
+		col.Type = schema.ColTypeBlob
+	case schema.ColTypeJson:
+		col.Type = schema.ColTypeText
+	case schema.ColTypeString:
+		if col.Length <= 0 {
+			col.Length = 255
+		}
+	}
+	if col.AutoInc {
+		col.Type = schema.ColTypeInteger
+	}
+	if col.Type != schema.ColTypeString {
+		col.Length = 0
+	}
+	if col.PrimaryKey {
+		col.Nullable = false
+		col.Unique = false
+	}
+	return col
 }
 
 // TableExists implements [core.SchemaIntrospector]. Tables, views and indexes

@@ -1,6 +1,10 @@
 package core
 
-import "context"
+import (
+	"context"
+
+	"github.com/MastewalB/behemoth/types/schema"
+)
 
 type SchemaDriver interface {
 
@@ -42,6 +46,23 @@ type MigrationRenderer interface {
 	// FileExtension is the rendered script's extension, including the dot:
 	// ".sql" for SQL databases, ".js" for a MongoDB shell script, ...
 	FileExtension() string
+}
+
+// ColumnNormalizer is an optional SchemaIntrospector capability: describing
+// how the driver's DDL changes a declared column. Some canonical distinctions
+// have no counterpart in the database — Postgres stores blob and bytes both as
+// BYTEA, a string without a length is created as VARCHAR(255) — so a column
+// read back from the database can't equal its declaration. Comparing the
+// normalized declaration instead lets an unchanged column match. Callers
+// discover it via type assertion, e.g.
+//
+//	normalizer, _ := introspector.(core.ColumnNormalizer)
+type ColumnNormalizer interface {
+	// NormalizeColumn returns col as Introspect would report it after the
+	// driver created it in table (canonical name): the same lossy mapping the
+	// DDL performs, applied in advance. It only affects whether a column
+	// counts as changed; operations are always built from the declaration.
+	NormalizeColumn(table string, col schema.Column) schema.Column
 }
 
 type MigrationRequest struct {

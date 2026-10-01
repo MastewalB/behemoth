@@ -132,7 +132,11 @@ func planColumns(table string, findings []ColumnFinding) ([]PlannedOperation, []
 			})
 
 		case ColDiffers:
-			isNarrowing := isNarrowingChange(*f.Declared, *f.Live)
+			declared := f.Normalized
+			if declared == nil {
+				declared = f.Declared
+			}
+			isNarrowing := isNarrowingChange(*f.Live, *declared)
 			opID := alterColumnID(table, f.Name)
 			if !isNarrowing {
 				ops = append(ops, PlannedOperation{
@@ -514,7 +518,9 @@ type ambiguousGroup struct {
 // (Type, Length, Nullable, PrimaryKey, Unique all equal
 // For columns more than 2, with possible rename match, the function groups them into
 // ambiguousGroup
-func matchRenameCandidates(declared, other []schema.Column) (pairs []renamePair, groups []ambiguousGroup, unmatchedDeclared, unmatchedOther []schema.Column) {
+// matchRenameCandidates pairs declared-only with other-only columns by
+// structural signature, comparing normalize(declared) — see diffColumns.
+func matchRenameCandidates(declared, other []schema.Column, normalize func(schema.Column) schema.Column) (pairs []renamePair, groups []ambiguousGroup, unmatchedDeclared, unmatchedOther []schema.Column) {
 	usedOther := make(map[string]bool)
 	groupSeq := 0
 
@@ -524,7 +530,7 @@ func matchRenameCandidates(declared, other []schema.Column) (pairs []renamePair,
 			if usedOther[a.Name] {
 				continue
 			}
-			if sameStructuralSignature(d, a) {
+			if sameStructuralSignature(normalize(d), a) {
 				candidates = append(candidates, a)
 			}
 		}
@@ -566,7 +572,8 @@ func columnsEqual(a, b schema.Column) bool {
 		a.Length == b.Length &&
 		a.Nullable == b.Nullable &&
 		a.PrimaryKey == b.PrimaryKey &&
-		a.Unique == b.Unique
+		a.Unique == b.Unique &&
+		a.AutoInc == b.AutoInc
 }
 
 func indexesEqual(a, b schema.Index) bool {
@@ -582,11 +589,25 @@ func fkEqual(a, b schema.ForeignKey) bool {
 		slices.Equal(a.Columns, b.Columns)
 }
 
-func isNarrowingChange(a, b schema.Column) bool {
-	return (a.Nullable && !b.Nullable) ||
-		(a.AutoInc && !b.AutoInc) ||
-		a.Length > b.Length
-	// return (a.Nullable == true && b.Nullable == false) ||
-	// 	(a.AutoInc == true && b.AutoInc == false) ||
-	// 	a.Length > b.Length
+// isNarrowingChange reports whether altering live into declared may reject
+// or truncate existing data, or break existing writers: changing the type,
+// adding NOT NULL, changing auto-increment, or shrinking the length.
+//
+// Auto-increment counts in both directions. Removing it breaks every insert
+// that leaves the column out; adding it to a populated column hands out
+// values that may already exist, unless the driver starts it past them.
+//
+// Every type change counts, including ones that are usually safe (integer to
+// bigint, string to text): whether existing values convert depends on the
+// data, which planning never reads, so the developer confirms it.
+//
+// declared should be the normalized declaration (ColumnFinding.Normalized),
+// so both sides speak the database's terms — a string declared without a
+// length is VARCHAR(255), not 0, and a type the driver stores the same way as
+// the live one (a uuid in SQLite's BLOB) is not a type change.
+func isNarrowingChange(live, declared schema.Column) bool {
+	return live.Type != declared.Type ||
+		(live.Nullable && !declared.Nullable) ||
+		live.AutoInc != declared.AutoInc ||
+		declared.Length < live.Length
 }

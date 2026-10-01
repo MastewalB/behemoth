@@ -411,8 +411,16 @@ func introspectedShape(ti TableIntrospection) schema.Table {
 	var indexes []schema.Index
 	var fks []schema.ForeignKey
 
+	// A matching column records its declaration, not the live column: the
+	// two only match up to driver normalization (ColumnNormalizer), and every
+	// later snapshot diff compares declarations with what is recorded here.
+	// Recording the live shape would make a normalized column (e.g. a blob
+	// read back as bytes) differ on every run after the baseline.
 	for _, f := range ti.Columns {
-		if f.Live != nil {
+		switch {
+		case f.Kind == ColMatch && f.Declared != nil:
+			cols = append(cols, *f.Declared)
+		case f.Live != nil:
 			cols = append(cols, *f.Live)
 		}
 	}

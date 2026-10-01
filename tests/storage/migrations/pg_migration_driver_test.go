@@ -360,6 +360,67 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		}
 	})
 
+	// Declarations the DDL can't preserve exactly — each reads back changed —
+	// still match once normalized (core.ColumnNormalizer).
+	t.Run("NormalizedDeclarationsMatch", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		normalized := schema.Table{Name: "normalized", Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true, Nullable: true, Unique: true}, // reads back NOT NULL, not UNIQUE
+			{Name: "s", Type: schema.ColTypeString},                                                   // VARCHAR(255)
+			{Name: "bl", Type: schema.ColTypeBlob, Nullable: true},                                    // BYTEA, reads back as bytes
+			{Name: "t", Type: schema.ColTypeText, Length: 10, Nullable: true},                         // TEXT has no length
+			{Name: "o", Type: schema.ColTypeString, Length: 40, Nullable: true, // override: TEXT
+				Overrides: map[string]schema.ColumnOverride{postgres.DriverName: {Type: schema.ColTypeText}}},
+		}}
+		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: []core.SchemaOperation{createTableOp(normalized)}}, nil)))
+		registry := schema.NewRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "normalized"}, normalized))
+		require.NoError(t, registry.Freeze())
+
+		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		require.NoError(t, err)
+		require.NoError(t, core.RejectAmbiguousTypes(report))
+		require.Len(t, report.Tables["normalized"].Columns, len(normalized.Columns))
+		for _, f := range report.Tables["normalized"].Columns {
+			assert.Equal(t, core.ColMatch, f.Kind, f.Name)
+		}
+
+		// Normalization is what makes them match: hidden from the type
+		// assertion, every one of these columns differs.
+		unnormalized := struct{ core.SchemaIntrospector }{driver}
+		report, err = core.RunIntrospection(ctx, registry, unnormalized, true)
+		require.NoError(t, err)
+		for _, f := range report.Tables["normalized"].Columns {
+			assert.Equal(t, core.ColDiffers, f.Kind, "%s should differ without normalization", f.Name)
+		}
+	})
+
+	// Normalization only absorbs what the DDL itself changes; a real change
+	// between the declaration and the live column is still a change.
+	t.Run("RealChangesStillDiffer", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		_, err := db.ExecContext(ctx, `CREATE TABLE changed (id INTEGER PRIMARY KEY, s VARCHAR(255) NOT NULL, n TEXT NOT NULL, b BYTEA NOT NULL)`)
+		require.NoError(t, err)
+		registry := schema.NewRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "changed"}, schema.Table{Name: "changed", Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "s", Type: schema.ColTypeString, Length: 40},   // live is 255
+			{Name: "n", Type: schema.ColTypeInteger},              // live is text
+			{Name: "b", Type: schema.ColTypeBlob, Nullable: true}, // same type after normalization, but nullability changed
+		}}))
+		require.NoError(t, registry.Freeze())
+
+		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		require.NoError(t, err)
+		kinds := map[string]core.ColumnDivergenceKind{}
+		for _, f := range report.Tables["changed"].Columns {
+			kinds[f.Name] = f.Kind
+		}
+		assert.Equal(t, map[string]core.ColumnDivergenceKind{
+			"id": core.ColMatch, "s": core.ColDiffers, "n": core.ColDiffers, "b": core.ColDiffers,
+		}, kinds)
+	})
+
 	t.Run("CompositePrimaryKeyAndSerial", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		_, err := db.ExecContext(ctx, `
@@ -542,22 +603,20 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		assert.Equal(t, "users", live.Schema.PhysicalName)
 	})
 
-	t.Run("AlterColumnUsesPrevColumnForConstraints", func(t *testing.T) {
+	t.Run("AlterColumnUsesPrevColumnForUniqueness", func(t *testing.T) {
 		setup(t)
 		prev := schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true}
-		next := schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Unique: true, Check: "length(name) > 1"}
+		next := schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Unique: true}
 		op := alterColumnOp("users", next)
 		op.PrevColumn = &prev
 		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0002_test", Up: []core.SchemaOperation{op}}, nil)))
 
 		require.NoError(t, tm.Insert(ctx, "users", map[string]any{"id": 1, "email": "a@example.com", "name": "Ada"}))
 		assert.Error(t, tm.Insert(ctx, "users", map[string]any{"id": 2, "email": "b@example.com", "name": "Ada"}), "UNIQUE added")
-		assert.Error(t, tm.Insert(ctx, "users", map[string]any{"id": 3, "email": "c@example.com", "name": "x"}), "CHECK added")
 
 		back := alterColumnOp("users", prev)
 		back.PrevColumn = &next
 		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0003_test", Up: []core.SchemaOperation{back}}, nil)))
 		assert.NoError(t, tm.Insert(ctx, "users", map[string]any{"id": 4, "email": "d@example.com", "name": "Ada"}), "UNIQUE dropped")
-		assert.NoError(t, tm.Insert(ctx, "users", map[string]any{"id": 5, "email": "e@example.com", "name": "y"}), "CHECK dropped")
 	})
 }

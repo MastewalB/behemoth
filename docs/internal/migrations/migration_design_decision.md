@@ -133,7 +133,7 @@ This stage converts the Introspection Report's divergences and ambiguities into 
 - **Definition divergence** (type/nullable/default/length differ) → `OpAlterColumn` candidate. Tier determined by direction:
 
 	- **Widening** (nullable→true, length increases, no data can be rejected) → `[Tier: Auto]`
-	- **Narrowing** (nullable→false, length decreases, a default is removed) → `[Tier: Data Dependent]`
+	- **Narrowing** (any type change, nullable→false, length decreases, auto-increment added or removed, a default is removed) → `[Tier: Data Dependent]`. Every type change counts, even usually-safe ones (integer→bigint): whether existing values convert depends on data planning never reads. Both sides are compared after driver normalization (`ColumnNormalizer`), so a type the driver stores identically (uuid in SQLite's BLOB) is not a change.
 
 - ~~**Type reverse-mapping ambiguity carried over from Introspection** → `[Convention]` Plan refuses to finalize tiering for that column until the ambiguity is resolved via the draft-review mechanism — an unresolved ambiguity is never silently defaulted to a tier.~~
 
@@ -183,7 +183,7 @@ type PlanIssue struct {
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Rename candidate (single structural match)                        | Rename · Drop old + Add new independently · Leave as-is                                           |
 | Ambiguous rename (multiple equally-plausible candidates)          | Manually pair specific columns · Fall back to independent add/drop for all involved · Leave as-is |
-| Narrowing alter (nullable→false, length shrinks, default removed) | Apply alter · Apply alter with a specified default for existing rows · Leave as-is                |
+| Narrowing alter (type change, nullable→false, length shrinks, auto-increment added or removed, default removed) | Apply alter · Apply alter with a specified default for existing rows · Leave as-is |
 | ~~Type reverse-mapping ambiguity~~                                | ~~Accept Planning's guessed canonical type · Override with a specified type · Leave as-is~~       |
 | Table found live as an incompatible object (view, etc.)           | _(no automated option — blocking; message directs to manual resolution outside the tool)_         |
 | Extra live column, never behemoth-declared                        | _(no options — not an issue since it's never surfaced)_                                           |

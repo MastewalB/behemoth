@@ -41,7 +41,7 @@ func RunIntrospection(
 		}
 
 		live = names.canonicalize(declared.Name, live)
-		cols, renames := diffColumns(declared.Columns, live.Schema.Columns, live.Ambiguities, trackExtraColumns)
+		cols, renames := diffColumns(declared.Columns, live.Schema.Columns, live.Ambiguities, trackExtraColumns, normalizerFor(introspector, declared.Name))
 		report.Tables[declared.Name] = TableIntrospection{
 			Table:       declared.Name,
 			ExistsLive:  true,
@@ -177,7 +177,7 @@ func RunIntrospectionFromSnapshotDiff(previous, current schema.Registry) *Intros
 			report.Tables[declared.Name] = TableIntrospection{Table: declared.Name, ExistsLive: false}
 			continue
 		}
-		cols, renames := diffColumns(declared.Columns, prevTable.Columns, nil, true) // trackExtraColumns=true for behemoth owned migration flow
+		cols, renames := diffColumns(declared.Columns, prevTable.Columns, nil, true, nil) // trackExtraColumns=true for behemoth owned migration flow; both sides are declarations, nothing to normalize
 		report.Tables[declared.Name] = TableIntrospection{
 			Table: declared.Name, ExistsLive: true,
 			Columns: cols, Renames: renames,
@@ -188,12 +188,30 @@ func RunIntrospectionFromSnapshotDiff(previous, current schema.Registry) *Intros
 	return report
 }
 
+// normalizerFor returns the introspector's NormalizeColumn bound to table, or
+// nil when the driver doesn't implement ColumnNormalizer.
+func normalizerFor(introspector SchemaIntrospector, table string) func(schema.Column) schema.Column {
+	n, ok := introspector.(ColumnNormalizer)
+	if !ok {
+		return nil
+	}
+	return func(col schema.Column) schema.Column { return n.NormalizeColumn(table, col) }
+}
+
 // diffColumns is the shared comparison core for both types of migrations(behemoth owned & external).
 //
 // trackExtraColumns controls the "extra live column" convention from the
 // In cases of migrations executed by behemoth's engine, a snapshot is used to record declarations
 // and a live column missing in the snapshot should be dropped.
-func diffColumns(declared, other []schema.Column, ambiguities []ColumnAmbiguity, trackExtraColumns bool) ([]ColumnFinding, []RenameCandidate) {
+//
+// normalize, when non-nil, maps a declared column to how the driver would
+// report it once created (see ColumnNormalizer). It is used only to decide
+// equality and rename pairing; findings always carry the original declaration,
+// so operations planned from them are built from what was declared.
+func diffColumns(declared, other []schema.Column, ambiguities []ColumnAmbiguity, trackExtraColumns bool, normalize func(schema.Column) schema.Column) ([]ColumnFinding, []RenameCandidate) {
+	if normalize == nil {
+		normalize = func(c schema.Column) schema.Column { return c }
+	}
 	declaredByName := indexColumnsByName(declared)
 	otherByName := indexColumnsByName(other)
 	ambigByCol := make(map[string]ColumnAmbiguity, len(ambiguities))
@@ -211,7 +229,10 @@ func diffColumns(declared, other []schema.Column, ambiguities []ColumnAmbiguity,
 	var findings []ColumnFinding
 	var otherOnly, declaredOnly []schema.Column
 
-	for name, d := range declaredByName {
+	// Declared order, then live order: findings feed baselines and rename
+	// matching, which must come out the same on every run.
+	for _, d := range declared {
+		name := d.Name
 		o, ok := otherByName[name]
 		if !ok {
 			// column is missing in live
@@ -219,9 +240,9 @@ func diffColumns(declared, other []schema.Column, ambiguities []ColumnAmbiguity,
 			continue
 		}
 
-		d, o := d, o
+		d, o, nd := d, o, normalize(d)
 		kind := ColMatch
-		if !columnsEqual(d, o) {
+		if !columnsEqual(nd, o) {
 			kind = ColDiffers
 		}
 
@@ -230,6 +251,7 @@ func diffColumns(declared, other []schema.Column, ambiguities []ColumnAmbiguity,
 				Name:          name,
 				Kind:          kind,
 				Declared:      &d,
+				Normalized:    &nd,
 				Live:          &o,
 				TypeAmbiguity: ambiguityOf(name),
 			})
@@ -240,7 +262,8 @@ func diffColumns(declared, other []schema.Column, ambiguities []ColumnAmbiguity,
 	// so pairing it by structural signature would be a guess too — and would
 	// move it out of the findings RejectAmbiguousTypes inspects.
 	var ambiguousOtherOnly []schema.Column
-	for name, o := range otherByName {
+	for _, o := range other {
+		name := o.Name
 		if _, ok := declaredByName[name]; ok {
 			continue
 		}
@@ -251,7 +274,7 @@ func diffColumns(declared, other []schema.Column, ambiguities []ColumnAmbiguity,
 		}
 	}
 
-	pairs, ambgGroups, unmatchedDeclared, unmatchedOther := matchRenameCandidates(declaredOnly, otherOnly)
+	pairs, ambgGroups, unmatchedDeclared, unmatchedOther := matchRenameCandidates(declaredOnly, otherOnly, normalize)
 
 	var renames []RenameCandidate
 	for _, p := range pairs {
@@ -288,7 +311,8 @@ func diffIndexes(declared, other []schema.Index, trackExtra bool) []IndexFinding
 	declaredByName, otherByName := indexIndexesByName(declared), indexIndexesByName(other)
 	var findings []IndexFinding
 
-	for name, d := range declaredByName {
+	for _, d := range declared {
+		name := d.Name
 		o, ok := otherByName[name]
 		if !ok {
 			// index is missing live
@@ -316,8 +340,8 @@ func diffIndexes(declared, other []schema.Index, trackExtra bool) []IndexFinding
 	}
 
 	if trackExtra {
-		for name, o := range otherByName {
-			if _, ok := declaredByName[name]; !ok {
+		for _, o := range other {
+			if _, ok := declaredByName[o.Name]; !ok {
 				findings = append(findings, IndexFinding{
 					Name: o.Name,
 					Kind: IdxExtra,
@@ -334,7 +358,8 @@ func diffForeignKeys(declared, other []schema.ForeignKey, trackExtra bool) []For
 	declaredByName, otherByName := indexFKsByName(declared), indexFKsByName(other)
 	var findings []ForeignKeyFinding
 
-	for name, d := range declaredByName {
+	for _, d := range declared {
+		name := d.Name
 		o, ok := otherByName[name]
 		if !ok {
 			// declared foreign-key missing live
@@ -362,8 +387,8 @@ func diffForeignKeys(declared, other []schema.ForeignKey, trackExtra bool) []For
 	}
 
 	if trackExtra {
-		for name, o := range otherByName {
-			if _, ok := declaredByName[name]; !ok {
+		for _, o := range other {
+			if _, ok := declaredByName[o.Name]; !ok {
 				findings = append(findings, ForeignKeyFinding{
 					Name: o.Name,
 					Kind: FKExtra,

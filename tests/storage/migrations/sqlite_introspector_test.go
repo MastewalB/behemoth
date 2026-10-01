@@ -17,7 +17,8 @@ import (
 // sqliteAllTypesTable exercises every canonical type the SQLite renderer keeps
 // distinct, plus the column features the introspector has to map back. uuid,
 // json and bytes are left out: they render to the same declared types as blob
-// and text (see TestSQLiteIntrospector/CollapsedTypesReadBackAsBaseType).
+// and text, so they only match after normalization
+// (see TestSQLiteIntrospector/NormalizedDeclarationsMatch).
 func sqliteAllTypesTable() schema.Table {
 	return schema.Table{
 		Name: "all_types",
@@ -142,29 +143,65 @@ func TestSQLiteIntrospector(t *testing.T) {
 		}
 	})
 
-	// Documents a known limitation rather than a goal: the renderer collapses
-	// these canonical types onto shared declared types, so the canonical type
-	// can't be recovered. They read back as the group's base type, without an
-	// ambiguity (the column is fully mappable, just not to the declared type).
-	t.Run("CollapsedTypesReadBackAsBaseType", func(t *testing.T) {
-		setup(t, schema.Table{Name: "collapsed", Columns: []schema.Column{
-			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
-			{Name: "u", Type: schema.ColTypeUuid, Nullable: true},
-			{Name: "j", Type: schema.ColTypeJson, Nullable: true},
-			{Name: "by", Type: schema.ColTypeBytes, Nullable: true},
-			{Name: "s", Type: schema.ColTypeString, Nullable: true}, // no length: rendered VARCHAR(255)
-		}})
-		live, err := driver.Introspect(ctx, "collapsed")
+	// Declarations the DDL can't preserve exactly — each reads back changed —
+	// still match once normalized (core.ColumnNormalizer).
+	t.Run("NormalizedDeclarationsMatch", func(t *testing.T) {
+		normalized := schema.Table{Name: "normalized", Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeBigInt, PrimaryKey: true, AutoInc: true, Nullable: true, Unique: true}, // INTEGER rowid alias: integer, never NULL, not UNIQUE
+			{Name: "u", Type: schema.ColTypeUuid, Nullable: true},                                                   // BLOB
+			{Name: "j", Type: schema.ColTypeJson, Nullable: true},                                                   // TEXT
+			{Name: "by", Type: schema.ColTypeBytes, Nullable: true},                                                 // BLOB
+			{Name: "s", Type: schema.ColTypeString, Nullable: true},                                                 // VARCHAR(255)
+			{Name: "t", Type: schema.ColTypeText, Length: 10, Nullable: true},                                       // TEXT has no length
+			{Name: "o", Type: schema.ColTypeUuid, Nullable: true, // override: TEXT
+				Overrides: map[string]schema.ColumnOverride{sqlite.DriverName: {Type: schema.ColTypeText}}},
+		}}
+		setup(t, normalized)
+		registry := schema.NewRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "normalized"}, normalized))
+		require.NoError(t, registry.Freeze())
+
+		report, err := core.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		assert.Empty(t, live.Ambiguities)
-		types := map[string]schema.Column{}
-		for _, c := range live.Schema.Columns {
-			types[c.Name] = c
+		require.NoError(t, core.RejectAmbiguousTypes(report))
+		require.Len(t, report.Tables["normalized"].Columns, len(normalized.Columns))
+		for _, f := range report.Tables["normalized"].Columns {
+			assert.Equal(t, core.ColMatch, f.Kind, f.Name)
 		}
-		assert.Equal(t, schema.ColTypeBlob, types["u"].Type)
-		assert.Equal(t, schema.ColTypeText, types["j"].Type)
-		assert.Equal(t, schema.ColTypeBlob, types["by"].Type)
-		assert.Equal(t, 255, types["s"].Length)
+
+		// Normalization is what makes them match: hidden from the type
+		// assertion, every one of these columns differs.
+		unnormalized := struct{ core.SchemaIntrospector }{driver}
+		report, err = core.RunIntrospection(ctx, registry, unnormalized, true)
+		require.NoError(t, err)
+		for _, f := range report.Tables["normalized"].Columns {
+			assert.Equal(t, core.ColDiffers, f.Kind, "%s should differ without normalization", f.Name)
+		}
+	})
+
+	// Normalization only absorbs what the DDL itself changes; a real change
+	// between the declaration and the live column is still a change.
+	t.Run("RealChangesStillDiffer", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		exec(t, `CREATE TABLE changed (id INTEGER PRIMARY KEY, s VARCHAR(255) NOT NULL, n TEXT NOT NULL, b BLOB NOT NULL)`)
+		registry := schema.NewRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "changed"}, schema.Table{Name: "changed", Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "s", Type: schema.ColTypeString, Length: 40},   // live is 255
+			{Name: "n", Type: schema.ColTypeInteger},              // live is text
+			{Name: "b", Type: schema.ColTypeUuid, Nullable: true}, // same type after normalization, but nullability changed
+		}}))
+		require.NoError(t, registry.Freeze())
+
+		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		require.NoError(t, err)
+		kinds := map[string]core.ColumnDivergenceKind{}
+		for _, f := range report.Tables["changed"].Columns {
+			kinds[f.Name] = f.Kind
+		}
+		assert.Equal(t, map[string]core.ColumnDivergenceKind{
+			"id": core.ColMatch, "s": core.ColDiffers, "n": core.ColDiffers, "b": core.ColDiffers,
+		}, kinds)
 	})
 
 	// A table created outside behemoth, with common SQL type names, a
