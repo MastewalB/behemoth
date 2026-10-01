@@ -258,6 +258,10 @@ type Migration struct {
 	CreatedAt time.Time
 
 	IsBaseline bool // true = record-only; MigrationRunner must not execute Up as DDL
+
+	// Custom names the CustomMigrations frozen into Up. A name listed in any
+	// migration on disk is never emitted again.
+	Custom []string `json:",omitempty"`
 }
 
 type ColumnAmbiguity struct {

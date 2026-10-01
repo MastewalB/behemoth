@@ -44,7 +44,7 @@ type RunResult struct {
 func RunMigration(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current schema.Registry,
+	declared Declared,
 	deps MigrationDeps,
 	confirmApply bool,
 ) (*RunResult, error) {
@@ -58,11 +58,11 @@ func RunMigration(
 
 	switch state {
 	case StateFirstRunEmpty:
-		return runFirstTimeEmpty(ctx, cfg, current, deps, confirmApply)
+		return runFirstTimeEmpty(ctx, cfg, declared, deps, confirmApply)
 	case StateFirstRunAwaitingBaselineConfirm:
-		return runFirstTimeAwaitingConfirm(ctx, cfg, current, deps, disk[0], confirmApply)
+		return runFirstTimeAwaitingConfirm(ctx, cfg, declared, deps, disk[0], confirmApply)
 	case StateOngoing:
-		return runOngoing(ctx, cfg, current, deps, confirmApply)
+		return runOngoing(ctx, cfg, declared, deps, confirmApply)
 	default:
 		return nil, behemotherr.NewInternalError("Migration.RunMigration", fmt.Errorf("unhandled run state %q", state))
 	}
@@ -103,17 +103,17 @@ func runBaselinePhase(ctx context.Context, candidates []BaselineCandidate, cfg M
 func runFirstTimeEmpty(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current schema.Registry,
+	declared Declared,
 	deps MigrationDeps,
 	confirmApply bool,
 ) (*RunResult, error) {
-	candidates, _, err := PartitionForBaseline(ctx, current, deps.Introspector)
+	candidates, _, err := PartitionForBaseline(ctx, declared.Schemas, deps.Introspector)
 	if err != nil {
 		return nil, err
 	}
 	if len(candidates) == 0 {
 		// Falls straight into ordinary generation instead of forcing an empty confirmation round-trip.
-		return runOngoing(ctx, cfg, current, deps, confirmApply)
+		return runOngoing(ctx, cfg, declared, deps, confirmApply)
 	}
 
 	baseline, err := runBaselinePhase(ctx, candidates, cfg, deps)
@@ -130,12 +130,12 @@ func runFirstTimeEmpty(
 func runFirstTimeAwaitingConfirm(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current schema.Registry,
+	declared Declared,
 	deps MigrationDeps,
 	existing Migration,
 	confirmApply bool,
 ) (*RunResult, error) {
-	candidates, _, err := PartitionForBaseline(ctx, current, deps.Introspector)
+	candidates, _, err := PartitionForBaseline(ctx, declared.Schemas, deps.Introspector)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func runFirstTimeAwaitingConfirm(
 func runOngoing(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current schema.Registry,
+	declared Declared,
 	deps MigrationDeps,
 	confirmApply bool,
 ) (*RunResult, error) {
@@ -228,7 +228,7 @@ func runOngoing(
 	// interactive review (renames, narrowing alters) still runs INSIDE
 	// RunGenerate; that is a separate, inner confirmation layer from the
 	// outer confirmApply gate this function enforces.
-	m, err := RunGenerate(ctx, cfg, current, deps.GenerateDeps, true)
+	m, err := RunGenerate(ctx, cfg, declared, deps.GenerateDeps, true)
 	if err != nil {
 		if behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationNothingToGenerate) {
 			return &RunResult{Status: StatusNoChanges, Message: "No schema changes detected."}, nil

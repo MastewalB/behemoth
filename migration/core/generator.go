@@ -28,6 +28,9 @@ func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, p
 	if err := checkNoInlineForeignKeys(resolvedPlan); err != nil {
 		return nil, err
 	}
+	if err := checkCustomCollisions(resolvedPlan); err != nil {
+		return nil, err
+	}
 
 	graphMap, nodeByID, err := buildDependencyGraph(resolvedPlan)
 	if err != nil {
@@ -54,7 +57,15 @@ func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, p
 	down, _ := computeDown(sortedIDs, nodeByID) // nil Down is valid (irreversible migration)
 
 	id := nextMigrationID(previousMigrationID)
-	return &Migration{ID: id, Name: id, Up: up, Down: down, DependsOn: dependsOnList(previousMigrationID), CreatedAt: time.Now()}, nil
+	return &Migration{
+		ID:        id,
+		Name:      id,
+		Up:        up,
+		Down:      down,
+		DependsOn: dependsOnList(previousMigrationID),
+		CreatedAt: time.Now(),
+		Custom:    customNames(resolvedPlan),
+	}, nil
 
 }
 
@@ -189,7 +200,7 @@ func computeDown(sortedIDs []string, nodeByID map[string]planNode) ([]SchemaOper
 	var down []SchemaOperation
 	for i := len(sortedIDs) - 1; i >= 0; i-- {
 		node := nodeByID[sortedIDs[i]]
-		if node.id == customOp {
+		if node.kind == customOp {
 			if len(node.custom.Up) > 0 && len(node.custom.Down) == 0 {
 				return nil, false
 			}
@@ -513,7 +524,7 @@ func RejectAmbiguousTypes(report *IntrospectionReport) error {
 func buildMigrationPlan(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current schema.Registry,
+	declared Declared,
 	deps GenerateDeps,
 	interactive bool,
 ) (*Migration, error) {
@@ -524,12 +535,15 @@ func buildMigrationPlan(
 	if err != nil {
 		return nil, err
 	}
-	report, err := buildReport(ctx, cfg, current, deps)
+	report, err := buildReport(ctx, cfg, declared.Schemas, deps)
 	if err != nil {
 		return nil, err
 	}
-	plan, issues, err := BuildPlan(report, current)
+	plan, issues, err := BuildPlan(report, declared.Schemas)
 	if err != nil {
+		return nil, err
+	}
+	if plan.Custom, err = pendingCustomMigrations(cfg, declared.Custom); err != nil {
 		return nil, err
 	}
 	resolved, err := ResolveIssues(ctx, plan, issues, deps.Presenter, interactive)
@@ -545,12 +559,12 @@ func buildMigrationPlan(
 func RunGenerate(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current schema.Registry,
+	declared Declared,
 	deps GenerateDeps,
 	interactive bool,
 ) (*Migration, error) {
 
-	m, err := buildMigrationPlan(ctx, cfg, current, deps, interactive)
+	m, err := buildMigrationPlan(ctx, cfg, declared, deps, interactive)
 	if err != nil {
 		return nil, err
 	}

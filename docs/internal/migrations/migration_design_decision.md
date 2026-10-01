@@ -151,7 +151,7 @@ This stage converts the Introspection Report's divergences and ambiguities into 
 
 #### **Branch - Developer-Authored Custom Operations**
 
-- A developer may inject a hand-written operation (typically a data-affecting step with no structural divergence behind it. e.g. a backfill) directly into the candidate set at Plan time. `[Convention]` A custom operation always carries its own explicit tier declaration from the developer and the Planning step never infers a tier for something it didn't derive from a divergence itself.
+- A developer may inject a hand-written operation (typically a data-affecting step with no structural divergence behind it. e.g. a backfill) directly into the candidate set at Plan time. 
 - `[Implementation Detail]` The mechanics of _how_ a custom operation is authored/injected (file-based, code-based) are left to the Generate-stage discussion, since a custom operation need to participate in the dependency graph.
 
 
@@ -435,3 +435,97 @@ type MigrationDeps struct {
 	2. Not a First Time Run - The normal generate route continues (Check pending -> Apply Pending if any(with confirmation)  -> `RunGenerate` - {Plan -> Resolve -> Generate})
 			
 
+# **Custom Migrations**
+
+A `CustomMigration` is a hand-authored, named group of operations that rides along with the generated ones: it is ordered among them in the dependency graph, frozen into the same `Migration`, and applied (Path I) or handed off (Path II) exactly like generated operations. It exists for steps the differ cannot derive from comparing declared and live shapes.
+
+```go
+type CustomMigration struct {
+	Name      string            // permanent identity, see Emitted Once below
+	Up        []SchemaOperation
+	Down      []SchemaOperation // optional; nil makes the whole migration irreversible
+	DependsOn []string          // generated operation IDs, or other custom migrations by Name
+}
+```
+
+`[Convention, important]` **Emitted exactly once.** A custom migration is frozen into one generated `Migration` and is history from then on. The `Name` is the only thing that tracks this, so names are permanent.
+
+### **Stage 0 - Declaration**
+
+- The application declares custom migrations in `PrepareConfig.Migrations`. `Prepare` carries them on `PreparedApp.Custom`, and `PreparedApp.Declared()` pairs them with the frozen schema registry into `core.Declared{Schemas, Custom}`, the single input every migration entry point takes (`RunGenerateCLI`, `RunGenerate`, `RunMigration`).
+- `Prepare` validates them up front, before plugin ordering, via `ValidateCustomMigrations`. Each rule fails `Prepare` with a configuration error:
+	- every custom migration has a non-empty `Name`, and names are unique
+	- every operation, in `Up` and `Down`, has a non-empty `ID`
+	- no operation ID is used by two different custom migrations
+	- no operation ID equals a custom migration `Name` (both are node identities in the Generation stage graph)
+- These are the checks that need no plan. Collisions with *generated* operation IDs depend on the plan and are checked at Generation.
+- `[Deferred]` **Plugin-declared custom migrations.** `PluginInitContext` lives in `types`, which cannot reference `migration/core` types without an import cycle. Supporting plugins means moving `SchemaOperation` and `CustomMigration` into `types/schema`, which is deferred until a plugin needs it.
+
+### **Stage 1 - Introspection / Diff**
+
+- Custom migrations take no part. Introspection compares `Declared.Schemas` against the live database (Path II) or the snapshot (Path I) only.
+- **Baseline phase (Path I, brownfield):** the baseline records live state only and never includes custom migrations. Pending custom migrations go into the first ordinary migration generated after the baseline is recorded.
+
+### **Stage 2 - Planning**
+
+- `buildMigrationPlan` runs `BuildPlan` on the schemas as usual, then sets `MigrationPlan.Custom` to the *pending* custom migrations (`pendingCustomMigrations`):
+	1. Read every migration file in `FolderPath` (`ReadDiskMigrations`).
+	2. Collect the names listed in each file's `Migration.Custom`.
+	3. Keep only the declared custom migrations whose `Name` is not among them, in declaration order.
+- Custom migrations never produce `PlanIssue`s and are never tiered. The planner did not derive them from a divergence, so there is nothing for it to propose options for.
+- `[Convention]` A plan with no generated operations but at least one pending custom migration is still a migration. Generation proceeds and does not report "nothing to generate".
+
+### **Stage 3 - Resolution**
+
+- Pass-through. `ResolveIssues` copies `MigrationPlan.Custom` into `ResolvedOperationSet.Custom` untouched.
+- Custom migrations never appear in the draft file and need no developer decision: declaring one is the decision. The fail-closed gate on unresolved issues applies to generated operations only.
+
+### **Stage 4 - Generation**
+
+Checks, before the graph is built (both abort generation):
+
+- **Inline foreign keys:** `checkNoInlineForeignKeys` covers each custom migration's `Up`. An `OpCreateTable` carrying `ForeignKeys` is rejected, and the foreign key must be authored as its own `OpAddForeignKey`, same as the planner's output.
+- **Collisions with generated operations:** `checkCustomCollisions` rejects a custom migration whose `Name`, or any `Up`/`Down` operation ID, equals a generated operation ID in this plan. Once frozen, `Up` and `Down` are flat lists, and `Down` construction, rendering and the runner all key on operation IDs, so two operations with one ID cannot coexist in a migration.
+
+Dependency graph:
+
+- Each custom migration is **one node**, keyed by its `Name`, not one node per operation. Its operations are never interleaved with anything else.
+- **Rule 1 applies:** the node depends on `OpCreateTable` of every table its `Up` operations target, when that table is created in the same plan.
+- **Rules 2 and 3 do not apply.** They are evaluated for generated foreign-key operations only. A custom migration that needs a referenced table created first must say so through `DependsOn`.
+- **Rule 5 - explicit edges:** each `DependsOn` entry becomes an edge. An entry may name a generated operation ID or another custom migration's `Name`.
+- `[Convention]` A `DependsOn` entry naming something not in this plan is dropped silently, on the same assumption as every other edge: the target was applied in an earlier migration. The consequence is that a typo, or a reference to an operation *inside* another custom migration (those IDs are not graph nodes), is also dropped silently rather than reported.
+- Cycles through `DependsOn` are authoring errors, reported with `KahnSort`'s cycle path (see Mutual Table Reference above).
+
+Freezing:
+
+- **`Up`:** walking the sorted nodes, a custom node contributes its `Up` operations as one contiguous block, in authored order.
+- **`Down`:** walking the sorted nodes in reverse, a custom node contributes its authored `Down` as written. It is **not** inverted or reversed, so it must already be in execution order. A custom migration with a non-empty `Up` and no `Down` makes the **entire** migration's `Down` nil, per the all-or-nothing rule in Reverse Operation Construction.
+- **`Migration.Custom`:** the names of every custom migration frozen into this migration, sorted so that a regenerated migration compares equal to the one on disk. The field is omitted from the JSON when empty, so migrations without custom migrations keep their existing file shape.
+
+### **Stage 5 - Write and Render**
+
+- The migration file carries `"Custom": [...]`. This field is the only durable record that a custom migration was emitted, and the next Planning stage reads it back.
+- Custom operations are `SchemaOperation`s, so the driver's `MigrationRenderer` renders them into the `.sql` script with no special handling.
+
+### **Stage 6 - Apply**
+
+- **Path I:** the runner applies the migration's `Up` as a unit through `ApplyMigration`. Custom operations run in the same transaction as the generated ones, where the driver's atomicity level allows. `applyOperationsToSnapshot` folds every `Up` operation, custom ones included, into the next `SchemaSnapshot`, so the snapshot reflects custom changes for the next diff.
+- **Path II:** behemoth stops at the written files, and the developer's migration tool runs the script.
+
+### **After Emission - Identity Rules**
+
+- Editing an emitted custom migration in code has no effect. The frozen file is what applies.
+- Deleting an emitted custom migration from code is harmless. It is already history.
+- `[Convention, important]` **Renaming** an emitted custom migration makes it a new one, and it **is emitted again** under the new name. **Reusing** an emitted name for a different migration means the new one is **never emitted**. Neither case is detectable, because the name is the identity.
+- `[Convention]` **Path II limitation**, the same one as `LatestMigrationID`: when the developer moves a generated file out of `FolderPath`, its `Migration.Custom` record goes with it, and every custom migration it contained is emitted again on the next run. As with migration IDs, behemoth owns no record beyond the staging folder.
+
+### **Known Limitations**
+
+- `[Important]` **No safe schema-only use yet.** The differ converges on the declared schema regardless of custom migrations, so with only schema operations available:
+	- a custom operation that **overlaps** the declared schema (e.g. adds a column the registry also declares) is generated by the differ as well, because the diff runs before the custom migration is applied, so the change is applied twice. Both paths. If the custom operation happens to reuse the generated operation's ID, the collision check rejects the migration instead;
+	- a custom operation that goes **beyond** the declared schema (e.g. an index the registry doesn't declare) is planned for removal on the next run **in Path I**: the snapshot diff tracks extras, so an extra index or foreign key is dropped and an extra column is raised as a drop issue. **Path II** ignores live extras (`trackExtraColumns = false`), so there it survives, but only by that rule, not by design.
+
+	`[Convention]` A custom migration must end at the declared schema, not elsewhere. Its legitimate uses are steps the differ cannot infer, ordered relative to generated operations, and those are mostly data steps.
+- `[Deferred]` **Data operations.** `SchemaOperation` has only structural kinds, so the backfill use case named above is not expressible yet. The intended shape is an `OpExec` kind carrying per-driver SQL and an optional `Down`. Drivers execute and render it like any other operation, and it leaves the snapshot untouched.
+- `[Deferred]` **Plugin-declared custom migrations**, see Stage 0.
+- `[Note]` The Planning stage's "Developer-Authored Custom Operations" branch describes custom operations carrying their own tier declaration. `CustomMigration` has no tier field, and custom migrations bypass tiering and Resolution entirely, as described above.

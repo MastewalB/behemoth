@@ -31,6 +31,12 @@ type PrepareConfig struct {
 	// runs after every plugin has declared, so it can also extend plugin
 	// tables (e.g. a column on "users"). nil = no application tables.
 	Schema func(reg schema.Registry) error
+
+	// Migrations are hand-authored migrations, ordered among generated
+	// operations by their DependsOn. Each is emitted into exactly one
+	// generated migration, recorded there by Name; names are therefore
+	// permanent and must never be reused.
+	Migrations []core.CustomMigration
 }
 
 // PreparedApp is the connection-free result of Prepare: every catalog and
@@ -45,6 +51,7 @@ type PreparedApp struct {
 	Schemas    schema.Registry
 	Resolver   behemoth.SchemaResolver
 	Migration  core.MigrationConfig
+	Custom     []core.CustomMigration
 
 	plugins []types.Plugin // kept so Boot runs exactly the set that was prepared
 }
@@ -55,6 +62,9 @@ type PreparedApp struct {
 // it alone, and Boot calls nothing else to get there.
 func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	if err := DetectPluginNameConflicts(plugins); err != nil {
+		return nil, err
+	}
+	if err := core.ValidateCustomMigrations(cfg.Migrations); err != nil {
 		return nil, err
 	}
 
@@ -123,8 +133,15 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 		Schemas:    schemaRegistry,
 		Resolver:   resolver,
 		Migration:  migrationCfg,
+		Custom:     cfg.Migrations,
 		plugins:    plugins,
 	}, nil
+}
+
+// Declared is what migration tooling converges the database on: every
+// declared table plus the application's custom migrations.
+func (a *PreparedApp) Declared() core.Declared {
+	return core.Declared{Schemas: a.Schemas, Custom: a.Custom}
 }
 
 // BootConfig is everything Boot needs beyond the prepared app and the
