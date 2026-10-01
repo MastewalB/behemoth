@@ -61,7 +61,7 @@ type PasswordHasher interface {
 // Implementations should use fast functions like SHA256 or HMAC, rather than slow password hashing functions like bcrypt/argon2.
 type SecretHasher interface {
 	Hash(secret string) (string, int, error)
-	Verify(hash, secret string, keyVersion int) (bool, error)
+	Verify(secret, hash string, keyVersion int) (bool, error)
 }
 
 // Encryptor is an interface for encrypting and decrypting data at rest.

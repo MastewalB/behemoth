@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/crypto"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/ratelimit"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -125,19 +127,30 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	}, nil
 }
 
+// BootConfig is everything Boot needs beyond the prepared app and the
+// database. Only Crypto.Secrets is required; every other zero value means
+// the documented default.
+type BootConfig struct {
+	Crypto crypto.Config
+
+	// KV is optional. nil = sessions and rate-limit counters use the database.
+	KV behemoth.KeyValueStorage
+
+	// Telemetry is optional. nil = no-op logger, audit recorder and metrics.
+	Telemetry *types.Telemetry
+
+	RateLimit types.RateLimitConfig
+	Session   types.SessionConfig
+	Token     types.TokenConfig
+}
+
 // Boot turns a PreparedApp into a running AuthContext. db must have been
 // built with app.Resolver, otherwise application queries and migrations
 // disagree on physical table and column names.
-func Boot(
-	app *PreparedApp,
-	db behemoth.Database,
-	kv behemoth.KeyValueStorage,
-	crypto types.Crypto,
-	tel *types.Telemetry,
-	rateLimitCfg types.RateLimitConfig,
-	sessionCfg types.SessionConfig,
-	tokenCfg types.TokenConfig,
-) (*types.AuthContext, error) {
+//
+// ctx bounds long-lived background work Boot starts (e.g. the KeyManager's
+// secret watch), so it should live as long as the application.
+func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootConfig) (*types.AuthContext, error) {
 	if app == nil {
 		return nil, behemotherr.NewConfigurationError("Boot", "Boot requires the result of Prepare", nil)
 	}
@@ -145,9 +158,16 @@ func Boot(
 		return nil, behemotherr.NewConfigurationError("Boot", "a Database is required", nil)
 	}
 	plugins, order := app.plugins, app.Order
+	kv := cfg.KV
 
+	tel := cfg.Telemetry
 	if tel == nil {
 		tel = types.NewTelemetry(nil, nil, nil)
+	}
+
+	cryptoSuite, err := crypto.New(ctx, cfg.Crypto, tel)
+	if err != nil {
+		return nil, err
 	}
 
 	// Registration phase
@@ -172,7 +192,7 @@ func Boot(
 	if err != nil {
 		return nil, err
 	}
-	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, store: store, cfg: rateLimitCfg, tel: tel}
+	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, store: store, cfg: cfg.RateLimit, tel: tel}
 	dispatcher := &DefaultDispatcher{catalog: app.Hooks, frozenChains: frozenChains, rateLimiter: rateLimiter, tel: tel}
 	idb := adapters.NewInternalAdapter(db, kv)
 
@@ -181,13 +201,13 @@ func Boot(
 		KV:              kv,
 		InternalAdapter: idb,
 		Dispatcher:      dispatcher,
-		TokenManager:    transport.NewDefaultTokenManager(db, kv, idb, app.Tokens, crypto, dispatcher, tokenCfg),
-		SessionManager:  transport.NewSessionManager(db, kv, idb, crypto, sessionCfg, dispatcher, tel),
+		TokenManager:    transport.NewDefaultTokenManager(db, kv, idb, app.Tokens, cryptoSuite, dispatcher, cfg.Token),
+		SessionManager:  transport.NewSessionManager(db, kv, idb, cryptoSuite, cfg.Session, dispatcher, tel),
 		RateLimiter:     rateLimiter,
-		Crypto:          crypto,
+		Crypto:          cryptoSuite,
 		Telemetry:       *tel,
 	}
-	cfg := struct {
+	routerCfg := struct {
 		BasePath    string
 		ErrorMapper types.ErrorMapper
 	}{
@@ -197,7 +217,7 @@ func Boot(
 	// Mount every plugin's endpoints, now that ac is fully populated —
 	// any handler closure built inside Endpoints() (or earlier, inside New())
 	// that reads ac.SessionManager/ac.TokenManager now sees real values.
-	router := types.NewRouter(types.RouterConfig{BasePath: cfg.BasePath, ErrorMapper: cfg.ErrorMapper})
+	router := types.NewRouter(types.RouterConfig{BasePath: routerCfg.BasePath, ErrorMapper: routerCfg.ErrorMapper})
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if err := router.Mount(name, p.Meta().MountPath, p.Routes()); err != nil {
@@ -750,7 +770,7 @@ func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
 			Path:      "/sign-in/email",
 			KeyFunc:   func(r *http.Request, ip string) string { return ip },
 			Limit:     types.Limit{Max: 10, Window: time.Minute},
-			Algorithm: nil,
+			Algorithm: ratelimit.IdentityLimiter{}, // TODO: real algorithm; allows every request for now
 			Action:    types.ActionReject,
 			Owner:     "core",
 			Disabled:  true,
