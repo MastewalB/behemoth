@@ -7,7 +7,9 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ModelManager interface provides control over the concrete type for testing.
@@ -165,6 +167,18 @@ func (s *DatabaseTestSuite) TestUpdate(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
+	// Drivers that report changed rather than matched rows (MySQL) must
+	// still treat a row already holding the values as matched.
+	err = s.adapter.Update(s.ctx, updatedModel)
+	assert.NoError(t, err, "updating with unchanged values is not NotFound")
+
+	// The convention: NotFound for a missing row, and never an insert.
+	ghost := s.modelManager.Create("ghost")
+	err = s.adapter.Update(s.ctx, ghost)
+	assert.True(t, behemotherr.IsNotFound(err), "updating a missing row: expected NotFound, got %v", err)
+	count, err := s.adapter.Count(s.ctx, ghost, getWhereExpr("id", clause.OpEqual, "ghost"))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), count, "Update must not insert a missing row")
 }
 
 func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
@@ -201,6 +215,51 @@ func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
 		found, err := s.adapter.FindMany(s.ctx, model, getWhereExpr("username", clause.OpEqual, "singleUpdatedUsername"), nil)
 		assert.NoError(t, err)
 		assert.Len(t, found, 1, "Only one record should be updated even if multiple match the condition")
+	})
+
+	// The UpdateOne convention (behemoth.Database): NotFound when no row
+	// matches, checked against the row as written.
+	t.Run("UpdateOneNoMatchIsNotFound", func(t *testing.T) {
+		defer s.modelManager.CleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		err := s.adapter.UpdateOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, "no-such-id"), behemoth.M{"email": "x@example.com"})
+		assert.True(t, behemotherr.IsNotFound(err), "expected NotFound, got %v", err)
+	})
+
+	// Drivers that report changed rather than matched rows (MySQL) must
+	// still treat a row already holding the new values as matched.
+	t.Run("UpdateOneUnchangedValuesStillMatch", func(t *testing.T) {
+		defer s.modelManager.CleanupTables()
+		models := s.PopulateTableWithTestData(t)
+		id := getModelID(models[0])
+		found, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+		require.NoError(t, err)
+
+		err = s.adapter.UpdateOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id), behemoth.M{"email": getModelEmail(found)})
+		assert.NoError(t, err, "a matched row that already holds the values is not NotFound")
+	})
+
+	// A guarded update applies once: the second identical call no longer
+	// matches its own guard.
+	t.Run("UpdateOneGuardIsCheckedOnWrite", func(t *testing.T) {
+		defer s.modelManager.CleanupTables()
+		models := s.PopulateTableWithTestData(t)
+		id := getModelID(models[0])
+		found, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+		require.NoError(t, err)
+
+		guarded := clause.Expression{Logic: clause.OpAnd, Conditions: []clause.Condition{
+			{Field: "id", Operator: clause.OpEqual, Value: id},
+			{Field: "email", Operator: clause.OpEqual, Value: getModelEmail(found)},
+		}}
+		require.NoError(t, s.adapter.UpdateOne(s.ctx, models[0], guarded, behemoth.M{"email": "claimed@example.com"}))
+		err = s.adapter.UpdateOne(s.ctx, models[0], guarded, behemoth.M{"email": "again@example.com"})
+		assert.True(t, behemotherr.IsNotFound(err), "the guard no longer holds; expected NotFound, got %v", err)
+
+		after, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+		require.NoError(t, err)
+		assert.Equal(t, "claimed@example.com", getModelEmail(after), "the second update did not apply")
 	})
 }
 
@@ -310,6 +369,9 @@ func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, "1"))
 	assert.Error(t, err)
 	assert.Nil(t, found)
+
+	err = s.adapter.Delete(s.ctx, model)
+	assert.True(t, behemotherr.IsNotFound(err), "deleting a missing row: expected NotFound, got %v", err)
 }
 
 func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
@@ -375,7 +437,7 @@ func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
 		expr := getWhereExpr("id", clause.OpEqual, "nonexistent")
 
 		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
-		// assert.Error(t, err, "DeleteOne should return error when no records match")
+		assert.True(t, behemotherr.IsNotFound(err), "DeleteOne with no match: expected NotFound, got %v", err)
 
 		// Verify all records still exist
 		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})

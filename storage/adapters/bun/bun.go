@@ -109,12 +109,20 @@ func (ba *BunAdapter) FindMany(
 }
 
 func (ba *BunAdapter) Update(ctx context.Context, m behemoth.Model) error {
-	_, err := ba.db.NewUpdate().
+	res, err := ba.db.NewUpdate().
 		TableExpr(m.SchemaName()).
 		Model(m).
 		WherePK().
 		Exec(ctx)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	}
+	// bun reports what its dialect reports: changed rows on MySQL.
+	return adapters.ExpectOneRow("Update", m, n, func() (int64, error) { return ba.Count(ctx, m, adapters.ByPrimaryKey(m)) })
 }
 
 func (ba *BunAdapter) UpdateOne(
@@ -135,15 +143,25 @@ func (ba *BunAdapter) UpdateOne(
 		Where(whereClause, args...).
 		Limit(1)
 
+	// expr is repeated outside the selecting subquery so it holds for the
+	// row as written (the UpdateOne convention).
 	q := ApplyMapUpdates(
 		ba.db.NewUpdate().
 			TableExpr(m.SchemaName()).
-			Where("? = (?)", bun.Ident(m.PrimaryKeyName()), subQuery),
+			Where("? = (?)", bun.Ident(m.PrimaryKeyName()), subQuery).
+			Where(whereClause, args...),
 		updates,
 	)
-	_, err := q.Exec(ctx)
-
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	res, err := q.Exec(ctx)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	}
+	// bun reports what its dialect reports: changed rows on MySQL.
+	return adapters.ExpectOneRow("UpdateOne", m, n, func() (int64, error) { return ba.Count(ctx, m, expr) })
 }
 
 func (ba *BunAdapter) UpdateMany(
@@ -170,11 +188,18 @@ func (ba *BunAdapter) UpdateMany(
 }
 
 func (ba *BunAdapter) Delete(ctx context.Context, m behemoth.Model) error {
-	_, err := ba.db.NewDelete().
+	res, err := ba.db.NewDelete().
 		TableExpr(m.SchemaName()).
 		Where("? = ?", bun.Ident(m.PrimaryKeyName()), m.PrimaryKeyField()).
 		Exec(ctx)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	}
+	return adapters.ExpectOneRow("Delete", m, n, nil)
 }
 
 func (ba *BunAdapter) DeleteOne(
@@ -193,12 +218,21 @@ func (ba *BunAdapter) DeleteOne(
 		Where(whereClause, args...).
 		Limit(1)
 
-	_, err := ba.db.NewDelete().
+	// expr is repeated outside the selecting subquery so it holds for the
+	// row as deleted.
+	res, err := ba.db.NewDelete().
 		TableExpr(m.SchemaName()).
 		Where("? = (?)", bun.Ident(m.PrimaryKeyName()), subQuery).
+		Where(whereClause, args...).
 		Exec(ctx)
-
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	}
+	return adapters.ExpectOneRow("DeleteOne", m, n, nil)
 }
 
 func (ba *BunAdapter) DeleteMany(

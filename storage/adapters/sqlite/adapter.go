@@ -194,8 +194,15 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 		adapters.PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName()),
 	)
 
-	_, err := sqlt.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	res, err := sqlt.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	}
+	return adapters.ExpectOneRow("Update", m, n, nil)
 }
 
 func (sqlt *SQLiteAdapter) UpdateOne(
@@ -232,9 +239,20 @@ func (sqlt *SQLiteAdapter) UpdateOne(
 		pk,
 		selectQuery,
 	)
+	// expr is repeated in the outer WHERE so it holds for the row as written
+	// (the UpdateOne convention); SQLite reports matched rows.
+	query += " AND (" + whereClause + ")"
+	queryArgs := append(append(values, args...), args...)
 
-	_, err := sqlt.DB.ExecContext(ctx, query, append(values, args...)...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	res, err := sqlt.DB.ExecContext(ctx, query, queryArgs...)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	}
+	return adapters.ExpectOneRow("UpdateOne", m, n, nil)
 }
 
 func (sqlt *SQLiteAdapter) UpdateMany(
@@ -275,8 +293,15 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		adapters.PhysicalTable(sqlt.names(), m),
 		adapters.PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName()),
 	)
-	_, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	res, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	}
+	return adapters.ExpectOneRow("Delete", m, n, nil)
 }
 
 func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
@@ -303,8 +328,17 @@ func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 		selectQuery,
 	)
 
-	_, err := sqlt.DB.ExecContext(ctx, query, args...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	// expr is repeated in the outer WHERE so it holds for the row as deleted.
+	query += " AND (" + whereClause + ")"
+	res, err := sqlt.DB.ExecContext(ctx, query, append(args, args...)...)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	}
+	return adapters.ExpectOneRow("DeleteOne", m, n, nil)
 }
 
 func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {

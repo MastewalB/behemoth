@@ -92,8 +92,26 @@ func (ga *GormAdapter) FindMany(
 }
 
 func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
-	err := ga.db.WithContext(ctx).Save(m).Error
-	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+	// Not Save: in GORM v2, Save inserts the row when the update matches
+	// nothing, which would silently create a missing row instead of
+	// reporting it (the behemoth.Database convention).
+	ser, ok := m.(behemoth.Serializable)
+	if !ok {
+		return behemotherr.SerializableNotImplemented()
+	}
+	row, err := ser.ToMap()
+	if err != nil {
+		return err
+	}
+	res := ga.db.WithContext(ctx).
+		Table(m.SchemaName()).
+		Where(fmt.Sprintf("%s = ?", m.PrimaryKeyName()), m.PrimaryKeyField()).
+		Updates(row)
+	if res.Error != nil {
+		return WrapWithCaller(res.Error, m.SchemaName(), mapGormError)
+	}
+	// GORM reports what its dialect reports: changed rows on MySQL.
+	return ExpectOneRow("Update", m, res.RowsAffected, func() (int64, error) { return ga.Count(ctx, m, ByPrimaryKey(m)) })
 }
 
 func (ga *GormAdapter) UpdateOne(
@@ -108,7 +126,9 @@ func (ga *GormAdapter) UpdateOne(
 
 	query, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
-	err := ga.db.
+	// expr is repeated outside the selecting subquery so it holds for the
+	// row as written (the UpdateOne convention).
+	res := ga.db.
 		WithContext(ctx).
 		Table(m.SchemaName()).
 		Where(
@@ -119,10 +139,13 @@ func (ga *GormAdapter) UpdateOne(
 				Find(m.New()).
 				Limit(1),
 		).
-		Updates(map[string]any(updates)).
-		Error
-
-	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+		Where(query, args...).
+		Updates(map[string]any(updates))
+	if res.Error != nil {
+		return WrapWithCaller(res.Error, m.SchemaName(), mapGormError)
+	}
+	// GORM reports what its dialect reports: changed rows on MySQL.
+	return ExpectOneRow("UpdateOne", m, res.RowsAffected, func() (int64, error) { return ga.Count(ctx, m, expr) })
 }
 
 func (ga *GormAdapter) UpdateMany(
@@ -146,8 +169,11 @@ func (ga *GormAdapter) UpdateMany(
 }
 
 func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
-	err := ga.db.WithContext(ctx).Delete(m).Error
-	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+	res := ga.db.WithContext(ctx).Delete(m)
+	if res.Error != nil {
+		return WrapWithCaller(res.Error, m.SchemaName(), mapGormError)
+	}
+	return ExpectOneRow("Delete", m, res.RowsAffected, nil)
 }
 
 func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
@@ -158,7 +184,9 @@ func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cla
 
 	query, args := BuildSQLWhereClause(&expr, DefaultClauseOption)
 
-	err := ga.db.
+	// expr is repeated outside the selecting subquery so it holds for the
+	// row as deleted.
+	res := ga.db.
 		WithContext(ctx).
 		Table(m.SchemaName()).
 		Where(
@@ -168,10 +196,12 @@ func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cla
 				Where(query, args...).
 				Find(m.New()).
 				Limit(1)).
-		Delete(m.New()).
-		Error
-
-	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+		Where(query, args...).
+		Delete(m.New())
+	if res.Error != nil {
+		return WrapWithCaller(res.Error, m.SchemaName(), mapGormError)
+	}
+	return ExpectOneRow("DeleteOne", m, res.RowsAffected, nil)
 }
 
 func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {

@@ -30,12 +30,37 @@ type Database interface {
 	FindOne(ctx context.Context, model Model, expr clause.Expression) (Model, error)
 	FindMany(ctx context.Context, model Model, expr clause.Expression, options *QueryOptions) ([]Model, error)
 
+	// Update writes every field of m to the row with m's primary key.
+	// [Convention] NotFound when there is no such row — it never inserts.
 	Update(ctx context.Context, m Model) error
+
+	// UpdateOne applies updates to one row matching expr — the first, if
+	// several match.
+	//
+	// [Convention] It returns a NotFound error (behemotherr.IsNotFound) when
+	// no row matches, and expr is checked against the row as it is when
+	// written, not only when it was selected: an implementation re-checks
+	// expr in the write itself, so after waiting on a concurrent writer the
+	// update applies only if expr still holds. A guarded write ("set
+	// consumed_at where it is still NULL") is therefore atomic: of several
+	// concurrent calls, one succeeds and the others get NotFound. A row that
+	// matches but already holds the new values counts as matched. An empty
+	// updates map is a no-op and returns nil.
 	UpdateOne(ctx context.Context, m Model, expr clause.Expression, updates M) error
+	// UpdateMany applies updates to every row matching expr. Matching no
+	// row is not an error: the *Many and *All operations act on a set, and
+	// an empty set is a valid one.
 	UpdateMany(ctx context.Context, m Model, expr clause.Expression, updates M) error
 
+	// Delete removes the row with m's primary key.
+	// [Convention] NotFound when there is no such row.
 	Delete(ctx context.Context, m Model) error
+	// DeleteOne removes one row matching expr — the first, if several match.
+	// [Convention] NotFound when no row matches, with expr checked against
+	// the row as it is deleted, exactly like UpdateOne.
 	DeleteOne(ctx context.Context, m Model, expr clause.Expression) error
+	// DeleteMany and DeleteAll remove every matching row; matching none is
+	// not an error.
 	DeleteMany(ctx context.Context, m Model, expr clause.Expression) error
 	DeleteAll(ctx context.Context, m Model) error
 

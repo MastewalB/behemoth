@@ -223,8 +223,16 @@ func (my *MySQLAdapter) Update(ctx context.Context, m behemoth.Model) error {
 		PhysicalColumn(my.names(), m, m.PrimaryKeyName()),
 	)
 
-	_, err := my.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	// MySQL reports changed rows unless the connection sets clientFoundRows.
+	res, err := my.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	return ExpectOneRow("Update", m, n, func() (int64, error) { return my.Count(ctx, m, ByPrimaryKey(m)) })
 }
 
 func (my *MySQLAdapter) UpdateOne(
@@ -260,10 +268,21 @@ func (my *MySQLAdapter) UpdateOne(
 		pk,
 		selectQuery,
 	)
+	// expr is repeated in the outer WHERE so it holds for the row as written
+	// (the UpdateOne convention).
+	query += " AND (" + whereClause + ")"
+	args := append(append(values, whereArgs...), whereArgs...)
 
-	_, err := my.DB.ExecContext(ctx, query, append(values, whereArgs...)...)
-	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
-
+	res, err := my.DB.ExecContext(ctx, query, args...)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	// MySQL reports changed rows unless the connection sets clientFoundRows.
+	return ExpectOneRow("UpdateOne", m, n, func() (int64, error) { return my.Count(ctx, m, expr) })
 }
 
 func (my *MySQLAdapter) UpdateMany(
@@ -297,8 +316,15 @@ func (my *MySQLAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		PhysicalTable(my.names(), m),
 		PhysicalColumn(my.names(), m, m.PrimaryKeyName()),
 	)
-	_, err := my.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	res, err := my.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	return ExpectOneRow("Delete", m, n, nil)
 }
 
 func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
@@ -325,8 +351,17 @@ func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cl
 		selectQuery,
 	)
 
-	_, err := my.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	// expr is repeated in the outer WHERE so it holds for the row as deleted.
+	query += " AND (" + whereClause + ")"
+	res, err := my.DB.ExecContext(ctx, query, append(args, args...)...)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	return ExpectOneRow("DeleteOne", m, n, nil)
 }
 
 func (my *MySQLAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {

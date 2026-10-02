@@ -177,8 +177,11 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 		"$set": PhysicalDocument(mdb.names(), m, doc),
 	}
 
-	_, err = mdb.collection(m).UpdateOne(ctx, mdb.byPrimaryKey(m), update)
-	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	res, err := mdb.collection(m).UpdateOne(ctx, mdb.byPrimaryKey(m), update)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	}
+	return ExpectOneRow("Update", m, res.MatchedCount, nil)
 }
 
 func (mdb *MongoAdapter) UpdateOne(
@@ -195,8 +198,13 @@ func (mdb *MongoAdapter) UpdateOne(
 		"$set": PhysicalDocument(mdb.names(), m, updates),
 	}
 
-	_, err := mdb.collection(m).UpdateOne(ctx, mdb.filter(m, &expr), update)
-	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	// The filter is evaluated atomically per document, so it holds for the
+	// document as written; MatchedCount gives the UpdateOne convention.
+	res, err := mdb.collection(m).UpdateOne(ctx, mdb.filter(m, &expr), update)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	}
+	return ExpectOneRow("UpdateOne", m, res.MatchedCount, nil)
 }
 
 func (mdb *MongoAdapter) UpdateMany(
@@ -221,8 +229,11 @@ func (mdb *MongoAdapter) UpdateMany(
 }
 
 func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
-	_, err := mdb.collection(m).DeleteOne(ctx, mdb.byPrimaryKey(m))
-	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	res, err := mdb.collection(m).DeleteOne(ctx, mdb.byPrimaryKey(m))
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	}
+	return ExpectOneRow("Delete", m, res.DeletedCount, nil)
 }
 
 func (mdb *MongoAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
@@ -231,8 +242,12 @@ func (mdb *MongoAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr c
 	if len(filter) == 0 {
 		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
 	}
-	_, err := mdb.collection(m).DeleteOne(ctx, filter)
-	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	// The filter is evaluated atomically per document.
+	res, err := mdb.collection(m).DeleteOne(ctx, filter)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	}
+	return ExpectOneRow("DeleteOne", m, res.DeletedCount, nil)
 }
 
 func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {

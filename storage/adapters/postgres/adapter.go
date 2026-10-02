@@ -243,8 +243,15 @@ func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	)
 	fmt.Println(query, values)
 
-	_, err := pg.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	res, err := pg.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	}
+	return adapters.ExpectOneRow("Update", m, n, nil)
 }
 
 func (pg *PostgresAdapter) UpdateOne(
@@ -253,7 +260,6 @@ func (pg *PostgresAdapter) UpdateOne(
 	expr clause.Expression,
 	updates behemoth.M,
 ) error {
-
 	if len(updates) == 0 {
 		return nil
 	}
@@ -282,9 +288,26 @@ func (pg *PostgresAdapter) UpdateOne(
 		pk,
 		selectQuery,
 	)
+	// expr is repeated in the outer WHERE (the UpdateOne convention):
+	// Postgres evaluates the selecting subquery once, before waiting on a
+	// concurrent writer's lock, and afterwards re-checks only the outer
+	// WHERE — without the repetition the update would still apply to a row
+	// the other writer just changed. Numbered placeholders continue after
+	// the subquery's. Postgres reports matched rows.
+	queryArgs := append(values, args...)
+	guard, guardArgs := pg.where(m, &expr, NewPostgresClauseOptions(len(queryArgs)+1))
+	query += " AND (" + guard + ")"
+	queryArgs = append(queryArgs, guardArgs...)
 
-	_, err := pg.DB.ExecContext(ctx, query, append(values, args...)...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	res, err := pg.DB.ExecContext(ctx, query, queryArgs...)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	}
+	return adapters.ExpectOneRow("UpdateOne", m, n, nil)
 }
 
 func (pg *PostgresAdapter) UpdateMany(
@@ -326,8 +349,15 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		adapters.PhysicalColumn(pg.names(), m, m.PrimaryKeyName()),
 	)
 
-	_, err := pg.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	res, err := pg.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	}
+	return adapters.ExpectOneRow("Delete", m, n, nil)
 }
 
 func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
@@ -354,8 +384,19 @@ func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 		selectQuery,
 	)
 
-	_, err := pg.DB.ExecContext(ctx, query, args...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	// expr is repeated in the outer WHERE so it holds for the row as deleted
+	// (see UpdateOne); numbered placeholders continue after the subquery's.
+	guard, guardArgs := pg.where(m, &expr, NewPostgresClauseOptions(len(args)+1))
+	query += " AND (" + guard + ")"
+	res, err := pg.DB.ExecContext(ctx, query, append(args, guardArgs...)...)
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	}
+	return adapters.ExpectOneRow("DeleteOne", m, n, nil)
 }
 
 func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {

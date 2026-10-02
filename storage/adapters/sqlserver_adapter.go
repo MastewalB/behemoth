@@ -209,8 +209,15 @@ func (ms *SQLServerAdapter) Update(ctx context.Context, m behemoth.Model) error 
 		pkPlaceholder,
 	)
 
-	_, err := ms.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
-	return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	res, err := ms.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	}
+	return ExpectOneRow("Update", m, n, nil)
 }
 
 func (ms *SQLServerAdapter) UpdateOne(
@@ -246,9 +253,23 @@ func (ms *SQLServerAdapter) UpdateOne(
 		pk,
 		subQuery,
 	)
+	// expr is repeated in the outer WHERE so it holds for the row as written
+	// (the UpdateOne convention); numbered placeholders continue after the
+	// subquery's. SQL Server reports matched rows.
+	args := append(values, whereArgs...)
+	guard, guardArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(args)+1))
+	query += " AND (" + guard + ")"
+	args = append(args, guardArgs...)
 
-	_, err := ms.DB.ExecContext(ctx, query, append(values, whereArgs...)...)
-	return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	res, err := ms.DB.ExecContext(ctx, query, args...)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	}
+	return ExpectOneRow("UpdateOne", m, n, nil)
 }
 
 func (ms *SQLServerAdapter) UpdateMany(
@@ -283,8 +304,15 @@ func (ms *SQLServerAdapter) Delete(ctx context.Context, m behemoth.Model) error 
 		PhysicalTable(ms.names(), m),
 		PhysicalColumn(ms.names(), m, m.PrimaryKeyName()),
 	)
-	_, err := ms.DB.ExecContext(ctx, query, m.PrimaryKeyField())
-	return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	res, err := ms.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	}
+	return ExpectOneRow("Delete", m, n, nil)
 }
 
 func (ms *SQLServerAdapter) DeleteOne(
@@ -314,8 +342,19 @@ func (ms *SQLServerAdapter) DeleteOne(
 		subQuery,
 	)
 
-	_, err := ms.DB.ExecContext(ctx, query, args...)
-	return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	// expr is repeated in the outer WHERE so it holds for the row as deleted;
+	// numbered placeholders continue after the subquery's.
+	guard, guardArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(args)+1))
+	query += " AND (" + guard + ")"
+	res, err := ms.DB.ExecContext(ctx, query, append(args, guardArgs...)...)
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	}
+	return ExpectOneRow("DeleteOne", m, n, nil)
 }
 
 func (ms *SQLServerAdapter) DeleteMany(
