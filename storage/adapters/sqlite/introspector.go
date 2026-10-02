@@ -83,8 +83,19 @@ func mapSQLiteType(declared string) (schema.ColumnType, int, *core.ColumnAmbigui
 //   - an AUTOINCREMENT column is always declared INTEGER, so bigint reads back as integer
 //   - a primary key column is never NULL — NOT NULL is rendered, or it is a
 //     rowid alias — and never also UNIQUE
+//   - the default is what Introspect parses out of the text SQLite reports for
+//     what renderColumnDefinition writes (storedDefault, sqliteDefaultFromStored):
+//     the sqlite override expression or the literal — an override that is only
+//     a quoted literal reads back as that literal; other drivers' overrides don't apply
 func (d *SQLiteDriver) NormalizeColumn(_ string, col schema.Column) schema.Column {
 	col = applyOverride(col)
+	// An unrenderable default fails at apply time; it's left as declared.
+	if stored, err := storedDefault(col); err == nil {
+		col.Default, col.Overrides = nil, nil
+		if stored != "" {
+			col.Default, col.Overrides = sqliteDefaultFromStored(stored, col.Type)
+		}
+	}
 	switch col.Type {
 	case schema.ColTypeUuid, schema.ColTypeBytes:
 		col.Type = schema.ColTypeBlob
@@ -238,19 +249,28 @@ func (d *SQLiteDriver) introspectColumns(ctx context.Context, physical string, p
 			AutoInc:    autoInc,
 		}
 		if c.dflt.Valid {
-			if val, isLiteral := parseSQLiteDefault(c.dflt.String, ct); isLiteral {
-				col.Default = val
-			} else {
-				// An expression default (CURRENT_TIMESTAMP, (datetime('now')), ...)
-				// isn't a data literal; it is kept verbatim as a raw SQLite
-				// expression — what an override Default means, and what the
-				// renderer emits back, wrapped in parentheses.
-				col.Overrides = map[string]schema.ColumnOverride{DriverName: {Default: stripParens(c.dflt.String)}}
-			}
+			col.Default, col.Overrides = sqliteDefaultFromStored(c.dflt.String, ct)
 		}
 		cols = append(cols, col)
 	}
 	return cols, ambiguities, nil
+}
+
+// sqliteDefaultFromStored maps a default, as PRAGMA table_info reports it
+// (the text the CREATE TABLE statement wrote, minus the parentheses of a
+// DEFAULT (expr)), onto the canonical column: a literal becomes Default — so
+// an override that is only a quoted literal ('{}') reads back as one; an
+// expression (CURRENT_TIMESTAMP, datetime('now'), ...) isn't a data literal,
+// so it is kept verbatim as a raw SQLite expression — what an override
+// Default means, and what the renderer emits back. NULL is no default at all.
+//
+// Introspect and NormalizeColumn both go through it, so a declaration and the
+// live column it produced are described the same way.
+func sqliteDefaultFromStored(stored string, ct schema.ColumnType) (any, map[string]schema.ColumnOverride) {
+	if val, isLiteral := parseSQLiteDefault(stored, ct); isLiteral {
+		return val, nil
+	}
+	return nil, map[string]schema.ColumnOverride{DriverName: {Default: stripParens(stored)}}
 }
 
 // parseSQLiteDefault interprets the literal forms PRAGMA table_info reports

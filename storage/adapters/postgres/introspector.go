@@ -63,8 +63,19 @@ func mapPgType(dataType, udtName string) (schema.ColumnType, *core.ColumnAmbigui
 //   - blob and bytes are both BYTEA, which reads back as bytes
 //   - only VARCHAR carries a length; every other type reads back without one
 //   - a primary key column is always NOT NULL, and never also UNIQUE
+//   - the default is what Introspect parses out of what renderDefaultExpr
+//     writes (pgDefaultFromStored): the postgres override expression or the
+//     literal, as one of the two forms; other drivers' overrides don't apply,
+//     and an identity column has no default at all
 func (d *PostgreSQLDriver) NormalizeColumn(_ string, col schema.Column) schema.Column {
 	col = applyOverride(col)
+	// An unrenderable default fails at apply time; it's left as declared.
+	if expr, err := renderDefaultExpr(col); err == nil {
+		col.Default, col.Overrides = nil, nil
+		if expr != "" && !col.AutoInc {
+			col.Default, col.Overrides = pgDefaultFromStored(expr, col.Type)
+		}
+	}
 	switch col.Type {
 	case schema.ColTypeString:
 		if col.Length <= 0 {
@@ -210,18 +221,10 @@ func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical strin
 		}
 
 		if defaultExpr.Valid {
-			switch val, isLiteral := parsePgDefault(defaultExpr.String); {
-			case strings.HasPrefix(defaultExpr.String, "nextval("):
+			if strings.HasPrefix(defaultExpr.String, "nextval(") {
 				col.AutoInc = true // serial / bigserial: the sequence is the auto-increment
-			case isLiteral:
-				col.Default = val
-			default:
-				// A function/expression default (now(), gen_random_uuid(), ...)
-				// isn't a data literal; parsing it into Default would be a
-				// guess. It's kept verbatim as a raw Postgres expression —
-				// exactly what an override Default means, and what the
-				// renderer emits unchanged.
-				col.Overrides = map[string]schema.ColumnOverride{DriverName: {Default: defaultExpr.String}}
+			} else {
+				col.Default, col.Overrides = pgDefaultFromStored(defaultExpr.String, ct)
 			}
 		}
 		cols = append(cols, col)
@@ -229,11 +232,30 @@ func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical strin
 	return cols, ambiguities, rows.Err()
 }
 
+// pgDefaultFromStored maps a default expression, as Postgres stores it in
+// column_default, onto the canonical column: a literal becomes Default; a
+// function/expression default (now(), gen_random_uuid(), ...) isn't a data
+// literal — parsing it into Default would be a guess — so it is kept verbatim
+// as a raw Postgres expression, exactly what an override Default means and
+// what the renderer emits unchanged. NULL is no default at all.
+//
+// Introspect and NormalizeColumn both go through it, so a declaration and the
+// live column it produced are described the same way.
+func pgDefaultFromStored(expr string, ct schema.ColumnType) (any, map[string]schema.ColumnOverride) {
+	if val, isLiteral := parsePgDefault(expr, ct); isLiteral {
+		return val, nil
+	}
+	return nil, map[string]schema.ColumnOverride{DriverName: {Default: expr}}
+}
+
 // parsePgDefault interprets the literal forms Postgres reports via
 // column_default: a quoted string with an optional cast ('x'::type), a bare
 // or parenthesized number, a boolean, or NULL. Anything else (function calls,
 // nextval, CURRENT_*) is NOT interpreted and returned as non-literal.
-func parsePgDefault(expr string) (value any, isLiteral bool) {
+//
+// On a numeric column a quoted literal is a number: Postgres stores a
+// negative default as '-1'::integer.
+func parsePgDefault(expr string, ct schema.ColumnType) (value any, isLiteral bool) {
 	expr = strings.TrimSpace(expr)
 
 	if strings.HasPrefix(expr, "'") {
@@ -251,7 +273,13 @@ func parsePgDefault(expr string) (value any, isLiteral bool) {
 			if rest != "" && !strings.HasPrefix(rest, "::") {
 				return nil, false
 			}
-			return strings.ReplaceAll(expr[1:i], "''", "'"), true
+			text := strings.ReplaceAll(expr[1:i], "''", "'")
+			if isNumericType(ct) {
+				if n, isNumber := parseNumber(text); isNumber {
+					return n, true
+				}
+			}
+			return text, true
 		}
 		return nil, false
 	}
@@ -261,21 +289,36 @@ func parsePgDefault(expr string) (value any, isLiteral bool) {
 	}
 	expr = strings.TrimSuffix(strings.TrimPrefix(expr, "("), ")")
 
-	if n, err := strconv.ParseInt(expr, 10, 64); err == nil {
+	if n, isNumber := parseNumber(expr); isNumber {
 		return n, true
 	}
-	if f, err := strconv.ParseFloat(expr, 64); err == nil {
-		return f, true
-	}
-	switch expr {
+	switch strings.ToLower(expr) { // the renderer writes TRUE, Postgres reports true
 	case "true":
 		return true, true
 	case "false":
 		return false, true
-	case "NULL":
+	case "null":
 		return nil, true
 	}
 	return nil, false
+}
+
+func parseNumber(s string) (any, bool) {
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return n, true
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f, true
+	}
+	return nil, false
+}
+
+func isNumericType(ct schema.ColumnType) bool {
+	switch ct {
+	case schema.ColTypeInteger, schema.ColTypeBigInt, schema.ColTypeReal, schema.ColTypeNumeric:
+		return true
+	}
+	return false
 }
 
 func (d *PostgreSQLDriver) primaryKeyColumns(ctx context.Context, physical string) ([]string, error) {

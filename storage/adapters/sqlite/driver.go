@@ -466,6 +466,18 @@ func overrideDefault(col schema.Column) string {
 	return col.Overrides[DriverName].Default
 }
 
+// storedDefault is the default's text as SQLite reports it once
+// renderColumnDefinition has written it, or "" for none: what follows DEFAULT,
+// except that SQLite drops the one pair of parentheses an expression default
+// is written in — DEFAULT ('{}') is reported as '{}'.
+func storedDefault(col schema.Column) (string, error) {
+	if expr := overrideDefault(col); expr != "" {
+		return expr, nil
+	}
+	clause, err := renderDefault(col.Default)
+	return strings.TrimPrefix(clause, "DEFAULT "), err
+}
+
 func (d *SQLiteDriver) renderColumnDefinition(table string, raw schema.Column, inlinePK bool) (string, error) {
 	col := applyOverride(raw)
 

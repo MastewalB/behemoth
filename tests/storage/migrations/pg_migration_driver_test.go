@@ -421,6 +421,66 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		}, kinds)
 	})
 
+	// Defaults as Postgres rewrites them on storage — negatives quoted with a
+	// cast, function names lower-cased, keywords upper-cased, expressions
+	// re-spaced, '{}' given a cast — still match their declarations.
+	t.Run("DefaultsMatch", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		expr := func(e string) map[string]schema.ColumnOverride {
+			return map[string]schema.ColumnOverride{postgres.DriverName: {Default: e}}
+		}
+		defaults := schema.Table{Name: "defaults", Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "neg", Type: schema.ColTypeInteger, Default: -1},
+			{Name: "big", Type: schema.ColTypeBigInt, Default: int64(-5)},
+			{Name: "json_num", Type: schema.ColTypeInteger, Default: float64(7)}, // as read back from a migration file
+			{Name: "dbl", Type: schema.ColTypeReal, Default: 1.5},
+			{Name: "b", Type: schema.ColTypeBoolean, Default: false},
+			{Name: "s", Type: schema.ColTypeString, Length: 10, Default: "it's"},
+			{Name: "ts_upper", Type: schema.ColTypeTimestamp, Overrides: expr("NOW()")},
+			{Name: "ts_keyword", Type: schema.ColTypeTimestamp, Overrides: expr("current_timestamp")},
+			{Name: "u", Type: schema.ColTypeUuid, Overrides: expr("gen_random_uuid()")},
+			{Name: "j", Type: schema.ColTypeJson, Overrides: expr("'{}'")},
+			{Name: "sum", Type: schema.ColTypeInteger, Overrides: expr("(1+1)")},
+			{Name: "none", Type: schema.ColTypeText, Nullable: true},
+		}}
+		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: []core.SchemaOperation{createTableOp(defaults)}}, nil)))
+		registry := schema.NewRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "defaults"}, defaults))
+		require.NoError(t, registry.Freeze())
+
+		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		require.NoError(t, err)
+		require.Len(t, report.Tables["defaults"].Columns, len(defaults.Columns))
+		for _, f := range report.Tables["defaults"].Columns {
+			assert.Equal(t, core.ColMatch, f.Kind, "%s: declared %#v %v, live %#v %v", f.Name, f.Declared.Default, f.Declared.Overrides, f.Live.Default, f.Live.Overrides)
+		}
+	})
+
+	t.Run("DefaultChangesDiffer", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		_, err := db.ExecContext(ctx, `CREATE TABLE changed (id INTEGER PRIMARY KEY, kept TEXT NOT NULL DEFAULT 'a', changed TEXT NOT NULL DEFAULT 'a', removed TIMESTAMPTZ NOT NULL DEFAULT now())`)
+		require.NoError(t, err)
+		registry := schema.NewRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "changed"}, schema.Table{Name: "changed", Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "kept", Type: schema.ColTypeText, Default: "a"},
+			{Name: "changed", Type: schema.ColTypeText, Default: "b"},
+			{Name: "removed", Type: schema.ColTypeTimestamp},
+		}}))
+		require.NoError(t, registry.Freeze())
+
+		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		require.NoError(t, err)
+		kinds := map[string]core.ColumnDivergenceKind{}
+		for _, f := range report.Tables["changed"].Columns {
+			kinds[f.Name] = f.Kind
+		}
+		assert.Equal(t, map[string]core.ColumnDivergenceKind{
+			"id": core.ColMatch, "kept": core.ColMatch, "changed": core.ColDiffers, "removed": core.ColDiffers,
+		}, kinds)
+	})
+
 	t.Run("CompositePrimaryKeyAndSerial", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		_, err := db.ExecContext(ctx, `

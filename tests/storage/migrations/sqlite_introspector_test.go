@@ -204,6 +204,63 @@ func TestSQLiteIntrospector(t *testing.T) {
 		}, kinds)
 	})
 
+	// Defaults as SQLite stores them — the expression text as written,
+	// wrapped in the renderer's parentheses — still match their declarations,
+	// whatever case or spacing they were declared with.
+	t.Run("DefaultsMatch", func(t *testing.T) {
+		expr := func(e string) map[string]schema.ColumnOverride {
+			return map[string]schema.ColumnOverride{sqlite.DriverName: {Default: e}}
+		}
+		defaults := schema.Table{Name: "defaults", Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "neg", Type: schema.ColTypeInteger, Default: -1},
+			{Name: "json_num", Type: schema.ColTypeInteger, Default: float64(7)}, // as read back from a migration file
+			{Name: "dbl", Type: schema.ColTypeReal, Default: 1.5},
+			{Name: "b", Type: schema.ColTypeBoolean, Default: false},
+			{Name: "int_bool", Type: schema.ColTypeInteger, Default: true},
+			{Name: "s", Type: schema.ColTypeString, Length: 10, Default: "it's"},
+			{Name: "ts_keyword", Type: schema.ColTypeTimestamp, Overrides: expr("current_timestamp")},
+			{Name: "dt_func", Type: schema.ColTypeDateTime, Overrides: expr("datetime('now')")},
+			{Name: "j", Type: schema.ColTypeJson, Overrides: expr("'{}'")},
+			{Name: "sum", Type: schema.ColTypeInteger, Overrides: expr("1+1")},
+			{Name: "none", Type: schema.ColTypeText, Nullable: true},
+		}}
+		setup(t, defaults)
+		registry := schema.NewRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "defaults"}, defaults))
+		require.NoError(t, registry.Freeze())
+
+		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		require.NoError(t, err)
+		require.Len(t, report.Tables["defaults"].Columns, len(defaults.Columns))
+		for _, f := range report.Tables["defaults"].Columns {
+			assert.Equal(t, core.ColMatch, f.Kind, "%s: declared %#v %v, live %#v %v", f.Name, f.Declared.Default, f.Declared.Overrides, f.Live.Default, f.Live.Overrides)
+		}
+	})
+
+	t.Run("DefaultChangesDiffer", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		exec(t, `CREATE TABLE changed (id INTEGER PRIMARY KEY, kept TEXT NOT NULL DEFAULT 'a', changed TEXT NOT NULL DEFAULT 'a', removed TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
+		registry := schema.NewRegistry()
+		require.NoError(t, registry.Declare(tableModel{name: "changed"}, schema.Table{Name: "changed", Columns: []schema.Column{
+			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
+			{Name: "kept", Type: schema.ColTypeText, Default: "a"},
+			{Name: "changed", Type: schema.ColTypeText, Default: "b"},
+			{Name: "removed", Type: schema.ColTypeTimestamp},
+		}}))
+		require.NoError(t, registry.Freeze())
+
+		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		require.NoError(t, err)
+		kinds := map[string]core.ColumnDivergenceKind{}
+		for _, f := range report.Tables["changed"].Columns {
+			kinds[f.Name] = f.Kind
+		}
+		assert.Equal(t, map[string]core.ColumnDivergenceKind{
+			"id": core.ColMatch, "kept": core.ColMatch, "changed": core.ColDiffers, "removed": core.ColDiffers,
+		}, kinds)
+	})
+
 	// A table created outside behemoth, with common SQL type names, a
 	// composite key, a named composite UNIQUE constraint, and indexes the
 	// canonical model can't express.

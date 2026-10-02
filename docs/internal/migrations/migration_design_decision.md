@@ -17,9 +17,45 @@ For common cases and larger services, users use dedicated tools that manage and 
 Behemoth might provide tool-specific generation (for goose or golang-migrate for e.g.) but as a separate packaging that's optionally installed instead of crammed in the core package.
 
 
+# **Inputs, Packages & Driver Capabilities**
+
+### **Where things live**
+
+| Package | Holds |
+| --- | --- |
+| `types/schema` | The declaration vocabulary shared across packages: `schema.Table`, `Column`, `Index`, `ForeignKey`, `ColumnOverride`, the `ColumnType` and `FK*` action constants, the contribution types, and `schema.Registry` (`DefaultRegistry`, `NewRegistry`). `[Convention, important]` It must never import `types` — it sits below it so `PluginInitContext` can carry a registry without an import cycle. |
+| `migration/core` | Everything about migrating: operations, `Migration`, `MigrationConfig`, `CustomMigration`, introspection/diff, planning, resolution, generation, the runner, `BuildSchemaResolverTable`, and the driver capability interfaces below. |
+| `storage/adapters/postgres`, `storage/adapters/sqlite` | One module per database, each holding the `behemoth.Database` adapter **and** the migration driver, built with the same `SchemaResolver` so application queries and migrations agree on physical names. SQLite is its own module so only applications using it link `go-sqlite3` (and therefore cgo). |
+
+### **Declaration**
+
+Tables are declared once, during `Prepare` (`types/init`), into a single registry. Each declarer receives a scoped registry that stamps its own name as `Owner` (a declarer can never misattribute a table) and refuses `Freeze`:
+
+1. **core** — `CoreDeclareSchema(ic)`, owner `"core"`.
+2. **each plugin**, in dependency order — inside its existing `Declare(ic)`, through `ic.Schemas`, owner = plugin name. There is no separate schema interface: tables are declared next to hooks, tokens and rate limits.
+3. **the application** — `PrepareConfig.Schema`, owner `"app"`, last, so it can also extend plugin tables.
+
+`Prepare` then freezes the registry and derives the `SchemaResolver` from it (`BuildSchemaResolverTable`). `[Convention, important]` The resolver is therefore complete **before** any adapter or migration driver exists; the application builds both with `PreparedApp.Resolver`. Migration tooling calls `Prepare` only — it never needs `Boot` or a running application.
+
+Every migration entry point (`RunGenerateCLI`, `RunGenerate`, `RunMigration`) takes the declaration as one value, `core.Declared{Schemas, Custom}`, which `PreparedApp.Declared()` builds (see *Custom Migrations*). Introspection and baselining use only `Declared.Schemas`.
+
+### **Driver capabilities**
+
+| Interface | Required | Purpose |
+| --- | --- | --- |
+| `SchemaDriver` | for Path I | `ApplyMigration`, `RecordBaseline`, `AtomicityLevel`. |
+| `SchemaIntrospector` | yes | `TableExists`, `Introspect`: reverse-maps a live table into the canonical model. |
+| `MigrationRenderer` | optional | Renders a migration as a script (`.sql`) written next to its `.json`. It must be rendered against the state the migration will be applied to. |
+| `ColumnNormalizer` | optional; required in practice for any driver whose DDL loses information | Describes how the driver's DDL changes a declared column, so an unchanged column compares equal. See *Column Comparison*. |
+
+Optional capabilities are discovered by type assertion. The Postgres and SQLite drivers implement all four, and each declares that at compile time.
+
+`[Implementation Detail]` Rendering: Postgres builds every statement with pure SQL builders, so the script is by construction exactly what `ApplyMigration` executes. SQLite's table rebuilds read the live schema, so its renderer executes `Up` in a transaction that is always rolled back and records every statement. A baseline renders the existing definitions of the tables it records, since its `Up` is never executed.
+
+
 # **Introspection/Diff stage - common to both scenarios**
 
-In this stage, the mapped schema registry is compared against the live database. This stage produces a structured description of where the live database's shape disagrees with the `SchemaRegistry`
+In this stage, the mapped schema registry is compared against the live database. This stage produces a structured description of where the live database's shape disagrees with the declared `schema.Registry` (`Declared.Schemas`).
 
 Roughly:
 Introspect -> Diff -> Report Ambiguities 
@@ -43,13 +79,13 @@ Before any comparison happens, every declared table/column is resolved to its `P
 
 #### **Branch - Column Level (Within Table Found Live)**
 
-- **Declared column found live, definition matches** (type, nullability, default, length all equivalent after native↔canonical mapping) → no action.
+- **Declared column found live, definition matches** (every field `columnsEqual` compares, after the driver normalizes the declaration — see *Column Comparison*) → no action.
 - **Declared column found live, definition differs** → divergence recorded (candidate alter). `[Implementation Detail]` Whether this is auto-safe or requires confirmation is decided by the Plan stage.
 - **Declared column missing live** → candidate add, _unless_ it pairs with an extra live column below (see Rename Detection).
 - **Non-declared extra column found live** → no action. 
 	- `[Convention]` The developer's own custom columns are left untouched, provided the owning `Model` implements `Serializable`. Behemoth will persist what it's given without requiring exclusive ownership of every column.
 	
-- **Rename Detection** (a "declared missing" + "extra live" pair, matched by structural signature i.e. type/nullable/length equivalence) → always surfaced as an **unresolved ambiguity requiring explicit confirmation**. `[Convention, important]`
+- **Rename Detection** (a "declared missing" + "extra live" pair, matched by structural signature i.e. type/length/nullable/primary-key/unique equivalence, using the **normalized** declaration) → always surfaced as an **unresolved ambiguity requiring explicit confirmation**. `[Convention, important]` An extra live column whose type couldn't be mapped never takes part in rename matching.
 
 	- **Multiple equally-plausible candidates for one column** → no pairing is guessed; every involved column falls back to independent add/drop candidates, each still individually flagged for review. `[Implementation Detail]`
 
@@ -58,6 +94,9 @@ Before any comparison happens, every declared table/column is resolved to its `P
 When the live database column type have no direct mapping to behemoth's list of supported column types, a type mapping ambiguity arises. This is out of scope for behemoth to handle, since it's not a comprehensive migration engine that's able to map every existing database types. The introspector's type support can grow over time as the need and relevance dictate, but that doesn't guarantee a complete coverage for all databases.
 
 If a user table has such unsupported field, they should provide a custom Model type with Model + Serializer interface implementations for the schema.
+
+- `[Convention, important]` The introspector reports such a column as `Text` with a `ColumnAmbiguity`, and `RejectAmbiguousTypes` **stops generation** (both paths) — there is no option to offer for a type nobody can determine. Each driver maps the type names it renders plus common SQL names (SQLite: `INT`, `CHAR(n)`, `DOUBLE`, `DECIMAL(p,s)`, `BOOL`, …) and flags everything else (Postgres: enums, `POINT`, …; SQLite: `DATE`, a column with no declared type). SQLite deliberately does **not** fall back on its type-affinity rules: an affinity says how values are stored, not what the column means (`DATE` gets NUMERIC affinity).
+- `[Convention]` A **lossy but determinable** mapping is not an ambiguity. SQLite's `BLOB` (uuid, blob or bytes) and `TEXT` (text or json) read back as `blob` and `text`; the column is fully usable as the type reported, and `ColumnNormalizer` makes the declaration compare equal (see *Column Comparison*).
 
 #### **Branch - Index Level (within a table found live)**
 
@@ -82,6 +121,8 @@ One Introspection Report: per table, per column/index/FK  matches, divergences, 
 
 Notes
 - `[Convention, important]` Since introspection is now required for _both_ paths, `SchemaIntrospector` is a **required** driver capability for migration support.
+- `[Convention]` Findings come out in declaration order (then live order for extras), so the report — and every baseline built from it — is identical across runs.
+- `[Implementation Detail]` SQLite specifics: structure comes from `PRAGMA table_info`, `index_list`/`index_info` and `foreign_key_list`; what the pragmas don't report — foreign-key constraint names and `AUTOINCREMENT` — is read from the table's stored `CREATE TABLE` text with the same parser table rebuilds use. Partial and expression indexes are skipped (the canonical `Index` can't express them); a composite `UNIQUE` constraint keeps its constraint name; `REFERENCES parent` without columns resolves to the parent's primary key; an unnamed foreign key keeps an empty name. Views and indexes sharing the table's name are reported as incompatible objects.
 
 
 ### Introspection frequency by Path
@@ -99,6 +140,208 @@ Notes
 - `[Implementation Detail]` Fingerprint composition (which fast facts are cheap enough to check on every call vs. worth caching) is left open for the implementation pass.
 
 **Driver without introspection capability** → `[Deferred]` fall back to the previously-designed pure canonical-snapshot diffing for that driver only, as a reduced-capability mode, rather than refusing migration support outright. Not designed in this pass.
+
+# **Column Comparison — Normalization, Equality & Narrowing**
+
+This section defines when a declared column and a live (or previously recorded) column are **the same**, and, when they are not, whether altering one into the other is **narrowing**. Both answers drive Planning: a match produces nothing, a widening difference an automatic `OpAlterColumn`, a narrowing one a confirmation issue.
+
+## **The problem normalization solves**
+
+A driver's DDL cannot always preserve every distinction a declaration makes. The introspector can only report what the database stored, so a column read back after the driver created it may legitimately differ from its declaration:
+
+| Declared | Created as | Read back as |
+| --- | --- | --- |
+| `uuid`, `bytes` (SQLite) | `BLOB` | `blob` |
+| `json` (SQLite) | `TEXT` | `text` |
+| `blob` (Postgres) | `BYTEA` | `bytes` |
+| `string`, no length (both) | `VARCHAR(255)` | `string(255)` |
+| `text` with a `Length` (both) | `TEXT` | `text`, no length |
+| `bigint` + `AutoInc` (SQLite) | `INTEGER PRIMARY KEY AUTOINCREMENT` | `integer` |
+| primary key declared nullable / unique (both) | `NOT NULL`, no separate `UNIQUE` | not nullable, not unique |
+| default `-1` on an integer (Postgres) | `'-1'::integer` | literal `-1` only if parsed with the column type in mind |
+
+Compared naively, every such column differs on **every** run, and the planner proposes changing it into what it already is (on SQLite, a table rebuild).
+
+## **`ColumnNormalizer`**
+
+```go
+type ColumnNormalizer interface {
+	// NormalizeColumn returns col as Introspect would report it after the
+	// driver created it in table (canonical name).
+	NormalizeColumn(table string, col schema.Column) schema.Column
+}
+```
+
+It is an optional capability of the `SchemaIntrospector`, discovered by type assertion. The question it answers is *"if I create this declared column and read it back, what do I get?"* — the same lossy mapping the DDL performs, applied in advance.
+
+### **Where core applies it**
+
+- **Equality in `RunIntrospection`** (Path II, and Path I's baseline): `diffColumns` compares `normalize(declared)` against the live column.
+- **Rename matching** (`matchRenameCandidates`): structural signatures compare the normalized declaration, so a renamed blob column still pairs with its live bytes counterpart.
+- **Narrowing:** every finding with both sides carries `ColumnFinding.Normalized`, and the planner judges narrowing on it (see below).
+- **Not** in snapshot diffs (`RunIntrospectionFromSnapshotDiff`, Path I after baseline): both sides there are declarations, so there is nothing to normalize; `nil` is passed.
+
+`[Convention, important]` Normalization only decides **whether** something changed. Findings always carry the original declaration in `ColumnFinding.Declared`, and every operation (`OpAddColumn`, `OpAlterColumn`, rename) is built from it, so the renderer receives exactly what was declared.
+
+### **Baseline recording**
+
+A baseline (Path I, brownfield) records tables into the snapshot that every later snapshot diff compares declarations against. `[Convention, important]` For a column that **matched**, the baseline records the **declaration**, not the live column: the two only matched up to normalization, and recording the live shape (e.g. `bytes` for a declared `blob`) would make the column differ on every run after the baseline. Columns that differ, and undeclared live columns, are recorded as found live.
+
+### **Contract for implementers**
+
+- **Replay the renderer, nothing else.** Every rule must correspond to something the driver's own DDL does. A rule that "helps a comparison pass" without the DDL doing it hides real changes.
+- **Share code with the introspector wherever both sides go through the same transformation.** Defaults are the strongest example: the normalizer runs the declared default through the driver's renderer and then through the **same parser** the introspector uses (`pgDefaultFromStored`, `sqliteDefaultFromStored`), so the two cannot drift apart.
+- **Apply the driver's own override first** (`Overrides[driver].Type`, `.AutoInc`, `.Default`), exactly as the renderer does, and **drop other drivers' overrides** — they never reach this database.
+- **Leave names alone** (`Name`, `PhysicalName`); name mapping is the resolver's job.
+- **Change it together with the renderer.** `NormalizeColumn` lives in the introspector file next to the reverse type mapping, and its comment lists the renderer functions it mirrors.
+- **Tests every driver must have:**
+  1. unit tests for each rule, including other drivers' overrides being ignored and an already-normal column passing through unchanged;
+  2. an integration test that creates one column per rule through the driver and expects every column to match after `RunIntrospection`;
+  3. the same test with the normalizer hidden (`struct{ core.SchemaIntrospector }{driver}`), expecting every column to **differ** — proof the normalizer is what makes them match;
+  4. a "real changes still differ" test: a different length, type or nullability is still reported.
+
+### **Current rules**
+
+**Postgres** (`storage/adapters/postgres/introspector.go`):
+
+| Rule | Because the DDL… |
+| --- | --- |
+| `Overrides["postgres"].Type` / `.AutoInc` replace the declared ones | renders the override |
+| string without a length → length 255 | renders `VARCHAR(255)` |
+| `blob` → `bytes` | renders both as `BYTEA` |
+| every type except `string` → length 0 | only `VARCHAR` carries a length |
+| primary key → not nullable, not unique | renders `NOT NULL`; the key implies uniqueness |
+| default → `pgDefaultFromStored(renderDefaultExpr(col))`, none on an identity column | see *Defaults* |
+
+**SQLite** (`storage/adapters/sqlite/introspector.go`):
+
+| Rule | Because the DDL… |
+| --- | --- |
+| `Overrides["sqlite"].Type` / `.AutoInc` replace the declared ones | renders the override |
+| `uuid`, `bytes` → `blob`; `json` → `text` | renders `BLOB` and `TEXT` |
+| string without a length → length 255 | renders `VARCHAR(255)` |
+| every type except `string` → length 0 | only `VARCHAR` carries a length |
+| `AutoInc` → `integer` | `AUTOINCREMENT` is only valid on `INTEGER PRIMARY KEY` |
+| primary key → not nullable, not unique | renders `NOT NULL`, or the column is a rowid alias (never NULL) |
+| default → `sqliteDefaultFromStored(storedDefault(col))` | see *Defaults* |
+
+## **Equality — `columnsEqual`**
+
+| Field | Compared | Notes |
+| --- | --- | --- |
+| `Name` | yes | Live physical names are mapped back to canonical before comparing. |
+| `Type`, `Length` | yes | After normalization. |
+| `Nullable`, `PrimaryKey`, `Unique` | yes | After normalization. |
+| `AutoInc` | yes | |
+| `Default` (+ override `Default`s) | yes | `defaultsEqual`, see *Defaults*. |
+| other `Overrides` fields | no | `Type`/`AutoInc` overrides are already folded in by normalization. |
+| `Check` | — | Removed from the model; see *Constraints*. |
+
+`[Convention]` Findings are produced in **declaration order** (then live order for extras), never map-iteration order — for columns, indexes and foreign keys alike. Baselines are regenerated and compared against the confirmed file (`migrationsEqual`), so a random order would read as "the live schema changed".
+
+## **Narrowing — `isNarrowingChange(live, declared)`**
+
+`declared` is the normalized declaration (`ColumnFinding.Normalized`), so both sides speak the database's terms. A change is **narrowing** — raised as a `PlanIssue` (*Apply alter* · *Leave as-is*) — when any of these holds; otherwise it is planned as an automatic `OpAlterColumn`:
+
+| Change | Narrowing | Why |
+| --- | --- | --- |
+| any type change | yes | Whether existing values convert depends on the data, which planning never reads — including usually-safe changes (integer → bigint, string → text). A type the driver stores identically (uuid in SQLite's `BLOB`) is not a change, because the comparison is normalized. |
+| nullable → `NOT NULL` | yes | Existing NULLs are rejected. |
+| `NOT NULL` → nullable | no | |
+| length shrinks | yes | Longer values are rejected or truncated. |
+| length grows | no | |
+| auto-increment added | yes | A new generator can hand out values that already exist (drivers start it past the existing maximum, but the change still alters how ids are produced). |
+| auto-increment removed | yes | Every insert that leaves the column out breaks. |
+| default added or changed | no | A default only applies to future inserts, never to existing rows. |
+| default removed | yes | Inserts relying on it start failing (or storing NULL). |
+
+`[Convention]` A new default on a column that also becomes `NOT NULL` is narrowing through the nullability rule, not the default rule — the existing rows are what's at risk, and the default never fills them.
+
+### **Applying an auto-increment change**
+
+An `OpAlterColumn` that changes `AutoInc` must actually change it, otherwise the column differs again on the next run. Drivers act only when `PrevColumn` says `AutoInc` changed:
+
+- **Postgres** — *adding*: `DROP DEFAULT` (an identity and a default can't coexist), `ADD GENERATED BY DEFAULT AS IDENTITY`, then `setval(pg_get_serial_sequence(table, column), COALESCE(MAX(column), 0) + 1, false)` so the sequence starts past existing values. *Removing*: `DROP IDENTITY IF EXISTS`, emitted **before** the default clause, since Postgres rejects `SET/DROP DEFAULT` on an identity column; a legacy `serial` column loses its `nextval()` default through the ordinary default clause. Adding to a non-integer column is rejected.
+- **SQLite** — the alter is a table rebuild that re-renders the column, so `AUTOINCREMENT` follows the declaration; the rebuild preserves `sqlite_sequence`, so ids continue past the existing maximum. `AUTOINCREMENT` is only valid on a lone `INTEGER PRIMARY KEY`. Removing it from a rowid alias still lets SQLite assign rowids (possibly reusing them).
+
+## **Defaults**
+
+### **Representation**
+
+A column's default has two forms, and exactly one applies:
+
+- `Column.Default` — a **literal value** (`"active"`, `7`, `true`).
+- `Overrides[driver].Default` — a **raw expression** in that driver's language (`now()`, `CURRENT_TIMESTAMP`). It wins over the literal.
+
+Introspectors report a live default the same way: a literal they can parse becomes `Default`; anything else is kept verbatim under **their own** override. `NormalizeColumn` maps a declaration onto exactly that shape.
+
+### **Comparison — `defaultsEqual`**
+
+- **Literals** compare by value; numbers numerically, whatever their Go type — a declaration holds `7` (`int`), an introspector reads `int64(7)`, and a migration file or Path I snapshot that went through JSON holds `float64(7)`.
+- **Expressions** compare per driver with `sameExpression`: case-insensitive, ignoring whitespace and parentheses that enclose the whole expression, but **exact inside quoted strings and quoted identifiers** (`'A'` ≠ `'a'`, `'a b'` ≠ `'ab'`).
+- `hasDefault` (used by the narrowing rule) is true for a non-nil literal or any non-empty override expression.
+
+### **Postgres workflow**
+
+1. **Render** (`renderDefaultExpr`): the postgres override expression if set, otherwise the literal (`'it''s'`, `7`, `TRUE`). An identity column gets no default.
+2. **Store** — Postgres rewrites what it stores. Observed with a probe against Postgres 15:
+
+| Declared | Stored (`information_schema.columns.column_default`) |
+| --- | --- |
+| `-1` on `INTEGER`; `-5` on `BIGINT` | `'-1'::integer`; `'-5'::integer` |
+| `7`, `1.5`, `1.50` | `7`, `1.5`, `1.50` |
+| `TRUE` | `true` |
+| `'x'` on `TEXT` / `VARCHAR` | `'x'::text` / `'x'::character varying` |
+| `NOW()`, `now()` | `now()` |
+| `current_timestamp` | `CURRENT_TIMESTAMP` |
+| `(1+1)` | `(1 + 1)` |
+| `'{}'` on `JSONB` | `'{}'::jsonb` |
+| `NULL` | no default |
+| `'2020-01-01'` on `TIMESTAMP` | `'2020-01-01 00:00:00'::timestamp without time zone` |
+
+3. **Read back** (`pgDefaultFromStored` → `parsePgDefault(expr, columnType)`): a quoted literal with an optional cast is a literal — and on a numeric column it is parsed as a **number** (Postgres quotes negatives); bare numbers, `true`/`false` (any case) and `NULL` are literals; `nextval(…)` is handled before this as `AutoInc` (serial); everything else is an expression, kept verbatim under `Overrides["postgres"]`.
+4. **Normalize** = step 3 applied to step 1's output.
+
+### **SQLite workflow**
+
+1. **Render**: the sqlite override as `DEFAULT (expr)`, otherwise the literal (`DEFAULT 'x'`, `DEFAULT 1` for `true`).
+2. **Store** — SQLite keeps the text as written, except that it **drops exactly one pair of parentheses** around an expression default. Observed with a probe:
+
+| Written | Reported (`PRAGMA table_info` → `dflt_value`) |
+| --- | --- |
+| `DEFAULT ('{}')`, `DEFAULT '{}'` | `'{}'` |
+| `DEFAULT (CURRENT_TIMESTAMP)` | `CURRENT_TIMESTAMP` |
+| `DEFAULT (1+1)` | `1+1` |
+| `DEFAULT (datetime('now'))` | `datetime('now')` |
+| `DEFAULT (-1)`, `DEFAULT -1` | `-1` |
+| `DEFAULT ((('x')))` | `(('x'))` |
+
+3. **Read back** (`sqliteDefaultFromStored` → `parseSQLiteDefault(text, columnType)`): a single quoted string, a number, `NULL`, `TRUE`/`FALSE` are literals; `0`/`1` on a `BOOLEAN` column read back as booleans; everything else is an expression under `Overrides["sqlite"]` (one more enclosing pair stripped).
+4. **Normalize** = step 3 applied to the text step 2 would report (`storedDefault`): the override expression itself, or the literal's text. Consequently an override that is only a quoted literal (`'{}'`) normalizes — and reads back — as the literal `{}`.
+
+### **Known limitation**
+
+`[Known limitation]` A literal the database **reformats** on storage never compares equal — Postgres stores `'2020-01-01'` on a timestamp column as `'2020-01-01 00:00:00'::timestamp…`. Such a column gets an automatic `SET DEFAULT` on every run: harmless, but noisy. Declare these defaults in their stored form, or as an override expression. A full fix would need each driver to reproduce the database's value formatting; deferred until it matters.
+
+## **Guidance for future drivers (MySQL, SQL Server, MongoDB, …)**
+
+`[Convention, important]` **Probe before encoding.** Every storage rule above was observed against the real database (a throwaway container or in-memory instance, a probe table with one column per case, and the catalog query the introspector uses), not recalled. A new driver starts the same way and records its probe table in this document. The points below are what to probe for, not facts to rely on.
+
+Checklist:
+
+1. **Types:** list every canonical type the renderer collapses, and every type the database stores differently from how it was written; each becomes a normalization rule.
+2. **Lengths:** which types carry one, what a length-less string becomes.
+3. **Keys:** whether primary keys are implicitly `NOT NULL` / unique, and how the catalog reports it.
+4. **Auto-increment:** how it is declared, how the catalog reports it, whether it can be added or removed in place, and how to start it past existing values.
+5. **Defaults:** the catalog's stored form for literals (quoting, casts, negatives, booleans), keywords, functions, and parenthesized expressions; share one parser between `Introspect` and `NormalizeColumn`.
+6. **Tests:** the four tests in *Contract for implementers*, plus a defaults round-trip test like `DefaultsMatch`.
+
+Points to probe per database (expected, unverified):
+
+- **MySQL** — `BOOLEAN` is `TINYINT(1)` (a type collapse); `VARCHAR` requires a length; `AUTO_INCREMENT` is reported in `information_schema.COLUMNS.EXTRA`, must be on a key, and continues past the existing maximum on its own; expression defaults (8.0.13+) are flagged `DEFAULT_GENERATED` in `EXTRA`, and literal defaults are reported unquoted in `COLUMN_DEFAULT`; `TEXT`/`BLOB` columns accept only expression defaults.
+- **SQL Server** — defaults are **named constraints** (`sys.default_constraints.definition`), stored wrapped in parentheses (numbers typically doubled: `((0))`, strings `('x')`, functions `(getdate())`); changing a default is drop-constraint-then-add; `IDENTITY` cannot be added to or removed from an existing column with `ALTER COLUMN`, so an auto-increment change needs a rebuild or a column swap; `bit` for booleans, `nvarchar(max)` for unbounded text.
+- **MongoDB / other document stores** — no DDL-level defaults or auto-increment, and no enforced lengths. The driver's `NormalizeColumn` clears `Default`, `AutoInc` and `Length` (whatever the database doesn't store), so those fields always compare equal; core needs no special case. Row consistency is the application's concern there (see *Constraints* for validation).
+
 
 # **Planning Stage** 
 
@@ -130,10 +373,12 @@ This stage converts the Introspection Report's divergences and ambiguities into 
 	- **Path II** → no snapshot exists, and the introspector excludes all extra columns before passing the live state to planner. 
 
 - **Rename-paired columns** (from Introspection's structural-signature matching) → `OpRenameColumn` candidate. `[Tier: Requires Confirmation]`
-- **Definition divergence** (type/nullable/default/length differ) → `OpAlterColumn` candidate. Tier determined by direction:
+- **Definition divergence** (any field `columnsEqual` compares differs: type, length, nullability, primary key, uniqueness, auto-increment, default) → `OpAlterColumn` candidate, built from the declaration with `PrevColumn` set to the live column. Tier determined by direction (full rules and rationale in *Column Comparison → Narrowing*):
 
-	- **Widening** (nullable→true, length increases, no data can be rejected) → `[Tier: Auto]`
-	- **Narrowing** (any type change, nullable→false, length decreases, auto-increment added or removed, a default is removed) → `[Tier: Data Dependent]`. Every type change counts, even usually-safe ones (integer→bigint): whether existing values convert depends on data planning never reads. Both sides are compared after driver normalization (`ColumnNormalizer`), so a type the driver stores identically (uuid in SQLite's BLOB) is not a change.
+	- **Widening** (nullable→true, length increases, a default is added or changed) → `[Tier: Auto]`
+	- **Narrowing** (any type change, nullable→false, length decreases, auto-increment added or removed, a default is removed) → `[Tier: Data Dependent]`, raised as a `PlanIssue`. Judged on the normalized declaration (`ColumnFinding.Normalized`), so a type the driver stores identically (uuid in SQLite's BLOB) is not a change, and a string declared without a length is 255, not 0.
+
+- **Defaults** — compared in the shape introspectors report them, after normalization; adding or changing one is widening, removing one is narrowing. Details, per-driver behavior and the known limitation are in *Column Comparison → Defaults*.
 
 - ~~**Type reverse-mapping ambiguity carried over from Introspection** → `[Convention]` Plan refuses to finalize tiering for that column until the ambiguity is resolved via the draft-review mechanism — an unresolved ambiguity is never silently defaulted to a tier.~~
 
@@ -152,7 +397,7 @@ This stage converts the Introspection Report's divergences and ambiguities into 
 #### **Branch - Developer-Authored Custom Operations**
 
 - A developer may inject a hand-written operation (typically a data-affecting step with no structural divergence behind it. e.g. a backfill) directly into the candidate set at Plan time. 
-- `[Implementation Detail]` The mechanics of _how_ a custom operation is authored/injected (file-based, code-based) are left to the Generate-stage discussion, since a custom operation need to participate in the dependency graph.
+- These are `CustomMigration`s: declared in code, attached to the plan as-is (never tiered, never raised as issues), and ordered by the Generation stage. See *Custom Migrations*.
 
 
 #### **Issue Planner**
@@ -183,7 +428,7 @@ type PlanIssue struct {
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Rename candidate (single structural match)                        | Rename · Drop old + Add new independently · Leave as-is                                           |
 | Ambiguous rename (multiple equally-plausible candidates)          | Manually pair specific columns · Fall back to independent add/drop for all involved · Leave as-is |
-| Narrowing alter (type change, nullable→false, length shrinks, auto-increment added or removed, default removed) | Apply alter · Apply alter with a specified default for existing rows · Leave as-is |
+| Narrowing alter (type change, nullable→false, length shrinks, auto-increment added or removed, default removed) | Apply alter · Leave as-is (`[Deferred]` Apply alter with a specified default for existing rows) |
 | ~~Type reverse-mapping ambiguity~~                                | ~~Accept Planning's guessed canonical type · Override with a specified type · Leave as-is~~       |
 | Table found live as an incompatible object (view, etc.)           | _(no automated option — blocking; message directs to manual resolution outside the tool)_         |
 | Extra live column, never behemoth-declared                        | _(no options — not an issue since it's never surfaced)_                                           |
@@ -292,7 +537,8 @@ This stage generates the migration object with ordered list of schema operations
 - **Rule 1:** Any operation targeting table T depends on T's own `OpCreateTable`, if T is created within this same `ResolvedOperationSet`.
 - **Rule 2:** `OpAddForeignKey` depends on its `RefTable`'s `OpCreateTable`, if `RefTable` is created within this same set.
 - **Rule 3:** `OpDropForeignKey` must precede its `RefTable`'s `OpDropTable`, if both exist within this same set.
-- **Rule 4:** Explicitly declared dependencies in `SchemaOperations` & `CustomMigration` are added.
+- **Rule 4:** Explicitly declared dependencies in `SchemaOperation.DependsOn` are added.
+- **Rule 5:** Explicitly declared dependencies in `CustomMigration.DependsOn` are added (see *Custom Migrations*).
 
 ##### **Dependency ordering / deferred constraint creation problem**
 
@@ -307,8 +553,8 @@ The dependency ordering logic should support logically valid cyclic dependencies
 
 **Handled, in scope:**
 
-- Two (or more) tables whose only interdependency is via foreign keys → resolved automatically per Rule 4, with zero developer intervention. Output ordering: `CreateTable(A)`, `CreateTable(B)` (relative order between these two is now a tie, broken by the existing alphabetical/registration-order tiebreak, then `AddForeignKey(A->B)`, `AddForeignKey(B->A)` in whichever order their own dependencies resolve.
-- **N-table mutual reference cycles** (A->B->C->A) → handled by the identical mechanism, since Rule 4 makes _every_ FK edge point only at a `CreateTable`, never at another FK — a cycle among FK operations themselves cannot form regardless of how many tables are involved. `[Convention]`
+- Two (or more) tables whose only interdependency is via foreign keys → resolved automatically per Rule 2, with zero developer intervention. Output ordering: `CreateTable(A)`, `CreateTable(B)` (relative order between these two is now a tie, broken by the existing alphabetical/registration-order tiebreak, then `AddForeignKey(A->B)`, `AddForeignKey(B->A)` in whichever order their own dependencies resolve.
+- **N-table mutual reference cycles** (A->B->C->A) → handled by the identical mechanism, since Rule 2 makes _every_ FK edge point only at a `CreateTable`, never at another FK — a cycle among FK operations themselves cannot form regardless of how many tables are involved. `[Convention]`
 
 **Explicitly out of scope, documented for future reference:**
 
@@ -329,7 +575,7 @@ The dependency ordering logic should support logically valid cyclic dependencies
 
 - **`[Convention, important]` All-or-nothing reversibility,:** if any single step in `Up` cannot be inverted (a `CustomMigration` with no authored `Down`, a retained-definition field unexpectedly missing), the **entire** migration's `Down` is `nil` to prevent a partial rollback stopping midway.
 
-- **Mutual-FK case, specifically:** inverting the deferred-constraint sequence is naturally symmetric and requires no special handling — `Down` of `[CreateTable(A), CreateTable(B), AddFK(A->B), AddFK(B->A)]` is simply `[DropFK(B->A), DropFK(A->B), DropTable(B), DropTable(A)]`, which is itself correctly ordered by the same reversal, and satisfies Rule 3 (`DropForeignKey` before its `RefTable`'s `DropTable`) automatically. `[Convention]` No additional rule is needed for reversing the deferred-constraint pattern — straight reversal of a correctly-ordered forward sequence is always itself correctly ordered backward, given Rules 1–4 hold.
+- **Mutual-FK case, specifically:** inverting the deferred-constraint sequence is naturally symmetric and requires no special handling — `Down` of `[CreateTable(A), CreateTable(B), AddFK(A->B), AddFK(B->A)]` is simply `[DropFK(B->A), DropFK(A->B), DropTable(B), DropTable(A)]`, which is itself correctly ordered by the same reversal, and satisfies Rule 3 (`DropForeignKey` before its `RefTable`'s `DropTable`) automatically. `[Convention]` No additional rule is needed for reversing the deferred-constraint pattern — straight reversal of a correctly-ordered forward sequence is always itself correctly ordered backward, given Rules 1–5 hold.
 
 
 `[Convention]` `LatestMigrationID`'s limitation for `PathGenerateOnly`: if the developer has already moved a previously generated file out of `FolderPath` (per that Path's own contract — "user is responsible to put it in their desired location"), behemoth has no way to see it and will compute IDs as if that migration never existed, producing a duplicate ID on the next run. This is an accepted consequence of `PathGenerateOnly` owning no persistent record beyond the staging folder, with a possible workaround being an explicit `--previous <id>` CLI override for that mode.
@@ -341,7 +587,7 @@ The dependency ordering logic should support logically valid cyclic dependencies
 ### **Entry Point**
 
 ```go
-func RunMigration(ctx context.Context, cfg MigrationConfig, current SchemaRegistry, deps MigrationDeps, interactive bool) (*Migration, error)
+func RunMigration(ctx context.Context, cfg MigrationConfig, declared Declared, deps MigrationDeps, confirmApply bool) (*RunResult, error)
 ```
 
 ### **Step 0 - Precondition**
@@ -351,7 +597,7 @@ func RunMigration(ctx context.Context, cfg MigrationConfig, current SchemaRegist
 ### **Step 1 - Folder & Candidate Detection**
 
 - `EnsureMigrationFolder` creates `cfg.FolderPath` if absent.
-- `PartitionForBaseline` checks every table `current` declares against live existence via `SchemaIntrospector.TableExists`.
+- `PartitionForBaseline` checks every table in `declared.Schemas` against live existence via `SchemaIntrospector.TableExists`.
     - **No candidates found** → pure greenfield. Baseline phase is skipped entirely; control passes straight to Step 5.
     - **One or more candidates found** → brownfield adoption; Baseline Phase (Steps 2–4) runs before Step 5 is reached.
 
@@ -379,7 +625,9 @@ This is a mandatory stage with no bypass, `[Convention, important]`, split into 
 
 ### **Step 4 - Recording**
 
-`BuildBaselineMigration(resolved *ResolvedBaseline) Migration` constructs one `Migration{ID: "0000_baseline", IsBaseline: true}` whose `Up` comprehensively reflects the resolved state: one `OpCreateTable` per table, plus separate `OpAddIndex`/`OpAddForeignKey` operations for every index and foreign key on that table.
+`BuildBaselineMigration(tables map[string]schema.Table) Migration` constructs one `Migration{ID: "0000_baseline", IsBaseline: true}` whose `Up` comprehensively reflects the recorded state: one `OpCreateTable` per table, plus separate `OpAddIndex`/`OpAddForeignKey` operations for every index and foreign key on that table.
+
+`[Convention, important]` The recorded tables come from the introspection report (`introspectedShape`): a column that **matched** its declaration is recorded **as declared**, everything else as found live — see *Column Comparison → Baseline recording*. Tables are sorted by name and columns, indexes and foreign keys keep declaration order, so rebuilding the baseline gives an identical migration (it is regenerated and compared with the confirmed file before being recorded).
 
 `[Convention]` `OpCreateTable.NewTable.ForeignKeys` is always empty here to prevent table-foreign-key cycles.
 
@@ -388,7 +636,7 @@ Before the migration is applied, the user can review and edit the file. Then `de
 
 ## **Step 5 - Ordinary Flow Takeover**
 
-`[Convention, important]` Regardless of whether the Baseline Phase ran, `RunMigration`'s final action is always a direct call to `RunGenerate(ctx, cfg, current, deps.GenerateDeps, interactive)`. This applies both to greenfield and brownfield cases. Any divergence between what baseline recorded and what `current` actually declares surfaces here, through the ordinary Planning/Resolution machinery, as the first real generated migration.
+`[Convention, important]` Regardless of whether the Baseline Phase ran, `RunMigration`'s final action is always a direct call to `RunGenerate(ctx, cfg, declared, deps.GenerateDeps, interactive)`. This applies both to greenfield and brownfield cases. Any divergence between what baseline recorded and what `current` actually declares surfaces here, through the ordinary Planning/Resolution machinery, as the first real generated migration.
 
 ## **Execution Semantics - `ApplyMigration` vs. `RecordBaseline`**
 
@@ -420,7 +668,7 @@ type MigrationDeps struct {
 
 ## Helper - `snapshotAsRegistry`
 
-`[Implementation Detail]` Adapts a persisted `SchemaSnapshot` into the read-only `SchemaRegistry` shape `FromSnapshotDiff` expects as "previous." `Declare`/`ExtendColumn`/`ExtendIndex` are unreachable on this adapter — it exists purely to carry values for a diff, never to accept new registrations, and returns an `Internal`-classified error if called, since that should never happen given how it's constructed.
+`[Implementation Detail]` Adapts a persisted `SchemaSnapshot` into the read-only `schema.Registry` shape `FromSnapshotDiff` expects as "previous." `Declare`/`ExtendColumn`/`ExtendIndex` are unreachable on this adapter — it exists purely to carry values for a diff, never to accept new registrations, and returns an `Internal`-classified error if called, since that should never happen given how it's constructed.
 
 
 # **Execution Flow** 
@@ -433,6 +681,13 @@ type MigrationDeps struct {
 		1. Empty Migration Folder - Run `PartitionForBaseline` to check if there are baseline candidates. If there are, proceed with baseline migration, otherwise, i.e. if no tables exist, proceed to `RunGenerate` from scratch
 		2. Folder has a single baseline migration file - If a single baseline migration is found in the folder, it means a first run has been made and was awaiting a confirmation. For maximum correctness, a baseline migration is generated afresh and compared with the user confirmed file. This will catch live state modifications in-between the two runs. If the state has changed, a new migration is regenerated and written, waiting for confirmation. Otherwise, the baseline migration is applied.
 	2. Not a First Time Run - The normal generate route continues (Check pending -> Apply Pending if any(with confirmation)  -> `RunGenerate` - {Plan -> Resolve -> Generate})
+
+## **Path Generate-Only - II**
+
+1. Run command — the application calls `Prepare` (not `Boot`), builds the migration driver with `PreparedApp.Resolver`, and calls `RunGenerateCLI(ctx, app.Migration, app.Declared(), deps, confirmWrite)`.
+2. Introspect the live database against `Declared.Schemas` (`trackExtraColumns = false`), normalizing declarations through the driver's `ColumnNormalizer`; reject unmappable types.
+3. Plan → attach pending custom migrations → Resolve (draft file) → Generate.
+4. Without `confirmWrite`: report the migration that would be written. With it: render the script first (a render failure writes nothing), then write the `.json` and the script to `FolderPath`. Applying it is the developer's own tool's job.
 			
 
 # **Custom Migrations**
@@ -528,4 +783,24 @@ Freezing:
 	`[Convention]` A custom migration must end at the declared schema, not elsewhere. Its legitimate uses are steps the differ cannot infer, ordered relative to generated operations, and those are mostly data steps.
 - `[Deferred]` **Data operations.** `SchemaOperation` has only structural kinds, so the backfill use case named above is not expressible yet. The intended shape is an `OpExec` kind carrying per-driver SQL and an optional `Down`. Drivers execute and render it like any other operation, and it leaves the snapshot untouched.
 - `[Deferred]` **Plugin-declared custom migrations**, see Stage 0.
-- `[Note]` The Planning stage's "Developer-Authored Custom Operations" branch describes custom operations carrying their own tier declaration. `CustomMigration` has no tier field, and custom migrations bypass tiering and Resolution entirely, as described above.
+
+# **Constraints (`Check`) — Removed, and a Future Design**
+
+### **Why `Check` was removed**
+
+`Column.Check` and `ColumnOverride.Check` held a raw SQL expression rendered as a `CHECK` constraint. It was removed because it was half a feature:
+
+- **Never read back:** neither introspector reported it, and `columnsEqual` never compared it, so a changed check was never migrated and nothing said so.
+- **Not database-neutral:** an untyped SQL string in a model meant to describe any database, with no meaning for document stores.
+
+`[Convention]` What remains is deliberate: SQLite's table rebuild still parses and **preserves** `CHECK` constraints that already exist in a live table (`itemCheck` in `rebuild.go`). That is about not destroying the database's existing constraints, not about declaring new ones.
+
+### **Future design** `[Deferred]`
+
+1. **Typed, declarative constraints instead of SQL text** — e.g. `Enum []any`, `Min`/`Max`, `MinLength`/`MaxLength`, `Pattern`. Structured values can be compared and diffed; strings of SQL can't.
+2. **Table-level and named, like indexes** — `schema.Table.Constraints []Constraint{Name, Columns, …}`. A name is what makes diffing and dropping possible (Postgres needs one to drop a constraint), and multi-column rules (`starts_at < ends_at`) need table level anyway. Contributions from other plugins would work like `ExtendIndex`.
+3. **Rendered natively per driver** — SQL drivers as named `CHECK` constraints; MongoDB as a `$jsonSchema` collection validator (which supports `enum`, `minimum`/`maximum`, `minLength`/`maxLength`, `pattern`).
+4. **Introspected and normalized like everything else** — each driver reads its constraints back into the same structure, and `NormalizeColumn`'s counterpart for constraints absorbs whatever the database rewrites (Postgres re-formats `CHECK` expressions; a probe decides how).
+5. **Narrowing** — adding or tightening a constraint is narrowing (existing rows may violate it); removing or loosening one is widening.
+6. **Also enforced in the application** through the existing `types.Validator`, so databases that enforce nothing still get the guarantee.
+7. **No raw escape hatch in core.** Database-specific SQL belongs in a custom migration, once data operations (`OpExec`) exist.

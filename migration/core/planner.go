@@ -573,7 +573,8 @@ func columnsEqual(a, b schema.Column) bool {
 		a.Nullable == b.Nullable &&
 		a.PrimaryKey == b.PrimaryKey &&
 		a.Unique == b.Unique &&
-		a.AutoInc == b.AutoInc
+		a.AutoInc == b.AutoInc &&
+		defaultsEqual(a, b)
 }
 
 func indexesEqual(a, b schema.Index) bool {
@@ -591,11 +592,16 @@ func fkEqual(a, b schema.ForeignKey) bool {
 
 // isNarrowingChange reports whether altering live into declared may reject
 // or truncate existing data, or break existing writers: changing the type,
-// adding NOT NULL, changing auto-increment, or shrinking the length.
+// adding NOT NULL, changing auto-increment, shrinking the length, or
+// removing the default.
 //
 // Auto-increment counts in both directions. Removing it breaks every insert
 // that leaves the column out; adding it to a populated column hands out
 // values that may already exist, unless the driver starts it past them.
+//
+// Removing a default narrows too: inserts that relied on it start failing (or
+// storing NULL). Adding or changing one doesn't — a default only applies to
+// future inserts, never to existing rows.
 //
 // Every type change counts, including ones that are usually safe (integer to
 // bigint, string to text): whether existing values convert depends on the
@@ -609,5 +615,6 @@ func isNarrowingChange(live, declared schema.Column) bool {
 	return live.Type != declared.Type ||
 		(live.Nullable && !declared.Nullable) ||
 		live.AutoInc != declared.AutoInc ||
+		(hasDefault(live) && !hasDefault(declared)) ||
 		declared.Length < live.Length
 }
