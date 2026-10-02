@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/models"
 	"golang.org/x/oauth2"
 )
 
@@ -63,10 +62,10 @@ func (g *Google) GetScopes() []string {
 	return g.Config.Scopes
 }
 
-func (g *Google) FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (behemoth.User, error) {
+func (g *Google) FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (*behemoth.UserInfo, error) {
 	resp, err := client.Get(GoogleProfileEndpoint)
 	if err != nil {
-		return &models.UserInfo{}, err
+		return &behemoth.UserInfo{}, err
 	}
 
 	defer resp.Body.Close()
@@ -74,15 +73,15 @@ func (g *Google) FetchUserInfo(client *http.Client, ctx context.Context, token *
 	body, err := io.ReadAll(resp.Body)
 	log.Println(string(body))
 	if err != nil {
-		return &models.UserInfo{}, err
+		return &behemoth.UserInfo{}, err
 	}
 
 	var googleUser googleUser
 	if err := json.Unmarshal(body, &googleUser); err != nil {
-		return &models.UserInfo{}, err
+		return &behemoth.UserInfo{}, err
 	}
 
-	return &models.UserInfo{
+	return &behemoth.UserInfo{
 		ID:                googleUser.ID,
 		Provider:          g.ProviderName,
 		Email:             googleUser.Email,

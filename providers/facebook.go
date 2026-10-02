@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/models"
 	"golang.org/x/oauth2"
 )
 
@@ -56,7 +55,7 @@ func (f *Facebook) GetScopes() []string {
 // FetchUserInfo retrieves user information from Facebook using the provided OAuth client and token.
 // It maps the Facebook user data to a UserInfo struct, including fields like ID, email, and name.
 // Returns the UserInfo or an error if the request or parsing fails.
-func (f *Facebook) FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (behemoth.User, error) {
+func (f *Facebook) FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (*behemoth.UserInfo, error) {
 
 	reqUrl := fmt.Sprintf(
 		"%s%s",
@@ -65,7 +64,7 @@ func (f *Facebook) FetchUserInfo(client *http.Client, ctx context.Context, token
 	)
 	resp, err := client.Get(reqUrl)
 	if err != nil {
-		return &models.UserInfo{}, err
+		return &behemoth.UserInfo{}, err
 	}
 
 	defer resp.Body.Close()
@@ -73,15 +72,15 @@ func (f *Facebook) FetchUserInfo(client *http.Client, ctx context.Context, token
 	body, err := io.ReadAll(resp.Body)
 	log.Println(string(body))
 	if err != nil {
-		return &models.UserInfo{}, err
+		return &behemoth.UserInfo{}, err
 	}
 
 	var fbUser facebookUser
 	if err := json.Unmarshal(body, &fbUser); err != nil {
-		return &models.UserInfo{}, err
+		return &behemoth.UserInfo{}, err
 	}
 
-	return &models.UserInfo{
+	return &behemoth.UserInfo{
 		Provider:          f.ProviderName,
 		ID:                fbUser.ID,
 		Email:             fbUser.Email,

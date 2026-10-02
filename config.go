@@ -8,7 +8,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type Config[T User] struct {
+type Config struct {
 	DatabaseConfig          DatabaseConfig
 	JWT                     *JWTConfig
 	Session                 *SessionConfig
@@ -18,13 +18,11 @@ type Config[T User] struct {
 	UseEmailAndPasswordAuth bool
 }
 
-// DatabaseConfig defines configuration for database connection and user model/table.
+// DatabaseConfig defines configuration for the database connection. The user
+// model is always models.User, extended through schema contributions.
 type DatabaseConfig struct {
-	Name           DatabaseName
-	DB             *sql.DB
-	UseDefaultUser bool
-	UserModel      User
-	UserFactory    func(map[string]any) User
+	Name DatabaseName
+	DB   *sql.DB
 }
 
 type PasswordConfig struct {
