@@ -250,6 +250,26 @@ type HookContext struct {
 	Request *RequestContext
 }
 
+type requestContextKey struct{}
+
+// ContextWithRequest returns ctx carrying rc, the request being handled. The
+// router sets it once per request (Router.Build), so code reached while
+// handling it — including layers that never see rc, like the store's data
+// hooks — can still attribute work to the request (IP, user agent, headers).
+// Outside a request (a CLI, a job) there is none, and RequestFrom says so.
+//
+// Only the request travels this way: it is request-scoped by definition.
+// Anything else a callee needs is passed explicitly.
+func ContextWithRequest(ctx context.Context, rc *RequestContext) context.Context {
+	return context.WithValue(ctx, requestContextKey{}, rc)
+}
+
+// RequestFrom returns the request ctx carries, or nil outside one.
+func RequestFrom(ctx context.Context) *RequestContext {
+	rc, _ := ctx.Value(requestContextKey{}).(*RequestContext)
+	return rc
+}
+
 type HookCatalog interface {
 	Declare(def HookPointDef) error // errors if Point already declared by a different owner
 	Lookup(point HookPoint) (HookPointDef, bool)

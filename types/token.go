@@ -2,13 +2,15 @@ package types
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/models"
 )
 
-type TokenKind string
+// TokenKind is models.TokenKind: the token model lives in package models so
+// the store (which can't import types) can persist it.
+type TokenKind = models.TokenKind
 
 const (
 	TokenKindEmailVerification TokenKind = "email_verification"
@@ -42,76 +44,8 @@ type TokenCatalog interface {
 	Lookup(kind TokenKind) (TokenKindDef, bool)
 }
 
-type Token struct {
-	ID           string
-	Kind         TokenKind
-	Subject      any
-	LookupHash   string
-	TokenHash    string
-	KeyVersion   int
-	ExpiresAt    time.Time
-	ConsumedAt   *time.Time // nil until used - for SingleUse kinds
-	RevokedAt    *time.Time
-	MetadataJSON behemoth.M // kind-specific payload: redirect URL for magic link, scopes for API key
-	CreatedAt    time.Time
-}
-
-func (t *Token) SchemaName() string     { return "tokens" }
-func (t *Token) PrimaryKeyName() string { return "id" }
-func (t *Token) PrimaryKeyField() any   { return t.ID }
-func (t *Token) New() behemoth.Model    { return &Token{} }
-
-func (t *Token) ToMap() (map[string]any, error) {
-	var consumedAt, revokedAt any
-	if t.ConsumedAt != nil {
-		consumedAt = *t.ConsumedAt
-	}
-	if t.RevokedAt != nil {
-		revokedAt = *t.RevokedAt
-	}
-	return map[string]any{
-		"id":          t.ID,
-		"kind":        t.Kind,
-		"subject":     t.Subject,
-		"lookup_hash": t.LookupHash,
-		"token_hash":  t.TokenHash,
-		"key_version": t.KeyVersion,
-		"metadata":    t.MetadataJSON,
-		"expires_at":  t.ExpiresAt,
-		"consumed_at": consumedAt,
-		"revoked_at":  revokedAt,
-		"created_at":  t.CreatedAt,
-	}, nil
-}
-
-func (t *Token) FromMap(m map[string]any) error {
-	t.ID, _ = m["id"].(string)
-	kind, _ := m["kind"].(string)
-	t.Kind = TokenKind(kind)
-	t.Subject, _ = m["subject"].(string)
-	t.LookupHash, _ = m["lookup_hash"].(string)
-	t.TokenHash, _ = m["token_hash"].(string)
-	if kv, ok := m["key_version"].(int64); ok {
-		t.KeyVersion = int(kv)
-	}
-
-	metadata, _ := m["metadata"].(string)
-
-	var meta behemoth.M
-	_ = json.Unmarshal([]byte(metadata), &meta)
-
-	t.MetadataJSON = meta
-
-	t.ExpiresAt, _ = m["expires_at"].(time.Time)
-	if v, ok := m["consumed_at"].(time.Time); ok {
-		t.ConsumedAt = &v
-	}
-	if v, ok := m["revoked_at"].(time.Time); ok {
-		t.RevokedAt = &v
-	}
-	t.CreatedAt, _ = m["created_at"].(time.Time)
-	return nil
-}
+// Token is models.Token; see TokenKind.
+type Token = models.Token
 
 type TokenManager interface {
 	// Issue generates a raw token, persists only its hash and returns the raw value

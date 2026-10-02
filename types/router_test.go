@@ -84,6 +84,9 @@ func TestRouterBuildPipeline(t *testing.T) {
 			if rctx.Auth != auth {
 				t.Error("handler did not receive the router's AuthContext")
 			}
+			if RequestFrom(rctx.Ctx) != rctx {
+				t.Error("rctx.Ctx does not carry the request (ContextWithRequest)")
+			}
 			return rctx.Response.JSON(http.StatusOK, map[string]string{"status": "ok"})
 		}},
 		{Method: http.MethodGet, Path: "/limited", Handler: func(rctx *RequestContext) error {

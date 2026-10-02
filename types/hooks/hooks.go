@@ -5,6 +5,8 @@ import "github.com/MastewalB/behemoth/types"
 const (
 	HookUserBeforeCreate          types.HookPoint = "data.user.beforeCreate"
 	HookUserAfterCreate           types.HookPoint = "data.user.afterCreate"
+	HookUserBeforeUpdate          types.HookPoint = "data.user.beforeUpdate"
+	HookUserAfterUpdate           types.HookPoint = "data.user.afterUpdate"
 	HookSignUpBefore              types.HookPoint = "auth.signUp.before"
 	HookSignUpAfter               types.HookPoint = "auth.signUp.after"
 	HookSignUpFailed              types.HookPoint = "auth.signUp.failed"

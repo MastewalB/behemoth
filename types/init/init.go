@@ -14,9 +14,10 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/types/ratelimit"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -214,25 +215,27 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		return nil, err
 	}
 
-	store, err := resolveRateLimitStore(kv, db) // backend selection, below
+	counterStore, err := resolveRateLimitStore(kv, db) // backend selection, below
 	if err != nil {
 		return nil, err
 	}
-	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, store: store, cfg: cfg.RateLimit, tel: tel}
+	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, store: counterStore, cfg: cfg.RateLimit, tel: tel}
 	dispatcher := &DefaultDispatcher{catalog: app.Hooks, frozenChains: frozenChains, rateLimiter: rateLimiter, tel: tel}
-	idb := adapters.NewInternalAdapter(db, kv)
 
 	ac := &types.AuthContext{
-		DB:              db,
-		KV:              kv,
-		InternalAdapter: idb,
-		Dispatcher:      dispatcher,
-		TokenManager:    transport.NewDefaultTokenManager(db, kv, idb, app.Tokens, cryptoSuite, dispatcher, cfg.Token),
-		SessionManager:  transport.NewSessionManager(db, kv, idb, cryptoSuite, cfg.Session, dispatcher, tel),
-		RateLimiter:     rateLimiter,
-		Crypto:          cryptoSuite,
-		Telemetry:       *tel,
+		DB:          db,
+		KV:          kv,
+		Dispatcher:  dispatcher,
+		RateLimiter: rateLimiter,
+		Crypto:      cryptoSuite,
+		Telemetry:   *tel,
 	}
+	// The store's data hooks dispatch with ac, and the managers persist
+	// through the store, so they are built in that order.
+	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}))
+	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token)
+	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel)
+
 	// Init before routing, so Routes() and Middlewares() may rely on
 	// anything a plugin sets up in Init.
 	for _, name := range order {
@@ -768,8 +771,11 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 		// {Point: hooks.HookSignInCredentialsVerified, Owner: "core", Phase: BeforeHookPhase}, // also Before; a distinct checkpoint, not signIn's "after"
 		// {Point: hooks.HookSignInAfter, Owner: "core", Phase: AfterHookPhase},
 		// {Point: hooks.HookSignInFailed, Owner: "core", Phase: FailedHookPhase, Audit: &AuditSpec{}},
-		// {Point: hooks.HookUserBeforeCreate, Owner: "core", Phase: BeforeHookPhase},
-		// {Point: hooks.HookUserAfterCreate, Owner: "core", Phase: AfterHookPhase},
+		// data hooks the store fires (see coreDataHookPoints)
+		{Point: hooks.HookUserBeforeCreate, Owner: "core", Phase: types.BeforeHookPhase},
+		{Point: hooks.HookUserAfterCreate, Owner: "core", Phase: types.AfterHookPhase},
+		{Point: hooks.HookUserBeforeUpdate, Owner: "core", Phase: types.BeforeHookPhase},
+		{Point: hooks.HookUserAfterUpdate, Owner: "core", Phase: types.AfterHookPhase},
 		// ...
 	}
 	for _, p := range points {

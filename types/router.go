@@ -1,6 +1,7 @@
 package types
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -146,9 +147,22 @@ func (r *Router) wrapWithErrorMapping(next HandlerFunc) HandlerFunc {
 	}
 }
 
-func (r *Router) withAuth(next HandlerFunc) HandlerFunc {
+// withRequestScope prepares every request before anything else sees it: it
+// sets rctx.Auth, and puts rctx on rctx.Ctx (ContextWithRequest) so code that
+// only receives a context.Context — the store's data hooks — still knows the
+// request. Adapters always set Ctx; the fallbacks keep a bare RequestContext
+// (tests, custom drivers) safe.
+func (r *Router) withRequestScope(next HandlerFunc) HandlerFunc {
 	return func(rctx *RequestContext) error {
 		rctx.Auth = r.auth
+		ctx := rctx.Ctx
+		if ctx == nil && rctx.Request != nil {
+			ctx = rctx.Request.Context()
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		rctx.Ctx = ContextWithRequest(ctx, rctx)
 		return next(rctx)
 	}
 }
@@ -173,7 +187,7 @@ func (r *Router) ApplyRateLimiting(rl RateLimiter, catalog RateLimitCatalog, ipC
 // Build wraps every route in the request pipeline and hands the table to
 // driver. From outermost to innermost, a request passes through:
 //
-//	Auth injection -> error mapping -> global middlewares -> route rate limit -> route middlewares -> handler
+//	request scope (Auth, request on Ctx) -> error mapping -> global middlewares -> route rate limit -> route middlewares -> handler
 //
 // Error mapping sits outside everything that can fail, so an error from a
 // middleware or the rate limiter becomes a response the same way a handler
@@ -187,7 +201,7 @@ func (r *Router) Build(driver FrameworkDriver, globalMiddleware ...Middleware) e
 		for j := len(globalMiddleware) - 1; j >= 0; j-- {
 			h = globalMiddleware[j](h)
 		}
-		rt.Handler = r.withAuth(r.wrapWithErrorMapping(h))
+		rt.Handler = r.withRequestScope(r.wrapWithErrorMapping(h))
 		routes[i] = rt
 	}
 	return driver.Mount(routes...)

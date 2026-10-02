@@ -143,7 +143,7 @@ From outermost (runs first) to innermost:
 ```
 adapter: build RequestContext (Request, Params, empty Response, Values)
   │
-  ├─ withAuth                 sets rctx.Auth                                   (Build)
+  ├─ withRequestScope         sets rctx.Auth, puts rctx on rctx.Ctx            (Build)
   ├─ wrapWithErrorMapping     returned error → mapped JSON response             (Build)
   ├─ global middleware[0]                                                      (Build)
   ├─ …
@@ -170,11 +170,11 @@ How each step builds it:
   | absolute (`MountAbsolute`) | the full path, since it lives outside `BasePath` | `/.well-known/jwks.json` → `/.well-known/jwks.json` |
 
   A rule written with the full path of a mounted route (`/api/auth/audit/status`) never matches. Changing `BasePath` never requires touching a rule.
-- **`Build`:** `h = global[0](… global[n](h))`, then `h = withAuth(wrapWithErrorMapping(h))`. `Build` works on a copy of the table, so the router's own routes stay unwrapped by this step.
+- **`Build`:** `h = global[0](… global[n](h))`, then `h = withRequestScope(wrapWithErrorMapping(h))`. `Build` works on a copy of the table, so the router's own routes stay unwrapped by this step.
 
 ### **Why this order**
 
-- **Auth outermost.** `withAuth` sets `rctx.Auth` before anything else runs, so every middleware — global or per-route — and the handler can rely on it. The router captured the `AuthContext` in `NewRouter`; adapters build the `RequestContext` without ever knowing about it.
+- **Request scope outermost.** `withRequestScope` sets `rctx.Auth` before anything else runs, so every middleware — global or per-route — and the handler can rely on it. The router captured the `AuthContext` in `NewRouter`; adapters build the `RequestContext` without ever knowing about it. It also puts the `RequestContext` on `rctx.Ctx` (`types.ContextWithRequest`), so code that only receives a `context.Context` still knows which request it serves — the store's data hooks read it back with `types.RequestFrom` to give hooks `HookContext.Request`. `[Convention]` Only the request travels through the context, because it is request-scoped by definition; everything else is passed explicitly. A `context.Context` without one (CLI, background job) is a call made outside any request.
 - **Error mapping directly inside it, outside everything that can fail.** An error from a global middleware, the rate limiter, a route middleware or the handler all become a response through the same mapper. Before this order, only handler errors were mapped; a rate-limit rejection reached the adapter as a raw error.
 - **Global middleware outside route-specific layers.** Cross-cutting concerns (request IDs, security headers, CSRF) see every request first, including ones the rate limiter is about to reject.
 - **Route middleware innermost.** It is the route's own concern and sees the request last, after everything general has passed.

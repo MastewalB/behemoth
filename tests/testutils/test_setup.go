@@ -335,12 +335,6 @@ func SetupSQLiteAdapter(t *testing.T, db *sql.DB) *sqliteAdapter.SQLiteAdapter {
 	return adapter
 }
 
-func SetupInternalAdapter(t *testing.T, db behemoth.Database) *adapters.InternalAdapter {
-	return &adapters.InternalAdapter{
-		DB: db,
-	}
-}
-
 func SetupGormAdapter(t *testing.T, db *gorm.DB) *adapters.GormAdapter {
 	return adapters.NewGormAdapter(db)
 }

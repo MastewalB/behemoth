@@ -7,17 +7,16 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
 type DefaultTokenManager struct {
-	db      behemoth.Database
+	st      *store.Store
 	kv      behemoth.KeyValueStorage
-	idb     types.InternalAdapter
 	catalog types.TokenCatalog
 	crypto  types.Crypto
 	cfg     types.TokenConfig
@@ -26,18 +25,16 @@ type DefaultTokenManager struct {
 }
 
 func NewDefaultTokenManager(
-	db behemoth.Database,
+	st *store.Store,
 	kv behemoth.KeyValueStorage,
-	idb types.InternalAdapter,
 	catalog types.TokenCatalog,
 	crypto types.Crypto,
 	dispatcher types.Dispatcher,
 	cfg types.TokenConfig,
 ) types.TokenManager {
 	return &DefaultTokenManager{
-		db:      db,
+		st:      st,
 		kv:      kv,
-		idb:     idb,
 		catalog: catalog,
 		crypto:  crypto,
 		disp:    dispatcher,
@@ -108,7 +105,6 @@ func (tm *DefaultTokenManager) Issue(
 	}
 
 	tok := &types.Token{
-		ID:           utils.GenerateUUID(),
 		Kind:         kind,
 		Subject:      subjectString(subject),
 		LookupHash:   utils.LookupHashOf(rawToken),
@@ -116,10 +112,9 @@ func (tm *DefaultTokenManager) Issue(
 		KeyVersion:   keyVersion,
 		ExpiresAt:    expiresAt,
 		MetadataJSON: meta,
-		CreatedAt:    time.Now(),
 	}
 
-	hctx := &types.HookContext{Ctx: ctx}
+	hctx := hookContext(ctx)
 
 	if _, err := tm.disp.RunBefore(hctx, hooks.HookTokenBeforeIssue, behemoth.M{
 		hooks.HookValueTokenKind:    string(kind),
@@ -132,7 +127,7 @@ func (tm *DefaultTokenManager) Issue(
 		return nil, "", behemotherr.WrapOp(op, "token", err)
 	}
 
-	tm.disp.RunAfter(&types.HookContext{Ctx: ctx}, hooks.HookTokenIssue, tok)
+	tm.disp.RunAfter(hctx, hooks.HookTokenIssue, tok)
 	return tok, rawToken, nil
 }
 
@@ -147,6 +142,9 @@ func (tm *DefaultTokenManager) persist(ctx context.Context, def types.TokenKindD
 	const op = "TokenManager.persist"
 	switch def.Backend {
 	case types.TokenBackendKV:
+		// No store involved: the KV entry is the whole record, so its
+		// identity and creation time are assigned here.
+		token.ID, token.CreatedAt = utils.GenerateUUID(), time.Now()
 		data, err := json.Marshal(token)
 		if err != nil {
 			return behemotherr.NewValidationError(op, "token", err)
@@ -160,15 +158,14 @@ func (tm *DefaultTokenManager) persist(ctx context.Context, def types.TokenKindD
 		}
 		return tm.kv.Set(ctx, kvKey(types.TokenKind(token.Kind), token.LookupHash), string(data), ttlSeconds)
 	default: // BackendDB
-		return tm.db.Transaction(ctx, func(ctx context.Context, tx behemoth.Database) (any, error) {
-			return nil, tx.Create(ctx, token)
-		})
+		return tm.st.CreateToken(ctx, token)
 	}
 }
 
 // fetch is the shared lookup & authenticity check path used by Verify and
-// Consume, so the two entry points can never drift on that logic.
-func (tm *DefaultTokenManager) fetch(ctx context.Context, def types.TokenKindDef, kind types.TokenKind, rawToken string) (*types.Token, error) {
+// Consume, so the two entry points can never drift on that logic. A DB token
+// is read through st — Consume passes its transaction's store.
+func (tm *DefaultTokenManager) fetch(ctx context.Context, st *store.Store, def types.TokenKindDef, kind types.TokenKind, rawToken string) (*types.Token, error) {
 	const op = "TokenManager.fetch"
 	lookupHash := utils.LookupHashOf(rawToken)
 
@@ -184,11 +181,11 @@ func (tm *DefaultTokenManager) fetch(ctx context.Context, def types.TokenKindDef
 			return nil, behemotherr.NewTokenError(op, behemotherr.ErrorCodeTokenNotFound, err) // corrupted cache entry treated as absent
 		}
 	default:
-		found, err := tm.db.FindOne(ctx, &types.Token{}, byLookupHashAndKind(lookupHash, kind))
+		found, err := st.FindTokenByLookupHash(ctx, kind, lookupHash)
 		if err != nil {
 			return nil, behemotherr.WrapOp(op, "token", err) // NotFound re-contextualized from adapter's raw "FindOne"/"tokens"
 		}
-		m = found.(*types.Token)
+		m = found
 	}
 
 	ok, err := tm.crypto.Secrets.Verify(rawToken, m.TokenHash, m.KeyVersion)
@@ -210,7 +207,7 @@ func (tm *DefaultTokenManager) Verify(ctx context.Context, kind types.TokenKind,
 		return nil, behemotherr.NewValidationError(op, "kind", fmt.Errorf("unknown token kind %q", kind))
 	}
 
-	m, err := tm.fetch(ctx, def, kind, rawToken)
+	m, err := tm.fetch(ctx, tm.st, def, kind, rawToken)
 	if err != nil {
 		return nil, err // already fully classified inside fetch
 	}
@@ -234,37 +231,38 @@ func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind
 		return nil, behemotherr.NewTokenError(op, behemotherr.ErrorCodeTokenInvalidUsage, nil)
 	}
 
-	hctx := &types.HookContext{Ctx: ctx}
+	hctx := hookContext(ctx)
 
 	var result *types.Token
 	var consumeErr error
 
 	switch def.Backend {
 	case types.TokenBackendDB:
-		// Start transaction to fetch, validate, & consume the token
-		consumeErr = tm.db.Transaction(ctx, func(ctx context.Context, tx behemoth.Database) (any, error) {
-			tok, err := tm.fetch(ctx, def, kind, rawToken)
+		// Fetch, validate and consume in one transaction. ConsumeToken is
+		// what makes it at-most-once: a concurrent Consume that read the
+		// token before this one stamped it still loses.
+		consumeErr = tm.st.Transaction(ctx, func(ctx context.Context, tx *store.Store) error {
+			tok, err := tm.fetch(ctx, tx, def, kind, rawToken)
 			if err != nil {
-				return nil, err // already fully classified inside fetch
+				return err // already fully classified inside fetch
 			}
 			if err := checkConsumable(tok); err != nil {
-				return nil, err
+				return err
 			}
-
-			now := time.Now()
-			if err := tx.UpdateOne(ctx, &types.Token{}, tokenByID(tok.ID), behemoth.M{"consumed_at": now}); err != nil {
-				return nil, err
+			at, err := tx.ConsumeToken(ctx, tok.ID)
+			if err != nil {
+				return err
 			}
-			tok.ConsumedAt = &now
+			tok.ConsumedAt = &at
 			result = tok
-			return tok, nil
+			return nil
 		})
 	case types.TokenBackendKV:
 		// KeyValueStorage exposes no transaction primitive, so this is
 		// non-atomic Get-then-Delete. Two concurrent Consume calls for the
 		// same token can both pass Get before either Delete runs, and both
 		// would appear to succeed.
-		tok, err := tm.fetch(ctx, def, kind, rawToken)
+		tok, err := tm.fetch(ctx, tm.st, def, kind, rawToken)
 		if err != nil {
 			consumeErr = err // already fully classified inside fetch
 			break
@@ -290,17 +288,14 @@ func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind
 func (tm *DefaultTokenManager) Revoke(ctx context.Context, tokenID string) error {
 	const op = "TokenManager.Revoke"
 
-	found, err := tm.db.FindOne(ctx, &types.Token{}, tokenByID(tokenID))
+	m, err := tm.st.FindTokenByID(ctx, tokenID)
 	if err != nil {
 		return behemotherr.WrapOp(op, "token", err)
 	}
-
-	m := found.(*types.Token)
 	if m.RevokedAt != nil {
 		return nil // idempotent, matches Session.Revoke's posture
 	}
-	now := time.Now()
-	if err := tm.db.UpdateOne(ctx, &types.Token{}, tokenByID(tokenID), behemoth.M{"revoked_at": now}); err != nil {
+	if err := tm.st.RevokeToken(ctx, tokenID); err != nil {
 		return behemotherr.WrapOp(op, "token", err)
 	}
 
@@ -318,37 +313,10 @@ func (tm *DefaultTokenManager) RevokeAllForSubject(ctx context.Context, kind typ
 	if def.Backend == types.TokenBackendKV {
 		return behemotherr.NewConfigurationError(op, fmt.Sprintf("kind %q is KV-backed; bulk revoke by subject is not supported", kind), nil)
 	}
-	where := clause.Expression{Conditions: []clause.Condition{
-		{Field: "kind", Operator: clause.OpEqual, Value: string(kind)},
-		{Field: "subject", Operator: clause.OpEqual, Value: subjectString(subject)},
-		{Field: "revoked_at", Operator: clause.OpIsNull},
-	}, Logic: clause.OpAnd}
-	if err := tm.db.UpdateMany(ctx, &types.Token{}, where, behemoth.M{"revoked_at": time.Now()}); err != nil {
+	if err := tm.st.RevokeTokensForSubject(ctx, kind, subjectString(subject)); err != nil {
 		return behemotherr.WrapOp(op, "token", err)
 	}
 	return nil
-}
-
-func tokenByID(id string) clause.Expression {
-	return clause.Expression{Conditions: []clause.Condition{{Field: "id", Operator: clause.OpEqual, Value: id}}}
-}
-
-func byLookupHashAndKind(hash string, kind types.TokenKind) clause.Expression {
-	return clause.Expression{
-		Conditions: []clause.Condition{
-			{
-				Field:    "lookup_hash",
-				Operator: clause.OpEqual,
-				Value:    hash,
-			},
-			{
-				Field:    "kind",
-				Operator: clause.OpEqual,
-				Value:    kind,
-			},
-		},
-		Logic: clause.OpAnd,
-	}
 }
 
 var _ types.TokenManager = (*DefaultTokenManager)(nil)

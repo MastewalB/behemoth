@@ -8,13 +8,31 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 )
 
+// Canonical names of the users table and its columns — the single source for
+// ToMap/FromMap, schema declarations, query conditions and update maps. They
+// are canonical names: the SchemaResolver maps them to physical ones.
+const (
+	UserTable = "users"
+
+	UserID            = "id"
+	UserEmail         = "email"
+	UserUsername      = "username"
+	UserFirstname     = "firstname"
+	UserLastname      = "lastname"
+	UserPasswordHash  = "password_hash"
+	UserEmailVerified = "email_verified"
+	UserImageURL      = "image_url"
+	UserCreatedAt     = "created_at"
+	UserUpdatedAt     = "updated_at"
+)
+
 type User struct {
 	ID            string    `db:"id"`
 	Email         string    `db:"email"`
 	Username      string    `db:"username"`
 	Firstname     string    `db:"firstname"`
 	Lastname      string    `db:"lastname"`
-	PasswordHash  string    `db:"password_hash"`
+	PasswordHash  string    `db:"password_hash" json:"-"` // never serialized: handlers return users as JSON
 	EmailVerified bool      `db:"email_verified"`
 	ImageUrl      string    `db:"image_url"`
 	CreatedAt     time.Time `db:"created_at"`
@@ -30,11 +48,11 @@ func (u *User) GetLastname() string     { return u.Lastname }
 func (u *User) GetName() string         { return fmt.Sprintf("%s %s", u.Firstname, u.Lastname) }
 
 func (u *User) SchemaName() string {
-	return "users"
+	return UserTable
 }
 
 func (u *User) PrimaryKeyName() string {
-	return "id"
+	return UserID
 }
 
 func (u *User) PrimaryKeyField() any {
@@ -47,57 +65,57 @@ func (u *User) New() behemoth.Model {
 
 func (u *User) ToMap() (map[string]any, error) {
 	return map[string]any{
-		"id":             u.ID,
-		"email":          u.Email,
-		"username":       u.Username,
-		"firstname":      u.Firstname,
-		"lastname":       u.Lastname,
-		"password_hash":  u.PasswordHash,
-		"email_verified": u.EmailVerified,
-		"image_url":      u.ImageUrl,
-		"created_at":     u.CreatedAt,
-		"updated_at":     u.UpdatedAt,
+		UserID:            u.ID,
+		UserEmail:         u.Email,
+		UserUsername:      u.Username,
+		UserFirstname:     u.Firstname,
+		UserLastname:      u.Lastname,
+		UserPasswordHash:  u.PasswordHash,
+		UserEmailVerified: u.EmailVerified,
+		UserImageURL:      u.ImageUrl,
+		UserCreatedAt:     u.CreatedAt,
+		UserUpdatedAt:     u.UpdatedAt,
 	}, nil
 }
 
 func (u *User) FromMap(data map[string]any) error {
-	id, ok := data["id"].(string)
+	id, ok := data[UserID].(string)
 	if !ok {
 		id = ""
 	}
-	email, ok := data["email"].(string)
+	email, ok := data[UserEmail].(string)
 	if !ok {
 		email = ""
 	}
-	username, ok := data["username"].(string)
+	username, ok := data[UserUsername].(string)
 	if !ok {
 		username = ""
 	}
-	firstname, ok := data["firstname"].(string)
+	firstname, ok := data[UserFirstname].(string)
 	if !ok {
 		firstname = ""
 	}
-	lastname, ok := data["lastname"].(string)
+	lastname, ok := data[UserLastname].(string)
 	if !ok {
 		lastname = ""
 	}
-	passwordHash, ok := data["password_hash"].(string)
+	passwordHash, ok := data[UserPasswordHash].(string)
 	if !ok {
 		passwordHash = ""
 	}
-	emailVerified, ok := data["email_verified"].(bool)
+	emailVerified, ok := data[UserEmailVerified].(bool)
 	if !ok {
 		emailVerified = false
 	}
-	imageUrl, ok := data["image_url"].(string)
+	imageUrl, ok := data[UserImageURL].(string)
 	if !ok {
 		imageUrl = ""
 	}
-	createdAt, ok := data["created_at"].(time.Time)
+	createdAt, ok := data[UserCreatedAt].(time.Time)
 	if !ok {
 		createdAt = time.Time{}
 	}
-	updatedAt, ok := data["updated_at"].(time.Time)
+	updatedAt, ok := data[UserUpdatedAt].(time.Time)
 	if !ok {
 		updatedAt = time.Time{}
 	}

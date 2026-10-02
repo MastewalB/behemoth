@@ -120,10 +120,14 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (behemoth.User, er
 		return nil, errors.New("invalid password")
 	}
 
-	if _, err := ac.InternalAdapter.FindUserByEmail(hctx.Ctx, ac.User, email); err == nil {
+	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
+	if err == nil {
 		ac.PasswordOptions.PasswordHasher.Hash(password) // timing mitigation, unchanged
 		dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists"})
 		return nil, errors.New("user already exists")
+	}
+	if !behemotherr.IsNotFound(err) {
+		return nil, err // infra error (DB down): not "no such user"
 	}
 
 	passwordHash, err := ac.PasswordOptions.PasswordHasher.Hash(password)
@@ -131,14 +135,18 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (behemoth.User, er
 		return nil, err // infra error - no Fail()
 	}
 
-	userData["email"] = email
-	userData["password_hash"] = passwordHash
-	userData["email_verified"] = false
-
-	// InternalAdapter.CreateUser fires data.user.beforeCreate / afterCreate
-	// internally (Tier 1) — SignUp doesn't need to know that happens.
-	user, err := ac.InternalAdapter.CreateUser(hctx.Ctx, ac.User, userData)
-	if err != nil {
+	// Profile fields come from the payload (keys the model doesn't have, like
+	// "password", are ignored); everything security-relevant is set here.
+	// The store assigns the id and timestamps, and fires data.user.beforeCreate
+	// / afterCreate (Tier 1) — SignUp doesn't need to know that happens.
+	user := &models.User{}
+	if err := user.FromMap(userData); err != nil {
+		return nil, errors.New("invalid user data")
+	}
+	user.Email = email
+	user.PasswordHash = passwordHash
+	user.EmailVerified = false
+	if err := ac.Store.CreateUser(hctx.Ctx, user); err != nil {
 		return nil, errors.New("user create failed")
 	}
 
@@ -148,9 +156,7 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (behemoth.User, er
 func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*SignInResult, error) {
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
-	email := strings.ToLower(strings.TrimSpace(creds.Email))
-
-	user, err := ac.InternalAdapter.FindUserByEmail(hctx.Ctx, ac.User, email)
+	user, err := ac.Store.FindUserByEmail(hctx.Ctx, creds.Email) // the store normalizes the email
 	if err != nil {
 		ac.PasswordOptions.PasswordHasher.Hash(creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
@@ -160,9 +166,9 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 		return nil, err // infra error (DB down) — must NOT count toward lockout
 	}
 
-	isValid, err := ac.PasswordOptions.PasswordHasher.Verify(user.GetPasswordHash(), creds.Password)
+	isValid, err := ac.PasswordOptions.PasswordHasher.Verify(user.PasswordHash, creds.Password)
 	if err != nil {
-
+		return nil, err // a malformed stored hash or key error — not a wrong password, so not counted as one
 	}
 
 	if !isValid {
@@ -174,7 +180,7 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 	// payload - this is the mechanism by which SignIn decides Pending vs Active
 	// without knowing anything about TOTP, backup codes, etc.
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
-		behemoth.M{hooks.HookValueUserID: user.GetID()})
+		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
 		dispatcher.Fail(hctx, hooks.HookSignInFailed,
 			types.FailureReason{Code: "secondFactorRejected", Cause: err})
@@ -186,7 +192,7 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 		state = types.SessionPending
 	}
 
-	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.GetID(), types.SessionMeta{
+	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{
 		IPAddress: hctx.Request.Request.RemoteAddr,
 		UserAgent: hctx.Request.Request.UserAgent(),
 		State:     state,
@@ -222,7 +228,7 @@ func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 		return rctx.Response.Error(http.StatusBadRequest, "invalid request body")
 	}
 
-	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
+	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx, Values: behemoth.M{}}
 
 	user, err := p.signUp(hctx, body)
 	if err != nil {
@@ -238,7 +244,7 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 		// return rctx.Response.Error(http.StatusBadRequest, "invalid request body")
 	}
 
-	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
+	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx, Values: behemoth.M{}}
 
 	result, err := p.signIn(hctx, creds)
 	if err != nil {
@@ -255,7 +261,7 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 
 func (p *Plugin) handleSignOut(rctx *types.RequestContext) error {
 	sessionID, _ := rctx.Values["sessionID"].(string) // populated by session middleware upstream
-	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
+	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx, Values: behemoth.M{}}
 	if err := SignOut(hctx, sessionID); err != nil {
 		return rctx.Response.Error(http.StatusInternalServerError, err.Error())
 	}

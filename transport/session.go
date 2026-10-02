@@ -9,18 +9,17 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
 type DefaultSessionManager struct {
-	db     behemoth.Database
+	st     *store.Store
 	kv     behemoth.KeyValueStorage
-	idb    types.InternalAdapter
 	crypto types.Crypto
 	cfg    types.SessionConfig
 	disp   types.Dispatcher
@@ -30,18 +29,16 @@ type DefaultSessionManager struct {
 func cacheKey(lookupHash string) string { return "session:" + lookupHash }
 
 func NewSessionManager(
-	db behemoth.Database,
+	st *store.Store,
 	kv behemoth.KeyValueStorage,
-	idb types.InternalAdapter,
 	crypto types.Crypto,
 	cfg types.SessionConfig,
 	disp types.Dispatcher,
 	tel *types.Telemetry,
 ) types.SessionManager {
 	return &DefaultSessionManager{
-		db:     db,
+		st:     st,
 		kv:     kv,
-		idb:    idb,
 		crypto: crypto,
 		cfg:    cfg,
 		disp:   disp,
@@ -58,7 +55,7 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 
 	// MaxConcurrent enforcement (SessionConfig)
 	if sm.cfg.MaxConcurrent > 0 {
-		count, err := sm.db.Count(ctx, &models.Session{}, notRevokedForUser(userID, ""))
+		count, err := sm.st.CountLiveSessions(ctx, fmt.Sprint(userID))
 		if err != nil {
 			return nil, "", behemotherr.WrapOp(op, "session", err)
 		}
@@ -97,9 +94,10 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 	}
 
 	now := time.Now()
-	hctx := &types.HookContext{Ctx: ctx}
+	hctx := hookContext(ctx)
 	payload, err := sm.disp.RunBefore(hctx, hooks.HookSessionCreate, behemoth.M{
-		"userID": fmt.Sprint(userID), "state": string(meta.State), "ipAddress": ip, "userAgent": ua,
+		hooks.HookValueUserID: fmt.Sprint(userID), hooks.HookValueState: string(meta.State),
+		hooks.HookValueIPAddress: ip, hooks.HookValueUserAgent: ua,
 	})
 	if err != nil {
 		return nil, "", err
@@ -107,12 +105,11 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 
 	// A before-hook may have annotated ip/userAgent (e.g. a geo-lookup plugin)
 	// pull any such enrichment back out; unknown keys are simply absent, no error.
-	if v, ok := payload["userAgent"].(string); ok {
+	if v, ok := payload[hooks.HookValueUserAgent].(string); ok {
 		ua = v
 	}
 
 	m := &models.Session{
-		ID:           utils.GenerateUUID(),
 		UserID:       fmt.Sprint(userID),
 		LookupHash:   lookupHash,
 		TokenHash:    tokenHash,
@@ -123,14 +120,8 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 		FreshAt:      now,
 		IPAddress:    ip,
 		UserAgent:    ua,
-		CreatedAt:    now,
-		UpdatedAt:    now,
 	}
-
-	err = sm.db.Transaction(ctx, func(ctx context.Context, tx behemoth.Database) (any, error) {
-		return nil, tx.Create(ctx, m)
-	})
-	if err != nil {
+	if err := sm.st.CreateSession(ctx, m); err != nil {
 		return nil, "", behemotherr.WrapOp(op, "session", err)
 	}
 
@@ -142,14 +133,11 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 }
 
 func (sm *DefaultSessionManager) evictOldest(ctx context.Context, userID any) error {
-	found, err := sm.db.FindMany(ctx, &models.Session{}, notRevokedForUser(userID, ""),
-		&behemoth.QueryOptions{OrderBy: behemoth.Order{Field: "created_at", Direction: behemoth.Asc}, Limit: 1})
-
-	if err != nil || len(found) == 0 {
+	oldest, err := sm.st.ListLiveSessions(ctx, fmt.Sprint(userID), "", 1)
+	if err != nil || len(oldest) == 0 {
 		return err
 	}
-	oldest := found[0].(*models.Session)
-	return sm.revokeModel(ctx, oldest, "evicted_over_limit")
+	return sm.revokeModel(ctx, oldest[0], "evicted_over_limit")
 }
 
 func (sm *DefaultSessionManager) Get(ctx context.Context, rawToken string) (*models.Session, error) {
@@ -183,9 +171,10 @@ func (sm *DefaultSessionManager) Get(ctx context.Context, rawToken string) (*mod
 	if m.KeyVersion != sm.crypto.Keys.CurrentVersion() {
 		newHash, newVersion, err := sm.crypto.Secrets.Hash(rawToken)
 		if err == nil {
-			_ = sm.db.UpdateOne(ctx, &models.Session{}, byID(m.ID),
-				behemoth.M{"token_hash": newHash, "key_version": newVersion})
-			m.TokenHash, m.KeyVersion = newHash, newVersion
+			if _, err := sm.st.UpdateSession(ctx, m.ID,
+				behemoth.M{models.SessionTokenHash: newHash, models.SessionKeyVersion: newVersion}); err == nil {
+				m.TokenHash, m.KeyVersion = newHash, newVersion
+			}
 		}
 	}
 
@@ -210,11 +199,10 @@ func (sm *DefaultSessionManager) Validate(ctx context.Context, rawToken string) 
 
 func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) (*models.Session, error) {
 	const op = "SessionManager.Promote"
-	found, err := sm.db.FindOne(ctx, &models.Session{}, byID(sessionID))
+	m, err := sm.st.FindSessionByID(ctx, sessionID)
 	if err != nil {
 		return nil, behemotherr.WrapOp(op, "session", err)
 	}
-	m := found.(*models.Session)
 
 	// Transition rule enforcement
 	if m.State == models.SessionRevoked {
@@ -232,27 +220,25 @@ func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) 
 
 	now := time.Now()
 	// Promotion resets to the FULL Active expiry window.
-	updates := behemoth.M{
-		"state":    string(models.SessionActive),
-		"fresh_at": now, "expires_at": now.Add(sm.cfg.ExpiresIn), "updated_at": now,
-	}
-	if err := sm.db.UpdateOne(ctx, &models.Session{}, byID(sessionID), updates); err != nil {
+	promoted, err := sm.st.UpdateSession(ctx, sessionID, behemoth.M{
+		models.SessionStateColumn: string(models.SessionActive),
+		models.SessionFreshAt:     now,
+		models.SessionExpiresAt:   now.Add(sm.cfg.ExpiresIn),
+	})
+	if err != nil {
 		return nil, behemotherr.WrapOp(op, "session", err)
 	}
-
-	m.State, m.FreshAt, m.ExpiresAt, m.UpdatedAt = models.SessionActive, now, now.Add(sm.cfg.ExpiresIn), now
-	sm.cacheSet(ctx, m)
-	return m, nil
+	sm.cacheSet(ctx, promoted)
+	return promoted, nil
 }
 
 func (sm *DefaultSessionManager) Touch(ctx context.Context, sessionID string) error {
 	const op = "SessionManager.Touch"
 
-	found, err := sm.db.FindOne(ctx, &models.Session{}, byID(sessionID))
+	m, err := sm.st.FindSessionByID(ctx, sessionID)
 	if err != nil {
 		return behemotherr.WrapOp(op, "session", err)
 	}
-	m := found.(*models.Session)
 	if m.State == models.SessionRevoked {
 		return nil // silently no-op; a revoked session being "used" isn't an error worth surfacing to request middleware
 	}
@@ -270,39 +256,35 @@ func (sm *DefaultSessionManager) Touch(ctx context.Context, sessionID string) er
 	if m.State == models.SessionPending {
 		ttl = sm.cfg.PendingExpiresIn
 	}
-	updates := behemoth.M{"last_active_at": now, "expires_at": now.Add(ttl), "updated_at": now}
-	if err := sm.db.UpdateOne(ctx, &models.Session{}, byID(sessionID), updates); err != nil {
+	touched, err := sm.st.UpdateSession(ctx, sessionID, behemoth.M{
+		models.SessionLastActiveAt: now,
+		models.SessionExpiresAt:    now.Add(ttl),
+	})
+	if err != nil {
 		return behemotherr.WrapOp(op, "session", err)
 	}
-
-	m.LastActiveAt, m.ExpiresAt, m.UpdatedAt = now, now.Add(ttl), now
-	sm.cacheSet(ctx, m)
+	sm.cacheSet(ctx, touched)
 	return nil
 }
 
 // ListForUser implements [types.SessionManager].
 func (sm *DefaultSessionManager) ListForUser(ctx context.Context, userID any) ([]*models.Session, error) {
-	found, err := sm.db.FindMany(ctx, &models.Session{}, byUserID(userID),
-		&behemoth.QueryOptions{OrderBy: behemoth.Order{Field: "created_at", Direction: behemoth.Desc}})
+	sessions, err := sm.st.ListSessionsForUser(ctx, fmt.Sprint(userID))
 	if err != nil {
 		return nil, behemotherr.WrapOp("SessionManager.ListForUser", "session", err)
 	}
-	out := make([]*models.Session, len(found))
-	for i, f := range found {
-		out[i] = f.(*models.Session)
-	}
-	return out, nil
+	return sessions, nil
 }
 
 // Revoke implements [types.SessionManager].
 func (sm *DefaultSessionManager) Revoke(ctx context.Context, sessionID string, reason string) error {
 	const op = "SessionManager.Revoke"
 
-	found, err := sm.db.FindOne(ctx, &models.Session{}, byID(sessionID))
+	m, err := sm.st.FindSessionByID(ctx, sessionID)
 	if err != nil {
 		return behemotherr.WrapOp(op, "session", err)
 	}
-	err = sm.revokeModel(ctx, found.(*models.Session), reason)
+	err = sm.revokeModel(ctx, m, reason)
 	if err != nil {
 		return behemotherr.WrapOp(op, "session", err)
 	}
@@ -313,12 +295,12 @@ func (sm *DefaultSessionManager) Revoke(ctx context.Context, sessionID string, r
 func (sm *DefaultSessionManager) RevokeAllForUser(ctx context.Context, userID any, reason string, except string) error {
 	const op = "SessionManager.RevokeAllForUser"
 
-	found, err := sm.db.FindMany(ctx, &models.Session{}, notRevokedForUser(userID, except), nil)
+	live, err := sm.st.ListLiveSessions(ctx, fmt.Sprint(userID), except, 0)
 	if err != nil {
 		return behemotherr.WrapOp(op, "session", err)
 	}
-	for _, f := range found {
-		if err := sm.revokeModel(ctx, f.(*models.Session), reason); err != nil {
+	for _, m := range live {
+		if err := sm.revokeModel(ctx, m, reason); err != nil {
 			return behemotherr.WrapOp(op, "session", err)
 		}
 	}
@@ -362,18 +344,22 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 		return nil // already revoked
 	}
 
-	hctx := &types.HookContext{Ctx: ctx}
+	hctx := hookContext(ctx)
 	if _, err := sm.disp.RunBefore(hctx, hooks.HookSessionRevoke,
-		behemoth.M{"sessionID": m.ID, "reason": reason}); err != nil {
+		behemoth.M{hooks.HookValueSessionID: m.ID, hooks.HookValueReason: reason}); err != nil {
 		return err
 	}
 
 	now := time.Now()
-	updates := behemoth.M{"state": models.SessionRevoked, "revoked_at": now, "revoked_reason": reason, "updated_at": now}
-	if err := sm.db.UpdateOne(ctx, &models.Session{}, byID(m.ID), updates); err != nil {
+	revoked, err := sm.st.UpdateSession(ctx, m.ID, behemoth.M{
+		models.SessionStateColumn:   string(models.SessionRevoked),
+		models.SessionRevokedAt:     now,
+		models.SessionRevokedReason: reason,
+	})
+	if err != nil {
 		return err
 	}
-	m.State, m.RevokedAt, m.RevokedReason = models.SessionRevoked, &now, reason
+	*m = *revoked
 
 	// Active invalidation without relying on the KV entry's TTL to lapse
 	// naturally, which would leave a revoked session validatable from cache
@@ -397,11 +383,11 @@ func (sm *DefaultSessionManager) fetchByLookupHash(ctx context.Context, lookupHa
 		// KV must never turn into a hard failure here; it's an optimization,
 		// never a correctness dependency (same fail-open posture as Rate Limiting).
 	}
-	found, err := sm.db.FindOne(ctx, &models.Session{}, byLookupHash(lookupHash))
+	m, err := sm.st.FindSessionByLookupHash(ctx, lookupHash)
 	if err != nil {
 		return nil, false, err
 	}
-	return found.(*models.Session), false, nil
+	return m, false, nil
 }
 
 func (sm *DefaultSessionManager) cacheSet(ctx context.Context, m *models.Session) {
@@ -431,31 +417,10 @@ func (sm *DefaultSessionManager) cacheDelete(ctx context.Context, lookupHash str
 	}
 }
 
-func byID(id string) clause.Expression {
-	return clause.Expression{Conditions: []clause.Condition{{Field: "id", Operator: clause.OpEqual, Value: id}}}
-}
-
-func byLookupHash(hash string) clause.Expression {
-	return clause.Expression{Conditions: []clause.Condition{{Field: "lookup_hash", Operator: clause.OpEqual, Value: hash}}}
-}
-
-func byUserID(userID any) clause.Expression {
-	return clause.Expression{Conditions: []clause.Condition{{Field: "user_id", Operator: clause.OpEqual, Value: fmt.Sprint(userID)}}}
-}
-
-// notRevokedForUser: used for both the MaxConcurrent count and RevokeAllForUser —
-// "not revoked" rather than "active only" deliberately includes Pending sessions,
-// since an abandoned half-completed login still occupies a concurrency slot and
-// still needs revoking on a full logout-everywhere.
-func notRevokedForUser(userID any, exceptID string) clause.Expression {
-	conds := []clause.Condition{
-		{Field: "user_id", Operator: clause.OpEqual, Value: fmt.Sprint(userID)},
-		{Field: "state", Operator: clause.OpNotEqual, Value: string(types.SessionRevoked)},
-	}
-	if exceptID != "" {
-		conds = append(conds, clause.Condition{Field: "id", Operator: clause.OpNotEqual, Value: exceptID})
-	}
-	return clause.Expression{Conditions: conds, Logic: clause.OpAnd}
+// hookContext is the HookContext a manager dispatches its own (semantic)
+// hooks with: the request being handled, if any, and fresh chain Values.
+func hookContext(ctx context.Context) *types.HookContext {
+	return &types.HookContext{Ctx: ctx, Values: behemoth.M{}, Request: types.RequestFrom(ctx)}
 }
 
 var _ types.SessionManager = (*DefaultSessionManager)(nil)

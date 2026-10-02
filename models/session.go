@@ -14,6 +14,29 @@ const (
 	SessionRevoked SessionState = "revoked"
 )
 
+// Canonical names of the sessions table and its columns — the single source
+// for ToMap/FromMap, schema declarations, query conditions and update maps.
+const (
+	SessionTable = "sessions"
+
+	SessionID             = "id"
+	SessionUserID         = "user_id"
+	SessionLookupHash     = "lookup_hash"
+	SessionTokenHash      = "token_hash"
+	SessionKeyVersion     = "key_version"
+	SessionStateColumn    = "state"
+	SessionExpiresAt      = "expires_at"
+	SessionLastActiveAt   = "last_active_at"
+	SessionFreshAt        = "fresh_at"
+	SessionIPAddress      = "ip_address"
+	SessionUserAgent      = "user_agent"
+	SessionImpersonatorID = "impersonator_id"
+	SessionRevokedAt      = "revoked_at"
+	SessionRevokedReason  = "revoked_reason"
+	SessionCreatedAt      = "created_at"
+	SessionUpdatedAt      = "updated_at"
+)
+
 type Session struct {
 	ID             string       `db:"id"`
 	UserID         string       `db:"user_id"`     // stored as string regardless of behemoth.Session.UserID's `any
@@ -47,34 +70,34 @@ func (s *Session) IsExpired() bool {
 }
 
 // Implementations of the Model interface.
-func (s *Session) SchemaName() string     { return "sessions" }
-func (s *Session) PrimaryKeyName() string { return "id" }
+func (s *Session) SchemaName() string     { return SessionTable }
+func (s *Session) PrimaryKeyName() string { return SessionID }
 func (s *Session) PrimaryKeyField() any   { return s.ID }
 func (s *Session) New() behemoth.Model    { return &Session{} }
 
 func (s *Session) FromMap(m map[string]any) error {
-	s.ID, _ = m["id"].(string)
-	s.UserID, _ = m["user_id"].(string)
-	s.LookupHash, _ = m["lookup_hash"].(string)
-	s.TokenHash, _ = m["token_hash"].(string)
-	if kv, ok := m["key_version"].(int64); ok {
+	s.ID, _ = m[SessionID].(string)
+	s.UserID, _ = m[SessionUserID].(string)
+	s.LookupHash, _ = m[SessionLookupHash].(string)
+	s.TokenHash, _ = m[SessionTokenHash].(string)
+	if kv, ok := m[SessionKeyVersion].(int64); ok {
 		s.KeyVersion = int(kv)
 	}
-	if state, ok := m["state"].(string); ok {
+	if state, ok := m[SessionStateColumn].(string); ok {
 		s.State = SessionState(state)
 	}
-	s.ExpiresAt, _ = m["expires_at"].(time.Time)
-	s.LastActiveAt, _ = m["last_active_at"].(time.Time)
-	s.FreshAt, _ = m["fresh_at"].(time.Time)
-	s.IPAddress, _ = m["ip_address"].(string)
-	s.UserAgent, _ = m["user_agent"].(string)
-	s.ImpersonatorID, _ = m["impersonator_id"].(string)
-	if t, ok := m["revoked_at"].(time.Time); ok {
+	s.ExpiresAt, _ = m[SessionExpiresAt].(time.Time)
+	s.LastActiveAt, _ = m[SessionLastActiveAt].(time.Time)
+	s.FreshAt, _ = m[SessionFreshAt].(time.Time)
+	s.IPAddress, _ = m[SessionIPAddress].(string)
+	s.UserAgent, _ = m[SessionUserAgent].(string)
+	s.ImpersonatorID, _ = m[SessionImpersonatorID].(string)
+	if t, ok := m[SessionRevokedAt].(time.Time); ok {
 		s.RevokedAt = &t
 	}
-	s.RevokedReason, _ = m["revoked_reason"].(string)
-	s.CreatedAt, _ = m["created_at"].(time.Time)
-	s.UpdatedAt, _ = m["updated_at"].(time.Time)
+	s.RevokedReason, _ = m[SessionRevokedReason].(string)
+	s.CreatedAt, _ = m[SessionCreatedAt].(time.Time)
+	s.UpdatedAt, _ = m[SessionUpdatedAt].(time.Time)
 	return nil
 }
 
@@ -85,22 +108,22 @@ func (s *Session) ToMap() (map[string]any, error) {
 	}
 
 	return map[string]any{
-		"id":              s.ID,
-		"user_id":         s.UserID,
-		"lookup_hash":     s.LookupHash,
-		"token_hash":      s.TokenHash,
-		"key_version":     s.KeyVersion,
-		"state":           s.State,
-		"expires_at":      s.ExpiresAt,
-		"last_active_at":  s.LastActiveAt,
-		"fresh_at":        s.FreshAt,
-		"ip_address":      s.IPAddress,
-		"user_agent":      s.UserAgent,
-		"impersonator_id": s.ImpersonatorID,
-		"revoked_at":      revokedAt,
-		"revoked_reason":  s.RevokedReason,
-		"created_at":      s.CreatedAt,
-		"updated_at":      s.UpdatedAt,
+		SessionID:             s.ID,
+		SessionUserID:         s.UserID,
+		SessionLookupHash:     s.LookupHash,
+		SessionTokenHash:      s.TokenHash,
+		SessionKeyVersion:     s.KeyVersion,
+		SessionStateColumn:    s.State,
+		SessionExpiresAt:      s.ExpiresAt,
+		SessionLastActiveAt:   s.LastActiveAt,
+		SessionFreshAt:        s.FreshAt,
+		SessionIPAddress:      s.IPAddress,
+		SessionUserAgent:      s.UserAgent,
+		SessionImpersonatorID: s.ImpersonatorID,
+		SessionRevokedAt:      revokedAt,
+		SessionRevokedReason:  s.RevokedReason,
+		SessionCreatedAt:      s.CreatedAt,
+		SessionUpdatedAt:      s.UpdatedAt,
 	}, nil
 }
 
@@ -145,15 +168,3 @@ func (s *Session) ToMap() (map[string]any, error) {
 // 		CreatedAt: time.Now(),
 // 	}
 // }
-
-const SessionTableSchema = `
-CREATE TABLE IF NOT EXISTS sessions (
-	id TEXT PRIMARY KEY,
-	user_id TEXT NOT NULL,
-	expires_at DATETIME NOT NULL,
-	ip_address TEXT,
-	user_agent TEXT,
-	created_at DATETIME NOT NULL,
-	updated_at DATETIME NOT NULL
-);
-`
