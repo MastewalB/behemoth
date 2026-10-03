@@ -48,7 +48,7 @@ func (e *AESGCMEncryptor) Decrypt(ciphertext []byte, keyVersion int) ([]byte, er
 		return nil, err
 	}
 	if len(ciphertext) < gcm.NonceSize() {
-		return nil, behemotherr.NewSecurityError("AESGCMEncryptor.Decrypt", "short_cipher_length", err)
+		return nil, behemotherr.NewSecurityError("AESGCMEncryptor.Decrypt", "short_cipher_length", nil)
 	}
 
 	nonce, sealed := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
