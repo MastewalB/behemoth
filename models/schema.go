@@ -18,7 +18,6 @@ func UserTableSchema() schema.Table {
 			{Name: UserUsername, Type: schema.ColTypeString, Length: 255, Nullable: true},
 			{Name: UserFirstname, Type: schema.ColTypeString, Length: 255, Nullable: true},
 			{Name: UserLastname, Type: schema.ColTypeString, Length: 255, Nullable: true},
-			{Name: UserPasswordHash, Type: schema.ColTypeText, Nullable: true},
 			{Name: UserEmailVerified, Type: schema.ColTypeBoolean, Default: false},
 			{Name: UserImageURL, Type: schema.ColTypeText, Nullable: true},
 			{Name: UserCreatedAt, Type: schema.ColTypeTimestamp},
@@ -76,5 +75,46 @@ func TokenTableSchema() schema.Table {
 			{Name: "uq_tokens_kind_lookup_hash", Columns: []string{TokenKindColumn, TokenLookupHash}, Unique: true},
 			{Name: "idx_tokens_kind_subject", Columns: []string{TokenKindColumn, TokenSubject}},
 		},
+	}
+}
+
+func AccountTableSchema() schema.Table {
+	return schema.Table{
+		Name: AccountTable,
+		Columns: []schema.Column{
+			{Name: AccountID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true},
+			{Name: AccountUserID, Type: schema.ColTypeString, Length: 36},
+			{Name: AccountProviderID, Type: schema.ColTypeString, Length: 64},
+			{Name: AccountAccountID, Type: schema.ColTypeString, Length: 255},
+			{Name: AccountPasswordHash, Type: schema.ColTypeText, Nullable: true},
+			{Name: AccountAccessToken, Type: schema.ColTypeText, Nullable: true},
+			{Name: AccountRefreshToken, Type: schema.ColTypeText, Nullable: true},
+			{Name: AccountIDToken, Type: schema.ColTypeText, Nullable: true},
+			{Name: AccountAccessTokenExpiresAt, Type: schema.ColTypeTimestamp, Nullable: true},
+			{Name: AccountRefreshTokenExpiresAt, Type: schema.ColTypeTimestamp, Nullable: true},
+			{Name: AccountScope, Type: schema.ColTypeText, Nullable: true},
+			{Name: AccountCreatedAt, Type: schema.ColTypeTimestamp},
+			{Name: AccountUpdatedAt, Type: schema.ColTypeTimestamp},
+		},
+		Indexes: []schema.Index{
+			{Name: "uq_accounts_provider_account", Columns: []string{AccountProviderID, AccountAccountID}, Unique: true},
+			{Name: "idx_accounts_user_id", Columns: []string{AccountUserID}},
+		},
+		ForeignKeys: []schema.ForeignKey{{
+			Name: "fk_accounts_user", Columns: []string{AccountUserID},
+			RefTable: UserTable, RefColumns: []string{UserID}, OnDelete: schema.FKCascade,
+		}},
+	}
+}
+
+func RateLimitTableSchema() schema.Table {
+	return schema.Table{
+		Name: RateLimitTable,
+		Columns: []schema.Column{
+			{Name: RateLimitKey, Type: schema.ColTypeString, Length: 255, PrimaryKey: true},
+			{Name: RateLimitCount, Type: schema.ColTypeBigInt},
+			{Name: RateLimitExpiresAt, Type: schema.ColTypeTimestamp},
+		},
+		Indexes: []schema.Index{{Name: "idx_rate_limits_expires_at", Columns: []string{RateLimitExpiresAt}}},
 	}
 }

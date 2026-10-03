@@ -20,7 +20,6 @@ CREATE TABLE users (
 	username TEXT UNIQUE NOT NULL,
 	firstname TEXT,
 	lastname TEXT,
-	password_hash TEXT NOT NULL,
 	email_verified TEXT,
 	image_url TEXT,
 	created_at datetime,
@@ -35,7 +34,6 @@ func newTestUser(id string) *models.User {
 		Username:      fmt.Sprintf("user%s", id),
 		Firstname:     "John",
 		Lastname:      "Doe",
-		PasswordHash:  "hashedpassword",
 		EmailVerified: false,
 		ImageUrl:      "http://example.com/avatar.png",
 		CreatedAt:     time.Now(),
@@ -45,15 +43,14 @@ func newTestUser(id string) *models.User {
 
 func insertUser(t *testing.T, db *sql.DB, u *models.User) {
 	_, err := db.Exec(`INSERT INTO users 
-		(id, email, username, firstname, lastname, password_hash, email_verified, image_url, created_at, updated_at) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		(id, email, username, firstname, lastname, email_verified, image_url, created_at, updated_at) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`,
 		u.ID,
 		u.Email,
 		u.Username,
 		u.Firstname,
 		u.Lastname,
-		u.PasswordHash,
 		u.EmailVerified,
 		u.ImageUrl,
 		u.CreatedAt,
@@ -79,7 +76,6 @@ func TestCreateUser(t *testing.T) {
 			&u.Username,
 			&u.Firstname,
 			&u.Lastname,
-			&u.PasswordHash,
 			&u.EmailVerified,
 			&u.ImageUrl,
 			&u.CreatedAt,
@@ -88,7 +84,6 @@ func TestCreateUser(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, user.Email, u.Email)
 	assert.Equal(t, user.Username, u.Username)
-	assert.Equal(t, user.PasswordHash, u.PasswordHash)
 }
 
 func TestReadUser(t *testing.T) {
@@ -105,7 +100,6 @@ func TestReadUser(t *testing.T) {
 			&u.Username,
 			&u.Firstname,
 			&u.Lastname,
-			&u.PasswordHash,
 			&u.EmailVerified,
 			&u.ImageUrl,
 			&u.CreatedAt,
@@ -138,7 +132,6 @@ func TestUpdateUser(t *testing.T) {
 			&u.Username,
 			&u.Firstname,
 			&u.Lastname,
-			&u.PasswordHash,
 			&u.EmailVerified,
 			&u.ImageUrl,
 			&u.CreatedAt,
@@ -177,14 +170,13 @@ func TestDuplicateEmailFails(t *testing.T) {
 
 	insertUser(t, db, user1)
 	_, err := db.Exec(`INSERT INTO users 
-		(id, email, username, firstname, lastname, password_hash, email_verified, image_url, created_at, updated_at) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		(id, email, username, firstname, lastname, email_verified, image_url, created_at, updated_at) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, user2.ID,
 		user2.Email,
 		user2.Username,
 		user2.Firstname,
 		user2.Lastname,
-		user2.PasswordHash,
 		user2.EmailVerified,
 		user2.ImageUrl,
 		user2.CreatedAt,
@@ -204,14 +196,13 @@ func TestDuplicateUsernameFails(t *testing.T) {
 	insertUser(t, db, user1)
 
 	_, err := db.Exec(`INSERT INTO users 
-		(id, email, username, firstname, lastname, password_hash, email_verified, image_url, created_at, updated_at) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		(id, email, username, firstname, lastname, email_verified, image_url, created_at, updated_at) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, user2.ID,
 		user2.Email,
 		user2.Username,
 		user2.Firstname,
 		user2.Lastname,
-		user2.PasswordHash,
 		user2.EmailVerified,
 		user2.ImageUrl,
 		user2.CreatedAt,

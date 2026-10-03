@@ -441,6 +441,9 @@ A flat set of candidate operations, each tagged with a tier and, where relevant,
 
 `[Convention]` Plan doesn't produce operation ordering — two candidates with a real dependency (e.g. a column addition on a table also being created in this same run) are both present in the output, unordered. Sequencing them correctly is explicitly out of scope here and belongs to the Generation stage.
 
+### `[Convention]` - **Migrations that drop, rename, or otherwise destroy data must not be applied without explicit human confirmation. This is an invariant of the migration engine, not a preference.**
+
+
 #### **Branch - Confirmation Workflow (for every "Requires Confirmation" candidate above)**
 
 - **Interactive context** (local developer machine) → each unresolved candidate is presented for explicit accept/reject; rejecting a proposed `OpRenameColumn` decomposes it back into independent `OpAddColumn` (auto) + `OpDropColumn` (now itself requiring its own separate confirmation).

@@ -13,6 +13,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
@@ -27,8 +28,13 @@ import (
 const schema = `
 CREATE TABLE users (
 	id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, username TEXT, firstname TEXT, lastname TEXT,
-	password_hash TEXT, email_verified BOOLEAN NOT NULL DEFAULT 0, image_url TEXT,
+	email_verified BOOLEAN NOT NULL DEFAULT 0, image_url TEXT,
 	created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL);
+CREATE TABLE accounts (
+	id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider_id TEXT NOT NULL, account_id TEXT NOT NULL,
+	password_hash TEXT, access_token TEXT, refresh_token TEXT, id_token TEXT,
+	access_token_expires_at TIMESTAMP, refresh_token_expires_at TIMESTAMP, scope TEXT,
+	created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, UNIQUE (provider_id, account_id));
 CREATE TABLE sessions (
 	id TEXT PRIMARY KEY, user_id TEXT NOT NULL, lookup_hash TEXT NOT NULL UNIQUE, token_hash TEXT NOT NULL,
 	key_version INTEGER NOT NULL, state TEXT NOT NULL, expires_at TIMESTAMP NOT NULL, last_active_at TIMESTAMP,
@@ -124,7 +130,10 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 	assert.Equal(t, "ada@example.com", stored.Email, "stored normalized")
 	assert.Equal(t, "Ada", stored.Firstname, "profile fields from the payload")
 	assert.NotEmpty(t, stored.ID)
-	assert.NotEmpty(t, stored.PasswordHash, "the hash is stored")
+	credential, err := ac.Store.FindAccount(ctx, models.ProviderCredential, stored.ID)
+	require.NoError(t, err, "signing up creates the user's credential account")
+	assert.Equal(t, stored.ID, credential.UserID)
+	assert.Contains(t, credential.PasswordHash, "argon2", "the hash is stored on the account")
 	assert.False(t, stored.EmailVerified, "a client can't verify its own email")
 	assert.Empty(t, stored.Extras(), "a client can't write arbitrary columns (mass assignment)")
 
@@ -140,4 +149,11 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 
 	w = call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"wrong password"}`)
 	assert.NotEqual(t, http.StatusOK, w.Code, "a wrong password is rejected")
+
+	// A user who only has an OAuth account has no password to sign in with.
+	oauthOnly := &models.User{Email: "grace@example.com"}
+	require.NoError(t, ac.Store.CreateUser(ctx, oauthOnly))
+	require.NoError(t, ac.Store.CreateAccount(ctx, &models.Account{UserID: oauthOnly.ID, ProviderID: "google", AccountID: "g-1"}))
+	w = call(t, ac, routes["/sign-in/email"], `{"email":"grace@example.com","password":"correct horse"}`)
+	assert.NotEqual(t, http.StatusOK, w.Code, "no credential account, no password sign-in")
 }

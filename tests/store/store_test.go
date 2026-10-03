@@ -36,7 +36,7 @@ func usersDB(t *testing.T) behemoth.Database {
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(`CREATE TABLE users (
 		id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, username TEXT, firstname TEXT, lastname TEXT,
-		password_hash TEXT, email_verified BOOLEAN NOT NULL DEFAULT 0, image_url TEXT,
+		email_verified BOOLEAN NOT NULL DEFAULT 0, image_url TEXT,
 		created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)`)
 	require.NoError(t, err)
 	return sqliteAdapter.NewSQLiteAdapter(db, nil)

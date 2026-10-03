@@ -19,7 +19,6 @@ const (
 	UserUsername      = "username"
 	UserFirstname     = "firstname"
 	UserLastname      = "lastname"
-	UserPasswordHash  = "password_hash"
 	UserEmailVerified = "email_verified"
 	UserImageURL      = "image_url"
 	UserCreatedAt     = "created_at"
@@ -29,8 +28,10 @@ const (
 // userColumns are User's own columns; any other column FromMap receives is
 // a contribution, kept in the Extension.
 var userColumns = columnSet(UserID, UserEmail, UserUsername, UserFirstname, UserLastname,
-	UserPasswordHash, UserEmailVerified, UserImageURL, UserCreatedAt, UserUpdatedAt)
+	UserEmailVerified, UserImageURL, UserCreatedAt, UserUpdatedAt)
 
+// User is who signs in. How they sign in — a password, an OAuth provider —
+// is an Account; the user row holds no credential.
 type User struct {
 	Extension
 	ID            string    `db:"id"`
@@ -38,20 +39,18 @@ type User struct {
 	Username      string    `db:"username"`
 	Firstname     string    `db:"firstname"`
 	Lastname      string    `db:"lastname"`
-	PasswordHash  string    `db:"password_hash" json:"-"` // never serialized: handlers return users as JSON
 	EmailVerified bool      `db:"email_verified"`
 	ImageUrl      string    `db:"image_url"`
 	CreatedAt     time.Time `db:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at"`
 }
 
-func (u *User) GetID() string           { return u.ID }
-func (u *User) GetPasswordHash() string { return u.PasswordHash }
-func (u *User) GetEmail() string        { return u.Email }
-func (u *User) GetUsername() string     { return u.Username }
-func (u *User) GetFirstname() string    { return u.Firstname }
-func (u *User) GetLastname() string     { return u.Lastname }
-func (u *User) GetName() string         { return fmt.Sprintf("%s %s", u.Firstname, u.Lastname) }
+func (u *User) GetID() string        { return u.ID }
+func (u *User) GetEmail() string     { return u.Email }
+func (u *User) GetUsername() string  { return u.Username }
+func (u *User) GetFirstname() string { return u.Firstname }
+func (u *User) GetLastname() string  { return u.Lastname }
+func (u *User) GetName() string      { return fmt.Sprintf("%s %s", u.Firstname, u.Lastname) }
 
 func (u *User) SchemaName() string {
 	return UserTable
@@ -76,7 +75,6 @@ func (u *User) ToMap() (map[string]any, error) {
 		UserUsername:      u.Username,
 		UserFirstname:     u.Firstname,
 		UserLastname:      u.Lastname,
-		UserPasswordHash:  u.PasswordHash,
 		UserEmailVerified: u.EmailVerified,
 		UserImageURL:      u.ImageUrl,
 		UserCreatedAt:     u.CreatedAt,
@@ -105,10 +103,6 @@ func (u *User) FromMap(data map[string]any) error {
 	if !ok {
 		lastname = ""
 	}
-	passwordHash, ok := data[UserPasswordHash].(string)
-	if !ok {
-		passwordHash = ""
-	}
 	emailVerified, ok := data[UserEmailVerified].(bool)
 	if !ok {
 		emailVerified = false
@@ -131,7 +125,6 @@ func (u *User) FromMap(data map[string]any) error {
 	u.Username = username
 	u.Firstname = firstname
 	u.Lastname = lastname
-	u.PasswordHash = passwordHash
 	u.EmailVerified = emailVerified
 	u.ImageUrl = imageUrl
 	u.CreatedAt = createdAt

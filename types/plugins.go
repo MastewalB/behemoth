@@ -310,9 +310,9 @@ type FailureReason struct {
 }
 
 type Dispatcher interface {
-	// RunBefore executes the frozen before-chain for point, threading payload
-	// through each handler in registered order. Returns the mutated payload,
-	// or the first non-nil error returned by any handler - that error IS the abort.
+	// RunBefore executes the frozen before-hook chain for a given hook point.
+	// It passes the payload through the hooks in registration order, returning
+	// the mutated payload or aborting on the first non-nil error.
 	RunBefore(hctx *HookContext, point HookPoint, payload behemoth.M) (behemoth.M, error)
 
 	// RunAfter executes the frozen after-chain for point, strictly post-commit.

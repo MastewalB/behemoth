@@ -216,7 +216,9 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		return nil, err
 	}
 
-	counterStore, err := resolveRateLimitStore(kv, db) // backend selection, below
+	// Counters fire no data hooks, so they get a store of their own: the
+	// one plugins use is built later, from the dispatcher this feeds.
+	counterStore, err := resolveRateLimitStore(kv, store.New(db, store.WithSchema(app.Resolver))) // backend selection, below
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +235,8 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	// The store's data hooks dispatch with ac, and the managers persist
 	// through the store, so they are built in that order.
-	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}), store.WithSchema(app.Resolver))
+	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}), store.WithSchema(app.Resolver),
+		store.WithEncryptor(cryptoSuite.AtRest))
 	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token)
 	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel)
 
@@ -667,17 +670,12 @@ func lookup(plugins []types.Plugin, name string) types.Plugin {
 	return nil
 }
 
-type dbCounterStore struct{ db behemoth.Database }
+// dbCounterStore counts in the rate_limits table: the AtomicIncrementer used
+// when no KeyValueStorage provides one.
+type dbCounterStore struct{ store *store.Store }
 
 func (s *dbCounterStore) Increment(ctx context.Context, key string, ttl time.Duration) (int64, error) {
-	var count int64
-	err := s.db.Transaction(ctx, func(ctx context.Context, tx behemoth.Database) (any, error) {
-		// UPSERT-style: increment if row exists and unexpired, else reset to 1
-		// with a fresh window; actual SQL varies by adapter, semantics fixed here.
-		// return nil, tx.UpdateOne(ctx, &models.RateCounter{}, byKeyAndUnexpired(key), behemoth.M{"count": clause.Raw("count + 1")})
-		return nil, nil
-	})
-	return count, err
+	return s.store.IncrementRateLimit(ctx, key, ttl)
 }
 
 type DefaultRateLimiter struct {
@@ -798,6 +796,8 @@ func CoreDeclareSchema(ic *types.PluginInitContext) error {
 		{&models.User{}, models.UserTableSchema()},
 		{&models.Session{}, models.SessionTableSchema()},
 		{&models.Token{}, models.TokenTableSchema()},
+		{&models.Account{}, models.AccountTableSchema()},
+		{&models.RateLimit{}, models.RateLimitTableSchema()},
 	} {
 		if err := ic.Schemas.Declare(d.model, d.table); err != nil {
 			return err
@@ -831,13 +831,13 @@ func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
 	return nil
 }
 
-func resolveRateLimitStore(kv behemoth.KeyValueStorage, db behemoth.Database) (types.AtomicIncrementer, error) {
+func resolveRateLimitStore(kv behemoth.KeyValueStorage, st *store.Store) (types.AtomicIncrementer, error) {
 	if kv != nil {
 		if inc, ok := kv.(types.AtomicIncrementer); ok {
 			return inc, nil // Redis-backed path — atomic, fast
 		}
 	}
-	return &dbCounterStore{db: db}, nil // KV absent, or lacks native INCR — DB-transactional fallback, still correct
+	return &dbCounterStore{store: st}, nil // KV absent, or lacks native INCR — DB-transactional fallback, still correct
 }
 
 type DefaultRateLimitCatalog struct {

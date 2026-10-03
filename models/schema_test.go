@@ -19,6 +19,8 @@ func TestDeclaredTablesMatchModels(t *testing.T) {
 		{UserTableSchema(), &User{}, userColumns},
 		{SessionTableSchema(), &Session{}, sessionColumns},
 		{TokenTableSchema(), &Token{}, tokenColumns},
+		{AccountTableSchema(), &Account{}, accountColumns},
+		{RateLimitTableSchema(), &RateLimit{}, rateLimitColumns},
 	} {
 		if tc.table.Name != tc.model.SchemaName() {
 			t.Errorf("table %q declared for model %q", tc.table.Name, tc.model.SchemaName())

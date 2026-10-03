@@ -6,7 +6,8 @@
 // It must not import github.com/MastewalB/behemoth/types: types imports store
 // (AuthContext holds a *Store). Anything store needs from above — today, the
 // hook dispatcher — it declares as its own small interface (Hooks), and Boot
-// supplies the implementation.
+// supplies the implementation. Contracts that live below types
+// (types/cryptotypes) it uses directly.
 package store
 
 import (
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/types/cryptotypes"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -38,12 +40,13 @@ type Hooks interface {
 
 // Store is the single implementation of behemoth's data layer.
 type Store struct {
-	db     behemoth.Database
-	hooks  Hooks
-	schema behemoth.SchemaResolver // which columns each table has, contributions included
-	newID  func() string
-	now    func() time.Time
-	inTx   bool // db is a transaction; see Transaction
+	db        behemoth.Database
+	hooks     Hooks
+	schema    behemoth.SchemaResolver // which columns each table has, contributions included
+	encryptor cryptotypes.Encryptor   // seals at-rest secrets; see WithEncryptor
+	newID     func() string
+	now       func() time.Time
+	inTx      bool // db is a transaction; see Transaction
 }
 
 // Option configures a Store.

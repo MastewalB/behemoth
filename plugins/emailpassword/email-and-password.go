@@ -1,6 +1,7 @@
 package emailpassword
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 )
@@ -140,7 +142,8 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, err
 	// become client-writable (mass assignment: "role": "admin", a verified
 	// flag, ...). The store assigns the id and timestamps, and fires
 	// data.user.beforeCreate / afterCreate (Tier 1) — hooks are where other
-	// plugins add their columns.
+	// plugins add their columns. The password hash goes to the user's
+	// "credential" account, created with the user or not at all.
 	profile := func(key string) string { v, _ := userData[key].(string); return strings.TrimSpace(v) }
 	user := &models.User{
 		Username:  profile(models.UserUsername),
@@ -149,9 +152,19 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, err
 		ImageUrl:  profile(models.UserImageURL),
 	}
 	user.Email = email
-	user.PasswordHash = passwordHash
 	user.EmailVerified = false
-	if err := ac.Store.CreateUser(hctx.Ctx, user); err != nil {
+	err = ac.Store.Transaction(hctx.Ctx, func(ctx context.Context, tx *store.Store) error {
+		if err := tx.CreateUser(ctx, user); err != nil {
+			return err
+		}
+		return tx.CreateAccount(ctx, &models.Account{
+			UserID:       user.ID,
+			ProviderID:   models.ProviderCredential,
+			AccountID:    user.ID,
+			PasswordHash: passwordHash,
+		})
+	})
+	if err != nil {
 		return nil, errors.New("user create failed")
 	}
 
@@ -171,7 +184,20 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 		return nil, err // infra error (DB down) — must NOT count toward lockout
 	}
 
-	isValid, err := ac.PasswordOptions.PasswordHasher.Verify(user.PasswordHash, creds.Password)
+	// The password lives on the user's "credential" account. A user without
+	// one (signed up through an OAuth provider only) has no password to
+	// match, and is answered exactly like a wrong password.
+	credential, err := ac.Store.FindAccount(hctx.Ctx, models.ProviderCredential, user.ID)
+	if err != nil {
+		ac.PasswordOptions.PasswordHasher.Hash(creds.Password) // timing mitigation
+		if behemotherr.IsNotFound(err) {
+			dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "noCredentialAccount"})
+			return nil, errors.New("invalid email or password")
+		}
+		return nil, err // infra error — must NOT count toward lockout
+	}
+
+	isValid, err := ac.PasswordOptions.PasswordHasher.Verify(credential.PasswordHash, creds.Password)
 	if err != nil {
 		return nil, err // a malformed stored hash or key error — not a wrong password, so not counted as one
 	}
