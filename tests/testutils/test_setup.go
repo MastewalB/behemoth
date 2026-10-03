@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
@@ -274,10 +273,17 @@ func SetupGormTestDB(t *testing.T) (*gorm.DB, func()) {
 	return db, cleanup
 }
 
-func SetupGORMDBWithSchema(t *testing.T, model behemoth.Model) (db *gorm.DB, cleanup func()) {
+// SetupGORMDBWithSchema opens a GORM database and runs schema (DDL) on it.
+// The tables come from the DDL, not from AutoMigrate: the adapter never
+// hands GORM a struct, so the test models need no gorm tags or TableName.
+func SetupGORMDBWithSchema(t *testing.T, schema string) (db *gorm.DB, cleanup func()) {
 	db, cleanup = SetupGormTestDB(t)
-	db.Exec("PRAGMA foreign_keys = ON;")
-	db.AutoMigrate(model)
+	if err := db.Exec("PRAGMA foreign_keys = ON;").Error; err != nil {
+		t.Fatalf("failed to enable foreign keys: %v", err)
+	}
+	if err := db.Exec(schema).Error; err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
 
 	return db, cleanup
 }
@@ -299,13 +305,13 @@ func SetupBunTestDB(t *testing.T) (db *bun.DB, cleanup func()) {
 	return db, cleanup
 }
 
-func SetupBunTestDBWithSchema(t *testing.T, model behemoth.Model) (db *bun.DB, cleanup func()) {
-	ctx := context.Background()
+// SetupBunTestDBWithSchema opens a bun database and runs schema (DDL) on it.
+// The tables come from the DDL, not from NewCreateTable().Model: the adapter
+// never hands bun a struct, so the test models need no bun.BaseModel or tags.
+func SetupBunTestDBWithSchema(t *testing.T, schema string) (db *bun.DB, cleanup func()) {
 	db, cleanup = SetupBunTestDB(t)
-
-	_, err := db.NewCreateTable().Model(model).IfNotExists().Exec(ctx)
-	if err != nil {
-		t.Fatal("failed to create table, %w", err)
+	if _, err := db.ExecContext(context.Background(), schema); err != nil {
+		t.Fatalf("failed to create table: %v", err)
 	}
 
 	return db, cleanup
@@ -336,11 +342,11 @@ func SetupSQLiteAdapter(t *testing.T, db *sql.DB) *sqliteAdapter.SQLiteAdapter {
 }
 
 func SetupGormAdapter(t *testing.T, db *gorm.DB) *adapters.GormAdapter {
-	return adapters.NewGormAdapter(db)
+	return adapters.NewGormAdapter(db, nil)
 }
 
 func SetupBunAdapter(t *testing.T, db *bun.DB) *bunAdapter.BunAdapter {
-	return bunAdapter.NewBunAdapter(db)
+	return bunAdapter.NewBunAdapter(db, nil)
 }
 
 func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *adapters.MongoAdapter {

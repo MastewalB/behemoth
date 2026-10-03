@@ -416,7 +416,7 @@ func TestMSSQLAdapter(t *testing.T) {
 }
 
 func TestGormAdapter(t *testing.T) {
-	db, cleanup := testutils.SetupGORMDBWithSchema(t, &testutils.GormTestUser{})
+	db, cleanup := testutils.SetupGORMDBWithSchema(t, testutils.TestUserSchema)
 	adapter := testutils.SetupGormAdapter(t, db)
 
 	manager := &GormAdapterTestManager{
@@ -430,7 +430,7 @@ func TestGormAdapter(t *testing.T) {
 }
 
 func TestBunAdapter(t *testing.T) {
-	db, cleanup := testutils.SetupBunTestDBWithSchema(t, &testutils.GormTestUser{})
+	db, cleanup := testutils.SetupBunTestDBWithSchema(t, testutils.TestUserSchema)
 	adapter := testutils.SetupBunAdapter(t, db)
 
 	manager := &BunAdapterTestManager{

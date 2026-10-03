@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/uptrace/bun"
 )
 
 type TestUser struct {
@@ -117,11 +116,11 @@ func NewTestUserMap(id int) behemoth.M {
 }
 
 type GormTestUser struct {
-	bun.BaseModel `bun:"table:users"`
+	// bun.BaseModel `bun:"table:users"`
 
-	ID       string `gorm:"primaryKey" bun:",pk,unique"`
-	Email    string `gorm:"not null" bun:",notnull"`
-	Username string `gorm:"unique;not null" bun:",unique,notnull"`
+	ID       string // `gorm:"primaryKey" bun:",pk,unique"`
+	Email    string // `gorm:"not null" bun:",notnull"`
+	Username string // `gorm:"unique;not null" bun:",unique,notnull"`
 }
 
 func (u *GormTestUser) SchemaName() string {
@@ -169,22 +168,21 @@ func (u *GormTestUser) ToMap() (map[string]any, error) {
 }
 
 func (u *GormTestUser) FromMap(data map[string]any) error {
-	id, ok := data["id"].(string)
-	if !ok {
-		return fmt.Errorf("invalid type for id")
+	// Lenient like TestUser: a partial select (QueryOptions.Select) leaves
+	// the other fields empty.
+	toString := func(v any) string {
+		switch x := v.(type) {
+		case string:
+			return x
+		case []byte:
+			return string(x)
+		default:
+			return ""
+		}
 	}
-	email, ok := data["email"].(string)
-	if !ok {
-		return fmt.Errorf("invalid type for email")
-	}
-	username, ok := data["username"].(string)
-	if !ok {
-		return fmt.Errorf("invalid type for username")
-	}
-
-	u.ID = id
-	u.Email = email
-	u.Username = username
+	u.ID = toString(data["id"])
+	u.Email = toString(data["email"])
+	u.Username = toString(data["username"])
 	return nil
 }
 
