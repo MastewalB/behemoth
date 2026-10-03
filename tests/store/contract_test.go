@@ -14,8 +14,8 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/storage/adapters"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
+	gormAdapter "github.com/MastewalB/behemoth/storage/adapters/gorm"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
@@ -117,12 +117,12 @@ func contractBackends() map[string]func(t *testing.T, tables []schema.Table, r b
 		"gorm/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
 			gdb, err := gorm.Open(gormsqlite.New(gormsqlite.Config{Conn: openSQLite(t, tables, r)}), quiet)
 			require.NoError(t, err)
-			return adapters.NewGormAdapter(gdb, r)
+			return gormAdapter.NewGormAdapter(gdb, r)
 		},
 		"gorm/postgres": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
 			gdb, err := gorm.Open(gormpostgres.New(gormpostgres.Config{Conn: openPostgres(t, tables, r)}), quiet)
 			require.NoError(t, err)
-			return adapters.NewGormAdapter(gdb, r)
+			return gormAdapter.NewGormAdapter(gdb, r)
 		},
 		"bun/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
 			return bunAdapter.NewBunAdapter(bun.NewDB(openSQLite(t, tables, r), sqlitedialect.New()), r)

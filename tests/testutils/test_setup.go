@@ -8,6 +8,7 @@ import (
 
 	"github.com/MastewalB/behemoth/storage/adapters"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
+	gormAdapter "github.com/MastewalB/behemoth/storage/adapters/gorm"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
@@ -341,8 +342,8 @@ func SetupSQLiteAdapter(t *testing.T, db *sql.DB) *sqliteAdapter.SQLiteAdapter {
 	return adapter
 }
 
-func SetupGormAdapter(t *testing.T, db *gorm.DB) *adapters.GormAdapter {
-	return adapters.NewGormAdapter(db, nil)
+func SetupGormAdapter(t *testing.T, db *gorm.DB) *gormAdapter.GormAdapter {
+	return gormAdapter.NewGormAdapter(db, nil)
 }
 
 func SetupBunAdapter(t *testing.T, db *bun.DB) *bunAdapter.BunAdapter {

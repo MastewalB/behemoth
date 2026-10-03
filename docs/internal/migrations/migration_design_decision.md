@@ -860,7 +860,7 @@ changes, err := TwoFactorEnabled.Update(true) // for Store.UpdateUser
 | MongoDB | Documents carry every field; `CanonicalFields` maps contributed physical names back using the declared columns. |
 | GORM, bun | Map-based I/O through the application's `*gorm.DB` / `bun.IDB` (below); same behavior as the SQL adapters. |
 
-**ORM adapters — map-based I/O.** `adapters.NewGormAdapter(db, resolver)` and `bun.NewBunAdapter(db, resolver)` run every operation through the application's `*gorm.DB` / `bun.IDB` (its pool, dialect, logger, hooks or plugins, and transactions), but rows never pass through the ORM's struct mapping:
+**ORM adapters — map-based I/O.** `gorm.NewGormAdapter(db, resolver)` and `bun.NewBunAdapter(db, resolver)` run every operation through the application's `*gorm.DB` / `bun.IDB` (its pool, dialect, logger, hooks or plugins, and transactions), but rows never pass through the ORM's struct mapping:
 
 - **Writes** — GORM's `Table(physical).Create(row)` / `Updates(row)`, bun's `NewInsert().Model(&row).TableExpr(physical)` / `NewUpdate().Set(…)`, where `row` is the model's `ToMap` keyed by physical column (`PhysicalDocument`). Extras are in `ToMap`, so contributed columns are written.
 - **Reads** — a select of the physical `ReadColumns` with the physical condition, executed with `Rows()` (both ORMs have it), scanned into `ScanTargets` and handed to `FromMap` under canonical names — the SQL adapters' path, so drivers' value shapes are the same.

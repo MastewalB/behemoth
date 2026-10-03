@@ -1,4 +1,7 @@
-package adapters
+// Package gorm provides GormAdapter, a behemoth.Database backed by GORM. It
+// lives in its own module, like the other database adapters, so the core module does not
+// depend on gorm.io/gorm.
+package gorm
 
 import (
 	"context"
@@ -10,6 +13,7 @@ import (
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/storage/adapters"
 	"gorm.io/gorm"
 )
 
@@ -31,17 +35,17 @@ type GormAdapter struct {
 // NewGormAdapter wraps db. resolver maps canonical names to physical ones; nil
 // uses them as-is.
 func NewGormAdapter(db *gorm.DB, resolver behemoth.SchemaResolver) *GormAdapter {
-	return &GormAdapter{db: db, resolver: ResolverOrIdentity(resolver)}
+	return &GormAdapter{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
 }
 
 func (ga *GormAdapter) table(ctx context.Context, m behemoth.Model) *gorm.DB {
-	return ga.db.WithContext(ctx).Table(PhysicalTable(ga.resolver, m))
+	return ga.db.WithContext(ctx).Table(adapters.PhysicalTable(ga.resolver, m))
 }
 
 // where applies expr, resolved to physical columns, to tx; an empty
 // expression adds no condition.
 func (ga *GormAdapter) where(tx *gorm.DB, m behemoth.Model, expr *clause.Expression) *gorm.DB {
-	query, args := BuildSQLWhereClause(PhysicalExpression(ga.resolver, m, expr), DefaultClauseOption)
+	query, args := adapters.BuildSQLWhereClause(adapters.PhysicalExpression(ga.resolver, m, expr), adapters.DefaultClauseOption)
 	if query == "" {
 		return tx
 	}
@@ -53,7 +57,7 @@ func (ga *GormAdapter) where(tx *gorm.DB, m behemoth.Model, expr *clause.Express
 // as written (the UpdateOne / DeleteOne convention). The pick is wrapped in a
 // derived table because MySQL rejects a subquery on the table being updated.
 func (ga *GormAdapter) oneRow(ctx context.Context, tx *gorm.DB, m behemoth.Model, expr *clause.Expression) *gorm.DB {
-	pk := PhysicalColumn(ga.resolver, m, m.PrimaryKeyName())
+	pk := adapters.PhysicalColumn(ga.resolver, m, m.PrimaryKeyName())
 	pick := ga.where(ga.table(ctx, m).Select(pk), m, expr).Limit(1)
 	sub := ga.db.WithContext(ctx).Table("(?) AS _sub", pick).Select(pk)
 	return ga.where(tx.Where(fmt.Sprintf("%s IN (?)", pk), sub), m, expr)
@@ -69,7 +73,7 @@ func (ga *GormAdapter) err(m behemoth.Model, err error) error {
 	if t, ok := ga.db.Dialector.(gorm.ErrorTranslator); ok {
 		err = t.Translate(err)
 	}
-	return WrapWithCaller(err, m.SchemaName(), mapGormError)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapGormError)
 }
 
 // row returns m's ToMap keyed by physical column.
@@ -82,13 +86,13 @@ func (ga *GormAdapter) row(m behemoth.Model) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return PhysicalDocument(ga.resolver, m, data), nil
+	return adapters.PhysicalDocument(ga.resolver, m, data), nil
 }
 
 // scan reads rows of the canonical columns into new models.
 func (ga *GormAdapter) scan(m behemoth.Model, rows *sql.Rows, columns []string) ([]behemoth.Model, error) {
 	defer rows.Close()
-	values, ptrs := ScanTargets(len(columns))
+	values, ptrs := adapters.ScanTargets(len(columns))
 	var out []behemoth.Model
 	for rows.Next() {
 		if err := rows.Scan(ptrs...); err != nil {
@@ -116,8 +120,8 @@ func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr claus
 		return nil, behemotherr.SerializableNotImplemented()
 	}
 	// columns stay canonical: they key the map handed to FromMap.
-	columns := ReadColumns(ga.resolver, m, nil)
-	rows, err := ga.where(ga.table(ctx, m).Select(PhysicalColumns(ga.resolver, m, columns)), m, &expr).Limit(1).Rows()
+	columns := adapters.ReadColumns(ga.resolver, m, nil)
+	rows, err := ga.where(ga.table(ctx, m).Select(adapters.PhysicalColumns(ga.resolver, m, columns)), m, &expr).Limit(1).Rows()
 	if err != nil {
 		return nil, ga.err(m, err)
 	}
@@ -145,8 +149,8 @@ func (ga *GormAdapter) FindMany(
 		selected = options.Select
 	}
 	// columns stay canonical: they key the map handed to FromMap.
-	columns := ReadColumns(ga.resolver, m, selected)
-	physical := PhysicalColumns(ga.resolver, m, columns)
+	columns := adapters.ReadColumns(ga.resolver, m, selected)
+	physical := adapters.PhysicalColumns(ga.resolver, m, columns)
 
 	tx := ga.table(ctx, m)
 	if options != nil && options.Distinct {
@@ -157,7 +161,7 @@ func (ga *GormAdapter) FindMany(
 	tx = ga.where(tx, m, &expr)
 	if options != nil {
 		if options.OrderBy.Field != "" {
-			tx = tx.Order(fmt.Sprintf("%s %s", PhysicalColumn(ga.resolver, m, options.OrderBy.Field), options.OrderBy.Direction))
+			tx = tx.Order(fmt.Sprintf("%s %s", adapters.PhysicalColumn(ga.resolver, m, options.OrderBy.Field), options.OrderBy.Direction))
 		}
 		if options.Limit != 0 {
 			tx = tx.Limit(options.Limit)
@@ -182,13 +186,13 @@ func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	if err != nil {
 		return err
 	}
-	pk := PhysicalColumn(ga.resolver, m, m.PrimaryKeyName())
+	pk := adapters.PhysicalColumn(ga.resolver, m, m.PrimaryKeyName())
 	res := ga.table(ctx, m).Where(fmt.Sprintf("%s = ?", pk), m.PrimaryKeyField()).Updates(row)
 	if res.Error != nil {
 		return ga.err(m, res.Error)
 	}
 	// GORM reports what its dialect reports: changed rows on MySQL.
-	return ExpectOneRow("Update", m, res.RowsAffected, func() (int64, error) { return ga.Count(ctx, m, ByPrimaryKey(m)) })
+	return adapters.ExpectOneRow("Update", m, res.RowsAffected, func() (int64, error) { return ga.Count(ctx, m, adapters.ByPrimaryKey(m)) })
 }
 
 func (ga *GormAdapter) UpdateOne(
@@ -200,12 +204,12 @@ func (ga *GormAdapter) UpdateOne(
 	if len(updates) == 0 {
 		return nil
 	}
-	res := ga.oneRow(ctx, ga.table(ctx, m), m, &expr).Updates(PhysicalDocument(ga.resolver, m, updates))
+	res := ga.oneRow(ctx, ga.table(ctx, m), m, &expr).Updates(adapters.PhysicalDocument(ga.resolver, m, updates))
 	if res.Error != nil {
 		return ga.err(m, res.Error)
 	}
 	// GORM reports what its dialect reports: changed rows on MySQL.
-	return ExpectOneRow("UpdateOne", m, res.RowsAffected, func() (int64, error) { return ga.Count(ctx, m, expr) })
+	return adapters.ExpectOneRow("UpdateOne", m, res.RowsAffected, func() (int64, error) { return ga.Count(ctx, m, expr) })
 }
 
 func (ga *GormAdapter) UpdateMany(
@@ -218,7 +222,7 @@ func (ga *GormAdapter) UpdateMany(
 		return nil
 	}
 	tx := ga.table(ctx, m).Session(&gorm.Session{AllowGlobalUpdate: true})
-	err := ga.where(tx, m, &expr).Updates(PhysicalDocument(ga.resolver, m, updates)).Error
+	err := ga.where(tx, m, &expr).Updates(adapters.PhysicalDocument(ga.resolver, m, updates)).Error
 	return ga.err(m, err)
 }
 
@@ -227,28 +231,28 @@ func (ga *GormAdapter) UpdateMany(
 func deleted() map[string]any { return map[string]any{} }
 
 func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
-	pk := PhysicalColumn(ga.resolver, m, m.PrimaryKeyName())
+	pk := adapters.PhysicalColumn(ga.resolver, m, m.PrimaryKeyName())
 	res := ga.table(ctx, m).Where(fmt.Sprintf("%s = ?", pk), m.PrimaryKeyField()).Delete(deleted())
 	if res.Error != nil {
 		return ga.err(m, res.Error)
 	}
-	return ExpectOneRow("Delete", m, res.RowsAffected, nil)
+	return adapters.ExpectOneRow("Delete", m, res.RowsAffected, nil)
 }
 
 func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	if query, _ := BuildSQLWhereClause(&expr, DefaultClauseOption); query == "" {
-		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
+	if query, _ := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption); query == "" {
+		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 	res := ga.oneRow(ctx, ga.table(ctx, m), m, &expr).Delete(deleted())
 	if res.Error != nil {
 		return ga.err(m, res.Error)
 	}
-	return ExpectOneRow("DeleteOne", m, res.RowsAffected, nil)
+	return adapters.ExpectOneRow("DeleteOne", m, res.RowsAffected, nil)
 }
 
 func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
-	if query, _ := BuildSQLWhereClause(&expr, DefaultClauseOption); query == "" {
-		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
+	if query, _ := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption); query == "" {
+		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 	return ga.err(m, ga.where(ga.table(ctx, m), m, &expr).Delete(deleted()).Error)
 }
