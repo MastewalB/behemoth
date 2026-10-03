@@ -17,7 +17,7 @@ const PluginName = "emailpassword"
 
 type Plugin struct {
 	authContext *types.AuthContext
-	signUp      func(hctx *types.HookContext, in behemoth.M) (behemoth.User, error)
+	signUp      func(hctx *types.HookContext, in behemoth.M) (*models.User, error)
 	signIn      func(hctx *types.HookContext, in EmailAndPasswordCredentials) (*SignInResult, error)
 }
 
@@ -101,7 +101,7 @@ type EmailAndPasswordCredentials struct {
 	Password string `json:"password"`
 }
 
-func signUpBody(hctx *types.HookContext, userData behemoth.M) (behemoth.User, error) {
+func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, error) {
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
 
@@ -135,13 +135,18 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (behemoth.User, er
 		return nil, err // infra error - no Fail()
 	}
 
-	// Profile fields come from the payload (keys the model doesn't have, like
-	// "password", are ignored); everything security-relevant is set here.
-	// The store assigns the id and timestamps, and fires data.user.beforeCreate
-	// / afterCreate (Tier 1) — SignUp doesn't need to know that happens.
-	user := &models.User{}
-	if err := user.FromMap(userData); err != nil {
-		return nil, errors.New("invalid user data")
+	// Only these profile fields are taken from the request. Never the whole
+	// payload: every column a model knows — contributed ones included — would
+	// become client-writable (mass assignment: "role": "admin", a verified
+	// flag, ...). The store assigns the id and timestamps, and fires
+	// data.user.beforeCreate / afterCreate (Tier 1) — hooks are where other
+	// plugins add their columns.
+	profile := func(key string) string { v, _ := userData[key].(string); return strings.TrimSpace(v) }
+	user := &models.User{
+		Username:  profile(models.UserUsername),
+		Firstname: profile(models.UserFirstname),
+		Lastname:  profile(models.UserLastname),
+		ImageUrl:  profile(models.UserImageURL),
 	}
 	user.Email = email
 	user.PasswordHash = passwordHash
@@ -205,7 +210,7 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 }
 
 type SignInResult struct {
-	User     behemoth.User
+	User     *models.User
 	Session  *models.Session
 	RawToken string
 }

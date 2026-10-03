@@ -202,6 +202,27 @@ type KeyValueStorage interface {
 type SchemaResolver interface {
 	Resolve(canonicalName string) string // returns the physical name; canonicalName itself if nothing overrides it
 	ResolveColumn(canonicalTable, canonicalColumn string) string
+
+	// Columns lists canonicalTable's declared columns — canonical names, in
+	// declaration order, columns other declarers contributed (ExtendColumn)
+	// included — or nil when the table isn't declared. Adapters read
+	// these columns, so a contributed column reaches the model; for a table
+	// it doesn't know, they fall back to the model's own ToMap keys.
+	Columns(canonicalTable string) []string
+}
+
+// Extensible is a model that carries columns beyond its own fields: values
+// of columns contributed to its table by another declarer (a plugin's
+// ExtendColumn on users, say). Its ToMap includes them and its FromMap
+// keeps every column it doesn't know as one. schema.Field gives typed
+// access to a single extra column.
+type Extensible interface {
+	Model
+	// Extras returns the contributed columns' values, keyed by canonical
+	// column name. It may be nil.
+	Extras() M
+	// SetExtra sets one contributed column's value.
+	SetExtra(column string, value any)
 }
 
 // IdentityResolver maps every name to itself: the resolver to use when no
@@ -210,6 +231,7 @@ type IdentityResolver struct{}
 
 func (IdentityResolver) Resolve(canonical string) string                 { return canonical }
 func (IdentityResolver) ResolveColumn(_ string, canonical string) string { return canonical }
+func (IdentityResolver) Columns(string) []string                         { return nil }
 
 type Serializable interface {
 	ToMap() (map[string]any, error)

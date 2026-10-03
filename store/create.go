@@ -27,7 +27,7 @@ func (s *Store) create(ctx context.Context, m behemoth.Model) error {
 	}
 	// FromMap ignores keys the model doesn't have; a hook setting one would
 	// otherwise believe it was stored.
-	if err := checkColumns(m, row, "Store.Create"); err != nil {
+	if err := s.checkColumns(m, row, "Store.Create"); err != nil {
 		return err
 	}
 	if err := ser.FromMap(row); err != nil {
@@ -47,14 +47,14 @@ func (s *Store) create(ctx context.Context, m behemoth.Model) error {
 // hooks, so a hook's values are normalized too).
 func (s *Store) update(ctx context.Context, m behemoth.Model, id any, changes behemoth.M, stamp string, prepare func(behemoth.M)) (behemoth.Model, error) {
 	const op = "Store.Update"
-	if err := checkUpdate(m, changes, op); err != nil {
+	if err := s.checkUpdate(m, changes, op); err != nil {
 		return nil, err
 	}
 	changes, err := s.hooks.BeforeUpdate(ctx, m.SchemaName(), id, copyRow(changes))
 	if err != nil {
 		return nil, err // the hook's error is the abort; returned as-is
 	}
-	if err := checkUpdate(m, changes, op); err != nil {
+	if err := s.checkUpdate(m, changes, op); err != nil {
 		return nil, err
 	}
 	if prepare != nil {
@@ -76,19 +76,20 @@ func (s *Store) update(ctx context.Context, m behemoth.Model, id any, changes be
 	return updated, nil
 }
 
-// checkUpdate rejects changes that touch the primary key or name a column m
-// doesn't have.
-func checkUpdate(m behemoth.Model, changes behemoth.M, op string) error {
+// checkUpdate rejects changes that touch the primary key or name a column m's
+// table doesn't have.
+func (s *Store) checkUpdate(m behemoth.Model, changes behemoth.M, op string) error {
 	if _, ok := changes[m.PrimaryKeyName()]; ok {
 		return behemotherr.NewValidationError(op, m.SchemaName(), fmt.Errorf("primary key %q can't be updated", m.PrimaryKeyName()))
 	}
-	return checkColumns(m, changes, op)
+	return s.checkColumns(m, changes, op)
 }
 
-// checkColumns rejects keys that aren't columns of m (canonical names, as m's
-// own ToMap reports them): a typo in an update map, or a key a hook added, is
-// an error rather than a silently ignored write.
-func checkColumns(m behemoth.Model, row behemoth.M, op string) error {
+// checkColumns rejects keys that aren't columns of m's table — m's own (as
+// its ToMap reports them) or contributed (as the schema lists them): a typo
+// in an update map, or a key a hook made up, is an error rather than a
+// silently ignored write.
+func (s *Store) checkColumns(m behemoth.Model, row behemoth.M, op string) error {
 	ser, ok := m.New().(behemoth.Serializable)
 	if !ok {
 		return behemotherr.SerializableNotImplemented()
@@ -96,6 +97,9 @@ func checkColumns(m behemoth.Model, row behemoth.M, op string) error {
 	columns, err := ser.ToMap()
 	if err != nil {
 		return err
+	}
+	for _, c := range s.schema.Columns(m.SchemaName()) {
+		columns[c] = nil
 	}
 	for k := range row {
 		if _, ok := columns[k]; !ok {

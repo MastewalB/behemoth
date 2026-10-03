@@ -93,7 +93,7 @@ Before any comparison happens, every declared table/column is resolved to its `P
 
 When the live database column type have no direct mapping to behemoth's list of supported column types, a type mapping ambiguity arises. This is out of scope for behemoth to handle, since it's not a comprehensive migration engine that's able to map every existing database types. The introspector's type support can grow over time as the need and relevance dictate, but that doesn't guarantee a complete coverage for all databases.
 
-If a user table has such unsupported field, they should provide a custom Model type with Model + Serializer interface implementations for the schema.
+For a column of such a type, see *Custom User Models → Scenario 2*: leave it undeclared if behemoth doesn't need it, or declare it with a type the driver can read and write and give its `schema.Field` a codec. (Custom models, previously advised here, are removed.)
 
 - `[Convention, important]` The introspector reports such a column as `Text` with a `ColumnAmbiguity`, and `RejectAmbiguousTypes` **stops generation** (both paths) — there is no option to offer for a type nobody can determine. Each driver maps the type names it renders plus common SQL names (SQLite: `INT`, `CHAR(n)`, `DOUBLE`, `DECIMAL(p,s)`, `BOOL`, …) and flags everything else (Postgres: enums, `POINT`, …; SQLite: `DATE`, a column with no declared type). SQLite deliberately does **not** fall back on its type-affinity rules: an affinity says how values are stored, not what the column means (`DATE` gets NUMERIC affinity).
 - `[Convention]` A **lossy but determinable** mapping is not an ambiguity. SQLite's `BLOB` (uuid, blob or bytes) and `TEXT` (text or json) read back as `blob` and `text`; the column is fully usable as the type reported, and `ColumnNormalizer` makes the declaration compare equal (see *Column Comparison*).
@@ -804,3 +804,120 @@ Freezing:
 5. **Narrowing** — adding or tightening a constraint is narrowing (existing rows may violate it); removing or loosening one is widening.
 6. **Also enforced in the application** through the existing `types.Validator`, so databases that enforce nothing still get the guarantee.
 7. **No raw escape hatch in core.** Database-specific SQL belongs in a custom migration, once data operations (`OpExec`) exist.
+
+# **Model Extensions — Contributed Columns at Runtime**
+
+A table can gain columns from declarers other than its owner: a plugin's `ExtendColumn` (`two_factor_enabled` on `users`), or the application's (`plan` on `users`). Migrations always created those columns — `schema.Registry` merges contributions into the table — but at runtime they were invisible: every adapter derived its column list from the Go model's own `ToMap`, so a contributed column was never inserted, never selected, and the store rejected updates to it as unknown. A contributed `NOT NULL` column without a default made **every** insert into the table fail.
+
+This section describes how contributed columns now travel between the database and the models.
+
+### **1. The schema decides which columns exist**
+
+- `behemoth.SchemaResolver` has `Columns(canonicalTable) []string`: the table's declared columns, canonical names, in declaration order, contributions included (base columns first, as the registry merges them). `core.DefaultSchemaResolver` serves it from `SchemaResolverTable.ColumnOrder`, built by `BuildSchemaResolverTable` from the frozen registry. `IdentityResolver` returns `nil`.
+- Adapters read through `adapters.ReadColumns(resolver, model, selected)`: the resolver's columns when it knows the table, otherwise the model's own `ToMap` keys (sorted, so query text is stable) — the fallback for tables nobody declared, such as the migration ledger. `QueryOptions.Select` narrows that list.
+- `[Convention]` The column list for **reads** comes from the schema; the column list for **writes** comes from the model's row (`ToMap`, extras included). A contributed column a model doesn't carry a value for is simply not written, and the database applies its default.
+
+### **2. Models carry contributed values**
+
+- `behemoth.Extensible` is a model with `Extras() M` and `SetExtra(column, value)`. `models.Extension` (embeddable) implements it; `User`, `Session` and `Token` embed it.
+- `ToMap` merges the extras into the row; the model's own columns win (the registry already rejects a contribution that reuses a base column's name, so they never legitimately collide).
+- `FromMap` keeps every column that isn't one of the model's own as an extra, and **replaces** the extras each time — a model re-read never keeps stale values.
+- Each model's own columns are listed once (`userColumns`, …) from its column constants, the same constants its `ToMap`/`FromMap` and its table declaration use.
+
+### **3. Typed access — `schema.Field[T]`**
+
+```go
+var TwoFactorEnabled = schema.Field[bool]{Table: "users", Name: "two_factor_enabled"}
+
+ic.Schemas.ExtendColumn(TwoFactorEnabled.Contribution(schema.Column{Type: schema.ColTypeBoolean, Default: false}))
+on, ok, err := TwoFactorEnabled.Get(user)     // ok=false: no value (absent or NULL)
+_ = TwoFactorEnabled.Set(newUser, true)       // before CreateUser
+changes, err := TwoFactorEnabled.Update(true) // for Store.UpdateUser
+```
+
+- A field declares its type once; plugins never handle raw column-name strings or untyped values.
+- `Get` converts what drivers actually return: integers and `0/1` into `bool`, `[]byte` into strings and numbers, `int64`/`float64` across numeric kinds (losslessly), text into `time.Time`, named types by their kind (`type Plan string`). Anything else is an error naming the field and suggesting a codec.
+- `Decode`/`Encode` replace the built-in conversions — the per-column codec for a type no driver maps (an enum, a database-specific type).
+- `Get`/`Set` on a model of another table is an error.
+
+### **4. The store**
+
+- `store.WithSchema(resolver)` tells the store each table's columns; `Boot` passes `PreparedApp.Resolver`. The store's column check (create rewrites, updates, update-hook rewrites) accepts a model's own columns **and** the declared ones, so contributed columns can be written; a typo is still a validation error naming the column. Without the option, only a model's own columns are accepted.
+- Data hooks see contributed columns in the row like any other column, and may set them — this is how a contributing plugin fills its own column on create.
+
+### **5. Core declares its tables**
+
+`models.UserTableSchema()`, `SessionTableSchema()` and `TokenTableSchema()` describe `users`, `sessions` (foreign key to `users`, cascade; index on `user_id`) and `tokens` (unique on `kind, lookup_hash`; index on `kind, subject`), built from the models' column constants; `CoreDeclareSchema` declares them. Without a declaration the resolver wouldn't know the table and contributions would fall back to invisibility. A test checks each declared table lists exactly its model's own columns. Ids are bounded strings (`VARCHAR(36)`), not a database UUID type, so every driver stores and returns the string the models hold.
+
+### **6. Adapter support**
+
+| Adapter | Contributed columns |
+| --- | --- |
+| SQLite, Postgres, MySQL, SQL Server | Read through `ReadColumns`; physical names mapped through the resolver. |
+| MongoDB | Documents carry every field; `CanonicalFields` maps contributed physical names back using the declared columns. |
+| GORM, bun | Map-based I/O through the application's `*gorm.DB` / `bun.IDB` (below); same behavior as the SQL adapters. |
+
+**ORM adapters — map-based I/O.** `adapters.NewGormAdapter(db, resolver)` and `bun.NewBunAdapter(db, resolver)` run every operation through the application's `*gorm.DB` / `bun.IDB` (its pool, dialect, logger, hooks or plugins, and transactions), but rows never pass through the ORM's struct mapping:
+
+- **Writes** — GORM's `Table(physical).Create(row)` / `Updates(row)`, bun's `NewInsert().Model(&row).TableExpr(physical)` / `NewUpdate().Set(…)`, where `row` is the model's `ToMap` keyed by physical column (`PhysicalDocument`). Extras are in `ToMap`, so contributed columns are written.
+- **Reads** — a select of the physical `ReadColumns` with the physical condition, executed with `Rows()` (both ORMs have it), scanned into `ScanTargets` and handed to `FromMap` under canonical names — the SQL adapters' path, so drivers' value shapes are the same.
+- **Conditions** — `PhysicalExpression`, rendered with `?` placeholders; GORM rewrites them to the dialect's bind variables, bun formats the arguments into the query itself.
+- **Single-row operations** — `UpdateOne` / `DeleteOne` pick the row as `pk IN (SELECT pk FROM (SELECT pk … WHERE expr LIMIT 1) AS _sub)` and repeat `expr` on the row (the guard). The derived table is MySQL's requirement (no subquery on the table being updated) and is valid everywhere, so there's no per-dialect branch. Zero matches are `NotFound` via `ExpectOneRow`, with the count fallback for dialects reporting changed rows.
+- **Errors** — unique and foreign-key violations map to `DuplicateKey` / `ForeignKeyViolation` whatever driver the application uses. GORM: the dialect's `gorm.ErrorTranslator`, applied whether or not the application set `Config.TranslateError`. bun has no translator: `adapters.ConstraintKind` reads the SQLSTATE where the driver exposes one (`SQLState()` — lib/pq, pgx; `Field('C')` — bun's pgdriver) and otherwise the engine's code in the message (SQLite, MySQL 1062 / 1452, SQL Server).
+- **Transactions** — bun's `RunInTx` is on `bun.IDB`, so an adapter holding a `bun.Tx` nests as a savepoint instead of refusing.
+- `[Decision]` **ORM model hooks don't run** on behemoth's models (GORM's `BeforeCreate`, bun's `BeforeAppendModel`, …): the ORM never sees a struct. Behemoth's data hooks (`data.user.beforeCreate`, …) are the extension point for these writes. Behemoth's models need no gorm or bun tags.
+
+`tests/store/contract_test.go` runs the store, session manager and token manager (including concurrent single-use consumption) over raw SQLite / Postgres as control, and GORM and bun over SQLite / Postgres, with behemoth's own models and a contributed column under another physical name.
+
+### **7. Conventions**
+
+- `[Convention, important]` **Never build a model from a request body** (`FromMap(payload)`). With extensions, every column a model knows — contributed ones included — would become client-writable (mass assignment: `"role": "admin"`, a verified flag). Copy an explicit list of fields; other plugins add their columns through data hooks. (`emailpassword`'s sign-up did this, and was fixed with the change; its test sends `"email_verified": true` and `"role": "admin"` and checks neither is stored.)
+- `[Convention]` A contributed column that is `NOT NULL` needs a `Default`, or the contributing plugin must set it on every create (a `data.<table>.beforeCreate` hook); otherwise inserts into the table fail.
+- `[Convention]` A contribution is owned by its declarer: other plugins read it through the declarer's exported `schema.Field`, never by name.
+
+### **Lifecycle of a contributed column**
+
+1. **Declare** — the two-factor plugin calls `ic.Schemas.ExtendColumn(TwoFactorEnabled.Contribution(…))` in `Declare`.
+2. **Prepare** — the registry merges it into `users`; the resolver lists it in `Columns("users")`.
+3. **Migrate** — the planner sees a declared column missing live and adds it (`OpAddColumn`, automatic).
+4. **Create** — `CreateUser` writes the model's row; the column is set if the model (or a before-create hook) set it, otherwise the database default applies.
+5. **Read** — adapters select every declared column; `FromMap` puts `two_factor_enabled` into the user's extras; `TwoFactorEnabled.Get(user)` returns `true`/`false`, converted from whatever the driver returned.
+6. **Update** — `ac.Store.UpdateUser(ctx, id, TwoFactorEnabled.Update(true))` passes the store's column check because the schema lists the column.
+
+# **Custom User Models — Replaced by Canonical Models and Extensions**
+
+### **Why custom models existed**
+
+Two reasons: an application with an existing `User` struct (and table) could integrate without switching to `models.User`, and a user table with a column whose type the database driver can't map (see *Branch - Type Reverse-Mapping Ambiguity*) could be handled by a model with its own `ToMap`/`FromMap`.
+
+### **Why they are removed**
+
+- **They don't solve contributions.** A custom model knows its own fields, not the columns other plugins contribute (`two_factor_enabled`), so it would need the extension mechanism anyway.
+- **They cost an interface.** Core and plugins need to read and write user fields (email, verified flag, name, …): with arbitrary models that means a `UserModel` interface with an accessor per field, a prototype (`AuthContext.User`), and type assertions on every store call — plugins never get a concrete type.
+- **The unsupported-type case is per column, not per model.** Reimplementing a whole model (`New`, `ToMap`, `FromMap`, every core field) to handle one column is the wrong granularity; a per-column codec covers it.
+
+**Decision:** one canonical model per core table, plus extensions (`models.Extension`), typed field keys (`schema.Field[T]`) and per-column codecs. `behemoth.User`, `AuthContext.User`, `models.UserFactory`, the user-model fields of the legacy `behemoth.Config`/`DatabaseConfig`, and the custom-user examples are removed. The OAuth profile a provider returns (`behemoth.UserInfo`, previously `models.UserInfo` posing as a model to satisfy `behemoth.User`) is plain data in package `behemoth`; `Provider.FetchUserInfo` returns `*UserInfo`. Core code that needs "the id of whatever model this is" (audit subjects) reads `Model.PrimaryKeyField()`.
+
+### **Scenarios**
+
+**1. The application has its own `User` struct with extra fields** (`plan`, `company`).
+- Each extra field becomes a contribution the application declares in `PrepareConfig.Schema` (`reg.ExtendColumn(Plan.Contribution(…))`), with one `schema.Field` per column.
+- At runtime the values live in the user's extras; the application reads them through its fields. To keep its own type it can wrap the model:
+  ```go
+  type AppUser struct{ *models.User }
+  func (u AppUser) Plan() string { p, _, _ := Plan.Get(u.User); return p }
+  ```
+  or convert at its own boundary.
+- **Existing table, Path II:** the contributions match the live columns; the diff is clean if the declared types match (otherwise ordinary alter/narrowing rules apply).
+- **Existing table, Path I:** the baseline records the declared shape for matching columns (see *Baseline recording*).
+
+**2. An existing users table has a column the driver can't map** (a Postgres enum `mood`).
+- **Not needed by behemoth:** leave it undeclared. It's not in `Columns("users")`, so it is never selected and never written; Path II ignores undeclared live columns. **Path I's baseline still stops** on it: it records every live column, and an unmappable one is rejected (`RejectAmbiguousTypes`) — unchanged from before.
+- **Needed at runtime:** declare it with a canonical type the driver can read and write as (a string, for an enum) and give its `schema.Field` a `Decode`/`Encode` for the Go type. Reads and writes then work.
+- **Migrations with such a column declared:** the introspector still can't map the live type, so generation stops for it in both paths. `[Deferred]` A per-driver *native type override* ("this column is `mood` in Postgres") would let the declaration describe it exactly; until then such a column must be managed outside behemoth's migrations. Custom models never solved this part either — they only covered runtime serialization.
+
+**3. A plugin needs a column on users** (two-factor). Covered by *Model Extensions*: `schema.Field` + `ExtendColumn` in `Declare`, a before-create hook if the column has no default, `Get`/`Update` at runtime.
+
+**4. An existing users table with a different primary-key type** (integer, auto-increment). `[Known limitation]` `models.User.ID` is a string and core tables reference users by `VARCHAR(36)`; such a table can't be adopted as `users` directly. Options (deferred until needed): a string-typed id column alongside, or making the id type configurable for core tables.
+
+**5. An existing users table with extra columns behemoth shouldn't touch.** Undeclared columns are never read or written, and Path II never plans them. In Path I the baseline records them (it tracks extras), so every later run raises each as a drop issue needing confirmation (default: leave as-is) — declare them as contributions to stop the question.

@@ -33,7 +33,13 @@ const (
 
 // Token is a hashed credential of some kind: the raw value is handed out
 // once; only its lookup hash and keyed hash are stored.
+// tokenColumns are Token's own columns; any other column FromMap receives is
+// a contribution, kept in the Extension.
+var tokenColumns = columnSet(TokenID, TokenKindColumn, TokenSubject, TokenLookupHash, TokenTokenHash,
+	TokenKeyVersion, TokenMetadata, TokenExpiresAt, TokenConsumedAt, TokenRevokedAt, TokenCreatedAt)
+
 type Token struct {
+	Extension
 	ID           string
 	Kind         TokenKind
 	Subject      any
@@ -68,7 +74,7 @@ func (t *Token) ToMap() (map[string]any, error) {
 		}
 		metadata = string(b)
 	}
-	return map[string]any{
+	return t.mergeExtras(map[string]any{
 		TokenID:         t.ID,
 		TokenKindColumn: string(t.Kind),
 		TokenSubject:    t.Subject,
@@ -80,7 +86,7 @@ func (t *Token) ToMap() (map[string]any, error) {
 		TokenConsumedAt: consumedAt,
 		TokenRevokedAt:  revokedAt,
 		TokenCreatedAt:  t.CreatedAt,
-	}, nil
+	}), nil
 }
 
 func (t *Token) FromMap(m map[string]any) error {
@@ -123,5 +129,6 @@ func (t *Token) FromMap(m map[string]any) error {
 		t.RevokedAt = &v
 	}
 	t.CreatedAt, _ = m[TokenCreatedAt].(time.Time)
+	t.collectExtras(m, tokenColumns)
 	return nil
 }

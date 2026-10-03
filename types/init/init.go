@@ -14,6 +14,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
@@ -232,7 +233,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	// The store's data hooks dispatch with ac, and the managers persist
 	// through the store, so they are built in that order.
-	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}))
+	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}), store.WithSchema(app.Resolver))
 	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token)
 	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel)
 
@@ -786,9 +787,22 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 	return nil
 }
 
-// CoreDeclareSchema declares the tables core itself owns.
+// CoreDeclareSchema declares the tables core itself owns. Plugins and the
+// application may extend them (ExtendColumn); the models carry those
+// columns in their Extension.
 func CoreDeclareSchema(ic *types.PluginInitContext) error {
-	// users, sessions, tokens, ... declared here once their TableSchemas exist
+	for _, d := range []struct {
+		model behemoth.Model
+		table schema.Table
+	}{
+		{&models.User{}, models.UserTableSchema()},
+		{&models.Session{}, models.SessionTableSchema()},
+		{&models.Token{}, models.TokenTableSchema()},
+	} {
+		if err := ic.Schemas.Declare(d.model, d.table); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1177,8 +1191,8 @@ func actorFrom(hctx *types.HookContext) any {
 // rather than requiring every AfterHookFunc caller to pre-extract an ID.
 func subjectFrom(result any) any {
 	switch r := result.(type) {
-	case behemoth.User:
-		return r.GetID()
+	case behemoth.Model: // a user, session, token, ... — whatever the point's result is
+		return r.PrimaryKeyField()
 	// case *behemoth.Session:
 	// 	return r.ID
 	// case *behemoth.Token:

@@ -909,6 +909,8 @@ func (r mapResolver) Resolve(canonical string) string {
 	return canonical
 }
 
+func (r mapResolver) Columns(string) []string { return nil }
+
 func (r mapResolver) ResolveColumn(table, column string) string {
 	if p, ok := r.columns[table+"."+column]; ok {
 		return p

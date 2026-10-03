@@ -1,0 +1,228 @@
+package store_test
+
+import (
+	"context"
+	"database/sql"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/MastewalB/behemoth"
+	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/storage/adapters"
+	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
+	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
+	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/MastewalB/behemoth/transport"
+	"github.com/MastewalB/behemoth/types"
+	binit "github.com/MastewalB/behemoth/types/init"
+	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
+	gormpostgres "gorm.io/driver/postgres"
+	gormsqlite "gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+// coreSchema is what Prepare would freeze: core's tables, plus two plugin
+// contributions to users (plan stored under another physical name).
+func coreSchema(t *testing.T) ([]schema.Table, behemoth.SchemaResolver) {
+	t.Helper()
+	reg := schema.NewRegistry()
+	require.NoError(t, reg.Declare(&models.User{}, models.UserTableSchema()))
+	require.NoError(t, reg.Declare(&models.Session{}, models.SessionTableSchema()))
+	require.NoError(t, reg.Declare(&models.Token{}, models.TokenTableSchema()))
+	tfa := twoFactorEnabled.Contribution(schema.Column{Type: schema.ColTypeBoolean, Default: false})
+	tfa.Owner = "two-factor"
+	require.NoError(t, reg.ExtendColumn(tfa))
+	p := plan.Contribution(schema.Column{Type: schema.ColTypeString, Length: 32, Nullable: true, PhysicalName: "subscription_plan"})
+	p.Owner = "billing"
+	require.NoError(t, reg.ExtendColumn(p))
+	require.NoError(t, reg.Freeze())
+
+	resolver := core.NewSchemaResolver()
+	resolver.Freeze(core.BuildSchemaResolverTable(reg, core.NewMigrationConfig(core.MigrationConfig{})))
+	var tables []schema.Table
+	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable} {
+		t, _ := reg.Lookup(name)
+		t.ForeignKeys = nil // created without them: the contract doesn't depend on FK enforcement
+		tables = append(tables, t)
+	}
+	return tables, resolver
+}
+
+func createTables(t *testing.T, driver core.SchemaDriver, tables []schema.Table) {
+	t.Helper()
+	m := core.Migration{ID: "0001"}
+	snapshot := core.SchemaSnapshot{Version: m.ID, Tables: map[string]schema.Table{}}
+	for _, table := range tables {
+		m.Up = append(m.Up, core.SchemaOperation{ID: "create_" + table.Name, Kind: core.OpCreateTable, Table: table.Name, NewTable: &table})
+		snapshot.Tables[table.Name] = table
+	}
+	require.NoError(t, driver.ApplyMigration(context.Background(), core.MigrationRequest{
+		Migration:      m,
+		LedgerEntry:    core.MigrationLedgerEntry{ID: m.ID, AppliedAt: time.Now()},
+		SnapshotUpdate: snapshot,
+		LedgerTable:    "behemoth_auth_schema",
+		SnapshotTable:  "behemoth_auth_schema_snapshot",
+	}))
+}
+
+// contractBackends open a database with core's tables and return an adapter
+// over it. The raw adapters are the control: the contract holds for them.
+func contractBackends() map[string]func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+	openSQLite := func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) *sql.DB {
+		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "contract.db")+"?_busy_timeout=10000")
+		require.NoError(t, err)
+		t.Cleanup(func() { db.Close() })
+		createTables(t, sqliteAdapter.NewSQLiteDriver(db, r), tables)
+		return db
+	}
+	openPostgres := func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) *sql.DB {
+		if testing.Short() {
+			t.Skip("starts a Postgres container")
+		}
+		ctx := context.Background()
+		db, cleanup := testutils.SetupPostgresTestDB(t, ctx)
+		t.Cleanup(cleanup)
+		require.Eventually(t, func() bool { return db.PingContext(ctx) == nil }, 30*time.Second, 200*time.Millisecond)
+		createTables(t, pgAdapter.NewPostgreSQLDriver(db, r), tables)
+		return db
+	}
+	quiet := &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)}
+
+	return map[string]func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database{
+		"sql/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			return sqliteAdapter.NewSQLiteAdapter(openSQLite(t, tables, r), r)
+		},
+		"sql/postgres": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			return pgAdapter.NewPostgresAdapter(openPostgres(t, tables, r), r)
+		},
+		"gorm/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			gdb, err := gorm.Open(gormsqlite.New(gormsqlite.Config{Conn: openSQLite(t, tables, r)}), quiet)
+			require.NoError(t, err)
+			return adapters.NewGormAdapter(gdb, r)
+		},
+		"gorm/postgres": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			gdb, err := gorm.Open(gormpostgres.New(gormpostgres.Config{Conn: openPostgres(t, tables, r)}), quiet)
+			require.NoError(t, err)
+			return adapters.NewGormAdapter(gdb, r)
+		},
+		"bun/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			return bunAdapter.NewBunAdapter(bun.NewDB(openSQLite(t, tables, r), sqlitedialect.New()), r)
+		},
+		"bun/postgres": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			return bunAdapter.NewBunAdapter(bun.NewDB(openPostgres(t, tables, r), pgdialect.New()), r)
+		},
+	}
+}
+
+// TestStoreContract runs the store and the managers over every backend with
+// behemoth's own models — the shapes the store really persists.
+func TestStoreContract(t *testing.T) {
+	tables, resolver := coreSchema(t)
+	for name, open := range contractBackends() {
+		t.Run(name, func(t *testing.T) {
+			db := open(t, tables, resolver)
+			st := store.New(db, store.WithSchema(resolver))
+			t.Run("Users", func(t *testing.T) { usersContract(t, st) })
+			t.Run("Sessions", func(t *testing.T) { sessionsContract(t, st) })
+			t.Run("Tokens", func(t *testing.T) { tokensContract(t, st) })
+		})
+	}
+}
+
+func usersContract(t *testing.T, st *store.Store) {
+	ctx := context.Background()
+	u := &models.User{Email: " Ada@Example.com", Firstname: "Ada"}
+	require.NoError(t, plan.Set(u, "pro"))
+	require.NoError(t, st.CreateUser(ctx, u))
+	var found *models.User
+	err := st.CreateUser(ctx, &models.User{Email: "ada@example.com"})
+	assert.True(t, behemotherr.IsDuplicateKey(err), "duplicate email: %v", err)
+
+	found, err = st.FindUserByEmail(ctx, "ada@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, u.ID, found.ID)
+	assert.Equal(t, "Ada", found.Firstname)
+	assert.False(t, found.CreatedAt.IsZero(), "timestamps read back as time.Time")
+	p, _, err := plan.Get(found)
+	require.NoError(t, err)
+	assert.Equal(t, "pro", p, "a contributed column under another physical name round-trips")
+
+	changes, err := twoFactorEnabled.Update(true)
+	require.NoError(t, err)
+	updated, err := st.UpdateUser(ctx, u.ID, changes)
+	require.NoError(t, err)
+	on, _, err := twoFactorEnabled.Get(updated)
+	require.NoError(t, err)
+	assert.True(t, on)
+
+	_, err = st.UpdateUser(ctx, "no-such-user", behemoth.M{models.UserFirstname: "x"})
+	assert.True(t, behemotherr.IsNotFound(err), "update of a missing row: %v", err)
+	require.NoError(t, st.DeleteUser(ctx, u.ID))
+	assert.True(t, behemotherr.IsNotFound(st.DeleteUser(ctx, u.ID)), "second delete is NotFound")
+	_, err = st.FindUserByID(ctx, u.ID)
+	assert.True(t, behemotherr.IsNotFound(err), "%v", err)
+}
+
+func sessionsContract(t *testing.T, st *store.Store) {
+	ctx := context.Background()
+	sm := transport.NewSessionManager(st, nil, testCrypto(t),
+		types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil)
+
+	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionPending})
+	require.NoError(t, err)
+	got, err := sm.Get(ctx, raw)
+	require.NoError(t, err)
+	assert.Equal(t, sess.ID, got.ID)
+	promoted, err := sm.Promote(ctx, sess.ID)
+	require.NoError(t, err)
+	assert.Equal(t, models.SessionActive, promoted.State)
+	require.NoError(t, sm.Revoke(ctx, sess.ID, "user_logout"))
+	_, err = sm.Get(ctx, raw)
+	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked), "%v", err)
+	listed, err := sm.ListForUser(ctx, "u1")
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.NotNil(t, listed[0].RevokedAt)
+}
+
+func tokensContract(t *testing.T, st *store.Store) {
+	ctx := context.Background()
+	catalog := binit.NewDefaultTokenCatalog()
+	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
+	tm := transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{})
+
+	_, raw, err := tm.Issue(ctx, kindReset, "u1", behemoth.M{"redirect": "/reset"})
+	require.NoError(t, err)
+	verified, err := tm.Verify(ctx, kindReset, raw)
+	require.NoError(t, err)
+	assert.Equal(t, "/reset", verified.MetadataJSON["redirect"], "metadata round-trips")
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	wins := 0
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := tm.Consume(ctx, kindReset, raw); err == nil {
+				mu.Lock()
+				wins++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, 1, wins, "a single-use token is consumed exactly once")
+}

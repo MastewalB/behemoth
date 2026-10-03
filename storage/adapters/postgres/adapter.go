@@ -122,7 +122,8 @@ func (pg *PostgresAdapter) FindOne(
 	}
 
 	// columns stay canonical: they key the map handed to FromMap.
-	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
+	columns := adapters.ReadColumns(pg.names(), m, nil)
+	values, valuePtrs := adapters.ScanTargets(len(columns))
 
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s",
@@ -163,11 +164,12 @@ func (pg *PostgresAdapter) FindMany(
 	)
 
 	// columns stay canonical: they key the map handed to FromMap.
-	if options != nil && len(options.Select) > 0 {
-		columns, values, valuePtrs = models.GenerateColumnValuePairsWithSelectFilter(m, options.Select)
-	} else {
-		columns, values, valuePtrs = models.GenerateColumnValuePairs(m)
+	var selected []string
+	if options != nil {
+		selected = options.Select
 	}
+	columns = adapters.ReadColumns(pg.names(), m, selected)
+	values, valuePtrs = adapters.ScanTargets(len(columns))
 
 	if options != nil && options.Distinct {
 		distinctClause = "DISTINCT "

@@ -113,7 +113,8 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 		routes[r.Path] = r
 	}
 
-	w := call(t, ac, routes["/sign-up/email"], `{"email":"  Ada@Example.COM ","password":"correct horse","firstname":"Ada"}`)
+	w := call(t, ac, routes["/sign-up/email"],
+		`{"email":"  Ada@Example.COM ","password":"correct horse","firstname":"Ada","email_verified":true,"role":"admin"}`)
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	assert.NotContains(t, w.Body.String(), "PasswordHash", "the response never carries the password hash")
 	assert.NotContains(t, w.Body.String(), "argon2", "the response never carries the password hash")
@@ -124,7 +125,8 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 	assert.Equal(t, "Ada", stored.Firstname, "profile fields from the payload")
 	assert.NotEmpty(t, stored.ID)
 	assert.NotEmpty(t, stored.PasswordHash, "the hash is stored")
-	assert.False(t, stored.EmailVerified)
+	assert.False(t, stored.EmailVerified, "a client can't verify its own email")
+	assert.Empty(t, stored.Extras(), "a client can't write arbitrary columns (mass assignment)")
 
 	w = call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"another one"}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "an existing email can't sign up again")

@@ -99,7 +99,8 @@ func (ms *SQLServerAdapter) FindOne(
 	}
 
 	// columns stay canonical: they key the map handed to FromMap.
-	columns, values, valuePtrs := models.GenerateColumnValuePairs(m)
+	columns := ReadColumns(ms.names(), m, nil)
+	values, valuePtrs := ScanTargets(len(columns))
 
 	// SQL Server uses SELECT TOP 1 instead of appending LIMIT 1.
 	query := fmt.Sprintf(
@@ -139,11 +140,12 @@ func (ms *SQLServerAdapter) FindMany(
 	)
 
 	// columns stay canonical: they key the map handed to FromMap.
-	if options != nil && len(options.Select) > 0 {
-		columns, values, valuePtrs = models.GenerateColumnValuePairsWithSelectFilter(m, options.Select)
-	} else {
-		columns, values, valuePtrs = models.GenerateColumnValuePairs(m)
+	var selected []string
+	if options != nil {
+		selected = options.Select
 	}
+	columns = ReadColumns(ms.names(), m, selected)
+	values, valuePtrs = ScanTargets(len(columns))
 
 	if options != nil && options.Distinct {
 		distinctClause = "DISTINCT "

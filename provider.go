@@ -3,6 +3,7 @@ package behemoth
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -23,5 +24,23 @@ type Provider interface {
 	GetConfig() *oauth2.Config
 
 	// FetchUserInfo retrieves user information from the OAuth provider and returns UserInfo type.
-	FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (User, error)
+	FetchUserInfo(client *http.Client, ctx context.Context, token *oauth2.Token) (*UserInfo, error)
+}
+
+// UserInfo is the profile an OAuth provider returns for the signed-in user.
+// It is plain data — not a stored model; an account links it to a user.
+type UserInfo struct {
+	Provider          string
+	Email             string
+	Name              string
+	FirstName         string
+	LastName          string
+	ID                string
+	AvatarURL         string
+	Location          string
+	AccessToken       string
+	AccessTokenSecret string
+	RefreshToken      string
+	ExpiresAt         time.Time
+	IDToken           string
 }

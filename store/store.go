@@ -38,11 +38,12 @@ type Hooks interface {
 
 // Store is the single implementation of behemoth's data layer.
 type Store struct {
-	db    behemoth.Database
-	hooks Hooks
-	newID func() string
-	now   func() time.Time
-	inTx  bool // db is a transaction; see Transaction
+	db     behemoth.Database
+	hooks  Hooks
+	schema behemoth.SchemaResolver // which columns each table has, contributions included
+	newID  func() string
+	now    func() time.Time
+	inTx   bool // db is a transaction; see Transaction
 }
 
 // Option configures a Store.
@@ -50,6 +51,12 @@ type Option func(*Store)
 
 // WithHooks fires h around writes. Without it, no data hooks run.
 func WithHooks(h Hooks) Option { return func(s *Store) { s.hooks = h } }
+
+// WithSchema tells the store which columns each table has — the resolver
+// built from the frozen schema registry, so columns other declarers
+// contributed (ExtendColumn) can be written and updated. Without it, only a
+// model's own columns are accepted.
+func WithSchema(r behemoth.SchemaResolver) Option { return func(s *Store) { s.schema = r } }
 
 // WithClock replaces the timestamp source, for tests.
 func WithClock(now func() time.Time) Option { return func(s *Store) { s.now = now } }
@@ -59,10 +66,11 @@ func WithIDs(newID func() string) Option { return func(s *Store) { s.newID = new
 
 func New(db behemoth.Database, opts ...Option) *Store {
 	s := &Store{
-		db:    db,
-		hooks: noHooks{},
-		newID: utils.GenerateUUID,
-		now:   func() time.Time { return time.Now().UTC() },
+		db:     db,
+		hooks:  noHooks{},
+		schema: behemoth.IdentityResolver{},
+		newID:  utils.GenerateUUID,
+		now:    func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
 		opt(s)

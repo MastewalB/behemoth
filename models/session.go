@@ -37,7 +37,15 @@ const (
 	SessionUpdatedAt      = "updated_at"
 )
 
+// sessionColumns are Session's own columns; any other column FromMap
+// receives is a contribution, kept in the Extension.
+var sessionColumns = columnSet(SessionID, SessionUserID, SessionLookupHash, SessionTokenHash,
+	SessionKeyVersion, SessionStateColumn, SessionExpiresAt, SessionLastActiveAt, SessionFreshAt,
+	SessionIPAddress, SessionUserAgent, SessionImpersonatorID, SessionRevokedAt, SessionRevokedReason,
+	SessionCreatedAt, SessionUpdatedAt)
+
 type Session struct {
+	Extension
 	ID             string       `db:"id"`
 	UserID         string       `db:"user_id"`     // stored as string regardless of behemoth.Session.UserID's `any
 	LookupHash     string       `db:"lookup_hash"` // unkeyed sha256(rawToken), indexed, unique, lookup key
@@ -98,6 +106,7 @@ func (s *Session) FromMap(m map[string]any) error {
 	s.RevokedReason, _ = m[SessionRevokedReason].(string)
 	s.CreatedAt, _ = m[SessionCreatedAt].(time.Time)
 	s.UpdatedAt, _ = m[SessionUpdatedAt].(time.Time)
+	s.collectExtras(m, sessionColumns)
 	return nil
 }
 
@@ -107,7 +116,7 @@ func (s *Session) ToMap() (map[string]any, error) {
 		revokedAt = *s.RevokedAt
 	}
 
-	return map[string]any{
+	return s.mergeExtras(map[string]any{
 		SessionID:             s.ID,
 		SessionUserID:         s.UserID,
 		SessionLookupHash:     s.LookupHash,
@@ -124,7 +133,7 @@ func (s *Session) ToMap() (map[string]any, error) {
 		SessionRevokedReason:  s.RevokedReason,
 		SessionCreatedAt:      s.CreatedAt,
 		SessionUpdatedAt:      s.UpdatedAt,
-	}, nil
+	}), nil
 }
 
 // type SessionStore struct {

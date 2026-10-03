@@ -13,7 +13,6 @@ type AuthContext struct {
 	// an import cycle.
 	Store           *store.Store
 	Crypto          Crypto
-	User            behemoth.User
 	PasswordOptions PasswordOptions
 	SessionManager  SessionManager
 	TokenManager    TokenManager

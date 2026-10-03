@@ -1,0 +1,80 @@
+package models
+
+import "github.com/MastewalB/behemoth/types/schema"
+
+// The tables core declares (CoreDeclareSchema), built from the same column
+// constants as each model's ToMap/FromMap. Other declarers may extend them
+// (ExtendColumn); a model carries those columns in its Extension.
+//
+// Ids are bounded strings rather than a database UUID type, so every driver
+// stores and returns them as the string the models hold.
+
+func UserTableSchema() schema.Table {
+	return schema.Table{
+		Name: UserTable,
+		Columns: []schema.Column{
+			{Name: UserID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true},
+			{Name: UserEmail, Type: schema.ColTypeString, Length: 255, Unique: true},
+			{Name: UserUsername, Type: schema.ColTypeString, Length: 255, Nullable: true},
+			{Name: UserFirstname, Type: schema.ColTypeString, Length: 255, Nullable: true},
+			{Name: UserLastname, Type: schema.ColTypeString, Length: 255, Nullable: true},
+			{Name: UserPasswordHash, Type: schema.ColTypeText, Nullable: true},
+			{Name: UserEmailVerified, Type: schema.ColTypeBoolean, Default: false},
+			{Name: UserImageURL, Type: schema.ColTypeText, Nullable: true},
+			{Name: UserCreatedAt, Type: schema.ColTypeTimestamp},
+			{Name: UserUpdatedAt, Type: schema.ColTypeTimestamp},
+		},
+	}
+}
+
+func SessionTableSchema() schema.Table {
+	return schema.Table{
+		Name: SessionTable,
+		Columns: []schema.Column{
+			{Name: SessionID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true},
+			{Name: SessionUserID, Type: schema.ColTypeString, Length: 36},
+			{Name: SessionLookupHash, Type: schema.ColTypeString, Length: 128, Unique: true},
+			{Name: SessionTokenHash, Type: schema.ColTypeText},
+			{Name: SessionKeyVersion, Type: schema.ColTypeInteger},
+			{Name: SessionStateColumn, Type: schema.ColTypeString, Length: 16},
+			{Name: SessionExpiresAt, Type: schema.ColTypeTimestamp},
+			{Name: SessionLastActiveAt, Type: schema.ColTypeTimestamp},
+			{Name: SessionFreshAt, Type: schema.ColTypeTimestamp},
+			{Name: SessionIPAddress, Type: schema.ColTypeString, Length: 64, Nullable: true},
+			{Name: SessionUserAgent, Type: schema.ColTypeText, Nullable: true},
+			{Name: SessionImpersonatorID, Type: schema.ColTypeString, Length: 36, Nullable: true},
+			{Name: SessionRevokedAt, Type: schema.ColTypeTimestamp, Nullable: true},
+			{Name: SessionRevokedReason, Type: schema.ColTypeString, Length: 64, Nullable: true},
+			{Name: SessionCreatedAt, Type: schema.ColTypeTimestamp},
+			{Name: SessionUpdatedAt, Type: schema.ColTypeTimestamp},
+		},
+		Indexes: []schema.Index{{Name: "idx_sessions_user_id", Columns: []string{SessionUserID}}},
+		ForeignKeys: []schema.ForeignKey{{
+			Name: "fk_sessions_user", Columns: []string{SessionUserID},
+			RefTable: UserTable, RefColumns: []string{UserID}, OnDelete: schema.FKCascade,
+		}},
+	}
+}
+
+func TokenTableSchema() schema.Table {
+	return schema.Table{
+		Name: TokenTable,
+		Columns: []schema.Column{
+			{Name: TokenID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true},
+			{Name: TokenKindColumn, Type: schema.ColTypeString, Length: 64},
+			{Name: TokenSubject, Type: schema.ColTypeString, Length: 255, Nullable: true},
+			{Name: TokenLookupHash, Type: schema.ColTypeString, Length: 128},
+			{Name: TokenTokenHash, Type: schema.ColTypeText},
+			{Name: TokenKeyVersion, Type: schema.ColTypeInteger},
+			{Name: TokenMetadata, Type: schema.ColTypeJson, Nullable: true},
+			{Name: TokenExpiresAt, Type: schema.ColTypeTimestamp, Nullable: true},
+			{Name: TokenConsumedAt, Type: schema.ColTypeTimestamp, Nullable: true},
+			{Name: TokenRevokedAt, Type: schema.ColTypeTimestamp, Nullable: true},
+			{Name: TokenCreatedAt, Type: schema.ColTypeTimestamp},
+		},
+		Indexes: []schema.Index{
+			{Name: "uq_tokens_kind_lookup_hash", Columns: []string{TokenKindColumn, TokenLookupHash}, Unique: true},
+			{Name: "idx_tokens_kind_subject", Columns: []string{TokenKindColumn, TokenSubject}},
+		},
+	}
+}

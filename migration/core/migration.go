@@ -40,6 +40,9 @@ func NewMigrationConfig(cfg MigrationConfig) MigrationConfig {
 type SchemaResolverTable struct {
 	Tables  map[string]string            // canonical table -> physical table
 	Columns map[string]map[string]string // canonical table -> canonical column -> physical column
+	// ColumnOrder lists each table's canonical columns in declaration order
+	// (contributions after the base columns, as schema.Registry merges them).
+	ColumnOrder map[string][]string
 }
 
 type DefaultSchemaResolver struct {
@@ -73,6 +76,19 @@ func (r *DefaultSchemaResolver) ResolveColumn(canonicalTable string, canonicalCo
 	return canonicalColumn
 }
 
+
+// Columns implements [SchemaResolver]: the table's declared columns,
+// contributions included, or nil for a table that isn't declared.
+func (r *DefaultSchemaResolver) Columns(canonicalTable string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cols := r.table.ColumnOrder[canonicalTable]
+	if cols == nil {
+		return nil
+	}
+	return append([]string(nil), cols...)
+}
+
 // Freeze is called exactly once, by Boot, after schema.Registry.Freeze()
 // has run — same "construct empty, populate in place, every early holder
 // of the reference sees the populated state automatically" pattern as
@@ -90,17 +106,21 @@ func (r *DefaultSchemaResolver) Freeze(table SchemaResolverTable) {
 // every Column, including ones contributed via ExtendColumn.
 func BuildSchemaResolverTable(registry schema.Registry, cfg MigrationConfig) SchemaResolverTable {
 	table := SchemaResolverTable{
-		Tables:  map[string]string{},
-		Columns: map[string]map[string]string{},
+		Tables:      map[string]string{},
+		Columns:     map[string]map[string]string{},
+		ColumnOrder: map[string][]string{},
 	}
 	for _, t := range registry.All() {
 		table.Tables[t.Name] = orDefault(t.PhysicalName, t.Name)
 
 		cols := make(map[string]string, len(t.Columns))
+		order := make([]string, 0, len(t.Columns))
 		for _, c := range t.Columns {
 			cols[c.Name] = orDefault(c.PhysicalName, c.Name)
+			order = append(order, c.Name)
 		}
 		table.Columns[t.Name] = cols
+		table.ColumnOrder[t.Name] = order
 	}
 	// Ledger/snapshot aren't plugin-declared tables at all — they're
 	// framework-internal bookkeeping, sourced from MigrationConfig instead.
