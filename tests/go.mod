@@ -6,8 +6,12 @@ require (
 	github.com/MastewalB/behemoth v0.0.0
 	github.com/MastewalB/behemoth/storage/adapters/bun v0.0.0
 	github.com/MastewalB/behemoth/storage/adapters/gorm v0.0.0
+	github.com/MastewalB/behemoth/storage/adapters/mongo v0.0.0
+	github.com/MastewalB/behemoth/storage/adapters/mysql v0.0.0
 	github.com/MastewalB/behemoth/storage/adapters/postgres v0.0.0
+	github.com/MastewalB/behemoth/storage/adapters/redis v0.0.0
 	github.com/MastewalB/behemoth/storage/adapters/sqlite v0.0.0
+	github.com/MastewalB/behemoth/storage/adapters/sqlserver v0.0.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/lib/pq v1.10.9
 	github.com/mattn/go-sqlite3 v1.14.44
@@ -124,3 +128,11 @@ replace github.com/MastewalB/behemoth/storage/adapters/postgres v0.0.0 => ../sto
 replace github.com/MastewalB/behemoth/storage/adapters/sqlite v0.0.0 => ../storage/adapters/sqlite
 
 replace github.com/MastewalB/behemoth/storage/adapters/gorm v0.0.0 => ../storage/adapters/gorm
+
+replace github.com/MastewalB/behemoth/storage/adapters/mongo v0.0.0 => ../storage/adapters/mongo
+
+replace github.com/MastewalB/behemoth/storage/adapters/mysql v0.0.0 => ../storage/adapters/mysql
+
+replace github.com/MastewalB/behemoth/storage/adapters/sqlserver v0.0.0 => ../storage/adapters/sqlserver
+
+replace github.com/MastewalB/behemoth/storage/adapters/redis v0.0.0 => ../storage/adapters/redis

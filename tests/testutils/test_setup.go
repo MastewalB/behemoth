@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/MastewalB/behemoth/storage/adapters"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
 	gormAdapter "github.com/MastewalB/behemoth/storage/adapters/gorm"
+	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
+	mysqlAdapter "github.com/MastewalB/behemoth/storage/adapters/mysql"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	sqlserverAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/sqliteshim"
 
@@ -350,18 +352,18 @@ func SetupBunAdapter(t *testing.T, db *bun.DB) *bunAdapter.BunAdapter {
 	return bunAdapter.NewBunAdapter(db, nil)
 }
 
-func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *adapters.MongoAdapter {
-	return adapters.NewMongoAdapter(client, dbName, nil)
+func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *mongoAdapter.MongoAdapter {
+	return mongoAdapter.NewMongoAdapter(client, dbName, nil)
 }
 
 func SetupPostgresAdapter(db *sql.DB) *pgAdapter.PostgresAdapter {
 	return pgAdapter.NewPostgresAdapter(db, nil)
 }
 
-func SetupMySQLAdapter(db *sql.DB) *adapters.MySQLAdapter {
-	return adapters.NewMySQLAdapter(db, nil)
+func SetupMySQLAdapter(db *sql.DB) *mysqlAdapter.MySQLAdapter {
+	return mysqlAdapter.NewMySQLAdapter(db, nil)
 }
 
-func SetupMSSQLAdapter(db *sql.DB) *adapters.SQLServerAdapter {
-	return adapters.NewSQLServerAdapter(db, nil)
+func SetupMSSQLAdapter(db *sql.DB) *sqlserverAdapter.SQLServerAdapter {
+	return sqlserverAdapter.NewSQLServerAdapter(db, nil)
 }

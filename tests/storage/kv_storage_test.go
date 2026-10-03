@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/MastewalB/behemoth/storage/adapters"
+	redisAdapter "github.com/MastewalB/behemoth/storage/adapters/redis"
 	"github.com/MastewalB/behemoth/tests/testutils"
 )
 
@@ -13,7 +13,7 @@ func TestRedisStorage(t *testing.T) {
 	client, cleanup := testutils.SetupRedisClient(t, ctx)
 	defer cleanup()
 
-	kvAdapter := adapters.NewRedisAdapter(client)
+	kvAdapter := redisAdapter.NewRedisAdapter(client)
 	suite := NewKeyValueStorageTestSuite(kvAdapter)
 	suite.RunAllTests(t)
 }

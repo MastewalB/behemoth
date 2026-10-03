@@ -1,4 +1,7 @@
-package adapters
+// Package mongo provides MongoAdapter, a behemoth.Database backed by MongoDB.
+// It lives in its own module, like the gorm and bun adapters, so the core
+// module does not depend on the MongoDB driver.
+package mongo
 
 import (
 	"context"
@@ -8,6 +11,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/storage/adapters"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -28,6 +32,8 @@ type MongoAdapter struct {
 	Resolver behemoth.SchemaResolver
 }
 
+// NewMongoAdapter returns an adapter for the dbName database of client.
+// resolver maps canonical names to physical ones; nil uses them as-is.
 func NewMongoAdapter(client *mongo.Client, dbName string, resolver behemoth.SchemaResolver) *MongoAdapter {
 	return &MongoAdapter{
 		db:       client.Database(dbName),
@@ -36,28 +42,28 @@ func NewMongoAdapter(client *mongo.Client, dbName string, resolver behemoth.Sche
 }
 
 func (mdb *MongoAdapter) names() behemoth.SchemaResolver {
-	return ResolverOrIdentity(mdb.Resolver)
+	return adapters.ResolverOrIdentity(mdb.Resolver)
 }
 
 func (mdb *MongoAdapter) collection(m behemoth.Model) *mongo.Collection {
-	return mdb.db.Collection(PhysicalTable(mdb.names(), m))
+	return mdb.db.Collection(adapters.PhysicalTable(mdb.names(), m))
 }
 
 // filter renders expr with its fields resolved to physical field names.
 func (mdb *MongoAdapter) filter(m behemoth.Model, expr *clause.Expression) bson.M {
-	return BuildMongoFilter(PhysicalExpression(mdb.names(), m, expr))
+	return BuildMongoFilter(adapters.PhysicalExpression(mdb.names(), m, expr))
 }
 
 // byPrimaryKey matches m's own document.
 func (mdb *MongoAdapter) byPrimaryKey(m behemoth.Model) bson.M {
-	return bson.M{PhysicalColumn(mdb.names(), m, m.PrimaryKeyName()): m.PrimaryKeyField()}
+	return bson.M{adapters.PhysicalColumn(mdb.names(), m, m.PrimaryKeyName()): m.PrimaryKeyField()}
 }
 
 // decode turns a stored document into a new model, mapping physical keys back
 // to the canonical ones FromMap expects.
 func (mdb *MongoAdapter) decode(m behemoth.Model, canonical map[string]string, raw map[string]any) (behemoth.Model, error) {
 	model := m.New()
-	if err := model.(behemoth.Serializable).FromMap(CanonicalDocument(canonical, raw)); err != nil {
+	if err := model.(behemoth.Serializable).FromMap(adapters.CanonicalDocument(canonical, raw)); err != nil {
 		return nil, err
 	}
 	return model, nil
@@ -74,8 +80,8 @@ func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 		return err
 	}
 
-	_, err = mdb.collection(m).InsertOne(ctx, PhysicalDocument(mdb.names(), m, doc))
-	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	_, err = mdb.collection(m).InsertOne(ctx, adapters.PhysicalDocument(mdb.names(), m, doc))
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
@@ -87,15 +93,15 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 
 	result := mdb.collection(m).FindOne(ctx, mdb.filter(m, &expr))
 	if result.Err() != nil {
-		return nil, WrapWithCaller(result.Err(), m.SchemaName(), mapMongoErrors)
+		return nil, adapters.WrapWithCaller(result.Err(), m.SchemaName(), mapMongoErrors)
 	}
 
 	var raw map[string]any
 	if err := result.Decode(&raw); err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
 
-	return mdb.decode(m, CanonicalFields(mdb.names(), m), raw)
+	return mdb.decode(m, adapters.CanonicalFields(mdb.names(), m), raw)
 }
 
 func (mdb *MongoAdapter) FindMany(
@@ -124,16 +130,16 @@ func (mdb *MongoAdapter) FindMany(
 	}
 
 	if err != nil {
-		return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
 	defer cursor.Close(ctx) // only once cursor is known to be non-nil
 
-	canonical := CanonicalFields(mdb.names(), m)
+	canonical := adapters.CanonicalFields(mdb.names(), m)
 	var results []behemoth.Model
 	for cursor.Next(ctx) {
 		var raw map[string]any
 		if err := cursor.Decode(&raw); err != nil {
-			return nil, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 		}
 		model, err := mdb.decode(m, canonical, raw)
 		if err != nil {
@@ -154,10 +160,10 @@ func (mdb *MongoAdapter) physicalQueryOptions(m behemoth.Model, options *behemot
 	}
 	out := *options
 	if out.OrderBy.Field != "" {
-		out.OrderBy.Field = PhysicalColumn(mdb.names(), m, out.OrderBy.Field)
+		out.OrderBy.Field = adapters.PhysicalColumn(mdb.names(), m, out.OrderBy.Field)
 	}
 	if len(out.Select) > 0 {
-		out.Select = PhysicalColumns(mdb.names(), m, out.Select)
+		out.Select = adapters.PhysicalColumns(mdb.names(), m, out.Select)
 	}
 	return &out
 }
@@ -174,14 +180,14 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	}
 
 	update := bson.M{
-		"$set": PhysicalDocument(mdb.names(), m, doc),
+		"$set": adapters.PhysicalDocument(mdb.names(), m, doc),
 	}
 
 	res, err := mdb.collection(m).UpdateOne(ctx, mdb.byPrimaryKey(m), update)
 	if err != nil {
-		return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
-	return ExpectOneRow("Update", m, res.MatchedCount, nil)
+	return adapters.ExpectOneRow("Update", m, res.MatchedCount, nil)
 }
 
 func (mdb *MongoAdapter) UpdateOne(
@@ -195,16 +201,16 @@ func (mdb *MongoAdapter) UpdateOne(
 	}
 
 	update := bson.M{
-		"$set": PhysicalDocument(mdb.names(), m, updates),
+		"$set": adapters.PhysicalDocument(mdb.names(), m, updates),
 	}
 
 	// The filter is evaluated atomically per document, so it holds for the
 	// document as written; MatchedCount gives the UpdateOne convention.
 	res, err := mdb.collection(m).UpdateOne(ctx, mdb.filter(m, &expr), update)
 	if err != nil {
-		return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
-	return ExpectOneRow("UpdateOne", m, res.MatchedCount, nil)
+	return adapters.ExpectOneRow("UpdateOne", m, res.MatchedCount, nil)
 }
 
 func (mdb *MongoAdapter) UpdateMany(
@@ -222,53 +228,53 @@ func (mdb *MongoAdapter) UpdateMany(
 		ctx,
 		mdb.filter(m, &expr),
 		bson.M{
-			"$set": PhysicalDocument(mdb.names(), m, updates),
+			"$set": adapters.PhysicalDocument(mdb.names(), m, updates),
 		},
 	)
-	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	res, err := mdb.collection(m).DeleteOne(ctx, mdb.byPrimaryKey(m))
 	if err != nil {
-		return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
-	return ExpectOneRow("Delete", m, res.DeletedCount, nil)
+	return adapters.ExpectOneRow("Delete", m, res.DeletedCount, nil)
 }
 
 func (mdb *MongoAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	filter := mdb.filter(m, &expr)
 
 	if len(filter) == 0 {
-		return behemotherr.NewValidationError(OpDeleteOne, "clause", nil)
+		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 	// The filter is evaluated atomically per document.
 	res, err := mdb.collection(m).DeleteOne(ctx, filter)
 	if err != nil {
-		return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
-	return ExpectOneRow("DeleteOne", m, res.DeletedCount, nil)
+	return adapters.ExpectOneRow("DeleteOne", m, res.DeletedCount, nil)
 }
 
 func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	filter := mdb.filter(m, &expr)
 
 	if len(filter) == 0 {
-		return behemotherr.NewValidationError(OpDeleteMany, "clause", nil)
+		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 	_, err := mdb.collection(m).DeleteMany(ctx, filter)
-	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 	_, err := mdb.collection(m).DeleteMany(ctx, bson.M{})
-	return WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 }
 
 func (mdb *MongoAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
 	count, err := mdb.collection(m).CountDocuments(ctx, mdb.filter(m, &expr))
 	if err != nil {
-		return 0, WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
 	}
 	return count, nil
 }
@@ -293,6 +299,8 @@ func (mdb *MongoAdapter) Transaction(ctx context.Context, fn behemoth.Transactio
 	return nil
 }
 
+// BuildMongoFilter renders expr as a MongoDB filter document. A nil or empty
+// expression gives an empty filter, which matches every document.
 func BuildMongoFilter(expr *clause.Expression) bson.M {
 	if expr == nil {
 		return bson.M{}
@@ -338,13 +346,13 @@ func buildMongoCondition(cond clause.Condition) bson.M {
 	case clause.OpLessEq:
 		return bson.M{cond.Field: bson.M{"$lte": cond.Value}}
 
-	// MongoDB requires the value for $in and $nin to be an array, so we use the ToSlice helper to ensure it's always a slice, even if a single value is provided.
+	// MongoDB requires the value for $in and $nin to be an array, so we use the adapters.ToSlice helper to ensure it's always a slice, even if a single value is provided.
 	case clause.OpIn:
-		valueSlice := ToSlice(cond.Value)
+		valueSlice := adapters.ToSlice(cond.Value)
 		return bson.M{cond.Field: bson.M{"$in": valueSlice}}
 
 	case clause.OpNotIn:
-		valueSlice := ToSlice(cond.Value)
+		valueSlice := adapters.ToSlice(cond.Value)
 		return bson.M{cond.Field: bson.M{"$nin": valueSlice}}
 
 	case clause.OpStartsWith:
@@ -384,13 +392,13 @@ func mapMongoErrors(op, entity string, err error) error {
 
 	switch {
 	case errors.Is(err, mongo.ErrNoDocuments):
-		return Classify(op, entity, SentinelNotFound, err)
+		return adapters.Classify(op, entity, adapters.SentinelNotFound, err)
 	case mongo.IsDuplicateKeyError(err): // E11000, from a unique index
-		return Classify(op, entity, SentinelDuplicateKey, err)
+		return adapters.Classify(op, entity, adapters.SentinelDuplicateKey, err)
 	case errors.Is(err, mongo.ErrEmptySlice) || errors.Is(err, mongo.ErrNilValue) || errors.Is(err, mongo.ErrNilDocument):
 		return behemotherr.NewValidationError(op, entity, err)
 	default:
-		return Classify(op, entity, SentinelUnknown, err)
+		return adapters.Classify(op, entity, adapters.SentinelUnknown, err)
 	}
 }
 

@@ -11,9 +11,11 @@ import (
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
+	mysqlAdapter "github.com/MastewalB/behemoth/storage/adapters/mysql"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	sqlserverAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/uptrace/bun"
@@ -241,7 +243,7 @@ func TestMongoAdapter(t *testing.T) {
 	// standard suite's CleanupDatabase disconnects the client.
 	t.Run("PhysicalNames", func(t *testing.T) {
 		defer dropAll()
-		mapped := adapters.NewMongoAdapter(mongoClient, testutils.MongoDBName, physicalNamesResolver(t))
+		mapped := mongoAdapter.NewMongoAdapter(mongoClient, testutils.MongoDBName, physicalNamesResolver(t))
 		manager := &MongoAdapterTestManager{t: t, client: mongoClient, cleanupTables: dropAll, cleanupDatabase: func() {}}
 		NewDatabaseTestSuite(t, mapped, manager).Run()
 	})
@@ -249,7 +251,7 @@ func TestMongoAdapter(t *testing.T) {
 	// Documents are stored under physical names and read back as canonical ones.
 	t.Run("StoresPhysicalNames", func(t *testing.T) {
 		defer dropAll()
-		mapped := adapters.NewMongoAdapter(mongoClient, testutils.MongoDBName, physicalNamesResolver(t))
+		mapped := mongoAdapter.NewMongoAdapter(mongoClient, testutils.MongoDBName, physicalNamesResolver(t))
 		user := testutils.NewTestUser("u-1")
 		if err := mapped.Create(ctx, user); err != nil {
 			t.Fatal(err)
@@ -366,7 +368,7 @@ func TestMySQLAdapter(t *testing.T) {
 			t.Fatal(err)
 		}
 		manager := &MySQLAdapterTestManager{t: t, db: db, cleanup: func() {}, table: "app_users"}
-		NewDatabaseTestSuite(t, adapters.NewMySQLAdapter(db, physicalNamesResolver(t)), manager).Run()
+		NewDatabaseTestSuite(t, mysqlAdapter.NewMySQLAdapter(db, physicalNamesResolver(t)), manager).Run()
 	})
 
 	manager := &MySQLAdapterTestManager{
@@ -382,7 +384,7 @@ func TestMySQLAdapter(t *testing.T) {
 func TestMSSQLAdapter(t *testing.T) {
 	ctx := t.Context()
 	db, cleanupDatabase := testutils.SetupMSSQLTestDBWithSchema(t, ctx, testutils.TestMSSQLServerUserSchema)
-	adapter := adapters.NewSQLServerAdapter(db, nil)
+	adapter := sqlserverAdapter.NewSQLServerAdapter(db, nil)
 
 	t.Run("UndefinedTable", func(t *testing.T) { assertUndefinedTable(t, adapter) })
 	t.Run("ConstraintErrors", func(t *testing.T) {
@@ -401,7 +403,7 @@ func TestMSSQLAdapter(t *testing.T) {
 			t.Fatal(err)
 		}
 		manager := &MSSQLAdapterTestManager{t: t, db: db, cleanup: func() {}, table: "app_users"}
-		NewDatabaseTestSuite(t, adapters.NewSQLServerAdapter(db, physicalNamesResolver(t)), manager).Run()
+		NewDatabaseTestSuite(t, sqlserverAdapter.NewSQLServerAdapter(db, physicalNamesResolver(t)), manager).Run()
 	})
 
 	manager := &MSSQLAdapterTestManager{
