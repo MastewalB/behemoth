@@ -22,8 +22,13 @@ type DefaultTokenManager struct {
 	cfg     types.TokenConfig
 	disp    types.Dispatcher
 	tel     *types.Telemetry
+	auth    *types.AuthContext
 }
 
+// NewDefaultTokenManager builds the default TokenManager. auth is the
+// AuthContext the manager belongs to; it is only handed to hook handlers as
+// HookContext.Auth and is not read during construction, so Boot may pass it
+// before all of its fields are set.
 func NewDefaultTokenManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
@@ -31,6 +36,7 @@ func NewDefaultTokenManager(
 	crypto types.Crypto,
 	dispatcher types.Dispatcher,
 	cfg types.TokenConfig,
+	auth *types.AuthContext,
 ) types.TokenManager {
 	return &DefaultTokenManager{
 		st:      st,
@@ -39,6 +45,7 @@ func NewDefaultTokenManager(
 		crypto:  crypto,
 		disp:    dispatcher,
 		cfg:     cfg,
+		auth:    auth,
 	}
 }
 
@@ -114,9 +121,7 @@ func (tm *DefaultTokenManager) Issue(
 		MetadataJSON: meta,
 	}
 
-	hctx := hookContext(ctx)
-
-	if _, err := tm.disp.RunBefore(hctx, hooks.HookTokenBeforeIssue, behemoth.M{
+	if _, err := tm.disp.RunBefore(hookContext(ctx, tm.auth, hooks.HookTokenBeforeIssue, types.BeforeHookPhase), hooks.HookTokenBeforeIssue, behemoth.M{
 		hooks.HookValueTokenKind:    string(kind),
 		hooks.HookValueTokenSubject: subjectString(subject),
 	}); err != nil {
@@ -127,7 +132,7 @@ func (tm *DefaultTokenManager) Issue(
 		return nil, "", behemotherr.WrapOp(op, "token", err)
 	}
 
-	if err := tm.disp.RunAfter(hctx, hooks.HookTokenAfterIssue, tok); err != nil {
+	if err := tm.disp.RunAfter(hookContext(ctx, tm.auth, hooks.HookTokenAfterIssue, types.AfterHookPhase), hooks.HookTokenAfterIssue, tok); err != nil {
 		return nil, "", err
 	}
 	return tok, rawToken, nil
@@ -233,8 +238,6 @@ func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind
 		return nil, behemotherr.NewTokenError(op, behemotherr.ErrorCodeTokenInvalidUsage, nil)
 	}
 
-	hctx := hookContext(ctx)
-
 	var result *types.Token
 	var consumeErr error
 
@@ -279,12 +282,13 @@ func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind
 	}
 
 	if consumeErr != nil {
+		hctx := hookContext(ctx, tm.auth, hooks.HookTokenFailed, types.FailedHookPhase)
 		if err := tm.disp.Fail(hctx, hooks.HookTokenFailed, types.FailureReason{Code: behemotherr.ClassifyCode(consumeErr), Cause: consumeErr}); err != nil {
 			return nil, err
 		}
 		return nil, consumeErr
 	}
-	if err := tm.disp.RunAfter(hctx, hooks.HookTokenConsumed, result); err != nil {
+	if err := tm.disp.RunAfter(hookContext(ctx, tm.auth, hooks.HookTokenConsumed, types.AfterHookPhase), hooks.HookTokenConsumed, result); err != nil {
 		return nil, err
 	}
 	return result, nil

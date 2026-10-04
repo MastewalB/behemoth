@@ -24,10 +24,15 @@ type DefaultSessionManager struct {
 	cfg    types.SessionConfig
 	disp   types.Dispatcher
 	tel    *types.Telemetry
+	auth   *types.AuthContext
 }
 
 func cacheKey(lookupHash string) string { return "session:" + lookupHash }
 
+// NewSessionManager builds the default SessionManager. auth is the
+// AuthContext the manager belongs to; it is only handed to hook handlers as
+// HookContext.Auth and is not read during construction, so Boot may pass it
+// before all of its fields are set.
 func NewSessionManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
@@ -35,6 +40,7 @@ func NewSessionManager(
 	cfg types.SessionConfig,
 	disp types.Dispatcher,
 	tel *types.Telemetry,
+	auth *types.AuthContext,
 ) types.SessionManager {
 	return &DefaultSessionManager{
 		st:     st,
@@ -43,6 +49,7 @@ func NewSessionManager(
 		cfg:    cfg,
 		disp:   disp,
 		tel:    tel,
+		auth:   auth,
 	}
 }
 
@@ -94,8 +101,7 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 	}
 
 	now := time.Now()
-	hctx := hookContext(ctx)
-	payload, err := sm.disp.RunBefore(hctx, hooks.HookSessionBeforeCreate, behemoth.M{
+	payload, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeCreate, types.BeforeHookPhase), hooks.HookSessionBeforeCreate, behemoth.M{
 		hooks.HookValueUserID: fmt.Sprint(userID), hooks.HookValueState: string(meta.State),
 		hooks.HookValueIPAddress: ip, hooks.HookValueUserAgent: ua,
 	})
@@ -126,7 +132,7 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 	}
 
 	sm.cacheSet(ctx, m)
-	if err := sm.disp.RunAfter(hctx, hooks.HookSessionAfterCreate, m); err != nil {
+	if err := sm.disp.RunAfter(hookContext(ctx, sm.auth, hooks.HookSessionAfterCreate, types.AfterHookPhase), hooks.HookSessionAfterCreate, m); err != nil {
 		return nil, "", err
 	}
 
@@ -346,8 +352,7 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 		return nil // already revoked
 	}
 
-	hctx := hookContext(ctx)
-	if _, err := sm.disp.RunBefore(hctx, hooks.HookSessionBeforeRevoke,
+	if _, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeRevoke, types.BeforeHookPhase), hooks.HookSessionBeforeRevoke,
 		behemoth.M{hooks.HookValueSessionID: m.ID, hooks.HookValueReason: reason}); err != nil {
 		return err
 	}
@@ -369,7 +374,7 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	// and an explicit Delete is required instead.
 	sm.cacheDelete(ctx, m.LookupHash)
 
-	return sm.disp.RunAfter(hctx, hooks.HookSessionAfterRevoke, m)
+	return sm.disp.RunAfter(hookContext(ctx, sm.auth, hooks.HookSessionAfterRevoke, types.AfterHookPhase), hooks.HookSessionAfterRevoke, m)
 }
 
 func (sm *DefaultSessionManager) fetchByLookupHash(ctx context.Context, lookupHash string) (*models.Session, bool, error) {
@@ -418,10 +423,19 @@ func (sm *DefaultSessionManager) cacheDelete(ctx context.Context, lookupHash str
 	}
 }
 
-// hookContext is the HookContext a manager dispatches its own (semantic)
-// hooks with: the request being handled, if any, and fresh chain Values.
-func hookContext(ctx context.Context) *types.HookContext {
-	return &types.HookContext{Ctx: ctx, Values: behemoth.M{}, Request: types.RequestFrom(ctx)}
+// hookContext builds the context the session and token managers dispatch
+// one hook point with, the way dataHooks.hookContext does for data points.
+// The managers' points are Tier 2, so Tx stays nil. Values are fresh for
+// each dispatch: they are scoped to one hook chain, and the before and after
+// points of an operation are two chains. Request is the request being
+// handled, or nil outside one (a CLI, a job).
+func hookContext(ctx context.Context, auth *types.AuthContext, point types.HookPoint, phase types.HookPhase) *types.HookContext {
+	return &types.HookContext{
+		Ctx: ctx, Point: point, Phase: phase,
+		Auth:    auth,
+		Values:  behemoth.M{},
+		Request: types.RequestFrom(ctx),
+	}
 }
 
 var _ types.SessionManager = (*DefaultSessionManager)(nil)

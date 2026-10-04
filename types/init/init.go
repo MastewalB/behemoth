@@ -286,8 +286,8 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// through the store, so they are built in that order.
 	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}), store.WithSchema(app.Resolver),
 		store.WithEncryptor(cryptoSuite.AtRest))
-	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token)
-	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel)
+	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token, ac)
+	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac)
 
 	// Init before routing, so Routes() and Middlewares() may rely on
 	// anything a plugin sets up in Init.

@@ -92,7 +92,7 @@ func authContext(t *testing.T) *types.AuthContext {
 		PasswordOptions: types.PasswordOptions{PasswordHasher: c.Passwords},
 		SessionManager: transport.NewSessionManager(st, nil, c,
 			types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
-			passDispatcher{}, nil),
+			passDispatcher{}, nil, nil),
 	}
 }
 

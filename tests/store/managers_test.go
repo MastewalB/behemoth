@@ -172,8 +172,12 @@ func newSessionManager(t *testing.T, cfg types.SessionConfig) (types.SessionMana
 	if cfg.PendingExpiresIn == 0 {
 		cfg.PendingExpiresIn = 5 * time.Minute
 	}
-	return transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg, d, nil), d
+	return transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg, d, nil, managersAuth), d
 }
+
+// managersAuth is the AuthContext the managers under test are built with. It
+// only has to be the pointer handlers get back as HookContext.Auth.
+var managersAuth = &types.AuthContext{}
 
 func TestSessionLifecycle(t *testing.T) {
 	ctx := context.Background()
@@ -250,18 +254,71 @@ func TestSessionRevokeAllAndEviction(t *testing.T) {
 	}, states(), "everything but the excepted session is revoked")
 }
 
-// The manager's own hooks get real chain Values and the request being handled.
-func TestSessionHooksGetValuesAndRequest(t *testing.T) {
+// The manager's own hooks get a complete HookContext: the point and phase
+// being dispatched, the AuthContext, chain Values of their own and the
+// request being handled.
+func TestSessionHooksGetACompleteContext(t *testing.T) {
 	sm, d := newSessionManager(t, types.SessionConfig{})
 	rc := &types.RequestContext{Request: httptest.NewRequest("POST", "/sign-in", nil)}
 	ctx := types.ContextWithRequest(context.Background(), rc)
-	_, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	sess, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
 	require.NoError(t, err)
-	require.NotEmpty(t, d.seen)
-	for _, h := range d.seen {
-		assert.NotNil(t, h.Values, "a handler writing Values must not panic")
-		assert.Same(t, rc, h.Request)
+	require.NoError(t, sm.Revoke(ctx, sess.ID, "user_logout"))
+
+	type dispatch struct {
+		point types.HookPoint
+		phase types.HookPhase
 	}
+	var got []dispatch
+	for _, h := range d.seen {
+		got = append(got, dispatch{h.Point, h.Phase})
+		assert.Same(t, managersAuth, h.Auth, "%s", h.Point)
+		assert.Same(t, rc, h.Request, "%s", h.Point)
+		assert.Nil(t, h.Tx, "%s: a Tier 2 point has no transaction", h.Point)
+		require.NotNil(t, h.Values, "%s: a handler writing Values must not panic", h.Point)
+		h.Values["seen"] = true
+	}
+	assert.Equal(t, []dispatch{
+		{hooks.HookSessionBeforeCreate, types.BeforeHookPhase}, {hooks.HookSessionAfterCreate, types.AfterHookPhase},
+		{hooks.HookSessionBeforeRevoke, types.BeforeHookPhase}, {hooks.HookSessionAfterRevoke, types.AfterHookPhase},
+	}, got)
+	for _, h := range d.seen {
+		assert.Len(t, h.Values, 1, "%s: Values are scoped to one dispatch", h.Point)
+	}
+}
+
+// The token manager's hooks get the same: issue, a consume, and a failed
+// second consume each dispatch with their own point and phase.
+func TestTokenHooksGetACompleteContext(t *testing.T) {
+	catalog := binit.NewDefaultTokenCatalog()
+	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
+	d := &passDispatcher{}
+	tm := transport.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), d, types.TokenConfig{}, managersAuth)
+
+	ctx := context.Background()
+	_, raw, err := tm.Issue(ctx, kindReset, "u1", nil)
+	require.NoError(t, err)
+	_, err = tm.Consume(ctx, kindReset, raw)
+	require.NoError(t, err)
+	_, err = tm.Consume(ctx, kindReset, raw)
+	require.Error(t, err)
+
+	type dispatch struct {
+		point types.HookPoint
+		phase types.HookPhase
+	}
+	var got []dispatch
+	for _, h := range d.seen {
+		got = append(got, dispatch{h.Point, h.Phase})
+		assert.Same(t, managersAuth, h.Auth, "%s", h.Point)
+		assert.NotNil(t, h.Values, "%s", h.Point)
+		assert.Nil(t, h.Request, "%s: no request outside one", h.Point)
+	}
+	assert.Equal(t, []dispatch{
+		{hooks.HookTokenBeforeIssue, types.BeforeHookPhase}, {hooks.HookTokenAfterIssue, types.AfterHookPhase},
+		{hooks.HookTokenConsumed, types.AfterHookPhase},
+		{hooks.HookTokenFailed, types.FailedHookPhase},
+	}, got)
 }
 
 // ---- token manager ----
@@ -275,7 +332,7 @@ func newTokenManager(t *testing.T) (types.TokenManager, *store.Store) {
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindAPI, Backend: types.TokenBackendDB, Owner: "core"}))
 	st := store.New(sessionsTokensDB(t))
-	return transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}), st
+	return transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, managersAuth), st
 }
 
 func TestTokenIssueVerifyConsume(t *testing.T) {
@@ -359,20 +416,15 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 	app, err := binit.Prepare(nil, binit.PrepareConfig{})
 	require.NoError(t, err)
 
-	// The handlers record the point they were registered on: the managers
-	// don't set HookContext.Point.
 	var fired []types.HookPoint
-	before := func(point types.HookPoint) types.BeforeHookFunc {
-		return func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
-			fired = append(fired, point)
-			return p, nil
-		}
+	var auths []*types.AuthContext
+	before := func(hctx *types.HookContext, p behemoth.M) (behemoth.M, error) {
+		fired, auths = append(fired, hctx.Point), append(auths, hctx.Auth)
+		return p, nil
 	}
-	after := func(point types.HookPoint) types.AfterHookFunc {
-		return func(*types.HookContext, any) error {
-			fired = append(fired, point)
-			return nil
-		}
+	after := func(hctx *types.HookContext, _ any) error {
+		fired, auths = append(fired, hctx.Point), append(auths, hctx.Auth)
+		return nil
 	}
 	ac, err := binit.Boot(ctx, app, sessionsTokensDB(t), binit.BootConfig{
 		Crypto: crypto.Config{
@@ -380,16 +432,16 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 		},
 		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: 5 * time.Minute},
 		Hooks: func(reg types.HookRegistry) error {
-			if err := reg.OnBefore(hooks.HookSessionBeforeCreate, before(hooks.HookSessionBeforeCreate), nil); err != nil {
+			if err := reg.OnBefore(hooks.HookSessionBeforeCreate, before, nil); err != nil {
 				return err
 			}
-			if err := reg.OnAfter(hooks.HookSessionAfterCreate, after(hooks.HookSessionAfterCreate), nil); err != nil {
+			if err := reg.OnAfter(hooks.HookSessionAfterCreate, after, nil); err != nil {
 				return err
 			}
-			if err := reg.OnBefore(hooks.HookSessionBeforeRevoke, before(hooks.HookSessionBeforeRevoke), nil); err != nil {
+			if err := reg.OnBefore(hooks.HookSessionBeforeRevoke, before, nil); err != nil {
 				return err
 			}
-			return reg.OnAfter(hooks.HookSessionAfterRevoke, after(hooks.HookSessionAfterRevoke), nil)
+			return reg.OnAfter(hooks.HookSessionAfterRevoke, after, nil)
 		},
 	})
 	require.NoError(t, err)
@@ -401,4 +453,7 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 		hooks.HookSessionBeforeCreate, hooks.HookSessionAfterCreate,
 		hooks.HookSessionBeforeRevoke, hooks.HookSessionAfterRevoke,
 	}, fired)
+	for i, got := range auths {
+		assert.Same(t, ac, got, "%s: handlers get the booted AuthContext", fired[i])
+	}
 }

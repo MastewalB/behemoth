@@ -187,7 +187,7 @@ func usersContract(t *testing.T, st *store.Store) {
 func sessionsContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
 	sm := transport.NewSessionManager(st, nil, testCrypto(t),
-		types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil)
+		types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil)
 
 	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionPending})
 	require.NoError(t, err)
@@ -210,7 +210,7 @@ func tokensContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
 	catalog := binit.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
-	tm := transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{})
+	tm := transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, nil)
 
 	_, raw, err := tm.Issue(ctx, kindReset, "u1", behemoth.M{"redirect": "/reset"})
 	require.NoError(t, err)
