@@ -455,8 +455,28 @@ func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 	return count, nil
 }
 
+// Transaction runs fn with an adapter bound to one database transaction. fn's
+// error rolls the transaction back and is returned as-is.
+//
+// Called on an adapter that is already bound to a transaction (the one
+// Transaction hands to fn), it runs fn in that same transaction: nothing is
+// begun, committed or rolled back here, and fn's error is returned for the
+// outer call to roll back on. Code that is handed an adapter, such as a hook
+// handler, can therefore call Transaction without knowing whether one is open.
 func (pg *PostgresAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
-	tx, err := pg.DB.(*sql.DB).BeginTx(ctx, nil)
+	var db *sql.DB
+	switch q := pg.DB.(type) {
+	case *sql.DB:
+		db = q
+	case *sql.Tx:
+		_, err := fn(ctx, pg)
+		return err
+	default:
+		return behemotherr.NewTransactionError("Transaction",
+			fmt.Errorf("cannot begin a transaction on a %T; the adapter needs a *sql.DB", pg.DB))
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

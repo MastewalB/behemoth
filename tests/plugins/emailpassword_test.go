@@ -62,8 +62,11 @@ type passDispatcher struct{}
 func (passDispatcher) RunBefore(_ *types.HookContext, _ types.HookPoint, p behemoth.M) (behemoth.M, error) {
 	return p, nil
 }
-func (passDispatcher) RunAfter(*types.HookContext, types.HookPoint, any)             {}
-func (passDispatcher) Fail(*types.HookContext, types.HookPoint, types.FailureReason) {}
+func (passDispatcher) RunAfter(*types.HookContext, types.HookPoint, any) error   { return nil }
+func (passDispatcher) RunAfterTx(*types.HookContext, types.HookPoint, any) error { return nil }
+func (passDispatcher) Fail(*types.HookContext, types.HookPoint, types.FailureReason) error {
+	return nil
+}
 
 // authContext wires what Boot would, by hand: the plugin can't go through
 // Prepare/Boot yet (its Meta and Declare are unimplemented).

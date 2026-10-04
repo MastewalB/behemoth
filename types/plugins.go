@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -237,6 +238,16 @@ type HookContext struct {
 
 	Auth *AuthContext
 
+	// Tx is set on Tier 1 data hooks only: the store bound to the transaction
+	// of the write that fired the hook. A handler's writes through Tx commit
+	// or roll back with that write, and its reads see the row being written.
+	// Tx.DB() is the database adapter bound to the same transaction, for
+	// tables the store has no operations for (a plugin's own); use it with
+	// Ctx. Auth.Store and Auth.DB are a different connection: their writes
+	// survive a rollback and their reads don't see the uncommitted row. Nil
+	// on Tier 2 hooks, which don't run inside a store transaction.
+	Tx *store.Store
+
 	// Values is scratch space scoped to this single dispatch chain; lets one
 	// handler leave a note for a later handler in the same chain (e.g. "password
 	// strength already checked by plugin X"). Distinct from the payload itself,
@@ -292,11 +303,21 @@ type PluginInitContext struct {
 // never rely on nil meaning "no change," since that's ambiguous with an empty M.
 type BeforeHookFunc func(hctx *HookContext, payload behemoth.M) (behemoth.M, error)
 
-// AfterHookFunc: strictly post-commit, read-only with respect to the operation's
-// outcome. result is the already-persisted entity. A returned error does NOT roll
-// anything back (nothing left to roll back) — the dispatcher captures it and hands
-// it to a configurable failure reporter/retry policy instead of propagating it as
-// the parent operation's error.
+// AfterHookFunc runs after the operation its point belongs to. result is the
+// entity the operation produced. What a returned error does depends on the tier:
+//
+// Tier 2 (flow points such as auth.signUp.after, dispatched with RunAfter): the
+// operation has already succeeded and committed. The error is logged and does
+// not become the operation's error. This is the place for side effects that
+// can't be undone: emails, webhooks, calls to other systems.
+//
+// Tier 1 (data points such as data.user.afterCreate, dispatched with
+// RunAfterTx): the handler runs inside the write's transaction, before commit.
+// The error fails the write and rolls it back, and no later handler runs.
+// result may still be rolled back after the handler returns, so the handler
+// should only do work the rollback undoes: database writes through
+// HookContext.Tx. Writes through Auth.Store, key-value storage writes and
+// outside side effects are not undone.
 type AfterHookFunc func(hctx *HookContext, result any) error
 
 // FailedHookFunc: notification-only, fired for business-rejected operations
@@ -309,21 +330,38 @@ type FailureReason struct {
 	Cause error  // underlying error, if any. nil for pure business rejections
 }
 
+// Dispatcher runs the handler chains of hook points.
+//
+// Every method returns a configuration error, and runs no handler, when point
+// was never declared or is declared with a different phase than the method
+// dispatches. That is a mistake in the code firing the point, so callers
+// return it like any other error instead of treating it as a handler's.
 type Dispatcher interface {
 	// RunBefore executes the frozen before-hook chain for a given hook point.
 	// It passes the payload through the hooks in registration order, returning
 	// the mutated payload or aborting on the first non-nil error.
 	RunBefore(hctx *HookContext, point HookPoint, payload behemoth.M) (behemoth.M, error)
 
-	// RunAfter executes the frozen after-chain for point, strictly post-commit.
-	// Never surfaces an error to the caller; failures are captured internally
-	// and handed to the configured FailureReporter. The flow has already succeeded;
-	// this call cannot change that.
-	RunAfter(hctx *HookContext, point HookPoint, result any)
+	// RunAfter executes the frozen after-chain for a Tier 2 point, once the
+	// flow has succeeded. It never surfaces a handler's error to the caller:
+	// a failed handler is logged and the rest of the chain still runs. The
+	// flow has already succeeded; a handler cannot change that. The returned
+	// error is non-nil only when point can't be dispatched (see below).
+	RunAfter(hctx *HookContext, point HookPoint, result any) error
+
+	// RunAfterTx executes the frozen after-chain for a Tier 1 data point,
+	// inside the write's transaction. Unlike RunAfter it stops at the first
+	// handler error (or panic) and returns it, so the store can roll the
+	// write back. It records no audit event, because the write is not
+	// committed yet; auditing data points is deferred until there is an
+	// after-commit hook.
+	RunAfterTx(hctx *HookContext, point HookPoint, result any) error
 
 	// Fail dispatches the frozen failed-chain for point with reason.
 	// No-op if point == ""; this is what lets Tier 1 CRUD skip cascading entirely.
-	Fail(hctx *HookContext, point HookPoint, reason FailureReason)
+	// Handler errors are logged. The returned error is non-nil only when
+	// point can't be dispatched (see below).
+	Fail(hctx *HookContext, point HookPoint, reason FailureReason) error
 }
 
 // HookPointDef formally defines an event type.
@@ -374,7 +412,9 @@ func WithLifecycle[TIn, TOut any](
 
 		mutated, err := dispatcher.RunBefore(hctx, before, payload)
 		if err != nil {
-			dispatcher.Fail(hctx, failed, FailureReason{Code: "rejectedByHook", Cause: err})
+			if failErr := dispatcher.Fail(hctx, failed, FailureReason{Code: "rejectedByHook", Cause: err}); failErr != nil {
+				return zero, failErr
+			}
 			return zero, err
 		}
 
@@ -386,7 +426,9 @@ func WithLifecycle[TIn, TOut any](
 		if err != nil {
 			return zero, err // flow's own business-rejection Fail() calls already happened inside fn
 		}
-		dispatcher.RunAfter(hctx, success, out)
+		if err := dispatcher.RunAfter(hctx, success, out); err != nil {
+			return zero, err
+		}
 		return out, nil
 	}
 }

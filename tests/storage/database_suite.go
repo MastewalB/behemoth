@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/MastewalB/behemoth"
@@ -62,6 +63,7 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("DeleteAll", s.TestDeleteAll)
 	s.t.Run("DeleteMany", s.TestDeleteMany)
 	s.t.Run("Transaction", s.TestTransaction)
+	s.t.Run("NestedTransaction", s.TestNestedTransaction)
 	s.t.Run("QueryOptions", s.TestQueryOptions)
 	s.t.Run("Count", s.TestCount)
 
@@ -647,6 +649,64 @@ func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
 	assert.NotNil(t, found)
 	assert.True(t, s.modelManager.Compare(commitModel, found))
 
+}
+
+// TestNestedTransaction covers Transaction called on the adapter a
+// transaction hands out, as a hook handler given that adapter may do. The
+// inner call must not panic or commit on its own: its writes share the outer
+// transaction's fate.
+func (s *DatabaseTestSuite) TestNestedTransaction(t *testing.T) {
+	defer s.modelManager.CleanupTables()
+
+	exists := func(id string) bool {
+		found, err := s.adapter.FindOne(s.ctx, s.modelManager.Create(id), getWhereExpr("id", clause.OpEqual, id))
+		return err == nil && found != nil
+	}
+	// nested creates outerID in a transaction and innerID in a Transaction
+	// called on that transaction's adapter. innerErr is returned by the inner
+	// fn and passed on by the outer one; outerErr is returned by the outer fn
+	// after a successful inner call.
+	nested := func(outerID, innerID string, innerErr, outerErr error) error {
+		return s.adapter.Transaction(context.Background(), func(ctx context.Context, tx behemoth.Database) (any, error) {
+			if err := tx.Create(ctx, s.modelManager.Create(outerID)); err != nil {
+				return nil, err
+			}
+			err := tx.Transaction(ctx, func(ctx context.Context, inner behemoth.Database) (any, error) {
+				if err := inner.Create(ctx, s.modelManager.Create(innerID)); err != nil {
+					return nil, err
+				}
+				// The inner call sees the outer transaction's uncommitted row.
+				if _, err := inner.FindOne(ctx, s.modelManager.Create(outerID), getWhereExpr("id", clause.OpEqual, outerID)); err != nil {
+					return nil, fmt.Errorf("inner transaction can't see the outer row: %w", err)
+				}
+				return nil, innerErr
+			})
+			if err != nil {
+				return nil, err
+			}
+			return nil, outerErr
+		})
+	}
+
+	t.Run("Commit", func(t *testing.T) {
+		assert.NoError(t, nested("nest_outer_ok", "nest_inner_ok", nil, nil))
+		assert.True(t, exists("nest_outer_ok"), "the outer write was committed")
+		assert.True(t, exists("nest_inner_ok"), "the inner write was committed with it")
+	})
+
+	t.Run("OuterRollbackUndoesInner", func(t *testing.T) {
+		fail := errors.New("outer failed after the inner call returned")
+		assert.ErrorIs(t, nested("nest_outer_rb", "nest_inner_rb", nil, fail), fail)
+		assert.False(t, exists("nest_outer_rb"))
+		assert.False(t, exists("nest_inner_rb"), "the inner call did not commit on its own")
+	})
+
+	t.Run("InnerErrorRollsBackBoth", func(t *testing.T) {
+		fail := errors.New("inner failed")
+		assert.ErrorIs(t, nested("nest_outer_err", "nest_inner_err", fail, nil), fail)
+		assert.False(t, exists("nest_outer_err"))
+		assert.False(t, exists("nest_inner_err"))
+	})
 }
 
 func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {

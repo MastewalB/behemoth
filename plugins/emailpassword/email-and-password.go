@@ -125,7 +125,9 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, err
 	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 	if err == nil {
 		ac.PasswordOptions.PasswordHasher.Hash(password) // timing mitigation, unchanged
-		dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists"})
+		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists"}); err != nil {
+			return nil, err
+		}
 		return nil, errors.New("user already exists")
 	}
 	if !behemotherr.IsNotFound(err) {
@@ -143,7 +145,10 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, err
 	// flag, ...). The store assigns the id and timestamps, and fires
 	// data.user.beforeCreate / afterCreate (Tier 1) — hooks are where other
 	// plugins add their columns. The password hash goes to the user's
-	// "credential" account, created with the user or not at all.
+	// "credential" account, created with the user or not at all. The data
+	// hooks run inside this transaction, so data.user.afterCreate can see a
+	// user that the account insert then rolls back; auth.signUp.after fires
+	// only once the transaction has committed.
 	profile := func(key string) string { v, _ := userData[key].(string); return strings.TrimSpace(v) }
 	user := &models.User{
 		Username:  profile(models.UserUsername),
@@ -178,7 +183,9 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 	if err != nil {
 		ac.PasswordOptions.PasswordHasher.Hash(creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
-			dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "userNotFound"})
+			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "userNotFound"}); err != nil {
+				return nil, err
+			}
 			return nil, errors.New("invalid email or password")
 		}
 		return nil, err // infra error (DB down) — must NOT count toward lockout
@@ -191,7 +198,9 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 	if err != nil {
 		ac.PasswordOptions.PasswordHasher.Hash(creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
-			dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "noCredentialAccount"})
+			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "noCredentialAccount"}); err != nil {
+				return nil, err
+			}
 			return nil, errors.New("invalid email or password")
 		}
 		return nil, err // infra error — must NOT count toward lockout
@@ -203,7 +212,9 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 	}
 
 	if !isValid {
-		dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalidCredentials"})
+		if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalidCredentials"}); err != nil {
+			return nil, err
+		}
 		return nil, errors.New("invalid email or password")
 	}
 
@@ -213,8 +224,10 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
-		dispatcher.Fail(hctx, hooks.HookSignInFailed,
-			types.FailureReason{Code: "secondFactorRejected", Cause: err})
+		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed,
+			types.FailureReason{Code: "secondFactorRejected", Cause: err}); failErr != nil {
+			return nil, failErr
+		}
 		return nil, err
 	}
 
@@ -249,8 +262,7 @@ func SignOut(hctx *types.HookContext, sessionID string) error {
 	if err := ac.SessionManager.Revoke(hctx.Ctx, sessionID, "user_logout"); err != nil {
 		return err
 	}
-	ac.Dispatcher.RunAfter(hctx, hooks.HookSignOutAfter, nil)
-	return nil
+	return ac.Dispatcher.RunAfter(hctx, hooks.HookSignOutAfter, nil)
 }
 
 func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {

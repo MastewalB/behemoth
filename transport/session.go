@@ -95,7 +95,7 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 
 	now := time.Now()
 	hctx := hookContext(ctx)
-	payload, err := sm.disp.RunBefore(hctx, hooks.HookSessionCreate, behemoth.M{
+	payload, err := sm.disp.RunBefore(hctx, hooks.HookSessionBeforeCreate, behemoth.M{
 		hooks.HookValueUserID: fmt.Sprint(userID), hooks.HookValueState: string(meta.State),
 		hooks.HookValueIPAddress: ip, hooks.HookValueUserAgent: ua,
 	})
@@ -126,7 +126,9 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 	}
 
 	sm.cacheSet(ctx, m)
-	sm.disp.RunAfter(hctx, hooks.HookSessionCreate, m)
+	if err := sm.disp.RunAfter(hctx, hooks.HookSessionAfterCreate, m); err != nil {
+		return nil, "", err
+	}
 
 	return m, rawToken, nil
 
@@ -345,7 +347,7 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	}
 
 	hctx := hookContext(ctx)
-	if _, err := sm.disp.RunBefore(hctx, hooks.HookSessionRevoke,
+	if _, err := sm.disp.RunBefore(hctx, hooks.HookSessionBeforeRevoke,
 		behemoth.M{hooks.HookValueSessionID: m.ID, hooks.HookValueReason: reason}); err != nil {
 		return err
 	}
@@ -367,8 +369,7 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	// and an explicit Delete is required instead.
 	sm.cacheDelete(ctx, m.LookupHash)
 
-	sm.disp.RunAfter(hctx, hooks.HookSessionRevoke, m)
-	return nil
+	return sm.disp.RunAfter(hctx, hooks.HookSessionAfterRevoke, m)
 }
 
 func (sm *DefaultSessionManager) fetchByLookupHash(ctx context.Context, lookupHash string) (*models.Session, bool, error) {

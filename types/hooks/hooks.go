@@ -16,9 +16,10 @@ const (
 	HookSignInFailed              types.HookPoint = "auth.signIn.failed"
 	HookSignOutBefore             types.HookPoint = "auth.signOut.before"
 	HookSignOutAfter              types.HookPoint = "auth.signOut.after"
-	HookSessionCreate             types.HookPoint = "auth.session.create"
-	HookSessionRevoke             types.HookPoint = "auth.session.revoke"
-	HookTokenIssue                types.HookPoint = "token.issue"
+	HookSessionBeforeCreate       types.HookPoint = "auth.session.beforeCreate"
+	HookSessionAfterCreate        types.HookPoint = "auth.session.afterCreate"
+	HookSessionBeforeRevoke       types.HookPoint = "auth.session.beforeRevoke"
+	HookSessionAfterRevoke        types.HookPoint = "auth.session.afterRevoke"
 
 	HookTokenBeforeIssue = types.HookPoint("token.beforeIssue")
 	HookTokenAfterIssue  = types.HookPoint("token.afterIssue") // Phase: After
@@ -31,7 +32,7 @@ const (
 // concepts MUST use the same key here
 // This communication is what lets an unrelated plugin's handler read or enrich a value
 // (e.g. a geo-IP plugin setting resolved city's IPAddress to the session during
-// session.create.before hook call) will need to use the HookValueIPAddress.
+// auth.session.beforeCreate hook call) will need to use the HookValueIPAddress.
 // The keys have type string to make sure a direct compatibility to behemoth.M's map[string]any type
 // to avoid unnecessary conversion string(Type) on each use
 const (

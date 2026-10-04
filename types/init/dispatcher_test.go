@@ -1,0 +1,183 @@
+package types
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/hooks"
+)
+
+type countingAudit struct{ events int }
+
+func (a *countingAudit) Record(context.Context, types.AuditEvent) error { a.events++; return nil }
+func (a *countingAudit) Query(context.Context, types.AuditFilter) ([]types.AuditEvent, error) {
+	return nil, nil
+}
+
+// afterDispatcher builds a dispatcher with one audited after-phase point and
+// the given handlers on it, in order.
+func afterDispatcher(t *testing.T, audit types.AuditRecorder, handlers ...types.AfterHookFunc) (*DefaultDispatcher, types.HookPoint) {
+	t.Helper()
+	const point types.HookPoint = "data.test.afterCreate"
+	catalog := NewDefaultHookCatalog()
+	def := types.HookPointDef{Point: point, Owner: "core", Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}}
+	if err := catalog.Declare(def); err != nil {
+		t.Fatal(err)
+	}
+	chain := make([]registeredHandler, len(handlers))
+	for i, h := range handlers {
+		chain[i] = registeredHandler{plugin: "test", handler: h}
+	}
+	chains := map[types.HookPoint][]registeredHandler{point: chain}
+	return NewDefaultDispatcher(catalog, chains, nil, types.NewTelemetry(nil, audit, nil)), point
+}
+
+// A data-level after hook runs inside the write's transaction: the first
+// failing handler ends the chain and its error reaches the caller, and no
+// audit event is recorded for a write that may not commit.
+func TestRunAfterTxStopsAtTheFirstError(t *testing.T) {
+	rejected := errors.New("rejected by hook")
+	var ran []int
+	audit := &countingAudit{}
+	d, point := afterDispatcher(t, audit,
+		func(*types.HookContext, any) error { ran = append(ran, 1); return nil },
+		func(*types.HookContext, any) error { ran = append(ran, 2); return rejected },
+		func(*types.HookContext, any) error { ran = append(ran, 3); return nil },
+	)
+	hctx := &types.HookContext{Ctx: context.Background()}
+
+	err := d.RunAfterTx(hctx, point, nil)
+	if !errors.Is(err, rejected) {
+		t.Fatalf("RunAfterTx error = %v, want the handler's error", err)
+	}
+	if len(ran) != 2 {
+		t.Errorf("handlers run = %v, want the chain to stop after the failing one", ran)
+	}
+	if audit.events != 0 {
+		t.Errorf("RunAfterTx recorded %d audit events, want none", audit.events)
+	}
+
+	// The Tier 2 dispatch of the same chain keeps going and audits.
+	ran = nil
+	d.RunAfter(hctx, point, nil)
+	if len(ran) != 3 {
+		t.Errorf("RunAfter handlers run = %v, want all three", ran)
+	}
+	if audit.events != 1 {
+		t.Errorf("RunAfter recorded %d audit events, want 1", audit.events)
+	}
+}
+
+func TestRunAfterTxSucceedsAndTurnsPanicsIntoErrors(t *testing.T) {
+	hctx := &types.HookContext{Ctx: context.Background()}
+
+	audit := &countingAudit{}
+	d, point := afterDispatcher(t, audit, func(*types.HookContext, any) error { return nil })
+	if err := d.RunAfterTx(hctx, point, nil); err != nil {
+		t.Fatalf("RunAfterTx = %v, want nil", err)
+	}
+	if audit.events != 0 {
+		t.Errorf("a successful RunAfterTx recorded %d audit events, want none before commit", audit.events)
+	}
+
+	d, point = afterDispatcher(t, nil, func(*types.HookContext, any) error { panic("boom") })
+	err := d.RunAfterTx(hctx, point, nil)
+	if !behemotherr.Is(err, behemotherr.CategoryInternal) {
+		t.Errorf("a panicking handler returned %v, want an internal error", err)
+	}
+}
+
+// Dispatching a point that was never declared, or in a phase it was not
+// declared with, is a configuration error from every method. No handler runs.
+func TestDispatchOfUndeclaredOrWrongPhasePointIsAConfigurationError(t *testing.T) {
+	ran := false
+	d, afterPoint := afterDispatcher(t, nil, func(*types.HookContext, any) error { ran = true; return nil })
+	hctx := &types.HookContext{Ctx: context.Background()}
+	const undeclared types.HookPoint = "data.test.undeclared"
+
+	for _, point := range []types.HookPoint{undeclared, afterPoint} {
+		if _, err := d.RunBefore(hctx, point, nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+			t.Errorf("RunBefore(%q) = %v, want a configuration error", point, err)
+		}
+		if err := d.Fail(hctx, point, types.FailureReason{}); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+			t.Errorf("Fail(%q) = %v, want a configuration error", point, err)
+		}
+	}
+	if err := d.RunAfter(hctx, undeclared, nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		t.Errorf("RunAfter(undeclared) = %v, want a configuration error", err)
+	}
+	if err := d.RunAfterTx(hctx, undeclared, nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		t.Errorf("RunAfterTx(undeclared) = %v, want a configuration error", err)
+	}
+	if ran {
+		t.Error("a handler ran on a dispatch that should have been rejected")
+	}
+	if err := d.Fail(hctx, "", types.FailureReason{}); err != nil {
+		t.Errorf("Fail with no point = %v, want nil", err)
+	}
+}
+
+// Core declares every point its own code fires, each in the phase it is
+// fired in, and the data points the store fires pass the Boot check.
+func TestCoreDeclaresTheHookPointsItFires(t *testing.T) {
+	catalog := NewDefaultHookCatalog()
+	ic := newScopedInitContext(catalog, nil, nil, nil, coreOwner)
+	if err := CoreDeclareHookPoints(ic); err != nil {
+		t.Fatal(err)
+	}
+	want := map[types.HookPoint]types.HookPhase{
+		hooks.HookSignUpBefore: types.BeforeHookPhase, hooks.HookSignUpAfter: types.AfterHookPhase, hooks.HookSignUpFailed: types.FailedHookPhase,
+		hooks.HookSignInBefore: types.BeforeHookPhase, hooks.HookSignInCredentialsVerified: types.BeforeHookPhase,
+		hooks.HookSignInAfter: types.AfterHookPhase, hooks.HookSignInFailed: types.FailedHookPhase,
+		hooks.HookSignOutBefore: types.BeforeHookPhase, hooks.HookSignOutAfter: types.AfterHookPhase,
+		hooks.HookSessionBeforeCreate: types.BeforeHookPhase, hooks.HookSessionAfterCreate: types.AfterHookPhase,
+		hooks.HookSessionBeforeRevoke: types.BeforeHookPhase, hooks.HookSessionAfterRevoke: types.AfterHookPhase,
+		hooks.HookTokenBeforeIssue: types.BeforeHookPhase, hooks.HookTokenAfterIssue: types.AfterHookPhase,
+		hooks.HookTokenConsumed: types.AfterHookPhase, hooks.HookTokenFailed: types.FailedHookPhase,
+		hooks.HookUserBeforeCreate: types.BeforeHookPhase, hooks.HookUserAfterCreate: types.AfterHookPhase,
+		hooks.HookUserBeforeUpdate: types.BeforeHookPhase, hooks.HookUserAfterUpdate: types.AfterHookPhase,
+	}
+	for point, phase := range want {
+		def, ok := catalog.Lookup(point)
+		if !ok {
+			t.Errorf("%q is not declared", point)
+		} else if def.Phase != phase || def.Owner != coreOwner {
+			t.Errorf("%q declared as phase %q by %q, want %q by %q", point, def.Phase, def.Owner, phase, coreOwner)
+		}
+	}
+	if got := len(catalog.All()); got != len(want) {
+		t.Errorf("core declares %d points, the test knows %d", got, len(want))
+	}
+
+	if err := checkDataHookPoints(catalog, coreDataHookPoints); err != nil {
+		t.Errorf("checkDataHookPoints(core) = %v", err)
+	}
+}
+
+func TestCheckDataHookPointsRejectsUndeclaredAndWrongPhase(t *testing.T) {
+	catalog := NewDefaultHookCatalog()
+	for _, def := range []types.HookPointDef{
+		{Point: "data.t.beforeCreate", Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: "data.t.afterCreate", Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: "data.t.beforeUpdate", Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: "data.t.afterUpdate", Owner: coreOwner, Phase: types.BeforeHookPhase}, // wrong phase
+	} {
+		if err := catalog.Declare(def); err != nil {
+			t.Fatal(err)
+		}
+	}
+	points := tableHookPoints{
+		beforeCreate: "data.t.beforeCreate", afterCreate: "data.t.afterCreate",
+		beforeUpdate: "data.t.beforeUpdate", afterUpdate: "data.t.afterUpdate",
+	}
+	if err := checkDataHookPoints(catalog, map[string]tableHookPoints{"t": points}); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		t.Errorf("wrong phase: %v, want a configuration error", err)
+	}
+	points.afterUpdate = "data.t.missing"
+	if err := checkDataHookPoints(catalog, map[string]tableHookPoints{"t": points}); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		t.Errorf("undeclared point: %v, want a configuration error", err)
+	}
+}

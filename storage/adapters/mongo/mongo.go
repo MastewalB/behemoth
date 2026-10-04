@@ -279,7 +279,20 @@ func (mdb *MongoAdapter) Count(ctx context.Context, m behemoth.Model, expr claus
 	return count, nil
 }
 
+// Transaction runs fn in one MongoDB transaction. The transaction travels in
+// the context handed to fn, not in the adapter: fn must pass that context to
+// every operation that should be part of it. The driver may run fn more than
+// once, when it retries the transaction after a transient error.
+//
+// Called with a context that already carries a transaction (inside another
+// Transaction's fn), it runs fn in that same transaction instead of starting
+// an independent one, and returns fn's error for the outer call to abort on.
 func (mdb *MongoAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
+	if mongo.SessionFromContext(ctx) != nil {
+		_, err := fn(ctx, mdb)
+		return err
+	}
+
 	// Create a new session using the Mongo Client that the database was created from
 	session, err := mdb.db.Client().StartSession()
 	if err != nil {

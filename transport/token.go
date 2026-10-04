@@ -127,7 +127,9 @@ func (tm *DefaultTokenManager) Issue(
 		return nil, "", behemotherr.WrapOp(op, "token", err)
 	}
 
-	tm.disp.RunAfter(hctx, hooks.HookTokenIssue, tok)
+	if err := tm.disp.RunAfter(hctx, hooks.HookTokenAfterIssue, tok); err != nil {
+		return nil, "", err
+	}
 	return tok, rawToken, nil
 }
 
@@ -277,10 +279,14 @@ func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind
 	}
 
 	if consumeErr != nil {
-		tm.disp.Fail(hctx, hooks.HookTokenFailed, types.FailureReason{Code: behemotherr.ClassifyCode(consumeErr), Cause: consumeErr})
+		if err := tm.disp.Fail(hctx, hooks.HookTokenFailed, types.FailureReason{Code: behemotherr.ClassifyCode(consumeErr), Cause: consumeErr}); err != nil {
+			return nil, err
+		}
 		return nil, consumeErr
 	}
-	tm.disp.RunAfter(hctx, hooks.HookTokenConsumed, result)
+	if err := tm.disp.RunAfter(hctx, hooks.HookTokenConsumed, result); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 

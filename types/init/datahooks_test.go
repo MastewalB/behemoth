@@ -2,11 +2,13 @@ package types
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 )
@@ -14,6 +16,7 @@ import (
 type recordingDispatcher struct {
 	before, after []*types.HookContext
 	rewrite       behemoth.M
+	afterErr      error
 }
 
 func (d *recordingDispatcher) RunBefore(hctx *types.HookContext, point types.HookPoint, payload behemoth.M) (behemoth.M, error) {
@@ -23,24 +26,31 @@ func (d *recordingDispatcher) RunBefore(hctx *types.HookContext, point types.Hoo
 	}
 	return payload, nil
 }
-func (d *recordingDispatcher) RunAfter(hctx *types.HookContext, point types.HookPoint, result any) {
+func (d *recordingDispatcher) RunAfter(hctx *types.HookContext, point types.HookPoint, result any) error {
 	d.after = append(d.after, hctx)
+	return nil
 }
-func (d *recordingDispatcher) Fail(*types.HookContext, types.HookPoint, types.FailureReason) {}
+func (d *recordingDispatcher) RunAfterTx(hctx *types.HookContext, point types.HookPoint, result any) error {
+	d.after = append(d.after, hctx)
+	return d.afterErr
+}
+func (d *recordingDispatcher) Fail(*types.HookContext, types.HookPoint, types.FailureReason) error {
+	return nil
+}
 
 func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
 	d := &recordingDispatcher{rewrite: behemoth.M{models.UserUsername: "from-hook"}}
 	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	ctx := context.Background()
 
-	row, err := h.BeforeCreate(ctx, "users", behemoth.M{models.UserEmail: "a@example.com"})
+	row, err := h.BeforeCreate(ctx, nil, "users", behemoth.M{models.UserEmail: "a@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if row[models.UserUsername] != "from-hook" {
 		t.Errorf("BeforeCreate did not return the dispatcher's rewrite: %v", row)
 	}
-	h.AfterCreate(ctx, "users", &models.User{})
+	h.AfterCreate(ctx, nil, "users", &models.User{})
 	if len(d.before) != 1 || d.before[0].Point != hooks.HookUserBeforeCreate || d.before[0].Phase != types.BeforeHookPhase {
 		t.Fatalf("before dispatch = %+v", d.before)
 	}
@@ -50,11 +60,11 @@ func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
 
 	// A table without hook points: untouched, nothing dispatched.
 	in := behemoth.M{"x": 1}
-	out, err := h.BeforeCreate(ctx, "audit_events", in)
+	out, err := h.BeforeCreate(ctx, nil, "audit_events", in)
 	if err != nil || out["x"] != 1 {
 		t.Errorf("unmapped table: row %v, err %v", out, err)
 	}
-	h.AfterCreate(ctx, "audit_events", &models.User{})
+	h.AfterCreate(ctx, nil, "audit_events", &models.User{})
 	if len(d.before) != 1 || len(d.after) != 1 {
 		t.Error("an unmapped table dispatched a hook")
 	}
@@ -65,10 +75,10 @@ func TestDataHooksUpdatePublishesTheID(t *testing.T) {
 	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	ctx := context.Background()
 
-	if _, err := h.BeforeUpdate(ctx, "users", "u1", behemoth.M{models.UserFirstname: "Ada"}); err != nil {
+	if _, err := h.BeforeUpdate(ctx, nil, "users", "u1", behemoth.M{models.UserFirstname: "Ada"}); err != nil {
 		t.Fatal(err)
 	}
-	h.AfterUpdate(ctx, "users", &models.User{ID: "u1"})
+	h.AfterUpdate(ctx, nil, "users", &models.User{ID: "u1"})
 	if len(d.before) != 1 || d.before[0].Point != hooks.HookUserBeforeUpdate || d.before[0].Values[hooks.HookValueUserID] != "u1" {
 		t.Fatalf("before update dispatch = %+v", d.before)
 	}
@@ -76,7 +86,7 @@ func TestDataHooksUpdatePublishesTheID(t *testing.T) {
 		t.Fatalf("after update dispatch = %+v", d.after)
 	}
 
-	out, err := h.BeforeUpdate(ctx, "audit_events", 1, behemoth.M{"x": 1})
+	out, err := h.BeforeUpdate(ctx, nil, "audit_events", 1, behemoth.M{"x": 1})
 	if err != nil || out["x"] != 1 || len(d.before) != 1 {
 		t.Errorf("unmapped table: changes %v, err %v, dispatched %d", out, err, len(d.before))
 	}
@@ -90,7 +100,7 @@ func TestDataHooksCarryTheRequest(t *testing.T) {
 
 	rc := &types.RequestContext{Request: httptest.NewRequest("POST", "/sign-up", nil), Values: behemoth.M{"request-only": true}}
 	ctx := types.ContextWithRequest(context.Background(), rc)
-	if _, err := h.BeforeCreate(ctx, "users", behemoth.M{}); err != nil {
+	if _, err := h.BeforeCreate(ctx, nil, "users", behemoth.M{}); err != nil {
 		t.Fatal(err)
 	}
 	got := d.before[0]
@@ -104,10 +114,40 @@ func TestDataHooksCarryTheRequest(t *testing.T) {
 		t.Error("the data hook has no AuthContext")
 	}
 
-	if _, err := h.BeforeCreate(context.Background(), "users", behemoth.M{}); err != nil {
+	if _, err := h.BeforeCreate(context.Background(), nil, "users", behemoth.M{}); err != nil {
 		t.Fatal(err)
 	}
 	if d.before[1].Request != nil {
 		t.Error("a write outside any request must not have one")
+	}
+}
+
+// Data hooks dispatch with the store that made the write, and an after
+// hook's error goes back to that store.
+func TestDataHooksPublishTheStoreAndReturnAfterErrors(t *testing.T) {
+	d := &recordingDispatcher{afterErr: errors.New("rejected by hook")}
+	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	ctx := context.Background()
+	tx := store.New(nil)
+
+	if !h.Fires("users") || h.Fires("audit_events") {
+		t.Error("Fires should report exactly the tables with hook points")
+	}
+	if _, err := h.BeforeCreate(ctx, tx, "users", behemoth.M{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.AfterCreate(ctx, tx, "users", &models.User{}); !errors.Is(err, d.afterErr) {
+		t.Errorf("AfterCreate = %v, want the dispatcher's error", err)
+	}
+	if err := h.AfterUpdate(ctx, tx, "users", &models.User{ID: "u1"}); !errors.Is(err, d.afterErr) {
+		t.Errorf("AfterUpdate = %v, want the dispatcher's error", err)
+	}
+	for _, hctx := range append(d.before, d.after...) {
+		if hctx.Tx != tx {
+			t.Errorf("%s: HookContext.Tx is not the store that made the write", hctx.Point)
+		}
+	}
+	if err := h.AfterCreate(ctx, tx, "audit_events", &models.User{}); err != nil {
+		t.Errorf("unmapped table: AfterCreate = %v", err)
 	}
 }

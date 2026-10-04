@@ -20,6 +20,7 @@ import (
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/hooks"
 	binit "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,9 +74,17 @@ func (d *passDispatcher) RunBefore(h *types.HookContext, _ types.HookPoint, p be
 	d.record(h)
 	return p, nil
 }
-func (d *passDispatcher) RunAfter(h *types.HookContext, _ types.HookPoint, _ any) { d.record(h) }
-func (d *passDispatcher) Fail(h *types.HookContext, _ types.HookPoint, _ types.FailureReason) {
+func (d *passDispatcher) RunAfter(h *types.HookContext, _ types.HookPoint, _ any) error {
 	d.record(h)
+	return nil
+}
+func (d *passDispatcher) RunAfterTx(h *types.HookContext, _ types.HookPoint, _ any) error {
+	d.record(h)
+	return nil
+}
+func (d *passDispatcher) Fail(h *types.HookContext, _ types.HookPoint, _ types.FailureReason) error {
+	d.record(h)
+	return nil
 }
 
 // ---- store: ConsumeToken ----
@@ -340,4 +349,56 @@ func TestTokenRevoke(t *testing.T) {
 	}
 	_, err = tm.Verify(ctx, kindAPI, other)
 	assert.NoError(t, err, "another subject's token is untouched")
+}
+
+// Under a real Boot the session manager dispatches through the default
+// dispatcher, which rejects undeclared points. Create and Revoke each fire a
+// before and an after point, and core declares all four.
+func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
+	ctx := context.Background()
+	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	require.NoError(t, err)
+
+	// The handlers record the point they were registered on: the managers
+	// don't set HookContext.Point.
+	var fired []types.HookPoint
+	before := func(point types.HookPoint) types.BeforeHookFunc {
+		return func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+			fired = append(fired, point)
+			return p, nil
+		}
+	}
+	after := func(point types.HookPoint) types.AfterHookFunc {
+		return func(*types.HookContext, any) error {
+			fired = append(fired, point)
+			return nil
+		}
+	}
+	ac, err := binit.Boot(ctx, app, sessionsTokensDB(t), binit.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("cd", 32)}, Current: 1},
+		},
+		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: 5 * time.Minute},
+		Hooks: func(reg types.HookRegistry) error {
+			if err := reg.OnBefore(hooks.HookSessionBeforeCreate, before(hooks.HookSessionBeforeCreate), nil); err != nil {
+				return err
+			}
+			if err := reg.OnAfter(hooks.HookSessionAfterCreate, after(hooks.HookSessionAfterCreate), nil); err != nil {
+				return err
+			}
+			if err := reg.OnBefore(hooks.HookSessionBeforeRevoke, before(hooks.HookSessionBeforeRevoke), nil); err != nil {
+				return err
+			}
+			return reg.OnAfter(hooks.HookSessionAfterRevoke, after(hooks.HookSessionAfterRevoke), nil)
+		},
+	})
+	require.NoError(t, err)
+
+	sess, _, err := ac.SessionManager.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	require.NoError(t, ac.SessionManager.Revoke(ctx, sess.ID, "user_logout"))
+	assert.Equal(t, []types.HookPoint{
+		hooks.HookSessionBeforeCreate, hooks.HookSessionAfterCreate,
+		hooks.HookSessionBeforeRevoke, hooks.HookSessionAfterRevoke,
+	}, fired)
 }

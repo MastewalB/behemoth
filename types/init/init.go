@@ -29,7 +29,14 @@ import (
 type PrepareConfig struct {
 	Migration core.MigrationConfig
 
-	// Schema declares the application's own tables under owner "app". It
+	// AppName is the owner name of everything the application itself
+	// declares or registers: its tables (Schema) and its hook handlers
+	// (BootConfig.Hooks). It is what HookOptions.Before/After and error
+	// messages call the application. Empty = "app". It can't be "core" or a
+	// plugin's name.
+	AppName string
+
+	// Schema declares the application's own tables under owner AppName. It
 	// runs after every plugin has declared, so it can also extend plugin
 	// tables (e.g. a column on "users"). nil = no application tables.
 	Schema func(reg schema.Registry) error
@@ -41,12 +48,23 @@ type PrepareConfig struct {
 	Migrations []core.CustomMigration
 }
 
+// Owner names that are not plugins. coreOwner owns what behemoth itself
+// declares. defaultAppOwner owns what the application declares or registers
+// when PrepareConfig.AppName is empty.
+const (
+	coreOwner       = "core"
+	defaultAppOwner = "app"
+)
+
 // PreparedApp is the connection-free result of Prepare: every catalog and
 // the schema registry, frozen, plus the SchemaResolver derived from them.
 // Build storage adapters and migration drivers with Resolver, then hand the
 // adapter to Boot.
 type PreparedApp struct {
-	Order      []string
+	Order []string
+	// AppName is the application's owner name: PrepareConfig.AppName, or
+	// "app" when that was empty.
+	AppName    string
 	Hooks      types.HookCatalog
 	Tokens     types.TokenCatalog
 	RateLimits types.RateLimitCatalog
@@ -66,6 +84,13 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	if err := DetectPluginNameConflicts(plugins); err != nil {
 		return nil, err
 	}
+	appName := cfg.AppName
+	if appName == "" {
+		appName = defaultAppOwner
+	}
+	if err := checkOwnerNames(plugins, appName); err != nil {
+		return nil, err
+	}
 	if err := core.ValidateCustomMigrations(cfg.Migrations); err != nil {
 		return nil, err
 	}
@@ -83,7 +108,7 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 
 	// Core declares first, under owner "core" via the scoped
 	// wrappers all plugins get, to enforce uniform validation process
-	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, "core")
+	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, coreOwner)
 	if err := CoreDeclareHookPoints(coreIC); err != nil {
 		return nil, err
 	}
@@ -108,7 +133,7 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 
 	// Application tables last, so they can extend anything declared above
 	if cfg.Schema != nil {
-		if err := cfg.Schema(&scopedSchemaRegistry{inner: schemaRegistry, owner: "app"}); err != nil {
+		if err := cfg.Schema(&scopedSchemaRegistry{inner: schemaRegistry, owner: appName}); err != nil {
 			return nil, fmt.Errorf("application schema declaration failed: %w", err)
 		}
 	}
@@ -129,6 +154,7 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 
 	return &PreparedApp{
 		Order:      order,
+		AppName:    appName,
 		Hooks:      hookCatalog,
 		Tokens:     tokenCatalog,
 		RateLimits: rateLimitCatalog,
@@ -157,6 +183,16 @@ type BootConfig struct {
 
 	// Telemetry is optional. nil = no-op logger, audit recorder and metrics.
 	Telemetry *types.Telemetry
+
+	// Hooks registers the application's own hook handlers, under the owner
+	// name PreparedApp.AppName ("app" by default). It runs after every
+	// plugin's Register, so the application can hook any declared point
+	// without writing a plugin. Among handlers of equal priority with no
+	// Before/After constraint between them, the application's run last.
+	// HookOptions.Before/After may name the application like a plugin. Like
+	// a plugin, it may register one handler per point. nil = the application
+	// registers no handlers.
+	Hooks func(reg types.HookRegistry) error
 
 	RateLimit types.RateLimitConfig
 	Session   types.SessionConfig
@@ -211,7 +247,17 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		}
 	}
 
-	frozenChains, err := freezeAllHookChains(app.Hooks, hookRegistry, order)
+	// The application registers last, like its schema is declared last. Its
+	// handlers are ordered as if it were the last plugin to boot.
+	hookOrder := order
+	if cfg.Hooks != nil {
+		if err := cfg.Hooks(&scopedHookRegistry{inner: hookRegistry, owner: app.AppName}); err != nil {
+			return nil, fmt.Errorf("application hook registration failed: %w", err)
+		}
+		hookOrder = append(append([]string{}, order...), app.AppName)
+	}
+
+	frozenChains, err := freezeAllHookChains(app.Hooks, hookRegistry, hookOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +278,9 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		RateLimiter: rateLimiter,
 		Crypto:      cryptoSuite,
 		Telemetry:   *tel,
+	}
+	if err := checkDataHookPoints(app.Hooks, coreDataHookPoints); err != nil {
+		return nil, err
 	}
 	// The store's data hooks dispatch with ac, and the managers persist
 	// through the store, so they are built in that order.
@@ -477,6 +526,17 @@ func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPh
 			fmt.Sprintf("point %q is phase %q, cannot register a %q handler on it", point, def.Phase, phase), nil)
 	}
 
+	// One handler per owner on a point: chain ordering (Before/After,
+	// tie-breaks) identifies a handler by its owner's name, so a second one
+	// could not be placed. An owner that needs two steps combines them in
+	// one handler.
+	for _, existing := range r.pending[point] {
+		if existing.plugin == plugin {
+			return behemotherr.NewConfigurationError("HookRegistry.register",
+				fmt.Sprintf("%q already registered a handler on point %q; an owner may register one handler per point", plugin, point), nil)
+		}
+	}
+
 	rh := registeredHandler{plugin: plugin, handler: fn, priority: types.PriorityNormal}
 	if opts != nil {
 		rh.priority, rh.before, rh.after = opts.Priority, opts.Before, opts.After
@@ -656,6 +716,28 @@ func DetectPluginNameConflicts(plugins []types.Plugin) error {
 	return nil
 }
 
+// checkOwnerNames rejects names that would make two owners indistinguishable:
+// an application named like core, or a plugin named like core or the
+// application. Owner names attribute tables and hook points and order hook
+// handlers, so each must mean one thing.
+func checkOwnerNames(plugins []types.Plugin, appName string) error {
+	if appName == coreOwner {
+		return behemotherr.NewConfigurationError("Prepare",
+			fmt.Sprintf("AppName %q is reserved for behemoth's own declarations", coreOwner), nil)
+	}
+	for _, p := range plugins {
+		switch name := p.Meta().Name; name {
+		case coreOwner:
+			return behemotherr.NewConfigurationError("Prepare",
+				fmt.Sprintf("plugin name %q is reserved for behemoth's own declarations", name), nil)
+		case appName:
+			return behemotherr.NewConfigurationError("Prepare",
+				fmt.Sprintf("plugin name %q is the application's name (PrepareConfig.AppName); rename one of them", name), nil)
+		}
+	}
+	return nil
+}
+
 // lookup finds the Plugin matching name. O(n) scan at boot-time plugin
 // counts (dozens at most), called a handful of times total, not per-request.
 // A nil return should never happen for a name that came out of
@@ -764,18 +846,43 @@ func (rl *DefaultRateLimiter) handleStoreFailure(ctx context.Context, rule strin
 	return nil // FailOpen request proceeds
 }
 
+// CoreDeclareHookPoints declares every hook point behemoth's own code fires:
+// the flow points of sign-up, sign-in and sign-out, the session and token
+// manager points, and the data points the store fires (coreDataHookPoints).
+// A point has one phase, so an operation with a before and an after side is
+// two points. Dispatching a point missing from this list is a configuration
+// error (DefaultDispatcher.checkPhase).
 func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 	points := []types.HookPointDef{
-		// {Point: hooks.HookSignInBefore, Owner: "core", Phase: BeforeHookPhase},
-		// {Point: hooks.HookSignInCredentialsVerified, Owner: "core", Phase: BeforeHookPhase}, // also Before; a distinct checkpoint, not signIn's "after"
-		// {Point: hooks.HookSignInAfter, Owner: "core", Phase: AfterHookPhase},
-		// {Point: hooks.HookSignInFailed, Owner: "core", Phase: FailedHookPhase, Audit: &AuditSpec{}},
+		{Point: hooks.HookSignUpBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSignUpAfter, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookSignUpFailed, Owner: coreOwner, Phase: types.FailedHookPhase},
+
+		{Point: hooks.HookSignInBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSignInCredentialsVerified, Owner: coreOwner, Phase: types.BeforeHookPhase}, // also Before; a distinct checkpoint, not signIn's "after"
+		{Point: hooks.HookSignInAfter, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookSignInFailed, Owner: coreOwner, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+
+		{Point: hooks.HookSignOutBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSignOutAfter, Owner: coreOwner, Phase: types.AfterHookPhase},
+
+		// fired by the session manager
+		{Point: hooks.HookSessionBeforeCreate, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSessionAfterCreate, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookSessionBeforeRevoke, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSessionAfterRevoke, Owner: coreOwner, Phase: types.AfterHookPhase},
+
+		// fired by the token manager
+		{Point: hooks.HookTokenBeforeIssue, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookTokenAfterIssue, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookTokenConsumed, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookTokenFailed, Owner: coreOwner, Phase: types.FailedHookPhase},
+
 		// data hooks the store fires (see coreDataHookPoints)
-		{Point: hooks.HookUserBeforeCreate, Owner: "core", Phase: types.BeforeHookPhase},
-		{Point: hooks.HookUserAfterCreate, Owner: "core", Phase: types.AfterHookPhase},
-		{Point: hooks.HookUserBeforeUpdate, Owner: "core", Phase: types.BeforeHookPhase},
-		{Point: hooks.HookUserAfterUpdate, Owner: "core", Phase: types.AfterHookPhase},
-		// ...
+		{Point: hooks.HookUserBeforeCreate, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookUserAfterCreate, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookUserBeforeUpdate, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookUserAfterUpdate, Owner: coreOwner, Phase: types.AfterHookPhase},
 	}
 	for _, p := range points {
 		if err := ic.Hooks.Declare(p); err != nil {
@@ -1021,16 +1128,20 @@ func NewDefaultDispatcher(
 	return &DefaultDispatcher{catalog: catalog, frozenChains: frozenChains, rateLimiter: rateLimiter, tel: tel}
 }
 
-// checkPhase is a single check point for point validity (existing & matching phase)
-func (d *DefaultDispatcher) checkPhase(point types.HookPoint, expected types.HookPhase) types.HookPointDef {
+// checkPhase is the single check that point exists and is declared with the
+// expected phase. Either failure is a mistake in the code that fires the
+// point, not in a handler, and is returned as a configuration error like the
+// ones Prepare and Boot return. op names the dispatching method.
+func (d *DefaultDispatcher) checkPhase(op string, point types.HookPoint, expected types.HookPhase) (types.HookPointDef, error) {
 	def, ok := d.catalog.Lookup(point)
 	if !ok {
-		panic(fmt.Sprintf("dispatcher: point %q was never declared", point))
+		return types.HookPointDef{}, behemotherr.NewConfigurationError(op, fmt.Sprintf("point %q was never declared", point), nil)
 	}
 	if def.Phase != expected {
-		panic(fmt.Sprintf("dispatcher: point %q is phase %q, cannot dispatch as %q", point, def.Phase, expected))
+		return types.HookPointDef{}, behemotherr.NewConfigurationError(op,
+			fmt.Sprintf("point %q is phase %q, cannot dispatch as %q", point, def.Phase, expected), nil)
 	}
-	return def
+	return def, nil
 }
 
 func (d *DefaultDispatcher) safeInvokeBefore(hctx *types.HookContext, fn types.BeforeHookFunc, payload behemoth.M, point types.HookPoint, plugin string) (m behemoth.M, err error) {
@@ -1047,6 +1158,7 @@ func (d *DefaultDispatcher) safeInvokeAfter(hctx *types.HookContext, fn types.Af
 	defer func() {
 		if r := recover(); r != nil {
 			err = behemotherr.NewInternalError("Dispatcher.RunAfter", fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
+			d.logError(hctx.Ctx, "after-hook panicked", err, behemoth.M{"point": string(point), "plugin": plugin})
 		}
 	}()
 	return fn(hctx, result)
@@ -1054,7 +1166,9 @@ func (d *DefaultDispatcher) safeInvokeAfter(hctx *types.HookContext, fn types.Af
 
 // RunBefore implements [Dispatcher].
 func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookPoint, payload behemoth.M) (behemoth.M, error) {
-	d.checkPhase(point, types.BeforeHookPhase)
+	if _, err := d.checkPhase("Dispatcher.RunBefore", point, types.BeforeHookPhase); err != nil {
+		return nil, err
+	}
 
 	// rate-limiting, evaluated before any registered before-hook handler runs
 	// rate limiter will handle auditing
@@ -1089,9 +1203,13 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 	return mutated, nil
 }
 
-// RunAfter implements [Dispatcher].
-func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPoint, result any) {
-	def := d.checkPhase(point, types.AfterHookPhase)
+// RunAfter implements [Dispatcher]. The only error it returns is checkPhase's;
+// handler errors are logged.
+func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPoint, result any) error {
+	def, err := d.checkPhase("Dispatcher.RunAfter", point, types.AfterHookPhase)
+	if err != nil {
+		return err
+	}
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.AfterHookFunc)
@@ -1108,14 +1226,45 @@ func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPo
 	}
 
 	d.recordAudit(hctx, point, def, result, nil)
+	return nil
 }
 
-// Fail implements [Dispatcher].
-func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint, reason types.FailureReason) {
-	if point == "" {
-		return // Tier 1 CRUD paths have no Failed-phase point to cascade to (hook taxonomy round)
+// RunAfterTx implements [Dispatcher]. It mirrors RunBefore rather than
+// RunAfter: the first failing handler ends the chain and its error is
+// returned as-is, because the caller (the store) rolls the write back on it.
+func (d *DefaultDispatcher) RunAfterTx(hctx *types.HookContext, point types.HookPoint, result any) error {
+	if _, err := d.checkPhase("Dispatcher.RunAfterTx", point, types.AfterHookPhase); err != nil {
+		return err
 	}
-	def := d.checkPhase(point, types.FailedHookPhase)
+
+	for _, h := range d.frozenChains[point] {
+		fn, ok := h.handler.(types.AfterHookFunc)
+		if !ok {
+			err := behemotherr.NewInternalError("Dispatcher.RunAfterTx",
+				fmt.Errorf("point %q: handler from %q has wrong type for phase After", point, h.plugin))
+			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{"point": string(point), "plugin": h.plugin})
+			return err
+		}
+		if err := d.safeInvokeAfter(hctx, fn, result, point, h.plugin); err != nil {
+			return err // abort and propagate; the write is rolled back
+		}
+	}
+	// No recordAudit here: the write can still be rolled back, and an audit
+	// event must not describe a row that never existed. Deferred until there
+	// is an after-commit hook.
+	return nil
+}
+
+// Fail implements [Dispatcher]. The only error it returns is checkPhase's;
+// handler errors are logged.
+func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint, reason types.FailureReason) error {
+	if point == "" {
+		return nil // Tier 1 CRUD paths have no Failed-phase point to cascade to (hook taxonomy round)
+	}
+	def, err := d.checkPhase("Dispatcher.Fail", point, types.FailedHookPhase)
+	if err != nil {
+		return err
+	}
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.FailedHookFunc)
@@ -1131,7 +1280,7 @@ func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint,
 	}
 
 	d.recordAudit(hctx, point, def, nil, &reason)
-
+	return nil
 }
 
 func (d *DefaultDispatcher) safeInvokeFailed(hctx *types.HookContext, fn types.FailedHookFunc, reason types.FailureReason, point types.HookPoint, plugin string) (err error) {

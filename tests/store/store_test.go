@@ -69,9 +69,19 @@ type recordingHooks struct {
 	updateRewrite behemoth.M
 	updateAbort   error
 	updatedAs     []behemoth.Model
+
+	// silent makes Fires report false, as for a table without hook points.
+	silent bool
+	// afterCreate and afterUpdate, if set, run as the after hooks with the
+	// store bound to the write's transaction.
+	afterCreate func(ctx context.Context, tx *store.Store, created behemoth.Model) error
+	afterUpdate func(ctx context.Context, tx *store.Store, updated behemoth.Model) error
+	inTx        []*store.Store
 }
 
-func (h *recordingHooks) BeforeUpdate(_ context.Context, table string, id any, changes behemoth.M) (behemoth.M, error) {
+func (h *recordingHooks) Fires(string) bool { return !h.silent }
+
+func (h *recordingHooks) BeforeUpdate(_ context.Context, _ *store.Store, table string, id any, changes behemoth.M) (behemoth.M, error) {
 	h.updateIDs = append(h.updateIDs, id)
 	seen := behemoth.M{}
 	for k, v := range changes {
@@ -87,12 +97,17 @@ func (h *recordingHooks) BeforeUpdate(_ context.Context, table string, id any, c
 	return changes, nil
 }
 
-func (h *recordingHooks) AfterUpdate(_ context.Context, table string, updated behemoth.Model) {
+func (h *recordingHooks) AfterUpdate(ctx context.Context, tx *store.Store, table string, updated behemoth.Model) error {
 	h.updatedAs = append(h.updatedAs, updated)
+	if h.afterUpdate != nil {
+		return h.afterUpdate(ctx, tx, updated)
+	}
+	return nil
 }
 
-func (h *recordingHooks) BeforeCreate(_ context.Context, table string, row behemoth.M) (behemoth.M, error) {
+func (h *recordingHooks) BeforeCreate(_ context.Context, tx *store.Store, table string, row behemoth.M) (behemoth.M, error) {
 	h.tables = append(h.tables, table)
+	h.inTx = append(h.inTx, tx)
 	if h.abort != nil {
 		return nil, h.abort
 	}
@@ -102,8 +117,13 @@ func (h *recordingHooks) BeforeCreate(_ context.Context, table string, row behem
 	return row, nil
 }
 
-func (h *recordingHooks) AfterCreate(_ context.Context, table string, created behemoth.Model) {
+func (h *recordingHooks) AfterCreate(ctx context.Context, tx *store.Store, table string, created behemoth.Model) error {
 	h.createdAs = append(h.createdAs, created)
+	h.inTx = append(h.inTx, tx)
+	if h.afterCreate != nil {
+		return h.afterCreate(ctx, tx, created)
+	}
+	return nil
 }
 
 func TestCreateUserAssignsIDTimestampsAndNormalizedEmail(t *testing.T) {
@@ -154,6 +174,157 @@ func TestCreateUserHookErrorAborts(t *testing.T) {
 	_, err = s.FindUserByEmail(ctx, "a@example.com")
 	assert.True(t, behemotherr.IsNotFound(err), "nothing was written: %v", err)
 	assert.Empty(t, h.createdAs, "AfterCreate never ran")
+}
+
+// An after-create hook runs in the create's transaction: its error fails the
+// create and rolls the row back.
+func TestCreateUserAfterHookErrorRollsBack(t *testing.T) {
+	ctx := context.Background()
+	abort := errors.New("rejected after insert")
+	h := &recordingHooks{}
+	h.afterCreate = func(ctx context.Context, tx *store.Store, created behemoth.Model) error {
+		_, err := tx.FindUserByID(ctx, created.PrimaryKeyField().(string))
+		assert.NoError(t, err, "the hook's store sees the row it was fired for")
+		return abort
+	}
+	s := store.New(usersDB(t), store.WithHooks(h))
+
+	err := s.CreateUser(ctx, &models.User{Email: "a@example.com"})
+	assert.ErrorIs(t, err, abort, "the hook's error is returned as-is")
+	_, err = s.FindUserByEmail(ctx, "a@example.com")
+	assert.True(t, behemotherr.IsNotFound(err), "the insert was rolled back: %v", err)
+}
+
+// What a hook writes through the store it is given commits or rolls back
+// with the write that fired it.
+func TestAfterCreateHookWritesShareTheTransaction(t *testing.T) {
+	ctx := context.Background()
+	h := &recordingHooks{}
+	var fail error
+	h.afterCreate = func(ctx context.Context, tx *store.Store, created behemoth.Model) error {
+		if created.(*models.User).Email == "shadow@example.com" {
+			return fail
+		}
+		return tx.CreateUser(ctx, &models.User{Email: "shadow@example.com"})
+	}
+	s := store.New(usersDB(t), store.WithHooks(h))
+
+	fail = errors.New("the hook's own write failed")
+	err := s.CreateUser(ctx, &models.User{Email: "a@example.com"})
+	assert.ErrorIs(t, err, fail)
+	for _, email := range []string{"a@example.com", "shadow@example.com"} {
+		_, err = s.FindUserByEmail(ctx, email)
+		assert.True(t, behemotherr.IsNotFound(err), "%s was rolled back: %v", email, err)
+	}
+
+	fail = nil
+	require.NoError(t, s.CreateUser(ctx, &models.User{Email: "a@example.com"}))
+	for _, email := range []string{"a@example.com", "shadow@example.com"} {
+		_, err = s.FindUserByEmail(ctx, email)
+		assert.NoError(t, err, "%s was committed", email)
+	}
+}
+
+// In a transaction the caller opened, hooks join it: a later failure rolls
+// back the row and what its hooks wrote, after the after hook has run.
+func TestHooksJoinTheCallersTransaction(t *testing.T) {
+	ctx := context.Background()
+	h := &recordingHooks{}
+	h.afterCreate = func(ctx context.Context, tx *store.Store, created behemoth.Model) error {
+		_, err := tx.UpdateUser(ctx, created.PrimaryKeyField().(string), behemoth.M{models.UserFirstname: "from-hook"})
+		return err
+	}
+	s := store.New(usersDB(t), store.WithHooks(h))
+
+	later := errors.New("a later write failed")
+	var callers *store.Store
+	err := s.Transaction(ctx, func(ctx context.Context, tx *store.Store) error {
+		callers = tx
+		if err := tx.CreateUser(ctx, &models.User{Email: "a@example.com"}); err != nil {
+			return err
+		}
+		return later
+	})
+	assert.ErrorIs(t, err, later)
+	require.Len(t, h.createdAs, 1, "the after hook ran before the rollback")
+	for _, tx := range h.inTx {
+		assert.Same(t, callers, tx, "hooks get the caller's transaction, not a nested one")
+	}
+	_, err = s.FindUserByEmail(ctx, "a@example.com")
+	assert.True(t, behemotherr.IsNotFound(err), "the user was rolled back: %v", err)
+}
+
+// A hook writes tables the store has no operations for through tx.DB(), the
+// adapter bound to the write's transaction. Here a raw users row stands in
+// for a plugin's own table.
+func TestHookWritesThroughTheAdapterShareTheTransaction(t *testing.T) {
+	ctx := context.Background()
+	h := &recordingHooks{}
+	var fail error
+	h.afterCreate = func(ctx context.Context, tx *store.Store, created behemoth.Model) error {
+		raw := &models.User{ID: "raw-1", Email: "raw@example.com", CreatedAt: t0, UpdatedAt: t0}
+		// Transaction on the bound adapter joins the open transaction.
+		err := tx.DB().Transaction(ctx, func(ctx context.Context, db behemoth.Database) (any, error) {
+			return nil, db.Create(ctx, raw)
+		})
+		if err != nil {
+			return err
+		}
+		return fail
+	}
+	db := usersDB(t)
+	s := store.New(db, store.WithHooks(h))
+	assert.Same(t, db, s.DB(), "outside a transaction DB is the adapter the store was built with")
+	rawExists := func() bool {
+		_, err := s.FindUserByID(ctx, "raw-1")
+		return err == nil
+	}
+
+	fail = errors.New("rejected after the raw write")
+	assert.ErrorIs(t, s.CreateUser(ctx, &models.User{Email: "a@example.com"}), fail)
+	assert.False(t, rawExists(), "the adapter write was rolled back with the user")
+
+	fail = nil
+	require.NoError(t, s.CreateUser(ctx, &models.User{Email: "a@example.com"}))
+	assert.True(t, rawExists(), "the adapter write was committed with the user")
+	assert.Len(t, h.createdAs, 2, "the raw insert fired no data hook")
+}
+
+// A table whose hooks don't fire writes directly, without a transaction.
+func TestWritesWithoutHooksOpenNoTransaction(t *testing.T) {
+	ctx := context.Background()
+	h := &recordingHooks{silent: true}
+	s := store.New(usersDB(t), store.WithHooks(h))
+	require.NoError(t, s.CreateUser(ctx, &models.User{Email: "a@example.com"}))
+	for _, tx := range h.inTx {
+		assert.Same(t, s, tx, "the write went through the store itself")
+	}
+
+	h = &recordingHooks{}
+	s = store.New(usersDB(t), store.WithHooks(h))
+	require.NoError(t, s.CreateUser(ctx, &models.User{Email: "a@example.com"}))
+	require.NotEmpty(t, h.inTx)
+	for _, tx := range h.inTx {
+		assert.NotSame(t, s, tx, "a hooked write runs on a store bound to a transaction")
+	}
+}
+
+func TestUpdateUserAfterHookErrorRollsBack(t *testing.T) {
+	ctx := context.Background()
+	abort := errors.New("rejected after update")
+	h := &recordingHooks{}
+	s := store.New(usersDB(t), store.WithHooks(h))
+	u := &models.User{Email: "a@example.com", Firstname: "Ada"}
+	require.NoError(t, s.CreateUser(ctx, u))
+
+	h.afterUpdate = func(context.Context, *store.Store, behemoth.Model) error { return abort }
+	_, err := s.UpdateUser(ctx, u.ID, behemoth.M{models.UserFirstname: "Grace"})
+	assert.ErrorIs(t, err, abort)
+	require.Len(t, h.updatedAs, 1)
+	assert.Equal(t, "Grace", h.updatedAs[0].(*models.User).Firstname, "the hook saw the updated row")
+	got, err := s.FindUserByID(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Ada", got.Firstname, "the update was rolled back")
 }
 
 func TestCreateHookAddingUnknownColumnIsRejected(t *testing.T) {
@@ -315,6 +486,133 @@ func TestBootWiresStoreToPluginHooks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hopper", updated.Username, "the plugin's before-update handler ran through the Dispatcher")
 	assert.Equal(t, "updated:"+u.ID, updated.Lastname, "the handler was told which user")
+}
+
+// BootConfig.Hooks registers the application's handlers without a plugin.
+// With no ordering constraint they run after the plugins' handlers.
+func TestBootRegistersApplicationHooks(t *testing.T) {
+	ctx := context.Background()
+	cryptoCfg := crypto.Config{
+		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
+	}
+	app, err := binit.Prepare([]types.Plugin{usernamePlugin{}}, binit.PrepareConfig{})
+	require.NoError(t, err)
+
+	var sawUsername any
+	rejected := errors.New("rejected by the application")
+	reject := false
+	ac, err := binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+		Crypto: cryptoCfg,
+		Hooks: func(reg types.HookRegistry) error {
+			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
+				sawUsername = row[models.UserUsername]
+				row[models.UserFirstname] = "from-app"
+				return row, nil
+			}, nil); err != nil {
+				return err
+			}
+			return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, _ any) error {
+				if hctx.Tx == nil {
+					return errors.New("a data hook should get the transaction's store")
+				}
+				if reject {
+					return rejected
+				}
+				return nil
+			}, nil)
+		},
+	})
+	require.NoError(t, err)
+
+	u := &models.User{Email: "grace@example.com"}
+	require.NoError(t, ac.Store.CreateUser(ctx, u))
+	assert.Equal(t, "grace", sawUsername, "the application's handler ran after the plugin's")
+	stored, err := ac.Store.FindUserByID(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "from-app", stored.Firstname)
+
+	reject = true
+	err = ac.Store.CreateUser(ctx, &models.User{Email: "ada@example.com"})
+	assert.ErrorIs(t, err, rejected)
+	_, err = ac.Store.FindUserByEmail(ctx, "ada@example.com")
+	assert.True(t, behemotherr.IsNotFound(err), "the application's after-hook error rolled the user back: %v", err)
+
+	// A registration error is a boot error.
+	app, err = binit.Prepare(nil, binit.PrepareConfig{})
+	require.NoError(t, err)
+	_, err = binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+		Crypto: cryptoCfg,
+		Hooks: func(reg types.HookRegistry) error {
+			return reg.OnBefore("no.such.point", func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) { return p, nil }, nil)
+		},
+	})
+	require.Error(t, err, "registering on an undeclared point fails Boot")
+}
+
+// The application's owner name comes from PrepareConfig.AppName, is usable
+// in ordering constraints, and can't collide with core or a plugin.
+func TestAppNameIsConfigurableAndChecked(t *testing.T) {
+	ctx := context.Background()
+	cryptoCfg := crypto.Config{
+		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
+	}
+	pluginName := usernamePlugin{}.Meta().Name
+
+	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, "app", app.AppName, "the default name")
+
+	app, err = binit.Prepare([]types.Plugin{usernamePlugin{}}, binit.PrepareConfig{AppName: "shop"})
+	require.NoError(t, err)
+	assert.Equal(t, "shop", app.AppName)
+
+	// The application asks to run before the plugin, which names it "shop".
+	var sawUsername any = "unset"
+	ac, err := binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+		Crypto: cryptoCfg,
+		Hooks: func(reg types.HookRegistry) error {
+			return reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
+				sawUsername = row[models.UserUsername]
+				return row, nil
+			}, &types.HookOptions{Before: []string{pluginName}})
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, ac.Store.CreateUser(ctx, &models.User{Email: "grace@example.com"}))
+	assert.NotEqual(t, "grace", sawUsername, "the application's handler ran before the plugin's")
+
+	for name, cfg := range map[string]binit.PrepareConfig{
+		"an application named core":   {AppName: "core"},
+		"a plugin named like the app": {AppName: pluginName},
+	} {
+		_, err = binit.Prepare([]types.Plugin{usernamePlugin{}}, cfg)
+		assert.Error(t, err, name)
+	}
+}
+
+// An owner may register one handler per point; a second is a boot error
+// instead of being dropped by the chain ordering.
+func TestSecondHandlerOnAPointIsRejected(t *testing.T) {
+	ctx := context.Background()
+	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	require.NoError(t, err)
+	pass := func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) { return row, nil }
+
+	_, err = binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
+		},
+		Hooks: func(reg types.HookRegistry) error {
+			if err := reg.OnBefore(hooks.HookUserBeforeCreate, pass, nil); err != nil {
+				return err
+			}
+			// A different priority doesn't make it a different handler slot.
+			return reg.OnBefore(hooks.HookUserBeforeCreate, pass, &types.HookOptions{Priority: types.PriorityLow})
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), string(hooks.HookUserBeforeCreate))
+	assert.Contains(t, err.Error(), `"app"`)
 }
 
 // capturingDriver keeps the routes Boot mounts, so a test can call them.
