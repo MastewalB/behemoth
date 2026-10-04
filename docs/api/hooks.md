@@ -241,7 +241,7 @@ In both cases, return the error. It is what rolls the user back when your row ca
 
 ### Rules for the adapter
 
-**Don't write Behemoth's tables through it.** The adapter writes the row and nothing else. The store's methods add all of this, and the adapter skips it:
+**By convention, Behemoth's tables go through the store.** Nothing enforces it, so know what you give up. The adapter writes the row and nothing else. The store's methods add all of this, and the adapter skips it:
 
 | Skipped | What goes wrong |
 | --- | --- |
@@ -253,6 +253,8 @@ In both cases, return the error. It is what rolls the user back when your row ca
 | Session cache | A session revoked through the adapter stays valid from the key-value cache until its entry expires. Revoke through the session manager. |
 
 Reading Behemoth's tables through the adapter is fine. A dashboard that lists users can use `FindMany` directly.
+
+[Writing Behemoth's tables from a plugin](core-tables.md) lists every skipped step per table, including what the session and token managers add.
 
 **Pass `hctx.Ctx` to every call.** On MongoDB the transaction travels in the context, not in the adapter: a call made with another context is written outside the transaction and stays after a rollback. On the SQL adapters it is the adapter that carries the transaction. Using `hctx.Tx.DB()` together with `hctx.Ctx` is correct on every database.
 

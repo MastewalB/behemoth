@@ -275,8 +275,13 @@ What the adapter skips when it is used on a core table:
 | Email normalization | `CreateUser`, `UpdateUser` | the row is not found by `FindUserByEmail` |
 | Column check | `checkColumns` | unknown keys are no longer a validation error at the store |
 | Session cache | `DefaultSessionManager` | a revoked session stays valid from the KV cache until its TTL |
+| Secret hashing | `DefaultSessionManager.Create`, `DefaultTokenManager.Issue` | a session or token row without matching lookup and keyed hashes can't be validated |
+| Session and token hook points | the two managers | `auth.session.*` and `token.*` handlers don't run |
+| Session limits and config | `DefaultSessionManager` | `MaxConcurrent`, expiry and `CaptureIPAndAgent` are not applied |
+| Single-use consume | `Store.ConsumeToken` | two concurrent requests can both use a single-use token |
+| Token backend | `DefaultTokenManager.persist` | a kind stored in the key-value storage is missed by a direct read of `tokens` |
 
-Nothing enforces the convention. The adapter accepts any declared model.
+Nothing enforces the convention. The adapter accepts any declared model. The per-table list for plugin authors is in [`../../api/core-tables.md`](../../api/core-tables.md); keep it in step with this table when a store or manager step is added.
 
 `hctx.Auth.Store` and `hctx.Auth.DB` are the root store and adapter and use a different connection. From inside a data hook:
 
@@ -345,6 +350,14 @@ All four dispatcher methods start with `DefaultDispatcher.checkPhase`. A point t
 - *Return a `ConfigurationError` from all four methods.* The mistake reaches the caller as an error on every path. `RunAfter` and `Fail` gain an error return that every caller has to check, and a flow can fail after its work is done (the session row exists, the after point is undeclared).
 **Decision:** The third option. `RunAfter` and `Fail` return only this error; handler errors are still logged. Core now declares every point it fires (`CoreDeclareHookPoints`), with the session points split into `beforeCreate`/`afterCreate` and `beforeRevoke`/`afterRevoke` because a point has one phase.
 **Revisit if:** the set of dispatched points can be known at boot (for example flows registering the points they fire). The check could then move to `Boot` entirely and `RunAfter` and `Fail` could drop the return value.
+
+### Core tables through the store is a convention, not an enforced rule
+**Context:** `Store.DB()` and `AuthContext.DB` give plugins the raw adapter. A write to `users`, `accounts`, `sessions` or `tokens` through it skips everything the store and the managers add. The most serious case is an OAuth token stored in plaintext, which nothing reports at write time.
+**Options considered:**
+- *A wrapper `Database` that rejects writes to core-owned tables.* The schema registry knows each table's owner, so the wrapper is cheap to build and turns a silent mistake into an error. It also blocks legitimate direct writes (a backfill, an import, a maintenance job that must not fire hooks), and it fixes the set of protected steps in code. Sealing may become optional per configuration later, and a plugin can already avoid the sensitive tables by using the managers.
+- *Keep it a convention and document exactly what a direct write skips.* No code, and the plugin author decides per write. A plugin that ignores the documentation can still store a token in plaintext.
+**Decision:** The convention. Plugin authors are expected to use the store for core tables and the managers for sessions and tokens, and `docs/api/core-tables.md` lists per table what a direct write skips so that the choice is an informed one. `Store.DB` and `AuthContext.DB` carry the same warning in their doc comments.
+**Revisit if:** direct writes to core tables become a recurring source of bugs or of plaintext secrets in third-party plugins. The wrapper could then be offered as an opt-in (`BootConfig`), or limited to the columns that are sealed.
 
 ### Plugins write their own tables through the adapter
 **Context:** A data hook runs inside the write's transaction, but `Store` only had typed operations for core tables. A plugin that owns a table could not write it inside the transaction, so the convention above could not be followed for the tables plugins care most about. Plugins such as a dashboard or an audit log also need to read every table.

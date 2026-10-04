@@ -117,10 +117,14 @@ func (noHooks) AfterUpdate(context.Context, *Store, string, behemoth.Model) erro
 // writes through it commits or rolls back with the Store's own writes.
 //
 // It exists for tables the Store has no operations for: a plugin's or the
-// application's own. Writes to behemoth's tables (users, accounts, sessions,
-// tokens) belong on the Store's methods; the adapter skips everything they
-// add: data hooks, ids and timestamps, email normalization, the column
-// check, and the sealing of account tokens.
+// application's own. By convention, writes to behemoth's tables (users,
+// accounts, sessions, tokens) go through the Store's methods, and sessions
+// and tokens through their managers. Nothing enforces this. The adapter
+// writes the row and skips everything those add: data hooks, ids and
+// timestamps, email normalization, the column check, and the sealing of
+// account tokens, which then land in plaintext. docs/api/core-tables.md
+// lists the skipped steps per table for a caller that decides to write
+// directly.
 //
 // Use the adapter with the context that came with the Store (fn's ctx,
 // HookContext.Ctx): on MongoDB the transaction travels in the context. Don't

@@ -6,6 +6,11 @@ import (
 )
 
 type AuthContext struct {
+	// DB is the root database adapter, for a plugin's or the application's
+	// own tables. By convention behemoth's tables are written through Store
+	// (and sessions and tokens through their managers): the adapter skips
+	// the hooks, ids, timestamps, normalization and token sealing they add.
+	// See Store.DB and docs/api/core-tables.md.
 	DB behemoth.Database
 	KV behemoth.KeyValueStorage
 	// Store is the data layer plugins use instead of DB. It is a concrete
