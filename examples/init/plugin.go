@@ -35,7 +35,6 @@ func (p *AuditLogPlugin) Declare(ic *types.PluginInitContext) error {
 }
 
 func (p *AuditLogPlugin) Register(reg types.HookRegistry) error { return nil }
-func (p *AuditLogPlugin) RegisterHooks() []types.Listener       { return nil }
 func (p *AuditLogPlugin) Middlewares() []types.Middleware       { return nil }
 
 // Routes are mounted under BasePath + MountPath: GET /api/auth/audit/status.

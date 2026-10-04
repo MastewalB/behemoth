@@ -442,7 +442,6 @@ func (usernamePlugin) Init(*types.AuthContext) error          { return nil }
 func (usernamePlugin) Routes() []types.Route                  { return nil }
 func (usernamePlugin) Middlewares() []types.Middleware        { return nil }
 func (usernamePlugin) Declare(*types.PluginInitContext) error { return nil }
-func (usernamePlugin) RegisterHooks() []types.Listener        { return nil }
 func (usernamePlugin) Register(reg types.HookRegistry) error {
 	if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
 		email, _ := row[models.UserEmail].(string)
@@ -633,7 +632,6 @@ func (p *signupPlugin) Version() string                        { return "0.0.0" 
 func (p *signupPlugin) Init(ac *types.AuthContext) error       { p.ac = ac; return nil }
 func (p *signupPlugin) Middlewares() []types.Middleware        { return nil }
 func (p *signupPlugin) Declare(*types.PluginInitContext) error { return nil }
-func (p *signupPlugin) RegisterHooks() []types.Listener        { return nil }
 
 func (p *signupPlugin) Routes() []types.Route {
 	return []types.Route{{Method: http.MethodPost, Path: "/sign-up", Handler: func(rctx *types.RequestContext) error {
@@ -689,4 +687,33 @@ func TestDataHooksSeeTheRequestBeingHandled(t *testing.T) {
 	outside := &models.User{Email: "job@example.com"}
 	require.NoError(t, ac.Store.CreateUser(ctx, outside))
 	assert.Equal(t, "no-request", outside.Username)
+}
+
+// noTransactionsDB is a database whose deployment has no transactions, the
+// way the MongoDB adapter reports a standalone server.
+type noTransactionsDB struct {
+	behemoth.Database
+	err error
+}
+
+func (d noTransactionsDB) CheckTransactions(context.Context) error { return d.err }
+
+// Boot asks a database that can tell whether its transactions work, and
+// refuses to start when they don't: hooked writes would fail later.
+func TestBootChecksTheDatabaseHasTransactions(t *testing.T) {
+	ctx := context.Background()
+	cfg := binit.BootConfig{Crypto: crypto.Config{
+		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
+	}}
+	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	require.NoError(t, err)
+
+	standalone := behemotherr.NewConfigurationError("test", "standalone server", nil)
+	_, err = binit.Boot(ctx, app, noTransactionsDB{Database: usersDB(t), err: standalone}, cfg)
+	require.Error(t, err)
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.ErrorIs(t, err, standalone)
+
+	_, err = binit.Boot(ctx, app, noTransactionsDB{Database: usersDB(t)}, cfg)
+	assert.NoError(t, err, "a database whose check passes boots")
 }

@@ -11,13 +11,11 @@ type AuthContext struct {
 	// Store is the data layer plugins use instead of DB. It is a concrete
 	// type: store never imports types, so no interface is needed to break
 	// an import cycle.
-	Store           *store.Store
-	Crypto          Crypto
-	PasswordOptions PasswordOptions
-	SessionManager  SessionManager
-	TokenManager    TokenManager
-	Dispatcher      Dispatcher
-	RateLimiter     RateLimiter
-	Telemetry       Telemetry
-	Validator       Validator
+	Store          *store.Store
+	Crypto         Crypto
+	SessionManager SessionManager
+	TokenManager   TokenManager
+	Dispatcher     Dispatcher
+	RateLimiter    RateLimiter
+	Telemetry      Telemetry
 }

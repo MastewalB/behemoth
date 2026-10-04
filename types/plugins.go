@@ -31,12 +31,8 @@ type Plugin interface {
 	// Middlewares() returns middleware functions that the plugin wants to register.
 	Middlewares() []Middleware
 
-	// DeclareHooks() []types.HookPointDef
-
 	// Declare lets the plugins declare hooks, tokens, and ratelimit rules it wants to get registered.
 	Declare(ic *PluginInitContext) error
-
-	RegisterHooks() []Listener
 
 	Register(reg HookRegistry) error
 }
@@ -388,14 +384,6 @@ const (
 	PriorityLow     HookPriority = 50
 	PriorityLowest  HookPriority = 100 // observers: logging, analytics; should see the final mutated state
 )
-
-// ListenOn declares event listening registry definition.
-type Listener struct {
-	Point    HookPoint
-	Phase    HookPhase // Like 'before', 'after', or 'failed'
-	Callback any       // Should be one of BeforeHookFunc, AfterHookFunc, FailedHookFunc
-	Options  *HookOptions
-}
 
 func WithLifecycle[TIn, TOut any](
 	dispatcher Dispatcher,

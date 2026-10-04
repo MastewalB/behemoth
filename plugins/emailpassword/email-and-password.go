@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
@@ -13,77 +15,145 @@ import (
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
+	"github.com/MastewalB/behemoth/utils"
 )
 
+// PluginName is the name the plugin registers under (PluginMeta.Name). It
+// owns the plugin's routes, and other plugins use it to depend on this one
+// or to order their hook handlers around it.
 const PluginName = "emailpassword"
 
+// pluginVersion is what Version reports.
+const pluginVersion = "0.1.0"
+
+// Plugin is the email and password authentication plugin. It adds the
+// sign-up, sign-in and sign-out routes. Users, credential accounts and
+// sessions are core tables, written through the store and the session
+// manager, and the auth.* hook points it fires are declared by core, so the
+// plugin contributes routes only.
 type Plugin struct {
+	opts        Options
 	authContext *types.AuthContext
 	signUp      func(hctx *types.HookContext, in behemoth.M) (*models.User, error)
 	signIn      func(hctx *types.HookContext, in EmailAndPasswordCredentials) (*SignInResult, error)
 }
 
-// Declare implements [types.Plugin].
-func (p *Plugin) Declare(ic *types.PluginInitContext) error {
-	panic("unimplemented")
-}
-
-// Meta implements [types.Plugin].
+// Meta implements [types.Plugin]. The plugin depends on no other plugin and
+// has no mount path, so its routes sit directly under the router's base path
+// (for example /api/auth/sign-in/email).
 func (p *Plugin) Meta() types.PluginMeta {
-	panic("unimplemented")
-}
-
-// Middlewares implements [types.Plugin].
-func (p *Plugin) Middlewares() []types.Middleware {
-	panic("unimplemented")
-}
-
-// Register implements [types.Plugin].
-func (p *Plugin) Register(reg types.HookRegistry) error {
-	panic("unimplemented")
+	return types.PluginMeta{Name: PluginName}
 }
 
 // Version implements [types.Plugin].
 func (p *Plugin) Version() string {
-	panic("unimplemented")
+	return pluginVersion
 }
 
-func New(authContext types.AuthContext) *Plugin {
-	// p := &Plugin{authContext: authContext}
-	// p.signUp = types.WithLifecycle(
-	// 	authContext.Dispatcher,
-	// 	hooks.HookSignInBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed,
-	// 	signUpBody,
-	// )
-	// p.signIn = types.WithLifecycle(
-	// 	authContext.Dispatcher,
-	// 	hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed,
-	// 	signInBody,
-	// )
-
-	return &Plugin{}
-}
-
-func (p *Plugin) Init(ac *types.AuthContext) error {
-	p.authContext = ac
-	p.signUp = types.WithLifecycle(ac.Dispatcher, hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed, signUpBody)
-	p.signIn = types.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, signInBody)
+// Declare implements [types.Plugin]. The plugin declares nothing:
+//   - hook points: it fires core's auth.signUp.*, auth.signIn.* and
+//     auth.signOut.* points, which core declares before any plugin's Declare
+//     runs (CoreDeclareHookPoints);
+//   - tables: the password hash lives on the core accounts table;
+//   - token kinds: none yet. Password reset and email verification are not
+//     built, and will declare their kinds here;
+//   - rate limits: core declares the baseline rule for /sign-in/email.
+func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	return nil
 }
 
-// Declare: no plugin-owned hook points — this plugin only fires core's
-// auth.signUp.* / auth.signIn.* / auth.signOut.* points, which core already
-// declared before any plugin's Declare() runs.
-func (p *Plugin) DeclareHooks() []types.HookPointDef {
-	return []types.HookPointDef{}
+// Register implements [types.Plugin]. The plugin attaches no handlers to
+// other points; its contribution is its routes. A second-factor plugin, by
+// contrast, would register on auth.signIn.credentialsVerified here.
+func (p *Plugin) Register(reg types.HookRegistry) error {
+	return nil
 }
 
-// Register: this plugin has no hook handlers of its own to attach elsewhere.
-// Its entire contribution is the endpoints below. A plugin like TOTP, by
-// contrast, would use Register() here to attach to
-// behemoth.HookSignInCredentialsVerified.
-func (p *Plugin) RegisterHooks() []types.Listener {
-	return []types.Listener{}
+// Middlewares implements [types.Plugin]. The plugin has no middleware that
+// should run on every route of the application. The session check that
+// sign-out needs is attached to that route alone (see Routes).
+func (p *Plugin) Middlewares() []types.Middleware {
+	return nil
+}
+
+// Default password length limits, used when Options leaves them zero.
+const (
+	DefaultMinPasswordLength = 8
+	DefaultMaxPasswordLength = 128
+)
+
+// Options configures the plugin. The zero value is usable.
+//
+// The email and password rules live here and not on types.AuthContext: this
+// plugin is the only place a password enters the system. A plugin that also
+// sets passwords (password reset, an admin screen) should depend on this one
+// and go through it, so the rules have one owner.
+type Options struct {
+	// MinPasswordLength and MaxPasswordLength bound a new password's length
+	// at sign-up, counted in characters. Zero means the default (8 and 128).
+	// The upper bound also caps the work the password hasher does for one
+	// request. Sign-in does not apply them: a password accepted under an
+	// older policy still signs in.
+	MinPasswordLength int
+	MaxPasswordLength int
+
+	// ValidatePassword is an optional extra check at sign-up, run after the
+	// length check, for example a breached-password lookup. nil = none.
+	ValidatePassword func(password string) error
+
+	// ValidateEmail checks the normalized (trimmed, lowercased) email at
+	// sign-up. nil = utils.IsValidEmail, a check of the address's shape.
+	ValidateEmail func(email string) error
+}
+
+// New returns the plugin configured with opts. Limits left at zero take
+// their defaults. Limits that contradict each other are reported by Init, as
+// a configuration error from Boot.
+func New(opts Options) *Plugin {
+	if opts.MinPasswordLength == 0 {
+		opts.MinPasswordLength = DefaultMinPasswordLength
+	}
+	if opts.MaxPasswordLength == 0 {
+		opts.MaxPasswordLength = DefaultMaxPasswordLength
+	}
+	if opts.ValidateEmail == nil {
+		opts.ValidateEmail = func(email string) error {
+			if !utils.IsValidEmail(email) {
+				return errors.New("invalid email")
+			}
+			return nil
+		}
+	}
+	return &Plugin{opts: opts}
+}
+
+// Init implements [types.Plugin]. It checks the options, keeps the
+// AuthContext and wraps the sign-up and sign-in flows with their hook points.
+// Passwords are hashed with the AuthContext's Crypto.Passwords.
+func (p *Plugin) Init(ac *types.AuthContext) error {
+	if p.opts.MinPasswordLength < 1 || p.opts.MaxPasswordLength < p.opts.MinPasswordLength {
+		return behemotherr.NewConfigurationError("emailpassword.Init",
+			fmt.Sprintf("password length limits are invalid: min %d, max %d", p.opts.MinPasswordLength, p.opts.MaxPasswordLength), nil)
+	}
+	if ac.Crypto.Passwords == nil {
+		return behemotherr.NewConfigurationError("emailpassword.Init", "AuthContext.Crypto has no password hasher", nil)
+	}
+	p.authContext = ac
+	p.signUp = types.WithLifecycle(ac.Dispatcher, hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed, p.signUpBody)
+	p.signIn = types.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.signInBody)
+	return nil
+}
+
+// validatePassword applies the plugin's rules to a new password.
+func (p *Plugin) validatePassword(password string) error {
+	n := utf8.RuneCountInString(password)
+	if n < p.opts.MinPasswordLength || n > p.opts.MaxPasswordLength {
+		return fmt.Errorf("password must be %d to %d characters long", p.opts.MinPasswordLength, p.opts.MaxPasswordLength)
+	}
+	if p.opts.ValidatePassword != nil {
+		return p.opts.ValidatePassword(password)
+	}
+	return nil
 }
 
 func (p *Plugin) Routes() []types.Route {
@@ -103,8 +173,9 @@ type EmailAndPasswordCredentials struct {
 	Password string `json:"password"`
 }
 
-func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, error) {
+func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, error) {
 	ac := hctx.Auth
+	hasher := ac.Crypto.Passwords
 	dispatcher := ac.Dispatcher
 
 	emailStr, ok := userData["email"].(string)
@@ -113,18 +184,18 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, err
 	}
 	email := strings.ToLower(strings.TrimSpace(emailStr))
 
-	if err := ac.Validator.ValidateEmail(email); err != nil {
+	if err := p.opts.ValidateEmail(email); err != nil {
 		return nil, errors.New("invalid email")
 	}
 
 	password, _ := userData["password"].(string)
-	if err := ac.Validator.ValidatePassword(password, ac.PasswordOptions); err != nil {
+	if err := p.validatePassword(password); err != nil {
 		return nil, errors.New("invalid password")
 	}
 
 	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 	if err == nil {
-		ac.PasswordOptions.PasswordHasher.Hash(password) // timing mitigation, unchanged
+		hasher.Hash(password) // timing mitigation, unchanged
 		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists"}); err != nil {
 			return nil, err
 		}
@@ -134,7 +205,7 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, err
 		return nil, err // infra error (DB down): not "no such user"
 	}
 
-	passwordHash, err := ac.PasswordOptions.PasswordHasher.Hash(password)
+	passwordHash, err := hasher.Hash(password)
 	if err != nil {
 		return nil, err // infra error - no Fail()
 	}
@@ -176,12 +247,13 @@ func signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, err
 	return user, nil
 }
 
-func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*SignInResult, error) {
+func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*SignInResult, error) {
 	ac := hctx.Auth
+	hasher := ac.Crypto.Passwords
 	dispatcher := ac.Dispatcher
 	user, err := ac.Store.FindUserByEmail(hctx.Ctx, creds.Email) // the store normalizes the email
 	if err != nil {
-		ac.PasswordOptions.PasswordHasher.Hash(creds.Password) // timing mitigation
+		hasher.Hash(creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
 			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "userNotFound"}); err != nil {
 				return nil, err
@@ -196,7 +268,7 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 	// match, and is answered exactly like a wrong password.
 	credential, err := ac.Store.FindAccount(hctx.Ctx, models.ProviderCredential, user.ID)
 	if err != nil {
-		ac.PasswordOptions.PasswordHasher.Hash(creds.Password) // timing mitigation
+		hasher.Hash(creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
 			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "noCredentialAccount"}); err != nil {
 				return nil, err
@@ -206,7 +278,7 @@ func signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*Si
 		return nil, err // infra error — must NOT count toward lockout
 	}
 
-	isValid, err := ac.PasswordOptions.PasswordHasher.Verify(credential.PasswordHash, creds.Password)
+	isValid, err := hasher.Verify(credential.PasswordHash, creds.Password)
 	if err != nil {
 		return nil, err // a malformed stored hash or key error — not a wrong password, so not counted as one
 	}

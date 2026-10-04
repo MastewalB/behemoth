@@ -6,13 +6,6 @@ import (
 	"github.com/MastewalB/behemoth"
 )
 
-type PasswordOptions struct {
-	PasswordHasher PasswordHasher
-	HashCost       int
-	MinLength      int
-	MaxLength      int
-}
-
 // type JWTConfig struct {
 // 	Secret        string
 // 	Expiry        time.Duration
@@ -38,7 +31,3 @@ type SessionConfig struct {
 // 	Expiry:        24 * time.Hour,
 // 	SigningMethod: jwt.SigningMethodHS256,
 // }
-
-var DefaultPasswordConfig = PasswordOptions{
-	HashCost: 10,
-}
