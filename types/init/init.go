@@ -221,6 +221,13 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if db == nil {
 		return nil, behemotherr.NewConfigurationError("Boot", "a Database is required", nil)
 	}
+	// Fail here instead of on the first hooked write (a sign-up) when the
+	// database is deployed without transactions, e.g. a standalone MongoDB.
+	if checker, ok := db.(behemoth.TransactionChecker); ok {
+		if err := checker.CheckTransactions(ctx); err != nil {
+			return nil, fmt.Errorf("database transaction check failed: %w", err)
+		}
+	}
 	plugins, order := app.plugins, app.Order
 	kv := cfg.KV
 

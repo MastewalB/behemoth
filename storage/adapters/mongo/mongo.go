@@ -27,6 +27,12 @@ import (
 //
 // There is no "missing table" condition: querying a collection that doesn't
 // exist simply returns no documents.
+//
+// The adapter needs a replica set or a sharded cluster. Transaction uses
+// MongoDB transactions, which a standalone server does not have, and the
+// store runs every write to a table with data hooks (users) in one. A
+// single-node replica set is enough. CheckTransactions reports a standalone
+// server, and Boot calls it.
 type MongoAdapter struct {
 	db       *mongo.Database
 	Resolver behemoth.SchemaResolver
@@ -39,6 +45,29 @@ func NewMongoAdapter(client *mongo.Client, dbName string, resolver behemoth.Sche
 		db:       client.Database(dbName),
 		Resolver: resolver,
 	}
+}
+
+var _ behemoth.TransactionChecker = (*MongoAdapter)(nil)
+
+// CheckTransactions implements behemoth.TransactionChecker. It asks the
+// server what it is (the hello command) and returns a configuration error
+// for a standalone server. A replica set member reports its set name and a
+// sharded cluster's router (mongos) reports msg "isdbgrid"; both have
+// transactions. An error reaching the server is returned as it is.
+func (mdb *MongoAdapter) CheckTransactions(ctx context.Context) error {
+	var hello struct {
+		SetName string `bson:"setName"`
+		Msg     string `bson:"msg"`
+	}
+	if err := mdb.db.RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello); err != nil {
+		return fmt.Errorf("MongoAdapter.CheckTransactions: hello command failed: %w", err)
+	}
+	if hello.SetName == "" && hello.Msg != "isdbgrid" {
+		return behemotherr.NewConfigurationError("MongoAdapter.CheckTransactions",
+			"the MongoDB server is a standalone instance, which has no transactions; "+
+				"run it as a replica set (a single node is enough: start mongod with --replSet and run rs.initiate()) or use a sharded cluster", nil)
+	}
+	return nil
 }
 
 func (mdb *MongoAdapter) names() behemoth.SchemaResolver {

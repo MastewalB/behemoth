@@ -283,7 +283,7 @@ So a data hook should only do work that the rollback undoes. A rollback does not
 ### Other things to know
 
 - **A handler can run more than once on MongoDB.** The MongoDB driver retries a transaction on a transient error, and the hooks are inside it. Writes through `hctx.Tx` and `hctx.Tx.DB()` are rolled back between attempts. Anything else the handler does is repeated.
-- **MongoDB needs a replica set.** A hooked write always opens a transaction, and a standalone MongoDB server has none.
+- **MongoDB needs a replica set.** A hooked write always opens a transaction, and a standalone MongoDB server has none. `Boot` returns a configuration error on a standalone server. A single-node replica set is enough: start `mongod` with `--replSet rs0` and run `rs.initiate()` once. A sharded cluster also works.
 - **A slow handler holds the transaction open.** It keeps its locks for as long as it runs. On SQLite that blocks every other writer.
 - **Not built: there is no after-commit data hook.** If you need to react to a committed row, use the Tier 2 after point of the flow that wrote it.
 - **Not built: data points record no audit events.** See [Audit](#audit).
@@ -412,4 +412,4 @@ Core declares these, so a handler can be registered on any of them.
 
 The session and token points are Tier 2 even though they sit next to a table write: the managers fire them outside any store transaction, `hctx.Tx` is nil, and an after handler's error is logged.
 
-The `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points are fired by the email/password plugin, which can't be booted through `Prepare` and `Boot` yet.
+The `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points are fired by the email/password plugin (`plugins/emailpassword`), so they only fire when that plugin is passed to `Prepare`.

@@ -82,7 +82,7 @@ The four SQL adapters and MongoDB join. GORM and bun nest with a savepoint, whic
 
 - **Postgres aborts the transaction on any failed statement.** Every later statement in it fails with "current transaction is aborted", and the commit turns into a rollback. A caller can't attempt an insert, classify a duplicate-key error and continue inside a transaction. The rate limiter's counter store stays outside transactions for this reason (see [`../../ratelimit/rate_limiter.md`](../../ratelimit/rate_limiter.md)). The plain adapters have no savepoint API to work around it.
 - **MongoDB may run `fn` more than once.** `session.WithTransaction` retries the callback on a transient transaction error. Writes made with the callback's context are rolled back between attempts. Any other effect of `fn` repeats.
-- **MongoDB transactions need a replica set or a sharded cluster.** On a standalone server `Transaction` fails.
+- **MongoDB transactions need a replica set or a sharded cluster.** On a standalone server `Transaction` fails. `MongoAdapter.CheckTransactions` detects this and `Boot` calls it, see the decision below.
 - **SQLite has one writer.** While a transaction holds the write lock, a write through the root adapter waits for `busy_timeout` and then fails.
 - **The `tx` adapter must not outlive `fn`.** On the SQL adapters it returns `sql.ErrTxDone`. On MongoDB it is the root adapter, so a late call succeeds outside any transaction.
 
@@ -91,3 +91,11 @@ The four SQL adapters and MongoDB join. GORM and bun nest with a savepoint, whic
 # **Tests**
 
 `tests/storage/database_suite.go` runs against every adapter. `TestNestedTransaction` calls `Transaction` on the adapter a transaction hands out and checks three cases: both writes commit together, an outer failure after the inner call undoes the inner write, and an inner error passed on undoes both. It also checks that the inner call can read the outer transaction's uncommitted row.
+
+### The MongoDB adapter requires a replica set
+**Context:** The store runs every write to a table that fires data hooks in a transaction (`Store.hooked`). A standalone MongoDB server has no transactions, so `CreateUser` and `UpdateUser` failed there, on the first sign-up and with the driver's own error message.
+**Options considered:**
+- *Require a replica set or sharded cluster.* Data hooks keep one contract on every database: an after-hook error rolls the write back, and a hook's writes through `HookContext.Tx` are atomic with the row. Standalone MongoDB is not supported. A single-node replica set covers local development.
+- *Let an adapter report that it has no transactions and have the store run hooked writes without one.* Standalone MongoDB works. An after-hook error can no longer undo the write, a hook's own writes stay behind when the main write fails, and sign-up can leave a user without a credential account. What a data hook may rely on would then depend on how the application's database is deployed.
+**Decision:** Require it, and check it at boot. `behemoth.TransactionChecker` is an optional interface of a `Database`. `Boot` calls `CheckTransactions` before anything is written and fails when it returns an error. `MongoAdapter` implements it with the `hello` command: a replica set member reports `setName`, a `mongos` reports `msg: "isdbgrid"`, and anything else is a standalone server and a configuration error that says how to fix it. The SQL adapters don't implement the interface. The check runs only in `Boot`; code that uses the adapter without `Boot` still gets the driver's error from `Transaction`.
+**Revisit if:** standalone MongoDB has to be supported in production. The second option would then be an explicit opt-in on the adapter, not automatic.

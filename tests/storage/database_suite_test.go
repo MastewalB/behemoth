@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MastewalB/behemoth"
@@ -18,6 +19,8 @@ import (
 	sqlserverAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/mongodb"
 	"github.com/uptrace/bun"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -238,6 +241,12 @@ func TestMongoAdapter(t *testing.T) {
 	adapter := testutils.SetupMongoAdapter(t, mongoClient, testutils.MongoDBName)
 
 	dropAll := func() { testutils.CleanupMongoTestDB(ctx, t, mongoClient, testutils.MongoDBName) }
+
+	t.Run("CheckTransactions passes on a replica set", func(t *testing.T) {
+		if err := adapter.CheckTransactions(ctx); err != nil {
+			t.Fatalf("CheckTransactions on a replica set = %v", err)
+		}
+	})
 
 	// The whole suite again, with every name physical-only. Runs first: the
 	// standard suite's CleanupDatabase disconnects the client.
@@ -731,5 +740,33 @@ func (m *BunAdapterTestManager) CleanupTables() {
 func (m *BunAdapterTestManager) CleanupDatabase() {
 	if m.cleanup != nil {
 		m.cleanup()
+	}
+}
+
+// A standalone MongoDB server has no transactions. The adapter says so
+// before any write is attempted.
+func TestMongoAdapterRejectsAStandaloneServer(t *testing.T) {
+	ctx := context.Background()
+	container, err := mongodb.Run(ctx, "mongo:6") // no replica set
+	if err != nil {
+		t.Fatalf("failed to start container: %s", err)
+	}
+	t.Cleanup(func() { _ = testcontainers.TerminateContainer(container) })
+	uri, err := container.ConnectionString(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Disconnect(ctx) })
+
+	err = mongoAdapter.NewMongoAdapter(client, testutils.MongoDBName, nil).CheckTransactions(ctx)
+	if !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		t.Fatalf("CheckTransactions on a standalone server = %v, want a configuration error", err)
+	}
+	if !strings.Contains(err.Error(), "replica set") {
+		t.Errorf("the error should say what to do: %v", err)
 	}
 }

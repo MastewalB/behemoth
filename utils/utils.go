@@ -87,8 +87,13 @@ func CurrentTimestamp() string {
 	return fmt.Sprintf("%d", (int64)(time.Now().Unix()))
 }
 
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$`)
+
+// IsValidEmail reports whether email looks like an address: a local part, an
+// "@" and a domain with a top-level label. It checks the shape only, not that
+// the mailbox exists. Plugins that accept an email use it as their default
+// check (for example emailpassword.Options.ValidateEmail).
 func IsValidEmail(email string) bool {
-	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$`)
 	return emailRegex.MatchString(email)
 }
 

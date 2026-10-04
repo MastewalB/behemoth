@@ -91,6 +91,22 @@ const (
 	Desc OrderDirection = "DESC"
 )
 
+// TransactionChecker is an optional interface of a Database whose
+// transactions depend on how the database is deployed. Boot calls
+// CheckTransactions once, before anything is written, and fails when it
+// returns an error. The store runs every write to a table that fires data
+// hooks in a transaction, so a deployment without them can't run those
+// writes at all.
+//
+// The MongoDB adapter implements it: MongoDB has transactions only on a
+// replica set or a sharded cluster. The SQL adapters don't need to; their
+// databases always have transactions.
+type TransactionChecker interface {
+	// CheckTransactions returns nil when Transaction can be used on this
+	// deployment, and an error that says what is missing otherwise.
+	CheckTransactions(ctx context.Context) error
+}
+
 // KeyValueStorage defines the interface for key-value storage operations.
 //
 // Implementations must handle the following common scenarios:

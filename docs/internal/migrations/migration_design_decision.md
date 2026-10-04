@@ -805,7 +805,7 @@ Freezing:
 3. **Rendered natively per driver** — SQL drivers as named `CHECK` constraints; MongoDB as a `$jsonSchema` collection validator (which supports `enum`, `minimum`/`maximum`, `minLength`/`maxLength`, `pattern`).
 4. **Introspected and normalized like everything else** — each driver reads its constraints back into the same structure, and `NormalizeColumn`'s counterpart for constraints absorbs whatever the database rewrites (Postgres re-formats `CHECK` expressions; a probe decides how).
 5. **Narrowing** — adding or tightening a constraint is narrowing (existing rows may violate it); removing or loosening one is widening.
-6. **Also enforced in the application** through the existing `types.Validator`, so databases that enforce nothing still get the guarantee.
+6. **Also enforced in the application**, so databases that enforce nothing still get the guarantee.
 7. **No raw escape hatch in core.** Database-specific SQL belongs in a custom migration, once data operations (`OpExec`) exist.
 
 # **Model Extensions — Contributed Columns at Runtime**
