@@ -29,6 +29,8 @@ The tier decides what a handler may safely do, so pick the point by the tier fir
 
 A short way to choose: if a rollback of the database transaction would undo everything your handler did, it fits Tier 1. If not, it belongs in Tier 2.
 
+Tier 1 also has after-commit points (`data.user.created`), which fire for every committed write and behave like Tier 2 after handlers; see [After-commit data points](#after-commit-data-points).
+
 For example, creating a profile row for each new user fits `data.user.afterCreate`, because the profile is rolled back if the user is. Sending a welcome email does not fit there, because the user can still be rolled back after your handler returns. Send it from `auth.signUp.after`, which fires once the user is committed.
 
 ## Phases and handler signatures
@@ -282,13 +284,39 @@ So a data hook should only do work that the rollback undoes. A rollback does not
 - **Rate-limit counters.** A rate limit attached to a before point counts the attempt even when the write is rolled back.
 - **In-memory state.** `hctx.Values`, and the model the caller passed in, keep what was set on them.
 
+### After-commit data points
+
+`data.user.created` and `data.user.updated` fire once the transaction that wrote the row has committed. They fire for every committed write to the table, whatever caused it, and never for a write that was rolled back.
+
+| | `data.user.afterCreate` | `data.user.created` |
+| --- | --- | --- |
+| Runs | inside the transaction, before commit | after the commit |
+| The row | may still be rolled back | is committed |
+| Handler error | fails the write and rolls it back | is logged; the write stays |
+| `hctx.Tx` | the transaction's store | nil; use `hctx.Auth.Store` |
+| Use it for | rows that belong with the user | reacting to a new user: emails, stats, cache updates, calls to other systems |
+
+```go
+reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) error {
+	user := result.(*models.User)
+	return mailer.SendWelcome(hctx.Ctx, user.Email)
+}, nil)
+```
+
+- **They wait for the outermost transaction.** Sign-up creates the user and its credential account in one transaction. `data.user.created` fires after both are committed, and not at all if the account insert fails.
+- **They run before the write returns to its caller**, in the same goroutine, in the order the writes happened. A slow handler delays the response. Start a goroutine or queue a job for slow work.
+- **A handler can't fail or undo the write.** Its error and its panic are logged.
+- **Delivery is best effort.** The notifications are held in memory until the commit. If the process stops between the commit and the handler, the handler never runs for that row. Most uses (a welcome email, a counter, a cache entry) can accept that.
+- **For work that must not be lost, write an outbox row.** In `data.user.afterCreate`, insert a row describing the work into a table of your own through `hctx.Tx.DB()`. It commits with the user or not at all. A worker of yours reads the table, does the work and marks the row done. Make the work safe to repeat, because a worker that stops halfway does it again.
+- **Your own after-commit work.** Inside a data hook or a `Store.Transaction`, `tx.AfterCommit(ctx, fn)` queues `fn` the same way, with the same best-effort limit.
+
 ### Other things to know
 
 - **A handler can run more than once on MongoDB.** The MongoDB driver retries a transaction on a transient error, and the hooks are inside it. Writes through `hctx.Tx` and `hctx.Tx.DB()` are rolled back between attempts. Anything else the handler does is repeated.
 - **MongoDB needs a replica set.** A hooked write always opens a transaction, and a standalone MongoDB server has none. `Boot` returns a configuration error on a standalone server. A single-node replica set is enough: start `mongod` with `--replSet rs0` and run `rs.initiate()` once. A sharded cluster also works.
 - **A slow handler holds the transaction open.** It keeps its locks for as long as it runs. On SQLite that blocks every other writer.
-- **Not built: there is no after-commit data hook.** If you need to react to a committed row, use the Tier 2 after point of the flow that wrote it.
-- **Not built: data points record no audit events.** See [Audit](#audit).
+- **To react to a committed row, use the after-commit points.** See [After-commit data points](#after-commit-data-points).
+- **`afterCreate` and `afterUpdate` record no audit events.** See [Audit](#audit).
 
 ## What each data point carries
 
@@ -300,6 +328,8 @@ Data points exist for the `users` table.
 | `data.user.afterCreate` | after | the stored `*models.User` | |
 | `data.user.beforeUpdate` | before | only the columns being changed | `HookValueUserID`: the row's id |
 | `data.user.afterUpdate` | after | the stored row, read back after the update | `HookValueUserID`: the row's id |
+| `data.user.created` | after, once committed | the stored `*models.User` | |
+| `data.user.updated` | after, once committed | the stored row, read back after the update | `HookValueUserID`: the row's id |
 
 Rules for rewriting the payload:
 
@@ -321,8 +351,9 @@ A rate-limit rule can be attached to a before point with `HookRateLimitRule`. Th
 
 A point can be declared with an `AuditSpec`. The dispatcher then records an audit event each time the point is dispatched, after its handlers have run. The event type defaults to the point's name.
 
-- This applies to Tier 2 after points and to failed points.
-- Tier 1 after points record nothing, even when declared with an `AuditSpec`. Their row may still be rolled back, and the audit log would describe a write that never happened.
+- This applies to Tier 2 after points, to failed points and to the after-commit data points (`data.user.created`, `data.user.updated`).
+- The in-transaction after points (`data.user.afterCreate`, `data.user.afterUpdate`) record nothing, even when declared with an `AuditSpec`. Their row may still be rolled back, and the audit log would describe a write that never happened.
+- Core declares no `AuditSpec` on the data points today.
 
 ## Declaring and firing your own points
 
@@ -387,6 +418,8 @@ Fired by the store. See [What each data point carries](#what-each-data-point-car
 | `data.user.afterCreate` | after |
 | `data.user.beforeUpdate` | before |
 | `data.user.afterUpdate` | after |
+| `data.user.created` | after, once committed |
+| `data.user.updated` | after, once committed |
 
 ### Flow points (Tier 2)
 

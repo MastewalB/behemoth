@@ -77,6 +77,16 @@ type recordingHooks struct {
 	afterCreate func(ctx context.Context, tx *store.Store, created behemoth.Model) error
 	afterUpdate func(ctx context.Context, tx *store.Store, updated behemoth.Model) error
 	inTx        []*store.Store
+
+	// committed records the after-commit notifications, in order.
+	committed []string
+}
+
+func (h *recordingHooks) CreateCommitted(_ context.Context, table string, m behemoth.Model) {
+	h.committed = append(h.committed, fmt.Sprint("created ", table, " ", m.PrimaryKeyField()))
+}
+func (h *recordingHooks) UpdateCommitted(_ context.Context, table string, m behemoth.Model) {
+	h.committed = append(h.committed, fmt.Sprint("updated ", table, " ", m.PrimaryKeyField()))
 }
 
 func (h *recordingHooks) Fires(string) bool { return !h.silent }
@@ -716,4 +726,125 @@ func TestBootChecksTheDatabaseHasTransactions(t *testing.T) {
 
 	_, err = binit.Boot(ctx, app, noTransactionsDB{Database: usersDB(t)}, cfg)
 	assert.NoError(t, err, "a database whose check passes boots")
+}
+
+// The committed notifications wait for the commit: they fire after a single
+// write, and not at all when the write is rolled back.
+func TestCommittedHooksFireAfterCommitOnly(t *testing.T) {
+	ctx := context.Background()
+	h := &recordingHooks{}
+	s := store.New(usersDB(t), store.WithHooks(h))
+
+	u := &models.User{Email: "ada@example.com"}
+	require.NoError(t, s.CreateUser(ctx, u))
+	_, err := s.UpdateUser(ctx, u.ID, behemoth.M{models.UserFirstname: "Ada"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"created users " + u.ID, "updated users " + u.ID}, h.committed)
+
+	// An after hook that fails rolls the write back: nothing committed.
+	h.committed = nil
+	h.afterCreate = func(context.Context, *store.Store, behemoth.Model) error { return errors.New("rejected") }
+	require.Error(t, s.CreateUser(ctx, &models.User{Email: "grace@example.com"}))
+	assert.Empty(t, h.committed, "a rolled-back write is never reported as committed")
+}
+
+// Inside a caller's transaction the notifications wait for the outermost
+// commit, the way sign-up creates a user and its account together.
+func TestCommittedHooksWaitForTheOutermostTransaction(t *testing.T) {
+	ctx := context.Background()
+	h := &recordingHooks{}
+	s := store.New(usersDB(t), store.WithHooks(h))
+
+	// A later step fails: the user is rolled back and never reported.
+	failed := errors.New("account insert failed")
+	err := s.Transaction(ctx, func(ctx context.Context, tx *store.Store) error {
+		if err := tx.CreateUser(ctx, &models.User{Email: "ada@example.com"}); err != nil {
+			return err
+		}
+		return failed
+	})
+	require.ErrorIs(t, err, failed)
+	assert.Empty(t, h.committed)
+	_, err = s.FindUserByEmail(ctx, "ada@example.com")
+	assert.True(t, behemotherr.IsNotFound(err), "%v", err)
+
+	// Everything succeeds: nothing is reported while the transaction is
+	// open, and everything is, in order, once it has committed.
+	var during []string
+	var extra []string
+	u := &models.User{Email: "ada@example.com"}
+	err = s.Transaction(ctx, func(ctx context.Context, tx *store.Store) error {
+		if err := tx.CreateUser(ctx, u); err != nil {
+			return err
+		}
+		tx.AfterCommit(ctx, func(context.Context) { extra = append(extra, "callback") })
+		// A helper that opens its own transaction joins this one.
+		if err := tx.Transaction(ctx, func(ctx context.Context, inner *store.Store) error {
+			_, err := inner.UpdateUser(ctx, u.ID, behemoth.M{models.UserFirstname: "Ada"})
+			return err
+		}); err != nil {
+			return err
+		}
+		during = append(during, h.committed...)
+		during = append(during, extra...)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Empty(t, during, "nothing fires before the outermost commit")
+	assert.Equal(t, []string{"created users " + u.ID, "updated users " + u.ID}, h.committed)
+	assert.Equal(t, []string{"callback"}, extra)
+
+	// Outside a transaction there is nothing to wait for.
+	ran := false
+	s.AfterCommit(ctx, func(context.Context) { ran = true })
+	assert.True(t, ran)
+}
+
+// Under Boot the notifications are the data.user.created and
+// data.user.updated points: a handler sees only committed users, has no
+// transaction, and can't fail the write.
+func TestCommittedDataPointsUnderBoot(t *testing.T) {
+	ctx := context.Background()
+	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	require.NoError(t, err)
+
+	var seen []string
+	ac, err := binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
+		},
+		Hooks: func(reg types.HookRegistry) error {
+			if err := reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) error {
+				seen = append(seen, "created "+result.(*models.User).Email)
+				assert.Nil(t, hctx.Tx, "the transaction is over")
+				// The row is visible on the root store's connection.
+				_, err := hctx.Auth.Store.FindUserByID(hctx.Ctx, result.(*models.User).ID)
+				assert.NoError(t, err)
+				return errors.New("a handler error is logged, not returned")
+			}, nil); err != nil {
+				return err
+			}
+			return reg.OnAfter(hooks.HookUserUpdated, func(hctx *types.HookContext, result any) error {
+				seen = append(seen, fmt.Sprint("updated ", hctx.Values[hooks.HookValueUserID] == result.(*models.User).ID))
+				return nil
+			}, nil)
+		},
+	})
+	require.NoError(t, err)
+
+	u := &models.User{Email: "ada@example.com"}
+	require.NoError(t, ac.Store.CreateUser(ctx, u), "an after-commit handler's error does not fail the write")
+	_, err = ac.Store.UpdateUser(ctx, u.ID, behemoth.M{models.UserFirstname: "Ada"})
+	require.NoError(t, err)
+
+	failed := errors.New("later step failed")
+	err = ac.Store.Transaction(ctx, func(ctx context.Context, tx *store.Store) error {
+		if err := tx.CreateUser(ctx, &models.User{Email: "grace@example.com"}); err != nil {
+			return err
+		}
+		return failed
+	})
+	require.ErrorIs(t, err, failed)
+
+	assert.Equal(t, []string{"created ada@example.com", "updated true"}, seen)
 }

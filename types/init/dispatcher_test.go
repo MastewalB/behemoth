@@ -139,6 +139,7 @@ func TestCoreDeclaresTheHookPointsItFires(t *testing.T) {
 		hooks.HookTokenConsumed: types.AfterHookPhase, hooks.HookTokenFailed: types.FailedHookPhase,
 		hooks.HookUserBeforeCreate: types.BeforeHookPhase, hooks.HookUserAfterCreate: types.AfterHookPhase,
 		hooks.HookUserBeforeUpdate: types.BeforeHookPhase, hooks.HookUserAfterUpdate: types.AfterHookPhase,
+		hooks.HookUserCreated: types.AfterHookPhase, hooks.HookUserUpdated: types.AfterHookPhase,
 	}
 	for point, phase := range want {
 		def, ok := catalog.Lookup(point)
@@ -164,6 +165,8 @@ func TestCheckDataHookPointsRejectsUndeclaredAndWrongPhase(t *testing.T) {
 		{Point: "data.t.afterCreate", Owner: coreOwner, Phase: types.AfterHookPhase},
 		{Point: "data.t.beforeUpdate", Owner: coreOwner, Phase: types.BeforeHookPhase},
 		{Point: "data.t.afterUpdate", Owner: coreOwner, Phase: types.BeforeHookPhase}, // wrong phase
+		{Point: "data.t.created", Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: "data.t.updated", Owner: coreOwner, Phase: types.AfterHookPhase},
 	} {
 		if err := catalog.Declare(def); err != nil {
 			t.Fatal(err)
@@ -172,6 +175,7 @@ func TestCheckDataHookPointsRejectsUndeclaredAndWrongPhase(t *testing.T) {
 	points := tableHookPoints{
 		beforeCreate: "data.t.beforeCreate", afterCreate: "data.t.afterCreate",
 		beforeUpdate: "data.t.beforeUpdate", afterUpdate: "data.t.afterUpdate",
+		created: "data.t.created", updated: "data.t.updated",
 	}
 	if err := checkDataHookPoints(catalog, map[string]tableHookPoints{"t": points}); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
 		t.Errorf("wrong phase: %v, want a configuration error", err)

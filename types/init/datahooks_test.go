@@ -15,6 +15,7 @@ import (
 
 type recordingDispatcher struct {
 	before, after []*types.HookContext
+	committed     []*types.HookContext // dispatched with RunAfter
 	rewrite       behemoth.M
 	afterErr      error
 }
@@ -27,7 +28,7 @@ func (d *recordingDispatcher) RunBefore(hctx *types.HookContext, point types.Hoo
 	return payload, nil
 }
 func (d *recordingDispatcher) RunAfter(hctx *types.HookContext, point types.HookPoint, result any) error {
-	d.after = append(d.after, hctx)
+	d.committed = append(d.committed, hctx)
 	return nil
 }
 func (d *recordingDispatcher) RunAfterTx(hctx *types.HookContext, point types.HookPoint, result any) error {
@@ -149,5 +150,30 @@ func TestDataHooksPublishTheStoreAndReturnAfterErrors(t *testing.T) {
 	}
 	if err := h.AfterCreate(ctx, tx, "audit_events", &models.User{}); err != nil {
 		t.Errorf("unmapped table: AfterCreate = %v", err)
+	}
+}
+
+// The committed notifications dispatch the after-commit points with RunAfter:
+// no transaction is published, and an update carries the row's id.
+func TestDataHooksDispatchCommittedPoints(t *testing.T) {
+	d := &recordingDispatcher{}
+	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	ctx := context.Background()
+
+	h.CreateCommitted(ctx, "users", &models.User{ID: "u1"})
+	h.UpdateCommitted(ctx, "users", &models.User{ID: "u1"})
+	h.CreateCommitted(ctx, "audit_events", &models.User{})
+	if len(d.committed) != 2 || len(d.after) != 0 {
+		t.Fatalf("dispatched %d with RunAfter and %d with RunAfterTx, want 2 and 0", len(d.committed), len(d.after))
+	}
+	created, updated := d.committed[0], d.committed[1]
+	if created.Point != hooks.HookUserCreated || updated.Point != hooks.HookUserUpdated {
+		t.Errorf("points = %q, %q", created.Point, updated.Point)
+	}
+	if created.Tx != nil || updated.Tx != nil {
+		t.Error("an after-commit point has no transaction to publish")
+	}
+	if updated.Values[hooks.HookValueUserID] != "u1" {
+		t.Errorf("the updated point should carry the row's id: %v", updated.Values)
 	}
 }

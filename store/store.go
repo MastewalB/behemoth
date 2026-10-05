@@ -53,6 +53,15 @@ type Hooks interface {
 	// commits, with the stored row. Its error fails the update and rolls it
 	// back.
 	AfterUpdate(ctx context.Context, tx *Store, table string, updated behemoth.Model) error
+
+	// CreateCommitted and UpdateCommitted run once the outermost transaction
+	// the write belongs to has committed (see Store.AfterCommit). They are
+	// not called when it rolls back. They get no tx, because there is none
+	// any more, and return no error, because nothing can be undone. They are
+	// best effort: a process that stops between the commit and the call
+	// never makes it.
+	CreateCommitted(ctx context.Context, table string, created behemoth.Model)
+	UpdateCommitted(ctx context.Context, table string, updated behemoth.Model)
 }
 
 // Store is the single implementation of behemoth's data layer.
@@ -64,6 +73,15 @@ type Store struct {
 	newID     func() string
 	now       func() time.Time
 	inTx      bool // db is a transaction; see Transaction
+	// commit collects the callbacks to run once the transaction s is bound
+	// to has committed. nil on a Store that is not bound to one.
+	commit *commitQueue
+}
+
+// commitQueue holds the after-commit callbacks of one transaction attempt,
+// in the order they were added.
+type commitQueue struct {
+	fns []func(ctx context.Context)
 }
 
 // Option configures a Store.
@@ -110,6 +128,8 @@ func (noHooks) BeforeUpdate(_ context.Context, _ *Store, _ string, _ any, change
 	return changes, nil
 }
 func (noHooks) AfterUpdate(context.Context, *Store, string, behemoth.Model) error { return nil }
+func (noHooks) CreateCommitted(context.Context, string, behemoth.Model)           {}
+func (noHooks) UpdateCommitted(context.Context, string, behemoth.Model)           {}
 
 // DB returns the database adapter the Store writes through. On a Store bound
 // to a transaction (the tx Transaction hands to fn, or HookContext.Tx in a
@@ -140,15 +160,58 @@ func (s *Store) DB() behemoth.Database { return s.db }
 // wants atomicity can call Transaction whether or not its caller already did.
 //
 // Data hooks fired by writes inside fn run inside the transaction too; see
-// Hooks. There is no after-commit hook: work that should only happen once the
-// transaction has committed belongs after Transaction returns.
+// Hooks. Callbacks added with AfterCommit, the data hooks' committed
+// notifications among them, run after the transaction has committed and
+// before Transaction returns.
 func (s *Store) Transaction(ctx context.Context, fn func(ctx context.Context, tx *Store) error) error {
 	if s.inTx {
 		return fn(ctx, s)
 	}
-	return s.db.Transaction(ctx, func(ctx context.Context, db behemoth.Database) (any, error) {
+	// The database may run the callback more than once (MongoDB retries a
+	// transaction on a transient error), so each attempt gets a queue of its
+	// own and only the one that committed is run.
+	var committed *commitQueue
+	err := s.db.Transaction(ctx, func(txCtx context.Context, db behemoth.Database) (any, error) {
+		queue := &commitQueue{}
 		tx := *s
-		tx.db, tx.inTx = db, true
-		return nil, fn(ctx, &tx)
+		tx.db, tx.inTx, tx.commit = db, true, queue
+		if err := fn(txCtx, &tx); err != nil {
+			return nil, err
+		}
+		committed = queue
+		return nil, nil
 	})
+	if err != nil {
+		return err
+	}
+	// ctx, not the callback's context: on MongoDB that one carries a session
+	// that has ended.
+	for _, run := range committed.fns {
+		run(ctx)
+	}
+	return nil
+}
+
+// AfterCommit runs fn once the transaction s is bound to has committed. On a
+// Store that is not bound to a transaction there is nothing to wait for, and
+// fn runs at once with ctx.
+//
+// Inside a transaction, fn is queued. A transaction that fn's caller joined
+// (Transaction called on a bound Store, as sign-up does around the user and
+// its account) is one transaction: fn waits for the outermost one. If it
+// rolls back, fn is dropped. Queued callbacks run in the order they were
+// added, in the goroutine that called Transaction, before it returns. They
+// get the context Transaction was called with, not ctx, and the root Store
+// is what they should write through: the transaction is over.
+//
+// It is best effort. The queue is in memory, so a process that stops after
+// the commit and before fn has run never runs it. Work that must not be lost
+// needs a row written inside the transaction (an outbox) and a worker that
+// reads it.
+func (s *Store) AfterCommit(ctx context.Context, fn func(ctx context.Context)) {
+	if s.commit == nil {
+		fn(ctx)
+		return
+	}
+	s.commit.fns = append(s.commit.fns, fn)
 }

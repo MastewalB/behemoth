@@ -31,6 +31,7 @@ Nothing enforces this. The adapter accepts any declared model, and a write to a 
 | --- | --- | --- |
 | `data.user.beforeCreate`, `data.user.beforeUpdate` | the store | Other plugins' handlers don't run. A plugin that fills its own column on `users`, or rejects certain emails, is bypassed. A contributed `NOT NULL` column without a default then fails the insert. |
 | `data.user.afterCreate`, `data.user.afterUpdate` | the store | Rows that other plugins add next to a user (a profile, an audit entry) are not written. |
+| `data.user.created`, `data.user.updated` (after commit) | the store | Plugins that react to new or changed users (a welcome email, a stats counter) are not told. |
 | The transaction around the write and its hooks | the store | Your write is a single statement. Wrap it yourself if it belongs with other writes. |
 | Email normalization (trim, lowercase) | the store | A user stored as `Ada@Example.com` is not found by `FindUserByEmail`, and can sign up a second time as `ada@example.com`. `store.NormalizeEmail` is exported if you need the same form. |
 

@@ -43,7 +43,11 @@ func (s *Store) create(ctx context.Context, m behemoth.Model) error {
 			return err
 		}
 		// The hook's error rolls the insert back; returned as-is.
-		return tx.hooks.AfterCreate(ctx, tx, m.SchemaName(), m)
+		if err := tx.hooks.AfterCreate(ctx, tx, m.SchemaName(), m); err != nil {
+			return err
+		}
+		tx.committed(ctx, m.SchemaName(), func(ctx context.Context) { tx.hooks.CreateCommitted(ctx, m.SchemaName(), m) })
+		return nil
 	})
 }
 
@@ -85,7 +89,12 @@ func (s *Store) update(ctx context.Context, m behemoth.Model, id any, changes be
 			return err
 		}
 		// The hook's error rolls the update back; returned as-is.
-		return tx.hooks.AfterUpdate(ctx, tx, m.SchemaName(), updated)
+		if err := tx.hooks.AfterUpdate(ctx, tx, m.SchemaName(), updated); err != nil {
+			return err
+		}
+		row := updated
+		tx.committed(ctx, m.SchemaName(), func(ctx context.Context) { tx.hooks.UpdateCommitted(ctx, m.SchemaName(), row) })
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -107,6 +116,15 @@ func (s *Store) hooked(ctx context.Context, table string, write func(ctx context
 		return write(ctx, s)
 	}
 	return s.Transaction(ctx, write)
+}
+
+// committed queues notify, a table's committed notification, to run once the
+// write's transaction has committed. A table without hooks has nobody to
+// notify and may be written outside any transaction, so nothing is queued.
+func (s *Store) committed(ctx context.Context, table string, notify func(ctx context.Context)) {
+	if s.hooks.Fires(table) {
+		s.AfterCommit(ctx, notify)
+	}
 }
 
 // checkUpdate rejects changes that touch the primary key or name a column m's

@@ -890,6 +890,9 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 		{Point: hooks.HookUserAfterCreate, Owner: coreOwner, Phase: types.AfterHookPhase},
 		{Point: hooks.HookUserBeforeUpdate, Owner: coreOwner, Phase: types.BeforeHookPhase},
 		{Point: hooks.HookUserAfterUpdate, Owner: coreOwner, Phase: types.AfterHookPhase},
+		// fired once the write's transaction has committed
+		{Point: hooks.HookUserCreated, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookUserUpdated, Owner: coreOwner, Phase: types.AfterHookPhase},
 	}
 	for _, p := range points {
 		if err := ic.Hooks.Declare(p); err != nil {
@@ -1257,8 +1260,9 @@ func (d *DefaultDispatcher) RunAfterTx(hctx *types.HookContext, point types.Hook
 		}
 	}
 	// No recordAudit here: the write can still be rolled back, and an audit
-	// event must not describe a row that never existed. Deferred until there
-	// is an after-commit hook.
+	// event must not describe a row that never existed. The after-commit
+	// points (data.user.created, ...) are dispatched with RunAfter, which
+	// does record.
 	return nil
 }
 

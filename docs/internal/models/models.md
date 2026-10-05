@@ -314,6 +314,32 @@ All four dispatcher methods start with `DefaultDispatcher.checkPhase`. A point t
 
 `dataHooks.AfterCreate` and `AfterUpdate` call `RunAfterTx` and return its error to the store. Before hooks need no second entry point: `RunBefore` already stops at the first error.
 
+### **After commit: the commit queue**
+
+`data.user.created` and `data.user.updated` fire once the write's transaction has committed. The store does not know hook points; it has a queue of callbacks per transaction and two more `store.Hooks` methods.
+
+1. `Store.Transaction` creates a `commitQueue` and puts it on the bound store (`tx.commit`). A `Transaction` call on a bound store returns that same store, so a joined transaction shares the queue of the outermost one.
+2. `Store.create` and `Store.update` queue a call to `Hooks.CreateCommitted` or `Hooks.UpdateCommitted` after the in-transaction after hook has succeeded (`Store.committed`). A table that fires no hooks queues nothing.
+3. When the adapter's `Transaction` returns nil, `Store.Transaction` runs the queue in order, with the context it was called with, and then returns. When it returns an error, the queue is dropped.
+4. `dataHooks.CreateCommitted` and `UpdateCommitted` dispatch the point with `RunAfter`: handler errors are logged, an audit event is recorded if the point declares one, and `HookContext.Tx` is nil.
+
+Sign-up shows why the queue belongs to the outermost transaction:
+
+| Step | Queue |
+| --- | --- |
+| `Store.Transaction` opens | empty |
+| `tx.CreateUser`: before hook, insert, after hook | `created(user)` |
+| `tx.CreateAccount` fails | dropped with the rollback; nothing fires |
+| `tx.CreateAccount` succeeds, commit | runs: `data.user.created` fires |
+
+Details that matter:
+
+- **A queue per attempt.** MongoDB may run the transaction callback more than once. Each attempt gets a fresh queue, and only the queue of the attempt that committed is run, so a retried write is reported once.
+- **The context.** Callbacks get the context of the `Store.Transaction` call. The callback's own context carries the MongoDB session, which has ended by then.
+- **`Store.AfterCommit(ctx, fn)` is public.** A handler or a flow can queue its own callback. On a store that is not bound to a transaction it runs `fn` at once.
+- **Callbacks run synchronously**, before `Transaction` returns, in the calling goroutine. A callback's panic is not recovered by the store; the dispatcher recovers handler panics.
+- **Adapter-level transactions are not seen.** Only `Store.Transaction` owns a queue. A transaction opened directly on the adapter around store calls does not delay the notifications of those calls.
+
 ### **What a rollback does not undo**
 
 - **Key-value writes.** A hook that writes to `KeyValueStorage` (Redis, a KV-backed token) leaves that write behind. Only database writes through `HookContext.Tx` are covered.
@@ -326,8 +352,8 @@ All four dispatcher methods start with `DefaultDispatcher.checkPhase`. A point t
 
 ### **Limits to know**
 
-- `[Not built]` **There is no after-commit hook.** A handler that wants to write to the database without being able to fail the main write has no Tier 1 place to do it. Until one exists, that work goes in the Tier 2 after hook of the operation (`auth.signUp.after`).
-- `[Not built]` **Data points are not audited.** `RunAfterTx` skips the audit record even when the point declares `Audit`, because the row can still be rolled back and the audit log would describe a write that never happened. The `data.user.*` points declare no `Audit` today. Auditing them is deferred to the after-commit hook.
+- **After-commit delivery is best effort.** The queue is in memory. A process that stops between the commit and the callbacks never runs them. There is no outbox in core; see the decision below.
+- **The in-transaction after points are not audited.** `RunAfterTx` skips the audit record even when the point declares `Audit`, because the row can still be rolled back. The after-commit points are dispatched with `RunAfter`, which records. Core declares no `Audit` on any data point today.
 - **A hook can run more than once on MongoDB.** The Mongo adapter uses `session.WithTransaction`, which runs its callback again on a transient error. A hooked write and its hooks are inside that callback. Writes through `HookContext.Tx` and `Tx.DB()` are rolled back between attempts, so they are unaffected. Anything else a hook does is repeated.
 - **Hooked writes need transaction support.** A write to a table that fires hooks always opens a transaction. MongoDB only supports transactions on a replica set or sharded cluster, so the MongoDB adapter requires one. `Boot` fails on a standalone server (`behemoth.TransactionChecker`, see [`../database/adapters/transactions.md`](../database/adapters/transactions.md)).
 - **Hooks hold the transaction open.** A slow handler keeps locks for as long as it runs. On SQLite that blocks every other writer.
@@ -340,7 +366,16 @@ All four dispatcher methods start with `DefaultDispatcher.checkPhase`. A point t
 - *After hooks stay as they were, with a documented warning.* No code change. Handlers still can't write in the transaction or abort, so the only safe handler is one that does nothing durable.
 - *Before and after hooks both run inside the transaction, and an after-hook error rolls back.* A handler can add related rows atomically and veto the write. Handlers must avoid work a rollback can't undo, and the dispatcher needs an after-dispatch that returns errors.
 **Decision:** The third option. It matches what a data hook is for, plugins adding their own rows and columns to a write, and it gives after hooks a contract that is the same inside and outside a caller's transaction. Irreversible side effects already have a home in Tier 2, which fires after commit. Tier 2 after hooks keep the log-and-continue behaviour.
-**Revisit if:** handlers need to write to the database after a write without being able to fail it. That calls for an after-commit hook next to these, not for changing them.
+**Revisit if:** the in-transaction contract proves too strict for common handlers. Work that must not fail the write has its own points now (`data.user.created`, see the next decision).
+
+### After-commit data hooks use an in-memory queue
+**Context:** The in-transaction after hook can't mean "this row is committed", and the Tier 2 after points only cover one flow each. With OAuth, users are created by more than one flow, and a plugin that reacts to every new user would have to know all of them. Data points also could not be audited.
+**Options considered:**
+- *Fire after the single write.* Simple, but wrong inside a caller's transaction: sign-up's user would be reported before the account insert that can still roll it back.
+- *An in-memory queue on the outermost transaction, run after commit.* Correct for nested writes and cheap. A process that stops between the commit and the callbacks loses them. This is what better-auth's `queueAfterTransactionHook`, Rails' `after_commit` and Django's `transaction.on_commit` do.
+- *A transactional outbox in core.* The event is a row written in the same transaction, and a worker delivers it at least once. Nothing is lost on a crash. Core would own a table, a worker, retries and cleanup, and every handler would have to be idempotent.
+**Decision:** The in-memory queue, documented as best effort. It covers the common uses (emails, stats, cache updates). An application that needs guaranteed delivery writes its own outbox row from `data.user.afterCreate` through `HookContext.Tx`, which is atomic with the user row, and runs its own worker. The API docs describe that recipe.
+**Revisit if:** core features need guaranteed delivery themselves (for example an audit log that must not miss a write, or webhooks as a built-in feature). An outbox in core would then be justified.
 
 ### An undeclared hook point is a configuration error, not a panic
 **Context:** `checkPhase` panicked when a point was dispatched without being declared, or in the wrong phase. Core fired the `auth.*`, `auth.session.*` and `token.*` points without declaring them, so sign-in, session creation and token issue panicked under a real `Boot`. Every other setup mistake (a duplicate declaration, a handler on an unknown point, a reserved owner name) is returned as a `ConfigurationError`.

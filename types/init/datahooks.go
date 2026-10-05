@@ -14,9 +14,14 @@ import (
 // tableHookPoints are the data hook points fired around writes to one table.
 // idValue is the HookContext.Values key an update's target id is published
 // under (the payload carries only the changes).
+//
+// created and updated are the after-commit points: they fire once the
+// transaction the write ran in has committed, not for a write that was
+// rolled back.
 type tableHookPoints struct {
 	beforeCreate, afterCreate types.HookPoint
 	beforeUpdate, afterUpdate types.HookPoint
+	created, updated          types.HookPoint
 	idValue                   string
 }
 
@@ -36,6 +41,7 @@ var coreDataHookPoints = map[string]tableHookPoints{
 	"users": {
 		beforeCreate: hooks.HookUserBeforeCreate, afterCreate: hooks.HookUserAfterCreate,
 		beforeUpdate: hooks.HookUserBeforeUpdate, afterUpdate: hooks.HookUserAfterUpdate,
+		created: hooks.HookUserCreated, updated: hooks.HookUserUpdated,
 		idValue: hooks.HookValueUserID,
 	},
 }
@@ -51,6 +57,7 @@ func checkDataHookPoints(catalog types.HookCatalog, points map[string]tableHookP
 		}{
 			{p.beforeCreate, types.BeforeHookPhase}, {p.afterCreate, types.AfterHookPhase},
 			{p.beforeUpdate, types.BeforeHookPhase}, {p.afterUpdate, types.AfterHookPhase},
+			{p.created, types.AfterHookPhase}, {p.updated, types.AfterHookPhase},
 		} {
 			def, ok := catalog.Lookup(want.point)
 			if !ok {
@@ -73,6 +80,12 @@ func checkDataHookPoints(catalog types.HookCatalog, points map[string]tableHookP
 // Data hooks run inside the write's transaction. After hooks are dispatched
 // with RunAfterTx, so a handler's error reaches the store and rolls the write
 // back; Tier 2 after hooks use RunAfter and can't.
+//
+// The committed notifications (CreateCommitted, UpdateCommitted) are the
+// exception: the store calls them after the commit, and they are dispatched
+// with RunAfter like a Tier 2 after hook. A handler's error is logged, an
+// audit event is recorded if the point declares one, and HookContext.Tx is
+// nil.
 type dataHooks struct {
 	ac     *types.AuthContext
 	points map[string]tableHookPoints
@@ -121,8 +134,33 @@ func (h dataHooks) AfterUpdate(ctx context.Context, tx *store.Store, table strin
 	return h.ac.Dispatcher.RunAfterTx(hctx, p.afterUpdate, updated)
 }
 
+func (h dataHooks) CreateCommitted(ctx context.Context, table string, created behemoth.Model) {
+	if p, ok := h.points[table]; ok {
+		h.committed(h.hookContext(ctx, nil, p.created, types.AfterHookPhase), p.created, created)
+	}
+}
+
+func (h dataHooks) UpdateCommitted(ctx context.Context, table string, updated behemoth.Model) {
+	if p, ok := h.points[table]; ok {
+		hctx := h.hookContext(ctx, nil, p.updated, types.AfterHookPhase)
+		hctx.Values[p.idValue] = updated.PrimaryKeyField()
+		h.committed(hctx, p.updated, updated)
+	}
+}
+
+// committed dispatches an after-commit point. The write can't be undone any
+// more, so the only error RunAfter returns (the point can't be dispatched,
+// which Boot's checkDataHookPoints rules out) is logged.
+func (h dataHooks) committed(hctx *types.HookContext, point types.HookPoint, row behemoth.Model) {
+	if err := h.ac.Dispatcher.RunAfter(hctx, point, row); err != nil && h.ac.Telemetry.Logger != nil {
+		h.ac.Telemetry.Logger.Error(hctx.Ctx, "after-commit data hook could not be dispatched",
+			behemoth.M{"point": string(point), "error": err})
+	}
+}
+
 // hookContext builds the context a data hook dispatches with. tx is the
-// store bound to the write's transaction, published as HookContext.Tx. A
+// store bound to the write's transaction, published as HookContext.Tx; it is
+// nil for the after-commit points. A
 // write made while handling a request (the router put it on ctx) carries that
 // request; one made outside any request (a CLI, a job) has none. Values are
 // always fresh: they are scoped to one hook chain.

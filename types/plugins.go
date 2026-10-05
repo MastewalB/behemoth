@@ -349,8 +349,8 @@ type Dispatcher interface {
 	// inside the write's transaction. Unlike RunAfter it stops at the first
 	// handler error (or panic) and returns it, so the store can roll the
 	// write back. It records no audit event, because the write is not
-	// committed yet; auditing data points is deferred until there is an
-	// after-commit hook.
+	// committed yet. The after-commit data points (data.user.created, ...)
+	// are dispatched with RunAfter and can be audited.
 	RunAfterTx(hctx *HookContext, point HookPoint, result any) error
 
 	// Fail dispatches the frozen failed-chain for point with reason.
