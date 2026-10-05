@@ -1,6 +1,16 @@
-// Package sqlserver provides SQLServerAdapter, a behemoth.Database backed by
-// Microsoft SQL Server. It lives in its own module, like the other database
-// adapters, so the core module does not depend on go-mssqldb.
+// Package sqlserver is behemoth's Microsoft SQL Server integration, in its own
+// module so the core module does not depend on go-mssqldb:
+//
+//   - SQLServerAdapter implements behemoth.Database (application reads/writes).
+//   - SQLServerDriver implements the migration interfaces: core.SchemaDriver,
+//     core.MigrationRenderer, core.SchemaIntrospector and core.ColumnNormalizer.
+//
+// Both take the same behemoth.SchemaResolver, so application queries and
+// migrations agree on physical table and column names.
+//
+// The migration driver works with any database/sql SQL Server driver. The
+// adapter classifies errors using go-mssqldb's error type, which is what
+// makes this module depend on it.
 package sqlserver
 
 import (

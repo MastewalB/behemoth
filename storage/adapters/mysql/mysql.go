@@ -1,6 +1,16 @@
-// Package mysql provides MySQLAdapter, a behemoth.Database backed by MySQL. It
-// lives in its own module, like the other database adapters, so the core
-// module does not depend on the MySQL driver.
+// Package mysql is behemoth's MySQL integration, in its own module so the core
+// module does not depend on the MySQL driver:
+//
+//   - MySQLAdapter implements behemoth.Database (application reads/writes).
+//   - MySQLDriver implements the migration interfaces: core.SchemaDriver,
+//     core.MigrationRenderer, core.SchemaIntrospector and core.ColumnNormalizer.
+//
+// Both take the same behemoth.SchemaResolver, so application queries and
+// migrations agree on physical table and column names.
+//
+// The migration driver works with any database/sql MySQL driver. The adapter
+// classifies errors using github.com/go-sql-driver/mysql's error type, which
+// is what makes this module depend on it.
 package mysql
 
 import (

@@ -25,7 +25,7 @@ Behemoth might provide tool-specific generation (for goose or golang-migrate for
 | --- | --- |
 | `types/schema` | The declaration vocabulary shared across packages: `schema.Table`, `Column`, `Index`, `ForeignKey`, `ColumnOverride`, the `ColumnType` and `FK*` action constants, the contribution types, and `schema.Registry` (`DefaultRegistry`, `NewRegistry`). `[Convention, important]` It must never import `types` — it sits below it so `PluginInitContext` can carry a registry without an import cycle. |
 | `migration/core` | Everything about migrating: operations, `Migration`, `MigrationConfig`, `CustomMigration`, introspection/diff, planning, resolution, generation, the runner, `BuildSchemaResolverTable`, and the driver capability interfaces below. |
-| `storage/adapters/postgres`, `storage/adapters/sqlite` | One module per database, each holding the `behemoth.Database` adapter **and** the migration driver, built with the same `SchemaResolver` so application queries and migrations agree on physical names. SQLite is its own module so only applications using it link `go-sqlite3` (and therefore cgo). |
+| `storage/adapters/postgres`, `storage/adapters/sqlite`, `storage/adapters/mysql`, `storage/adapters/sqlserver` | One module per database, each holding the `behemoth.Database` adapter **and** the migration driver, built with the same `SchemaResolver` so application queries and migrations agree on physical names. SQLite is its own module so only applications using it link `go-sqlite3` (and therefore cgo). |
 
 ### **Declaration**
 
@@ -48,9 +48,9 @@ Every migration entry point (`RunGenerateCLI`, `RunGenerate`, `RunMigration`) ta
 | `MigrationRenderer` | optional | Renders a migration as a script (`.sql`) written next to its `.json`. It must be rendered against the state the migration will be applied to. |
 | `ColumnNormalizer` | optional; required in practice for any driver whose DDL loses information | Describes how the driver's DDL changes a declared column, so an unchanged column compares equal. See *Column Comparison*. |
 
-Optional capabilities are discovered by type assertion. The Postgres and SQLite drivers implement all four, and each declares that at compile time.
+Optional capabilities are discovered by type assertion. The Postgres, SQLite, MySQL and SQL Server drivers implement all four, and each declares that at compile time.
 
-`[Implementation Detail]` Rendering: Postgres builds every statement with pure SQL builders, so the script is by construction exactly what `ApplyMigration` executes. SQLite's table rebuilds read the live schema, so its renderer executes `Up` in a transaction that is always rolled back and records every statement. A baseline renders the existing definitions of the tables it records, since its `Up` is never executed.
+`[Implementation Detail]` Rendering: Postgres builds every statement with pure SQL builders, so the script is by construction exactly what `ApplyMigration` executes. SQLite's table rebuilds read the live schema, so its renderer executes `Up` in a transaction that is always rolled back and records every statement. A baseline renders the existing definitions of the tables it records, since its `Up` is never executed. MySQL sits between the two: `ApplyMigration` and `RenderMigration` share one planner whose builders are pure except for an index on a `TEXT`/`BLOB` column, where the column's type is read from the live table unless the migration itself defines the column (see *MySQL Driver*). SQL Server renders the way SQLite does, by applying `Up` in a transaction that is rolled back, because most of its operations read the catalog (see *SQL Server Driver*).
 
 
 # **Introspection/Diff stage - common to both scenarios**
@@ -154,10 +154,16 @@ A driver's DDL cannot always preserve every distinction a declaration makes. The
 | `uuid`, `bytes` (SQLite) | `BLOB` | `blob` |
 | `json` (SQLite) | `TEXT` | `text` |
 | `blob` (Postgres) | `BYTEA` | `bytes` |
-| `string`, no length (both) | `VARCHAR(255)` | `string(255)` |
-| `text` with a `Length` (both) | `TEXT` | `text`, no length |
+| `bytes` (MySQL) | `LONGBLOB` | `blob` |
+| `uuid` (MySQL, SQL Server) | `CHAR(36)` / `NCHAR(36)` | `string(36)` |
+| `json` (SQL Server) | `NVARCHAR(MAX)` | `text` |
+| `bytes` (SQL Server) | `VARBINARY(MAX)` | `blob` |
+| `string` longer than 4000 (SQL Server) | `NVARCHAR(MAX)` | `text` |
+| `timestamp` (MySQL) | `DATETIME(6)` | `datetime` |
+| `string`, no length (all) | `VARCHAR(255)` | `string(255)` |
+| `text` with a `Length` (all) | `TEXT` (`LONGTEXT` on MySQL) | `text`, no length |
 | `bigint` + `AutoInc` (SQLite) | `INTEGER PRIMARY KEY AUTOINCREMENT` | `integer` |
-| primary key declared nullable / unique (both) | `NOT NULL`, no separate `UNIQUE` | not nullable, not unique |
+| primary key declared nullable / unique (all) | `NOT NULL`, no separate `UNIQUE` | not nullable, not unique |
 | default `-1` on an integer (Postgres) | `'-1'::integer` | literal `-1` only if parsed with the column type in mind |
 
 Compared naively, every such column differs on **every** run, and the planner proposes changing it into what it already is (on SQLite, a table rebuild).
@@ -225,6 +231,36 @@ A baseline (Path I, brownfield) records tables into the snapshot that every late
 | primary key → not nullable, not unique | renders `NOT NULL`, or the column is a rowid alias (never NULL) |
 | default → `sqliteDefaultFromStored(storedDefault(col))` | see *Defaults* |
 
+**MySQL** (`storage/adapters/mysql/introspector.go`):
+
+| Rule | Because the DDL… |
+| --- | --- |
+| `Overrides["mysql"].Type` / `.AutoInc` replace the declared ones | renders the override |
+| `uuid` → `string`, length 36 | renders `CHAR(36)` |
+| `timestamp` → `datetime` | renders `DATETIME(6)` for both |
+| `bytes` → `blob` | renders `LONGBLOB` for both |
+| string without a length → length 255 | renders `VARCHAR(255)` |
+| every type except `string` → length 0 | only `CHAR`/`VARCHAR` carry a length |
+| primary key → not nullable, not unique | renders `NOT NULL`; the key implies uniqueness |
+| default → `mysqlDefaultFromStored(storedDefault(col))`, none on an `AUTO_INCREMENT` column | see *Defaults* |
+
+`boolean` needs no rule: it is rendered as `TINYINT(1)`, and the introspector reads `tinyint(1)` back as `boolean` (any other `TINYINT` is an integer).
+
+**SQL Server** (`storage/adapters/sqlserver/introspector.go`):
+
+| Rule | Because the DDL… |
+| --- | --- |
+| `Overrides["sqlserver"].Type` / `.AutoInc` replace the declared ones | renders the override |
+| `uuid` → `string`, length 36 | renders `NCHAR(36)` |
+| `json` → `text` | renders `NVARCHAR(MAX)` |
+| `bytes` → `blob` | renders `VARBINARY(MAX)` for both |
+| string without a length → length 255; longer than 4000 → `text` | renders `NVARCHAR(255)`; `NVARCHAR(n)` stops at 4000, so `NVARCHAR(MAX)` |
+| every type except `string` → length 0 | only character types carry a length |
+| primary key → not nullable, not unique; `AutoInc` → not nullable | renders `NOT NULL`; an identity column can't be `NULL` |
+| default → `sqlServerDefaultFromStored(renderDefaultExpr(col))`, none on an identity column | see *Defaults* |
+
+`datetime` and `timestamp` need no rule here: they are `DATETIME2(6)` and `DATETIMEOFFSET(6)`, which read back as themselves.
+
 ## **Equality — `columnsEqual`**
 
 | Field | Compared | Notes |
@@ -263,6 +299,8 @@ An `OpAlterColumn` that changes `AutoInc` must actually change it, otherwise the
 
 - **Postgres** — *adding*: `DROP DEFAULT` (an identity and a default can't coexist), `ADD GENERATED BY DEFAULT AS IDENTITY`, then `setval(pg_get_serial_sequence(table, column), COALESCE(MAX(column), 0) + 1, false)` so the sequence starts past existing values. *Removing*: `DROP IDENTITY IF EXISTS`, emitted **before** the default clause, since Postgres rejects `SET/DROP DEFAULT` on an identity column; a legacy `serial` column loses its `nextval()` default through the ordinary default clause. Adding to a non-integer column is rejected.
 - **SQLite** — the alter is a table rebuild that re-renders the column, so `AUTOINCREMENT` follows the declaration; the rebuild preserves `sqlite_sequence`, so ids continue past the existing maximum. `AUTOINCREMENT` is only valid on a lone `INTEGER PRIMARY KEY`. Removing it from a rowid alias still lets SQLite assign rowids (possibly reusing them).
+- **MySQL** — every alter is a `MODIFY COLUMN` that restates the whole column, so `AUTO_INCREMENT` follows the declaration whether or not `PrevColumn` is set. Added to a populated column, MySQL continues past the largest existing value on its own (observed: ids 3 and 7, next insert 8). The column must be a key, which MySQL reports itself; a non-integer column is rejected by the driver.
+- **SQL Server** — `IDENTITY` can't be added to or removed from a column in place. The driver compares the live column with the declaration and, when `AutoInc` differs, rebuilds the table (`rebuildTable`, see *SQL Server Driver*). Rows are copied with `IDENTITY_INSERT ON`, which moves a new identity past the largest copied value (observed: ids 3 and 7, next insert 8).
 
 ## **Defaults**
 
@@ -319,11 +357,68 @@ Introspectors report a live default the same way: a literal they can parse becom
 3. **Read back** (`sqliteDefaultFromStored` → `parseSQLiteDefault(text, columnType)`): a single quoted string, a number, `NULL`, `TRUE`/`FALSE` are literals; `0`/`1` on a `BOOLEAN` column read back as booleans; everything else is an expression under `Overrides["sqlite"]` (one more enclosing pair stripped).
 4. **Normalize** = step 3 applied to the text step 2 would report (`storedDefault`): the override expression itself, or the literal's text. Consequently an override that is only a quoted literal (`'{}'`) normalizes — and reads back — as the literal `{}`.
 
+### **MySQL workflow**
+
+1. **Render** (`renderDefaultExpr`): the mysql override as `DEFAULT (expr)`. MySQL requires the parentheses for every expression except `CURRENT_TIMESTAMP`, and with them `now()` is accepted on a `DATETIME(6)` column whatever its precision. Otherwise the literal: `'it''s'` (backslashes doubled), `TRUE`/`FALSE`, `7`. On a `TEXT`, `BLOB` or `JSON` column MySQL accepts no literal default, so the literal is rendered as a quoted string in parentheses: `('it''s')`, `('-1')`. An `AUTO_INCREMENT` column gets no default.
+2. **Store** — observed with a probe against MySQL 8.0.36 (`information_schema.COLUMNS`):
+
+| Written | `COLUMN_DEFAULT` | `EXTRA` |
+| --- | --- | --- |
+| `DEFAULT 'it''s'` | `it's` | |
+| `DEFAULT ''` | empty string (not `NULL`) | |
+| `DEFAULT 'NULL'` | `NULL` as a string; no default is SQL `NULL` | |
+| `DEFAULT 7`, `-1`, `1.5`, `1.50` | `7`, `-1`, `1.5`, `1.5` | |
+| `DEFAULT 1.5` on `DECIMAL(65,30)` | `1.500000000000000000000000000000` | |
+| `DEFAULT TRUE` / `FALSE` | `1` / `0` | |
+| `DEFAULT '2020-01-01'` on `DATETIME(6)` | `2020-01-01 00:00:00.000000` | |
+| `DEFAULT CURRENT_TIMESTAMP(6)` | `CURRENT_TIMESTAMP(6)` | `DEFAULT_GENERATED` |
+| `DEFAULT (CURRENT_TIMESTAMP(6))`, `(NOW(6))` | `now(6)` | `DEFAULT_GENERATED` |
+| `DEFAULT (now())`, `(CURRENT_TIMESTAMP)` on `DATETIME(6)` | `now()` | `DEFAULT_GENERATED` |
+| `DEFAULT (LOCALTIMESTAMP(3))` | `now(3)` | `DEFAULT_GENERATED` |
+| `DEFAULT (UUID())` | `uuid()` | `DEFAULT_GENERATED` |
+| `DEFAULT (1+1)` | `(1 + 1)` | `DEFAULT_GENERATED` |
+| `DEFAULT (7)`, `(1.50)`, `(true)` | `7`, `1.50`, `true` | `DEFAULT_GENERATED` |
+| `DEFAULT (-1)` | `-(1)` | `DEFAULT_GENERATED` |
+| `DEFAULT ('it''s')` | `_utf8mb4\'it\\\'s\'` | `DEFAULT_GENERATED` |
+| `DEFAULT ('a\\b')` (the value `a\b`) | `_utf8mb4\'a\\\\b\'` | `DEFAULT_GENERATED` |
+| `DEFAULT (concat('a', 'b'))` | `concat(_utf8mb4\'a\',_utf8mb4\'b\')` | `DEFAULT_GENERATED` |
+
+   A literal default is bare text. Every parenthesized default is flagged `DEFAULT_GENERATED`, and its text is the expression with each quote and backslash escaped once more. String literals in it get a charset introducer that names the charset of the connection that created the column (`_latin1` from a latin1 client).
+3. **Read back** (`mysqlDefaultFromStored(text, generated, columnType)`):
+   - not generated: the column type decides. `1`/`0` on a boolean column are booleans, a number on a numeric column is a number, anything else is a string.
+   - generated: the text is unescaped (`unescapeStoredExpression`), charset introducers and enclosing parentheses are removed, and then a single quoted string, a number, `true`/`false` are literals; `NULL` is no default; `CURRENT_TIMESTAMP`, `LOCALTIME`, `LOCALTIMESTAMP` and `NOW` are spelled `now(n)`; everything else is an expression under `Overrides["mysql"]`.
+4. **Normalize** = step 3 applied to what step 2 would report (`storedDefault`): the override expression flagged generated, a literal on a `TEXT`/`BLOB`/`JSON` column as its quoted string flagged generated, any other literal as its bare text (`1`/`0` for a boolean).
+
+`[Known limitation]` `-(1)` shows that MySQL rewrites expressions beyond case and spacing. The driver never writes a negative number in parentheses itself (a number on a `TEXT` column is quoted), but an override such as `(-1)` or one with a string literal containing a quote inside a larger expression reads back differently from its declaration and is altered on every run. Declare such defaults in their stored form.
+
+### **SQL Server workflow**
+
+1. **Render** (`renderDefaultExpr`): the sqlserver override expression as written, otherwise the literal: `N'it''s'`, `7`, and `1`/`0` for a boolean (T-SQL has no `TRUE`). A default is a constraint; it is written inline (`DEFAULT expr`) on `CREATE TABLE` and `ADD`, and as `ALTER TABLE … ADD DEFAULT expr FOR column` on an alter. The constraint is left unnamed, so SQL Server names it (`DF__table__column__hash`), and the driver finds it in `sys.default_constraints` when it has to drop it. An identity column gets no default.
+2. **Store** — observed with a probe against SQL Server 2019 (`sys.default_constraints.definition`):
+
+| Written | Stored |
+| --- | --- |
+| `N'it''s'`, `'x'`, `N''` | `(N'it''s')`, `('x')`, `(N'')` |
+| `7`, `-1`, `1.5`, `1.50` | `((7))`, `((-1))`, `((1.5))`, `((1.50))` |
+| `1` / `0` on `BIT` | `((1))` / `((0))` |
+| `'2020-01-01'` on `DATETIME2` | `('2020-01-01')` |
+| `GETDATE()`, `CURRENT_TIMESTAMP` | `(getdate())` |
+| `SYSDATETIMEOFFSET()`, `(sysutcdatetime())`, `NEWID()` | `(sysdatetimeoffset())`, `(sysutcdatetime())`, `(newid())` |
+| `(1+1)` | `((1)+(1))` |
+| `CONVERT(nvarchar(10), 5)` | `(CONVERT([nvarchar](10),(5)))` |
+| `NULL` | `(NULL)` |
+
+   Everything is wrapped in one pair of parentheses and each number in another. Function names are lower-cased, type names bracketed.
+3. **Read back** (`sqlServerDefaultFromStored(expr, columnType)`): enclosing parentheses are removed; a single string literal (`'x'` or `N'x'`) or a number is a literal, and `1`/`0` on a `BIT` column are booleans; `NULL` is no default; `CURRENT_TIMESTAMP` is spelled `getdate()`; everything else is an expression under `Overrides["sqlserver"]`.
+4. **Normalize** = step 3 applied to step 1's output.
+
+`[Known limitation]` SQL Server rewrites expressions beyond case and spacing (`1+1` → `(1)+(1)`, `nvarchar` → `[nvarchar]`). An override it rewrites this way reads back differently from its declaration and is altered on every run. Declare such defaults in their stored form.
+
 ### **Known limitation**
 
-`[Known limitation]` A literal the database **reformats** on storage never compares equal — Postgres stores `'2020-01-01'` on a timestamp column as `'2020-01-01 00:00:00'::timestamp…`. Such a column gets an automatic `SET DEFAULT` on every run: harmless, but noisy. Declare these defaults in their stored form, or as an override expression. A full fix would need each driver to reproduce the database's value formatting; deferred until it matters.
+`[Known limitation]` A literal the database **reformats** on storage never compares equal — Postgres stores `'2020-01-01'` on a timestamp column as `'2020-01-01 00:00:00'::timestamp…`, MySQL as `2020-01-01 00:00:00.000000`. Such a column gets an automatic `SET DEFAULT` on every run: harmless, but noisy. Declare these defaults in their stored form, or as an override expression. A full fix would need each driver to reproduce the database's value formatting; deferred until it matters.
 
-## **Guidance for future drivers (MySQL, SQL Server, MongoDB, …)**
+## **Guidance for future drivers (MongoDB, …)**
 
 `[Convention, important]` **Probe before encoding.** Every storage rule above was observed against the real database (a throwaway container or in-memory instance, a probe table with one column per case, and the catalog query the introspector uses), not recalled. A new driver starts the same way and records its probe table in this document. The points below are what to probe for, not facts to rely on.
 
@@ -338,9 +433,156 @@ Checklist:
 
 Points to probe per database (expected, unverified):
 
-- **MySQL** — `BOOLEAN` is `TINYINT(1)` (a type collapse); `VARCHAR` requires a length; `AUTO_INCREMENT` is reported in `information_schema.COLUMNS.EXTRA`, must be on a key, and continues past the existing maximum on its own; expression defaults (8.0.13+) are flagged `DEFAULT_GENERATED` in `EXTRA`, and literal defaults are reported unquoted in `COLUMN_DEFAULT`; `TEXT`/`BLOB` columns accept only expression defaults.
-- **SQL Server** — defaults are **named constraints** (`sys.default_constraints.definition`), stored wrapped in parentheses (numbers typically doubled: `((0))`, strings `('x')`, functions `(getdate())`); changing a default is drop-constraint-then-add; `IDENTITY` cannot be added to or removed from an existing column with `ALTER COLUMN`, so an auto-increment change needs a rebuild or a column swap; `bit` for booleans, `nvarchar(max)` for unbounded text.
 - **MongoDB / other document stores** — no DDL-level defaults or auto-increment, and no enforced lengths. The driver's `NormalizeColumn` clears `Default`, `AutoInc` and `Length` (whatever the database doesn't store), so those fields always compare equal; core needs no special case. Row consistency is the application's concern there (see *Constraints* for validation).
+
+
+# **MySQL Driver**
+
+`storage/adapters/mysql` holds `MySQLDriver` next to `MySQLAdapter`. It targets MySQL 8.0.13 and later, the first version with expression defaults, and was probed against 8.0.36. MariaDB is not covered: its `JSON` is an alias of `LONGTEXT` and its catalog reports defaults differently.
+
+Type mapping (`renderMySQLType`, reverse in `mysqlTypeMapping`):
+
+| Canonical | Created as | Read back as |
+| --- | --- | --- |
+| `string` | `VARCHAR(n)`, 255 without a length | `string` (`CHAR` too) |
+| `text` | `LONGTEXT` | `text` (all four `TEXT` sizes) |
+| `int` | `INT` | `int` (`TINYINT`, `SMALLINT`, `MEDIUMINT` too) |
+| `bigint` | `BIGINT` | `bigint` |
+| `real` | `DOUBLE` | `real` (`FLOAT` too) |
+| `numeric` | `DECIMAL(65,30)` | `numeric` |
+| `bool` | `TINYINT(1)` | `bool` |
+| `datetime`, `timestamp` | `DATETIME(6)` | `datetime` (`TIMESTAMP` too) |
+| `uuid` | `CHAR(36)` | `string(36)` |
+| `json` | `JSON` | `json` |
+| `bytes`, `blob` | `LONGBLOB` | `blob` (`BINARY`/`VARBINARY` read back as `bytes`) |
+
+`ENUM`, `SET`, `DATE`, `TIME`, `YEAR`, `BIT`, spatial types and generated columns are reported as text with an ambiguity.
+
+How each operation is applied:
+
+| Operation | Statement |
+| --- | --- |
+| create table | `CREATE TABLE` with the columns, `PRIMARY KEY (…)` and one `UNIQUE KEY` per unique column |
+| add column | `ALTER TABLE … ADD COLUMN …`, plus `, ADD UNIQUE KEY …` in the same statement for a unique column |
+| alter column | `ALTER TABLE … MODIFY COLUMN <full definition>`, plus `, ADD UNIQUE KEY …` / `, DROP INDEX …` when `PrevColumn` says uniqueness changed |
+| rename column | `ALTER TABLE … RENAME COLUMN … TO …` |
+| drop column | `ALTER TABLE … DROP COLUMN …`; MySQL removes the column from its indexes |
+| add / drop index | `CREATE [UNIQUE] INDEX … ON …` / `DROP INDEX … ON …` (index names are per table, so `OpDropIndex` needs its `Table`) |
+| add / drop foreign key | `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY …` / `ALTER TABLE … DROP FOREIGN KEY …` |
+
+Every operation is one statement, and MySQL 8 runs a single DDL statement atomically. A column and its unique key therefore succeed or fail together.
+
+### Apply order under best-effort atomicity
+**Context:** MySQL commits each DDL statement as it runs, so `ApplyMigration` cannot roll back a migration that fails midway (`AtomicityBestEffort`). The Postgres order (DDL, then the ledger insert, all in one transaction) would run the DDL of an already recorded migration before the duplicate ledger row stops it.
+**Options considered:**
+- *Postgres order.* Simple, but a reapplied migration executes its DDL and only then fails.
+- *Ledger row first, DDL second.* Stops a reapply, but a migration that fails midway is recorded as applied.
+- *Check first, DDL second, record last.* Plan every statement, create the bookkeeping tables, look the ID up in the ledger, run the DDL, then write the ledger row and the snapshot in one transaction.
+**Decision:** the third. A malformed migration (unknown kind, missing payload, unrenderable type) and a recorded one both fail before the first statement. A failure during the DDL leaves the earlier operations applied and the migration unrecorded; the error lists the operations that stay applied. Everything runs on one `*sql.Conn` holding `GET_LOCK('behemoth.migration.<hash of the ledger table>', -1)`, MySQL's session-scoped counterpart of Postgres's advisory lock, so two migrators can't interleave. The server releases the lock if the session dies.
+**Revisit if:** the runner gains a recovery path for partially applied migrations; it would need the ledger to record which operations ran.
+
+### `DATETIME(6)` for both `datetime` and `timestamp`
+**Context:** MySQL's `TIMESTAMP` ends in January 2038 and converts values through the session time zone. Expiry times of long-lived tokens can reach past 2038 today.
+**Options considered:**
+- *`TIMESTAMP(6)` for `timestamp`.* Keeps the two canonical types apart, with the 2038 limit and results that depend on each connection's `time_zone`.
+- *`DATETIME(6)` for both.* No range limit, and a value round-trips through `go-sql-driver/mysql` as written (it formats `time.Time` in its `loc`, UTC by default). The two canonical types collapse.
+**Decision:** `DATETIME(6)` for both, with a normalization rule (`timestamp` → `datetime`). The introspector maps a live `TIMESTAMP` column to `datetime` as well, so an existing table that uses `TIMESTAMP` matches either declaration instead of raising a type change on every run. Six fractional digits match Postgres's microseconds.
+**Revisit if:** the canonical model gains a way to ask for a native type by name.
+
+### Indexes on `TEXT` and `BLOB` columns
+**Context:** MySQL can't index a `TEXT` or `BLOB` column whole; the key part needs a prefix length. The canonical `Index` has no such field, and core's own schema and the driver suite index `text` columns.
+**Options considered:**
+- *Fail.* Honest, but `text` columns could then never be indexed or unique on MySQL.
+- *Always add a prefix.* Not valid on other column types.
+- *Add a prefix where the column needs one.* The builder has to know the column's type, which an `OpAddIndex` doesn't carry.
+**Decision:** the third, with a fixed prefix of 255 (`keyPrefixLength`; 1020 bytes in utf8mb4, so three such columns fit InnoDB's 3072-byte key). `keyPrefixes` learns column types from the migration's own operations (create table, add, alter and rename column) and reads `information_schema.COLUMNS` for any other column. This is why `RenderMigration` should run against the database the migration will be applied to. The introspector ignores `SUB_PART`, so the index reads back as declared. `[Known limitation]` A unique key or unique index on such a column enforces uniqueness of the first 255 characters only. Changing an indexed column to `text` fails with MySQL's error 1170; drop the index first.
+**Revisit if:** `schema.Index` gains per-column lengths.
+
+### Unique columns are named unique keys
+**Context:** MySQL has no unique constraint apart from a unique index, so `Column.Unique` and a declared `Index{Unique: true}` on one column are the same kind of object live. The introspector has to tell them apart, and `OpAlterColumn` has to drop the key of a column that stops being unique.
+**Options considered:**
+- *Inline `UNIQUE`.* MySQL names the key after the column, or `<column>_2` when that name is taken, so the name can't be predicted.
+- *A named key, `<table>_<column>_key`.* The same convention as the Postgres driver.
+**Decision:** the named key (`uniqueKeyName`, from physical names). A name over 64 characters, which MySQL rejects, is cut and ends in a hash of the full name. `classifyKeys` reads a single-column unique key as `Column.Unique` when it has that name or the column's own name (what an inline `UNIQUE` on an existing table produced); any other unique key is an `Index`. `MODIFY COLUMN` never mentions uniqueness, so an alter without `PrevColumn` leaves it alone, as on Postgres.
+
+### Adding a `NOT NULL` column without a default
+**Context:** Postgres and SQLite reject adding such a column to a table with rows, and the driver suite expects that. MySQL fills the rows with the type's implicit value (`''`, `0`) instead, even in strict mode (observed).
+**Options considered:** let MySQL fill the rows; or check for rows first.
+**Decision:** `ApplyMigration` runs `SELECT 1 FROM <table> LIMIT 1` right before the statement and fails when a row exists (`emptyTableGuard`). The check is not a statement, so the rendered script doesn't contain it: someone running the script by hand gets MySQL's behavior.
+
+### The index MySQL creates for a foreign key
+**Context:** InnoDB needs an index on a foreign key's columns. When none starts with them, `ADD CONSTRAINT` creates one named after the constraint (after the first column for an unnamed constraint), and `DROP FOREIGN KEY` leaves it behind.
+**Decision:** the introspector leaves that index out (`classifyKeys`: non-unique, on exactly the key's columns, named after the key or its first column), so it never shows as an extra live index. `OpDropForeignKey` drops the constraint only: the operation can't tell an index MySQL created from one the application declared under the same name. Once the key is gone the index is reported like any other index. See `docs/ongoing.md`.
+
+
+# **SQL Server Driver**
+
+`storage/adapters/sqlserver` holds `SQLServerDriver` next to `SQLServerAdapter`. It was probed against SQL Server 2019 and uses nothing newer than 2016 (filtered indexes, `THROW`, `DATETIMEOFFSET`). It works in the connection's default schema (`SCHEMA_NAME()`).
+
+DDL is transactional, so the driver reports `AtomicityFull` and applies like Postgres: one transaction holding `sp_getapplock` (`@LockOwner = 'Transaction'`, keyed on the ledger table) around the operations, the ledger insert and the snapshot write.
+
+Type mapping (`renderSQLServerType`, reverse in `mapSQLServerType`):
+
+| Canonical | Created as | Read back as |
+| --- | --- | --- |
+| `string` | `NVARCHAR(n)`, 255 without a length, `MAX` above 4000 | `string` (`VARCHAR`, `CHAR`, `NCHAR` too) |
+| `text` | `NVARCHAR(MAX)` | `text` (`VARCHAR(MAX)`, `TEXT`, `NTEXT` too) |
+| `int` | `INT` | `int` (`SMALLINT`, `TINYINT` too) |
+| `bigint` | `BIGINT` | `bigint` |
+| `real` | `FLOAT` | `real` (`REAL` too) |
+| `numeric` | `DECIMAL(38,10)` | `numeric` (`NUMERIC`, `MONEY`, `SMALLMONEY` too) |
+| `bool` | `BIT` | `bool` |
+| `datetime` | `DATETIME2(6)` | `datetime` (`DATETIME`, `SMALLDATETIME` too) |
+| `timestamp` | `DATETIMEOFFSET(6)` | `timestamp` |
+| `uuid` | `NCHAR(36)` | `string(36)`; a live `UNIQUEIDENTIFIER` reads back as `uuid` |
+| `json` | `NVARCHAR(MAX)` | `text` |
+| `bytes`, `blob` | `VARBINARY(MAX)` | `blob` (`BINARY(n)`/`VARBINARY(n)` read back as `bytes`) |
+
+`sys.columns.max_length` counts bytes, so an `NVARCHAR`/`NCHAR` length is half of it. `DATE`, `TIME`, `XML`, `rowversion`, `sql_variant`, spatial types and computed columns are reported as text with an ambiguity.
+
+How each operation is applied:
+
+| Operation | Statements |
+| --- | --- |
+| create table | `CREATE TABLE` with the columns and `PRIMARY KEY (…)`, then one `CREATE UNIQUE INDEX` per unique column |
+| add column | `ALTER TABLE … ADD …`, then the unique index for a unique column. SQL Server itself rejects a `NOT NULL` column without a default on a table with rows. |
+| alter column | drop the default constraint; if type, length or nullability differ from the live column: drop the indexes on the column, `ALTER COLUMN`, create them again; add the default; add or drop the column's unique index when `PrevColumn` says uniqueness changed. A change of `AutoInc` rebuilds the table instead. |
+| rename column | `EXEC sp_rename …, 'COLUMN'`; filtered indexes on the column are dropped before and created after; the column's unique index is renamed with it |
+| drop column | drop its default constraint and every index it is part of, then `DROP COLUMN` |
+| add / drop index | `CREATE [UNIQUE] INDEX … [WHERE …]` / `DROP INDEX … ON …` |
+| add / drop foreign key | `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY … ON DELETE …` / `DROP CONSTRAINT`. `restrict` is written `NO ACTION`: T-SQL has no `RESTRICT`. |
+
+Observed behavior behind that table (probe, SQL Server 2019): `ALTER COLUMN` accepts a widening or a nullability change on an indexed column with a default, and fails for a type change (`The index … is dependent on column`); `DROP COLUMN` fails for a column with a default or an index; `sp_rename` fails for a column a filtered index names in its predicate; a unique index treats NULLs as equal; an index on `NVARCHAR(MAX)` is rejected (error 1919).
+
+### Operations read the live schema
+**Context:** on Postgres an operation maps to statements that depend on nothing but the operation. On SQL Server most don't: a default constraint has a generated name, the indexes to drop around `ALTER COLUMN` and `DROP COLUMN` are whatever exists, a unique index's filter depends on its columns' nullability, and an identity change recreates the whole table.
+**Options considered:**
+- *Pure builders with dynamic T-SQL* (`DECLARE @n sysname; SELECT @n = name FROM sys.default_constraints …; EXEC(…)`). The script stays independent of the database, but it becomes procedural code nobody can read, and a table rebuild can't be written that way at all.
+- *Read the catalog in Go while applying.* Each statement is plain DDL. The statements then depend on the database the migration runs against.
+**Decision:** read the catalog (`readTable`, `liveIndexes`, `nullableColumns`, `dropDefault`), inside the migration's transaction so an operation sees what the operations before it did. `RenderMigration` follows SQLite's approach: it applies `Up` in a transaction that is always rolled back and prints the statements that ran (`run.exec` records every one). A baseline's tables already exist, so its `Up` is built without being executed (`run.dry`). Rendering therefore takes schema locks on the tables involved for its duration and has to run against the database the migration will be applied to.
+**Revisit if:** rendering against a busy production database turns out to block for too long.
+
+### Unique means a filtered unique index
+**Context:** a SQL Server unique index or `UNIQUE` constraint treats NULLs as equal, so a nullable unique column could hold one NULL. Postgres, SQLite and MySQL allow any number, and the driver suite adds a nullable unique column to a table with two rows.
+**Options considered:** keep SQL Server's behavior and document it; or filter NULLs out of the index.
+**Decision:** `Column.Unique` is a unique *index* named `<table>_<column>_key` (`uniqueKeyName`), not a constraint, and every unique index, the column's or a declared `Index{Unique: true}`, gets `WHERE c IS NOT NULL` for each nullable key column (`indexSQL`). A row with a NULL in the key is then never indexed and never conflicts, which is Postgres's behavior. Indexes on `NOT NULL` columns have no filter. When `ALTER COLUMN` changes nullability, the column's indexes are recreated so the filter follows. The introspector accepts exactly that filter (`isNullFilter`); an index with any other filter, or with included columns, can't be expressed and is left out. It reads a single-column unique index as `Column.Unique` when it has the driver's name or is a `UNIQUE` constraint. `[Known limitation]` SQL Server doesn't accept a filtered index as the target of a foreign key, so a *nullable* unique column can't be referenced by one.
+
+### `uuid` is `NCHAR(36)`, not `UNIQUEIDENTIFIER`
+**Context:** models hold ids as text. `database/sql` drivers return a `UNIQUEIDENTIFIER` as 16 bytes in SQL Server's mixed byte order, which `FromMap` would read as garbage.
+**Options considered:** `UNIQUEIDENTIFIER` with a conversion in every adapter read; or a character column.
+**Decision:** `NCHAR(36)`, the same choice as the MySQL driver. `N` rather than plain `CHAR` because `go-mssqldb` sends Go strings as `NVARCHAR`, and comparing them to a `CHAR` column converts the column and defeats its index. A live `UNIQUEIDENTIFIER` column still reads back as `uuid`, so against a declared `uuid` it shows as a type change the developer can leave as it is.
+**Revisit if:** the adapters gain per-type value conversion.
+
+### An auto-increment change rebuilds the table
+**Context:** `IDENTITY` can't be added or removed with `ALTER COLUMN`, and the driver contract requires both, keeping existing values.
+**Options considered:**
+- *Swap the column* (add a new one, copy, drop the old, rename). Values can't be copied *into* an identity column with `UPDATE`, and the column is usually the primary key that other tables reference.
+- *`ALTER TABLE … SWITCH`* into a twin table. Metadata-only, but it needs identical indexes and constraints on both sides and fails for tables that foreign keys reference.
+- *Rebuild:* create a new table, copy the rows, drop the old one, rename.
+**Decision:** rebuild (`rebuildTable`), in the migration's transaction. The altered column is rendered from its declaration. Every other column is recreated from the catalog in native terms (`liveColumn.nativeDefinition`: type with length, precision or scale, collation when it isn't the database's, identity seed and increment, nullability, default), so a `VARCHAR` or `MONEY` column stays what it was. The primary key, the indexes, the table's foreign keys and the foreign keys other tables hold on it are dropped and created again, with their `ON DELETE` and `ON UPDATE` actions. The rebuild refuses, changing nothing, when the table has something it can't carry over: a check constraint, a trigger, a computed or `rowversion` column, or an index the introspector can't express. Constraint names SQL Server generated (primary key, defaults) change.
+**Revisit if:** check constraints come back into the canonical model.
+
+`[Known limitation]` `text`, `json`, `bytes` and `blob` columns are `MAX` types, which SQL Server can't index, make unique or use in a key at all; there is no prefix index as on MySQL. Give such a column the override `Overrides["sqlserver"].Type = string` (with a `Length`) when it has to be indexed. The driver suite does this for the text columns it indexes (`indexableText`).
 
 
 # **Planning Stage** 

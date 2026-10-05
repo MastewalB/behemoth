@@ -7,8 +7,10 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/storage/adapters/mysql"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	"github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/require"
 
@@ -56,5 +58,72 @@ func TestPostgreSQLDriver(t *testing.T) {
 	t.Run("LedgerReadsBackThroughAdapter", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		readBackThroughAdapter(t, postgres.NewPostgreSQLDriver(db, nil), testutils.SetupPostgresAdapter(db))
+	})
+}
+
+// TestMySQLDriver runs the database-agnostic suite, then the MySQL-specific
+// tests, against one MySQL container.
+func TestMySQLDriver(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a MySQL container")
+	}
+	ctx := context.Background()
+	db, cleanup := testutils.SetupMySQLTestDB(t, ctx)
+	t.Cleanup(cleanup)
+
+	tm := NewMySQLTestManager(db) // the container is torn down by t.Cleanup, after every subtest
+	RunDriverTests(t,
+		func(r core.SchemaResolver) core.SchemaDriver { return mysql.NewMySQLDriver(db, r) },
+		tm,
+	)
+	runMySQLDriverTests(t, db, tm)
+
+	t.Run("RunnerUsesConfiguredTables", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		runnerUsesConfiguredTables(t,
+			func(r behemoth.SchemaResolver) core.SchemaDriver { return mysql.NewMySQLDriver(db, r) },
+			func(r behemoth.SchemaResolver) behemoth.Database { return mysql.NewMySQLAdapter(db, r) },
+			tm,
+		)
+	})
+
+	t.Run("LedgerReadsBackThroughAdapter", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		readBackThroughAdapter(t, mysql.NewMySQLDriver(db, nil), testutils.SetupMySQLAdapter(db))
+	})
+}
+
+// TestSQLServerDriver runs the database-agnostic suite, then the SQL
+// Server-specific tests, against one SQL Server container.
+func TestSQLServerDriver(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a SQL Server container")
+	}
+	ctx := context.Background()
+	db, cleanup := testutils.SetupMSSQLTestDB(t)
+	t.Cleanup(cleanup)
+
+	// The container's port opens before SQL Server accepts logins.
+	require.Eventually(t, func() bool { return db.PingContext(ctx) == nil }, 60*time.Second, 500*time.Millisecond)
+
+	tm := NewSQLServerTestManager(db) // the container is torn down by t.Cleanup, after every subtest
+	RunDriverTests(t,
+		func(r core.SchemaResolver) core.SchemaDriver { return sqlserver.NewSQLServerDriver(db, r) },
+		tm,
+	)
+	runSQLServerDriverTests(t, db, tm)
+
+	t.Run("RunnerUsesConfiguredTables", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		runnerUsesConfiguredTables(t,
+			func(r behemoth.SchemaResolver) core.SchemaDriver { return sqlserver.NewSQLServerDriver(db, r) },
+			func(r behemoth.SchemaResolver) behemoth.Database { return sqlserver.NewSQLServerAdapter(db, r) },
+			tm,
+		)
+	})
+
+	t.Run("LedgerReadsBackThroughAdapter", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		readBackThroughAdapter(t, sqlserver.NewSQLServerDriver(db, nil), testutils.SetupMSSQLAdapter(db))
 	})
 }

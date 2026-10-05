@@ -100,13 +100,18 @@ func (s *DriverTestSuite) TearDownSuite() {
 
 // ---- Fixtures & helpers ----
 
+// indexableText turns a text column the suite puts an index on into a bounded
+// string on SQL Server, which can't index NVARCHAR(MAX) at all. The other
+// drivers ignore the override.
+var indexableText = map[string]schema.ColumnOverride{"sqlserver": {Type: schema.ColTypeString}}
+
 func usersTable() schema.Table {
 	return schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
 			{Name: "email", Type: schema.ColTypeString, Length: 255, Unique: true},
-			{Name: "name", Type: schema.ColTypeText, Nullable: true},
+			{Name: "name", Type: schema.ColTypeText, Nullable: true, Overrides: indexableText},
 			{Name: "status", Type: schema.ColTypeString, Length: 32, Default: "active"},
 		},
 	}
@@ -828,7 +833,7 @@ func (s *DriverTestSuite) TestUpThenDownRoundTrip() {
 	s.seedUsersAndPosts(schema.FKCascade)
 	before := s.columns("users")
 
-	bio := schema.Column{Name: "bio", Type: schema.ColTypeText, Nullable: true}
+	bio := schema.Column{Name: "bio", Type: schema.ColTypeText, Nullable: true, Overrides: indexableText}
 	idx := schema.Index{Name: "idx_users_bio", Columns: []string{"bio"}}
 	s.mustApply(
 		addColumnOp("users", bio),
