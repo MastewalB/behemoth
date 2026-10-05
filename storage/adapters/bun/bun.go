@@ -320,6 +320,12 @@ func (ba *BunAdapter) Count(
 
 // Transaction runs fn in a transaction: a new one on a *bun.DB, a savepoint
 // when the adapter already holds a bun.Tx.
+//
+// The savepoint is bun's behaviour and differs from the plain SQL and MongoDB
+// adapters, which join the open transaction. The results match as long as
+// the caller passes fn's error on. Making this adapter join too is deferred;
+// see "Nested transactions keep each library's behaviour" in
+// docs/internal/database/adapters/transactions.md.
 func (ba *BunAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
 	return ba.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		_, err := fn(ctx, NewBunAdapter(tx, ba.resolver))

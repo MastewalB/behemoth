@@ -74,7 +74,7 @@ The four SQL adapters and MongoDB join. GORM and bun nest with a savepoint, whic
 | returns the inner error | everything rolls back | everything rolls back |
 | swallows the inner error and continues | the inner writes made before the error stay in the transaction | the inner writes are undone, the outer ones stay |
 
-`[Convention]` Pass the inner error on. Code that swallows it behaves differently per adapter, and on Postgres the transaction is unusable anyway (see below).
+`[Convention]` Pass the inner error on. Code that swallows it behaves differently per adapter, and on Postgres the transaction is unusable anyway (see below). The decision to keep the difference, and the alternatives, are recorded under [Nested transactions keep each library's behaviour](#nested-transactions-keep-each-librarys-behaviour).
 
 ---
 
@@ -99,3 +99,37 @@ The four SQL adapters and MongoDB join. GORM and bun nest with a savepoint, whic
 - *Let an adapter report that it has no transactions and have the store run hooked writes without one.* Standalone MongoDB works. An after-hook error can no longer undo the write, a hook's own writes stay behind when the main write fails, and sign-up can leave a user without a credential account. What a data hook may rely on would then depend on how the application's database is deployed.
 **Decision:** Require it, and check it at boot. `behemoth.TransactionChecker` is an optional interface of a `Database`. `Boot` calls `CheckTransactions` before anything is written and fails when it returns an error. `MongoAdapter` implements it with the `hello` command: a replica set member reports `setName`, a `mongos` reports `msg: "isdbgrid"`, and anything else is a standalone server and a configuration error that says how to fix it. The SQL adapters don't implement the interface. The check runs only in `Boot`; code that uses the adapter without `Boot` still gets the driver's error from `Transaction`.
 **Revisit if:** standalone MongoDB has to be supported in production. The second option would then be an explicit opt-in on the adapter, not automatic.
+
+### Nested transactions keep each library's behaviour
+**Context:** Hook handlers get the transaction-bound adapter (`HookContext.Tx.DB()`) and may call `Transaction` on it. The plain SQL adapters and MongoDB join the open transaction. GORM and bun set a savepoint and roll back to it when the inner function fails. The results are the same when the inner error is passed on. They differ when the caller swallows it:
+
+```go
+err := hctx.Tx.DB().Transaction(hctx.Ctx, func(ctx context.Context, db behemoth.Database) (any, error) {
+	if err := db.Create(ctx, &Profile{UserID: id}); err != nil { // succeeds
+		return nil, err
+	}
+	return nil, errors.New("second step failed")
+})
+if err != nil {
+	// swallowed: the handler returns nil and the outer write commits
+}
+```
+
+| Adapter | The profile row after the outer commit |
+| --- | --- |
+| Postgres, MySQL, SQLite, SQL Server, MongoDB | stored: it was written in the outer transaction and nothing undid it |
+| GORM, bun | not stored: the savepoint rollback removed it |
+
+On Postgres through the plain adapter there is a third outcome when the inner failure was a failed statement: the whole transaction is aborted and the outer commit fails.
+
+**Options considered:**
+- *1. Keep the difference and document "pass the inner error on".* No code. Code that follows the rule behaves the same on every adapter, and `Store.Transaction` always joins, so everything that goes through the store is already uniform. A plugin that swallows the error leaves different data depending on the application's adapter.
+- *2. Make GORM and bun join.* On an adapter that is already bound to a transaction, `Transaction` calls `fn(ctx, adapter)` and starts nothing, as the SQL adapters do. All adapters then behave the same, and the change is small:
+  - bun: the adapter holds a `bun.IDB`. When it is a `bun.Tx`, call `fn(ctx, ba)` instead of `RunInTx`.
+  - GORM: `*gorm.DB` does not say whether it is inside a transaction through its type. `Transaction` would mark the adapter it hands to `fn` (a field on `GormAdapter`), and an adapter built from a `*gorm.DB` the application put in a transaction itself would be recognised by its connection pool (`db.Statement.ConnPool` implementing `gorm.TxCommitter`).
+  
+  The cost is that partial rollback is no longer available through these two adapters. Behemoth does not use it. An application that relies on GORM's or bun's savepoints inside a Behemoth callback would lose them.
+- *3. Add savepoints to the plain SQL adapters.* Every SQL adapter would support partial rollback, and rolling back to a savepoint also clears Postgres's aborted state, so a handler could survive a failed statement. Each dialect needs its own syntax (`SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, `SAVE TRANSACTION` on SQL Server) and unique savepoint names for deeper nesting. MongoDB has no savepoints, so the adapters would still not be uniform.
+
+**Decision:** Option 1. The rule is what correct code does anyway, and nothing in Behemoth swallows an inner transaction error. The API docs state the rule where handlers are told about `Tx.DB()`, and the GORM and bun `Transaction` methods carry a comment about the difference.
+**Revisit if:** a plugin bug is traced to the difference, or uniform behaviour across adapters becomes a stated guarantee. Option 2 is then the recommended fix: it is the smaller change and gives one behaviour on every adapter, MongoDB included. Option 3 is worth its cost only if handlers need to recover from a failed statement on Postgres.
