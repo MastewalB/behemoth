@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/types"
 	binit "github.com/MastewalB/behemoth/types/init"
 	_ "github.com/lib/pq"
@@ -14,10 +15,12 @@ import (
 // always see the same plugins, the same schema and therefore the same
 // SchemaResolver.
 
-func plugins() []types.Plugin {
-	return []types.Plugin{
-		&AuditLogPlugin{},
-	}
+// plugins returns the plugin list for Prepare. The email/password plugin is
+// returned a second time by its own type, because the signup command calls
+// its SignUp and SignIn methods directly.
+func plugins() ([]types.Plugin, *emailpassword.Plugin) {
+	ep := emailpassword.New(emailpassword.Options{})
+	return []types.Plugin{ep, &AuditLogPlugin{}}, ep
 }
 
 func prepareConfig() binit.PrepareConfig {

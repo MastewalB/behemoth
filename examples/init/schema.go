@@ -20,6 +20,19 @@ func (t *Todo) PrimaryKeyName() string { return "id" }
 func (t *Todo) PrimaryKeyField() any   { return t.ID }
 func (t *Todo) New() behemoth.Model    { return &Todo{} }
 
+// ToMap and FromMap make the model writable through the database adapter,
+// which works on rows keyed by canonical column name.
+func (t *Todo) ToMap() (map[string]any, error) {
+	return map[string]any{"id": t.ID, "title": t.Title, "done": t.Done}, nil
+}
+
+func (t *Todo) FromMap(row map[string]any) error {
+	t.ID, _ = row["id"].(string)
+	t.Title, _ = row["title"].(string)
+	t.Done, _ = row["done"].(bool)
+	return nil
+}
+
 func declareAppSchema(reg schema.Registry) error {
 	return reg.Declare(&Todo{}, schema.Table{
 		Name:         "todos",

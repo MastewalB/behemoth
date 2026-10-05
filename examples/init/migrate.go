@@ -14,7 +14,8 @@ import (
 // application: Prepare alone is enough, and it already carries the resolver
 // the migration driver needs.
 func migrate(ctx context.Context, confirm bool) error {
-	app, err := binit.Prepare(plugins(), prepareConfig())
+	all, _ := plugins()
+	app, err := binit.Prepare(all, prepareConfig())
 	if err != nil {
 		return err
 	}
