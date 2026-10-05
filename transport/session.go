@@ -25,6 +25,7 @@ type DefaultSessionManager struct {
 	disp   types.Dispatcher
 	tel    *types.Telemetry
 	auth   *types.AuthContext
+	ipCfg  *types.ClientIPConfig // how the client's address is resolved from a request; see requestMeta
 }
 
 func cacheKey(lookupHash string) string { return "session:" + lookupHash }
@@ -33,6 +34,10 @@ func cacheKey(lookupHash string) string { return "session:" + lookupHash }
 // AuthContext the manager belongs to; it is only handed to hook handlers as
 // HookContext.Auth and is not read during construction, so Boot may pass it
 // before all of its fields are set.
+//
+// ipCfg is the client-IP configuration the router uses (trusted proxies and
+// the forwarding header), so a session records the same address rate limiting
+// sees. nil means no proxy is trusted: the address is the direct peer's.
 func NewSessionManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
@@ -41,7 +46,11 @@ func NewSessionManager(
 	disp types.Dispatcher,
 	tel *types.Telemetry,
 	auth *types.AuthContext,
+	ipCfg *types.ClientIPConfig,
 ) types.SessionManager {
+	if ipCfg == nil {
+		ipCfg = &types.ClientIPConfig{}
+	}
 	return &DefaultSessionManager{
 		st:     st,
 		kv:     kv,
@@ -50,11 +59,33 @@ func NewSessionManager(
 		disp:   disp,
 		tel:    tel,
 		auth:   auth,
+		ipCfg:  ipCfg,
 	}
+}
+
+// requestMeta returns the IP address and user agent a new session records.
+// A value the caller set in meta is used as it is. An empty one is taken from
+// the request being handled (types.RequestFrom), and stays empty when ctx
+// carries none: a CLI, a job, or a caller that did not pass on the request's
+// context.
+func (sm *DefaultSessionManager) requestMeta(ctx context.Context, meta types.SessionMeta) (ip, ua string) {
+	ip, ua = meta.IPAddress, meta.UserAgent
+	rc := types.RequestFrom(ctx)
+	if rc == nil || rc.Request == nil {
+		return ip, ua
+	}
+	if ip == "" {
+		ip = types.ClientIP(rc.Request, sm.ipCfg)
+	}
+	if ua == "" {
+		ua = rc.Request.UserAgent()
+	}
+	return ip, ua
 }
 
 func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta types.SessionMeta) (*models.Session, string, error) {
 	const op = "SessionManager.Create"
+	ctx = types.BeginOperation(ctx) // beforeCreate and afterCreate share Values
 
 	if meta.State != types.SessionActive && meta.State != types.SessionPending {
 		return nil, "", behemotherr.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
@@ -95,7 +126,7 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 	if meta.State == types.SessionPending {
 		ttl = sm.cfg.PendingExpiresIn
 	}
-	ip, ua := meta.IPAddress, meta.UserAgent
+	ip, ua := sm.requestMeta(ctx, meta)
 	if !sm.cfg.CaptureIPAndAgent {
 		ip, ua = "", ""
 	}
@@ -351,6 +382,7 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	if m.State == models.SessionRevoked {
 		return nil // already revoked
 	}
+	ctx = types.BeginOperation(ctx) // beforeRevoke and afterRevoke share Values
 
 	if _, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeRevoke, types.BeforeHookPhase), hooks.HookSessionBeforeRevoke,
 		behemoth.M{hooks.HookValueSessionID: m.ID, hooks.HookValueReason: reason}); err != nil {
@@ -425,15 +457,20 @@ func (sm *DefaultSessionManager) cacheDelete(ctx context.Context, lookupHash str
 
 // hookContext builds the context the session and token managers dispatch
 // one hook point with, the way dataHooks.hookContext does for data points.
-// The managers' points are Tier 2, so Tx stays nil. Values are fresh for
-// each dispatch: they are scoped to one hook chain, and the before and after
-// points of an operation are two chains. Request is the request being
-// handled, or nil outside one (a CLI, a job).
+// The managers' points are Tier 2, so Tx stays nil. Values are the
+// operation's: each manager method that fires points calls
+// types.BeginOperation first, so its before and after points share one map,
+// which starts as a copy of the caller's operation (a sign-in's). Request is
+// the request being handled, or nil outside one (a CLI, a job).
 func hookContext(ctx context.Context, auth *types.AuthContext, point types.HookPoint, phase types.HookPhase) *types.HookContext {
+	values := types.HookValuesFrom(ctx)
+	if values == nil {
+		values = behemoth.M{}
+	}
 	return &types.HookContext{
 		Ctx: ctx, Point: point, Phase: phase,
 		Auth:    auth,
-		Values:  behemoth.M{},
+		Values:  values,
 		Request: types.RequestFrom(ctx),
 	}
 }

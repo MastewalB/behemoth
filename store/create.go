@@ -11,13 +11,15 @@ import (
 // create runs BeforeCreate on m's row, inserts the (possibly rewritten) row
 // and runs AfterCreate. Hooks see and return canonical rows (behemoth.M), so
 // m must be Serializable; the hook's rewrite is read back into m before the
-// insert, and m holds exactly what was stored afterwards.
+// insert, and m holds exactly what was stored afterwards. prepare, if set,
+// normalizes the final row (after hooks, so a hook's values are normalized
+// too), as it does for update.
 //
 // The three steps share one transaction (see hooked): an error from either
 // hook or from the insert leaves nothing written. m is not restored on
 // failure, so it may hold an id and a hook's rewrite for a row that doesn't
 // exist.
-func (s *Store) create(ctx context.Context, m behemoth.Model) error {
+func (s *Store) create(ctx context.Context, m behemoth.Model, prepare func(behemoth.M)) error {
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
 		return behemotherr.SerializableNotImplemented()
@@ -36,6 +38,9 @@ func (s *Store) create(ctx context.Context, m behemoth.Model) error {
 		if err := tx.checkColumns(m, row, "Store.Create"); err != nil {
 			return err
 		}
+		if prepare != nil {
+			prepare(row)
+		}
 		if err := ser.FromMap(row); err != nil {
 			return behemotherr.NewValidationError("Store.Create", m.SchemaName(), fmt.Errorf("row rewritten by a before-create hook: %w", err))
 		}
@@ -46,7 +51,6 @@ func (s *Store) create(ctx context.Context, m behemoth.Model) error {
 		if err := tx.hooks.AfterCreate(ctx, tx, m.SchemaName(), m); err != nil {
 			return err
 		}
-		tx.committed(ctx, m.SchemaName(), func(ctx context.Context) { tx.hooks.CreateCommitted(ctx, m.SchemaName(), m) })
 		return nil
 	})
 }
@@ -92,8 +96,6 @@ func (s *Store) update(ctx context.Context, m behemoth.Model, id any, changes be
 		if err := tx.hooks.AfterUpdate(ctx, tx, m.SchemaName(), updated); err != nil {
 			return err
 		}
-		row := updated
-		tx.committed(ctx, m.SchemaName(), func(ctx context.Context) { tx.hooks.UpdateCommitted(ctx, m.SchemaName(), row) })
 		return nil
 	})
 	if err != nil {
@@ -115,16 +117,9 @@ func (s *Store) hooked(ctx context.Context, table string, write func(ctx context
 	if !s.hooks.Fires(table) {
 		return write(ctx, s)
 	}
-	return s.Transaction(ctx, write)
-}
-
-// committed queues notify, a table's committed notification, to run once the
-// write's transaction has committed. A table without hooks has nobody to
-// notify and may be written outside any transaction, so nothing is queued.
-func (s *Store) committed(ctx context.Context, table string, notify func(ctx context.Context)) {
-	if s.hooks.Fires(table) {
-		s.AfterCommit(ctx, notify)
-	}
+	return s.Transaction(ctx, func(ctx context.Context, tx *Store) error {
+		return write(tx.hooks.Begin(ctx, table), tx)
+	})
 }
 
 // checkUpdate rejects changes that touch the primary key or name a column m's

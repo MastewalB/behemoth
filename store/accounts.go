@@ -32,7 +32,7 @@ func (s *Store) CreateAccount(ctx context.Context, a *models.Account) error {
 		}
 		*secret = sealed
 	}
-	return s.create(ctx, a)
+	return s.create(ctx, a, nil)
 }
 
 func (s *Store) FindAccountByID(ctx context.Context, id string) (*models.Account, error) {

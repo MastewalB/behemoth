@@ -81,11 +81,16 @@ func checkDataHookPoints(catalog types.HookCatalog, points map[string]tableHookP
 // with RunAfterTx, so a handler's error reaches the store and rolls the write
 // back; Tier 2 after hooks use RunAfter and can't.
 //
-// The committed notifications (CreateCommitted, UpdateCommitted) are the
-// exception: the store calls them after the commit, and they are dispatched
-// with RunAfter like a Tier 2 after hook. A handler's error is logged, an
-// audit event is recorded if the point declares one, and HookContext.Tx is
-// nil.
+// The after-commit points (created, updated) are the exception. The store
+// has no call for them: AfterCreate and AfterUpdate queue their dispatch on
+// the transaction (Store.AfterCommit), so it runs once the outermost
+// transaction has committed and never for a write that was rolled back. They
+// are dispatched with RunAfter like a Tier 2 after hook: a handler's error
+// is logged, an audit event is recorded if the point declares one, and
+// HookContext.Tx is nil.
+//
+// One write is one operation: its before, after and after-commit points
+// share one HookContext.Values (Begin).
 type dataHooks struct {
 	ac     *types.AuthContext
 	points map[string]tableHookPoints
@@ -96,6 +101,17 @@ var _ store.Hooks = dataHooks{}
 func (h dataHooks) Fires(table string) bool {
 	_, ok := h.points[table]
 	return ok
+}
+
+// Begin opens the operation of one write to table. Its Values start as a
+// copy of the enclosing operation's (a sign-up's, when the flow passed its
+// context to the store), or empty. On a retried transaction the store calls
+// Begin again, so each attempt starts from the enclosing values.
+func (h dataHooks) Begin(ctx context.Context, table string) context.Context {
+	if _, ok := h.points[table]; !ok {
+		return ctx
+	}
+	return types.BeginOperation(ctx)
 }
 
 func (h dataHooks) BeforeCreate(ctx context.Context, tx *store.Store, table string, row behemoth.M) (behemoth.M, error) {
@@ -111,7 +127,12 @@ func (h dataHooks) AfterCreate(ctx context.Context, tx *store.Store, table strin
 	if !ok {
 		return nil
 	}
-	return h.ac.Dispatcher.RunAfterTx(h.hookContext(ctx, tx, p.afterCreate, types.AfterHookPhase), p.afterCreate, created)
+	hctx := h.hookContext(ctx, tx, p.afterCreate, types.AfterHookPhase)
+	if err := h.ac.Dispatcher.RunAfterTx(hctx, p.afterCreate, created); err != nil {
+		return err
+	}
+	h.onCommit(ctx, tx, hctx.Values, p.created, created)
+	return nil
 }
 
 func (h dataHooks) BeforeUpdate(ctx context.Context, tx *store.Store, table string, id any, changes behemoth.M) (behemoth.M, error) {
@@ -131,45 +152,48 @@ func (h dataHooks) AfterUpdate(ctx context.Context, tx *store.Store, table strin
 	}
 	hctx := h.hookContext(ctx, tx, p.afterUpdate, types.AfterHookPhase)
 	hctx.Values[p.idValue] = updated.PrimaryKeyField()
-	return h.ac.Dispatcher.RunAfterTx(hctx, p.afterUpdate, updated)
+	if err := h.ac.Dispatcher.RunAfterTx(hctx, p.afterUpdate, updated); err != nil {
+		return err
+	}
+	h.onCommit(ctx, tx, hctx.Values, p.updated, updated)
+	return nil
 }
 
-func (h dataHooks) CreateCommitted(ctx context.Context, table string, created behemoth.Model) {
-	if p, ok := h.points[table]; ok {
-		h.committed(h.hookContext(ctx, nil, p.created, types.AfterHookPhase), p.created, created)
-	}
-}
-
-func (h dataHooks) UpdateCommitted(ctx context.Context, table string, updated behemoth.Model) {
-	if p, ok := h.points[table]; ok {
-		hctx := h.hookContext(ctx, nil, p.updated, types.AfterHookPhase)
-		hctx.Values[p.idValue] = updated.PrimaryKeyField()
-		h.committed(hctx, p.updated, updated)
-	}
-}
-
-// committed dispatches an after-commit point. The write can't be undone any
-// more, so the only error RunAfter returns (the point can't be dispatched,
-// which Boot's checkDataHookPoints rules out) is logged.
-func (h dataHooks) committed(hctx *types.HookContext, point types.HookPoint, row behemoth.Model) {
-	if err := h.ac.Dispatcher.RunAfter(hctx, point, row); err != nil && h.ac.Telemetry.Logger != nil {
-		h.ac.Telemetry.Logger.Error(hctx.Ctx, "after-commit data hook could not be dispatched",
-			behemoth.M{"point": string(point), "error": err})
-	}
+// onCommit queues the dispatch of point, an after-commit point of the write
+// ctx belongs to, on tx's transaction. The write can't be undone any more
+// when it runs, so the only error RunAfter returns (the point can't be
+// dispatched, which Boot's checkDataHookPoints rules out) is logged.
+//
+// The dispatch keeps values, the write's Values as its after hook left them,
+// but runs with the callback's context: ctx is the transaction's, which has
+// ended by then (on MongoDB it carries the closed session).
+func (h dataHooks) onCommit(ctx context.Context, tx *store.Store, values behemoth.M, point types.HookPoint, row behemoth.Model) {
+	tx.AfterCommit(ctx, func(ctx context.Context) {
+		hctx := h.hookContext(types.ContextWithHookValues(ctx, values), nil, point, types.AfterHookPhase)
+		if err := h.ac.Dispatcher.RunAfter(hctx, point, row); err != nil && h.ac.Telemetry.Logger != nil {
+			h.ac.Telemetry.Logger.Error(hctx.Ctx, "after-commit data hook could not be dispatched",
+				behemoth.M{"point": string(point), "error": err})
+		}
+	})
 }
 
 // hookContext builds the context a data hook dispatches with. tx is the
 // store bound to the write's transaction, published as HookContext.Tx; it is
-// nil for the after-commit points. A
-// write made while handling a request (the router put it on ctx) carries that
-// request; one made outside any request (a CLI, a job) has none. Values are
-// always fresh: they are scoped to one hook chain.
+// nil for the after-commit points. A write made while handling a request
+// (the router put it on ctx) carries that request; one made outside any
+// request (a CLI, a job) has none. Values are the write's (Begin), shared by
+// all of its points.
 func (h dataHooks) hookContext(ctx context.Context, tx *store.Store, point types.HookPoint, phase types.HookPhase) *types.HookContext {
+	values := types.HookValuesFrom(ctx)
+	if values == nil {
+		// Begin was not called: a caller other than the store.
+		values = behemoth.M{}
+	}
 	return &types.HookContext{
 		Ctx: ctx, Point: point, Phase: phase,
 		Auth:    h.ac,
 		Tx:      tx,
-		Values:  behemoth.M{},
+		Values:  values,
 		Request: types.RequestFrom(ctx),
 	}
 }

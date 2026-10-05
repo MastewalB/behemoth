@@ -80,18 +80,34 @@ type recordingHooks struct {
 
 	// committed records the after-commit notifications, in order.
 	committed []string
+
+	// begun counts Begin calls; writes records, per Before and After call,
+	// the number of the write its context belongs to.
+	begun  int
+	writes []any
 }
 
-func (h *recordingHooks) CreateCommitted(_ context.Context, table string, m behemoth.Model) {
-	h.committed = append(h.committed, fmt.Sprint("created ", table, " ", m.PrimaryKeyField()))
-}
-func (h *recordingHooks) UpdateCommitted(_ context.Context, table string, m behemoth.Model) {
-	h.committed = append(h.committed, fmt.Sprint("updated ", table, " ", m.PrimaryKeyField()))
+// reportCommit queues an after-commit notification on the write's store, the
+// way an implementation of store.Hooks does (the store has no call for it).
+func (h *recordingHooks) reportCommit(ctx context.Context, tx *store.Store, what, table string, m behemoth.Model) {
+	tx.AfterCommit(ctx, func(context.Context) {
+		h.committed = append(h.committed, fmt.Sprint(what, " ", table, " ", m.PrimaryKeyField()))
+	})
 }
 
 func (h *recordingHooks) Fires(string) bool { return !h.silent }
 
-func (h *recordingHooks) BeforeUpdate(_ context.Context, _ *store.Store, table string, id any, changes behemoth.M) (behemoth.M, error) {
+type writeKey struct{}
+
+// Begin numbers the writes, so a test can tell that a write's Before and
+// After calls ran with the context Begin returned.
+func (h *recordingHooks) Begin(ctx context.Context, table string) context.Context {
+	h.begun++
+	return context.WithValue(ctx, writeKey{}, h.begun)
+}
+
+func (h *recordingHooks) BeforeUpdate(ctx context.Context, _ *store.Store, table string, id any, changes behemoth.M) (behemoth.M, error) {
+	h.writes = append(h.writes, ctx.Value(writeKey{}))
 	h.updateIDs = append(h.updateIDs, id)
 	seen := behemoth.M{}
 	for k, v := range changes {
@@ -109,13 +125,18 @@ func (h *recordingHooks) BeforeUpdate(_ context.Context, _ *store.Store, table s
 
 func (h *recordingHooks) AfterUpdate(ctx context.Context, tx *store.Store, table string, updated behemoth.Model) error {
 	h.updatedAs = append(h.updatedAs, updated)
+	h.writes = append(h.writes, ctx.Value(writeKey{}))
 	if h.afterUpdate != nil {
-		return h.afterUpdate(ctx, tx, updated)
+		if err := h.afterUpdate(ctx, tx, updated); err != nil {
+			return err
+		}
 	}
+	h.reportCommit(ctx, tx, "updated", table, updated)
 	return nil
 }
 
-func (h *recordingHooks) BeforeCreate(_ context.Context, tx *store.Store, table string, row behemoth.M) (behemoth.M, error) {
+func (h *recordingHooks) BeforeCreate(ctx context.Context, tx *store.Store, table string, row behemoth.M) (behemoth.M, error) {
+	h.writes = append(h.writes, ctx.Value(writeKey{}))
 	h.tables = append(h.tables, table)
 	h.inTx = append(h.inTx, tx)
 	if h.abort != nil {
@@ -130,9 +151,13 @@ func (h *recordingHooks) BeforeCreate(_ context.Context, tx *store.Store, table 
 func (h *recordingHooks) AfterCreate(ctx context.Context, tx *store.Store, table string, created behemoth.Model) error {
 	h.createdAs = append(h.createdAs, created)
 	h.inTx = append(h.inTx, tx)
+	h.writes = append(h.writes, ctx.Value(writeKey{}))
 	if h.afterCreate != nil {
-		return h.afterCreate(ctx, tx, created)
+		if err := h.afterCreate(ctx, tx, created); err != nil {
+			return err
+		}
 	}
+	h.reportCommit(ctx, tx, "created", table, created)
 	return nil
 }
 
@@ -171,6 +196,21 @@ func TestCreateUserRunsHooks(t *testing.T) {
 	assert.Equal(t, "from-hook", stored.Username, "the hook's rewrite is what was stored")
 	require.Len(t, h.createdAs, 1)
 	assert.Same(t, u, h.createdAs[0], "AfterCreate receives the stored model")
+}
+
+// An email a before-create hook sets is normalized like the caller's, so the
+// user is stored in the form FindUserByEmail looks up.
+func TestCreateUserNormalizesAHooksEmail(t *testing.T) {
+	ctx := context.Background()
+	h := &recordingHooks{rewrite: behemoth.M{models.UserEmail: "  Grace@Example.COM "}}
+	s := store.New(usersDB(t), store.WithHooks(h))
+
+	u := &models.User{Email: "ada@example.com"}
+	require.NoError(t, s.CreateUser(ctx, u))
+	assert.Equal(t, "grace@example.com", u.Email, "the caller's model holds what was stored")
+	found, err := s.FindUserByEmail(ctx, "grace@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, u.ID, found.ID)
 }
 
 func TestCreateUserHookErrorAborts(t *testing.T) {
@@ -728,8 +768,28 @@ func TestBootChecksTheDatabaseHasTransactions(t *testing.T) {
 	assert.NoError(t, err, "a database whose check passes boots")
 }
 
-// The committed notifications wait for the commit: they fire after a single
-// write, and not at all when the write is rolled back.
+// The store calls Begin once per hooked write and runs the write's Before and
+// After calls with the context it returned. A table without hooks begins
+// nothing.
+func TestBeginScopesEachHookedWrite(t *testing.T) {
+	ctx := context.Background()
+	h := &recordingHooks{}
+	s := store.New(usersDB(t), store.WithHooks(h))
+
+	u := &models.User{Email: "ada@example.com"}
+	require.NoError(t, s.CreateUser(ctx, u))
+	_, err := s.UpdateUser(ctx, u.ID, behemoth.M{models.UserFirstname: "Ada"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, h.begun)
+	assert.Equal(t, []any{1, 1, 2, 2}, h.writes, "before and after of a write share the context Begin returned")
+
+	h.silent = true
+	require.NoError(t, s.CreateUser(ctx, &models.User{Email: "grace@example.com"}))
+	assert.Equal(t, 2, h.begun, "a table that fires no hooks begins no write")
+}
+
+// Callbacks a hook queues with AfterCommit wait for the commit: they run
+// after a single write, and not at all when the write is rolled back.
 func TestCommittedHooksFireAfterCommitOnly(t *testing.T) {
 	ctx := context.Background()
 	h := &recordingHooks{}

@@ -103,10 +103,61 @@ Every handler receives a `*types.HookContext`.
 | `Point`, `Phase` | The point being dispatched and its phase. |
 | `Auth` | The `*types.AuthContext`: store, session manager, token manager, crypto, telemetry. |
 | `Tx` | Tier 1 only: the store bound to the write's transaction. `Tx.DB()` is the database adapter bound to the same transaction, for your own tables. Nil on Tier 2 hooks. See [Data hooks and transactions](#data-hooks-and-transactions). |
-| `Values` | A scratch map shared by the handlers of one chain. One handler can leave a note for a later one. It is fresh for each dispatch and is not the payload. |
+| `Values` | A scratch map for handlers, shared by all the points of one operation. A handler can leave a note for a later handler. It is not the payload. See [Passing data between handlers](#passing-data-between-handlers). |
 | `Request` | The HTTP request being handled, or nil when the operation was started outside a request (a CLI, a background job). Most handlers don't need it. |
 
 Some points publish well-known entries in `Values` or in the payload. The keys are constants in `types/hooks` (`HookValueUserID`, `HookValueSessionID`, `HookValueIPAddress`, ...). Use the constants so that handlers from different authors agree on the names.
+
+### Passing data between handlers
+
+An after handler receives the result of an operation, not its input. When a handler on a before point works something out from the input that a later handler needs, it leaves it in `hctx.Values`.
+
+`Values` lasts for one operation: the before, after and failed points fired for one call share the map. For a sign-up those are `auth.signUp.before`, `auth.signUp.failed` and `auth.signUp.after`. For a write to `users` they are `data.user.beforeCreate`, `data.user.afterCreate` and `data.user.created`.
+
+An invite plugin accepts an `inviteCode` at sign-up and attaches the new user to the invite:
+
+```go
+func (p *InvitePlugin) Register(reg types.HookRegistry) error {
+	// The code is input: it arrives in the payload.
+	err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+		code, _ := payload["inviteCode"].(string)
+		invite, err := p.find(hctx.Ctx, code)
+		if err != nil {
+			return nil, behemotherr.NewInvalidInputError("invite", "invite", "this invite code is not valid", err)
+		}
+		hctx.Values["invite.id"] = invite.ID // a note for the handlers below
+		return payload, nil
+	}, nil)
+	if err != nil {
+		return err
+	}
+
+	// The user is being written: link it to the invite in the same transaction.
+	return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, result any) error {
+		inviteID, ok := hctx.Values["invite.id"].(string)
+		if !ok {
+			return nil // a user created by another path
+		}
+		return hctx.Tx.DB().Create(hctx.Ctx, &InviteUse{InviteID: inviteID, UserID: result.(*models.User).ID})
+	}, nil)
+}
+```
+
+The second handler is on another operation: the write to `users` that the sign-up makes. An operation started inside another one begins with a copy of the outer operation's `Values`:
+
+- its handlers see what the outer handlers left (`invite.id`);
+- what its handlers write stays in the copy. A handler on `auth.signUp.after` does not see a note left by a handler on `data.user.afterCreate`;
+- the copy is shallow, so a pointer stored as a value is shared.
+
+A runnable version of this is in `examples/init`: the application registers the invite handlers in `hooks.go`, a plugin adds its own in `plugin.go`, and every handler logs the point, the phase and the keys it sees in `Values`. Run it through the HTTP route or with `go run . signup`, which calls the flows without a request.
+
+Things to know:
+
+- Nobody outside the handlers sets `Values`. The caller of a flow passes input; a handler decides what to keep. This works the same for an HTTP request and for a flow called from a CLI or a job.
+- Prefix your keys with your plugin's name. All handlers of an operation share the map, and nested operations inherit it.
+- A value that the operation itself should act on goes in the payload, not in `Values`. The code that fires the point never reads `Values` back.
+- `hctx.Request.Values` lasts for the whole HTTP request and exists only when there is one. Check `hctx.Request` for nil before using it.
+- The outer values reach a nested operation through the `context.Context`. Code that calls the store or a manager with a new context (`context.Background()`) instead of the one it was given cuts the link, and the nested handlers see an empty map.
 
 ## Registering handlers
 
@@ -380,12 +431,16 @@ func (p *InvitePlugin) Declare(ic *types.PluginInitContext) error {
 Fire it through the dispatcher on the `AuthContext`:
 
 ```go
-hctx := &types.HookContext{Ctx: ctx, Point: HookInviteAccepted, Phase: types.AfterHookPhase,
-	Auth: ac, Values: behemoth.M{}, Request: types.RequestFrom(ctx)}
+ctx = types.BeginOperation(ctx) // once per call, before the first dispatch
+hctx := &types.HookContext{Ctx: ctx, Auth: ac,
+	Values: types.HookValuesFrom(ctx), Request: types.RequestFrom(ctx)}
 if err := ac.Dispatcher.RunAfter(hctx, HookInviteAccepted, invite); err != nil {
 	return err // the point is not declared, or not as an after point
 }
 ```
+
+- `BeginOperation` gives the call its own `Values`, copied from the operation it runs inside, if any. Use the returned context for every dispatch of the call and for the store and manager calls it makes, so that all its points share `Values` and nested operations inherit them.
+- The dispatcher sets `Point` and `Phase` for the handlers. You don't have to.
 
 | Method | Use |
 | --- | --- |
@@ -404,7 +459,7 @@ signUp := types.WithLifecycle(ac.Dispatcher,
 	signUpBody)
 ```
 
-It runs the before chain on the input, calls the function with the rewritten input, and runs the after chain on the output. If a before handler stops it, it fires the failed point with `rejectedByHook`. If the function itself returns an error, no after chain runs; the function is expected to have fired the failed point for its own business rejections.
+It runs the before chain on the input, calls the function with the rewritten input, and runs the after chain on the output. The whole call is one operation: you pass a `HookContext` with `Ctx`, `Auth` and `Request`, and `WithLifecycle` sets up `Values` and puts them on `hctx.Ctx` for the function to pass on. If a before handler stops it, it fires the failed point with `rejectedByHook`. If the function itself returns an error, no after chain runs; the function is expected to have fired the failed point for its own business rejections.
 
 ## Hook point reference
 
@@ -429,14 +484,14 @@ Core declares these, so a handler can be registered on any of them.
 | --- | --- | --- | --- |
 | `auth.signUp.before` | before | email/password sign-up | the sign-up fields from the request, including `email` and the plaintext `password` |
 | `auth.signUp.after` | after | email/password sign-up | the created `*models.User` |
-| `auth.signUp.failed` | failed | email/password sign-up | codes `userExists`, `rejectedByHook` |
+| `auth.signUp.failed` | failed | email/password sign-up | codes `userExists`, `rejectedByHook` (a handler on `auth.signUp.before` or on a `data.user.*` create point rejected the sign-up) |
 | `auth.signIn.before` | before | email/password sign-in | `email`, `password` |
 | `auth.signIn.credentialsVerified` | before | sign-in, after the password check | `HookValueUserID`. A second-factor plugin stops the sign-in here. |
 | `auth.signIn.after` | after | email/password sign-in | the sign-in result |
 | `auth.signIn.failed` | failed | email/password sign-in | codes `userNotFound`, `noCredentialAccount`, `invalidCredentials`, `secondFactorRejected`, `rejectedByHook`. Audited. |
 | `auth.signOut.before` | before | sign-out | `sessionID` |
 | `auth.signOut.after` | after | sign-out | nil |
-| `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent |
+| `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent. The last two come from the request being handled unless the caller of `SessionManager.Create` set them, and are empty when `CaptureIPAndAgent` is off or there is no request. |
 | `auth.session.afterCreate` | after | session manager | the created `*models.Session` |
 | `auth.session.beforeRevoke` | before | session manager | session id, reason |
 | `auth.session.afterRevoke` | after | session manager | the revoked `*models.Session` |

@@ -272,7 +272,7 @@ What the adapter skips when it is used on a core table:
 | Data hooks | `Store.create`, `Store.update` | no `data.user.*` handler runs; other plugins' rewrites and vetoes are bypassed |
 | Token sealing | `CreateAccount`, `UpdateAccount` (`seal.go`) | OAuth tokens land in plaintext; `openAccount` then fails to open them |
 | Ids and timestamps | `CreateUser`, `CreateAccount`, ... | empty primary key, zero timestamps |
-| Email normalization | `CreateUser`, `UpdateUser` | the row is not found by `FindUserByEmail` |
+| Email normalization | `CreateUser`, `UpdateUser` (`normalizeUserRow`, applied after the before hooks) | the row is not found by `FindUserByEmail` |
 | Column check | `checkColumns` | unknown keys are no longer a validation error at the store |
 | Session cache | `DefaultSessionManager` | a revoked session stays valid from the KV cache until its TTL |
 | Secret hashing | `DefaultSessionManager.Create`, `DefaultTokenManager.Issue` | a session or token row without matching lookup and keyed hashes can't be validated |
@@ -319,9 +319,9 @@ All four dispatcher methods start with `DefaultDispatcher.checkPhase`. A point t
 `data.user.created` and `data.user.updated` fire once the write's transaction has committed. The store does not know hook points; it has a queue of callbacks per transaction and two more `store.Hooks` methods.
 
 1. `Store.Transaction` creates a `commitQueue` and puts it on the bound store (`tx.commit`). A `Transaction` call on a bound store returns that same store, so a joined transaction shares the queue of the outermost one.
-2. `Store.create` and `Store.update` queue a call to `Hooks.CreateCommitted` or `Hooks.UpdateCommitted` after the in-transaction after hook has succeeded (`Store.committed`). A table that fires no hooks queues nothing.
+2. `dataHooks.AfterCreate` and `AfterUpdate` queue the dispatch of the committed point with `tx.AfterCommit` once the in-transaction after chain has succeeded (`dataHooks.onCommit`). The store has no call of its own for this, and a table that fires no hooks queues nothing.
 3. When the adapter's `Transaction` returns nil, `Store.Transaction` runs the queue in order, with the context it was called with, and then returns. When it returns an error, the queue is dropped.
-4. `dataHooks.CreateCommitted` and `UpdateCommitted` dispatch the point with `RunAfter`: handler errors are logged, an audit event is recorded if the point declares one, and `HookContext.Tx` is nil.
+4. The queued callback dispatches the point with `RunAfter`: handler errors are logged, an audit event is recorded if the point declares one, and `HookContext.Tx` is nil. `HookContext.Values` are the write's, the same map its before and after handlers saw.
 
 Sign-up shows why the queue belongs to the outermost transaction:
 
@@ -357,7 +357,7 @@ Details that matter:
 - **A hook can run more than once on MongoDB.** The Mongo adapter uses `session.WithTransaction`, which runs its callback again on a transient error. A hooked write and its hooks are inside that callback. Writes through `HookContext.Tx` and `Tx.DB()` are rolled back between attempts, so they are unaffected. Anything else a hook does is repeated.
 - **Hooked writes need transaction support.** A write to a table that fires hooks always opens a transaction. MongoDB only supports transactions on a replica set or sharded cluster, so the MongoDB adapter requires one. `Boot` fails on a standalone server (`behemoth.TransactionChecker`, see [`../database/adapters/transactions.md`](../database/adapters/transactions.md)).
 - **Hooks hold the transaction open.** A slow handler keeps locks for as long as it runs. On SQLite that blocks every other writer.
-- **Hooks fire only for `users`.** The transaction rules apply to any table that gains hook points in `coreDataHookPoints`. The `auth.session.*` and `token.*` points are not data points: the session and token managers fire them as Tier 2 points, so `sessions` and `tokens` have no entry there. The managers build a `HookContext` per dispatch (`hookContext` in `transport/session.go`) with the point, the phase, fresh `Values`, the request and the `AuthContext` that `Boot` passes to their constructors. `Tx` is nil.
+- **Hooks fire only for `users`.** The transaction rules apply to any table that gains hook points in `coreDataHookPoints`. The `auth.session.*` and `token.*` points are not data points: the session and token managers fire them as Tier 2 points, so `sessions` and `tokens` have no entry there. The managers build a `HookContext` per dispatch (`hookContext` in `transport/session.go`) with the point, the phase, the operation's `Values`, the request and the `AuthContext` that `Boot` passes to their constructors. `Tx` is nil.
 
 ### Data hooks run inside the write's transaction
 **Context:** `data.user.afterCreate` ran at the point of the insert. Inside sign-up's transaction it could act on a user that the account insert then rolled back, it could not reach the transaction to write related rows, and its error was logged and ignored. The after hook was neither a reliable "the row is committed" signal nor a usable part of the write.

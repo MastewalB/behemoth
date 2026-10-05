@@ -16,7 +16,7 @@ func (s *Store) CreateSession(ctx context.Context, sess *models.Session) error {
 	now := s.now()
 	sess.ID = s.newID()
 	sess.CreatedAt, sess.UpdatedAt = now, now
-	return s.create(ctx, sess)
+	return s.create(ctx, sess, nil)
 }
 
 func (s *Store) FindSessionByID(ctx context.Context, id string) (*models.Session, error) {

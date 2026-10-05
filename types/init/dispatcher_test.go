@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
@@ -183,5 +184,36 @@ func TestCheckDataHookPointsRejectsUndeclaredAndWrongPhase(t *testing.T) {
 	points.afterUpdate = "data.t.missing"
 	if err := checkDataHookPoints(catalog, map[string]tableHookPoints{"t": points}); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
 		t.Errorf("undeclared point: %v, want a configuration error", err)
+	}
+}
+
+// Handlers get the point and phase being dispatched even when the firing
+// site left them empty, on a copy: the site's context is not changed, and
+// the copy shares its Values.
+func TestDispatcherSetsPointAndPhaseOnACopy(t *testing.T) {
+	var seen *types.HookContext
+	d, point := afterDispatcher(t, nil, func(hctx *types.HookContext, _ any) error {
+		seen = hctx
+		hctx.Values["note"] = "from the handler"
+		return nil
+	})
+
+	site := &types.HookContext{Ctx: context.Background(), Values: behemoth.M{}}
+	if err := d.RunAfter(site, point, nil); err != nil {
+		t.Fatal(err)
+	}
+	if seen.Point != point || seen.Phase != types.AfterHookPhase {
+		t.Errorf("handler saw point %q phase %q", seen.Point, seen.Phase)
+	}
+	if site.Point != "" || site.Phase != "" {
+		t.Errorf("the firing site's context was changed: %q %q", site.Point, site.Phase)
+	}
+	if site.Values["note"] != "from the handler" {
+		t.Error("the handler's note did not reach the firing site's Values")
+	}
+
+	// A context without Values must not make a handler's write panic.
+	if err := d.RunAfterTx(&types.HookContext{Ctx: context.Background()}, point, nil); err != nil {
+		t.Fatalf("a nil Values map reached the handler: %v", err)
 	}
 }

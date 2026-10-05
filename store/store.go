@@ -35,6 +35,14 @@ type Hooks interface {
 	// (sessions, tokens, rate-limit counters) keep writing directly.
 	Fires(table string) bool
 
+	// Begin is called once per write to a table that fires hooks, inside
+	// the write's transaction and before its Before call. The context it
+	// returns is the one the write and its Before and After calls run with,
+	// so an implementation can tie the calls of one write together. It
+	// should be derived from ctx: on MongoDB ctx carries the transaction.
+	// When the database retries the transaction, Begin runs again.
+	Begin(ctx context.Context, table string) context.Context
+
 	// BeforeCreate may inspect and rewrite the row about to be inserted into
 	// table (canonical column names), or abort the write by returning an error.
 	BeforeCreate(ctx context.Context, tx *Store, table string, row behemoth.M) (behemoth.M, error)
@@ -54,14 +62,10 @@ type Hooks interface {
 	// back.
 	AfterUpdate(ctx context.Context, tx *Store, table string, updated behemoth.Model) error
 
-	// CreateCommitted and UpdateCommitted run once the outermost transaction
-	// the write belongs to has committed (see Store.AfterCommit). They are
-	// not called when it rolls back. They get no tx, because there is none
-	// any more, and return no error, because nothing can be undone. They are
-	// best effort: a process that stops between the commit and the call
-	// never makes it.
-	CreateCommitted(ctx context.Context, table string, created behemoth.Model)
-	UpdateCommitted(ctx context.Context, table string, updated behemoth.Model)
+	// There is no "committed" call. An implementation that wants to act once
+	// the write is durable queues a callback from AfterCreate or AfterUpdate
+	// with tx.AfterCommit: it runs when the outermost transaction the write
+	// belongs to has committed, and is dropped when it rolls back.
 }
 
 // Store is the single implementation of behemoth's data layer.
@@ -119,7 +123,8 @@ func New(db behemoth.Database, opts ...Option) *Store {
 
 type noHooks struct{}
 
-func (noHooks) Fires(string) bool { return false }
+func (noHooks) Fires(string) bool                                   { return false }
+func (noHooks) Begin(ctx context.Context, _ string) context.Context { return ctx }
 func (noHooks) BeforeCreate(_ context.Context, _ *Store, _ string, row behemoth.M) (behemoth.M, error) {
 	return row, nil
 }
@@ -128,8 +133,6 @@ func (noHooks) BeforeUpdate(_ context.Context, _ *Store, _ string, _ any, change
 	return changes, nil
 }
 func (noHooks) AfterUpdate(context.Context, *Store, string, behemoth.Model) error { return nil }
-func (noHooks) CreateCommitted(context.Context, string, behemoth.Model)           {}
-func (noHooks) UpdateCommitted(context.Context, string, behemoth.Model)           {}
 
 // DB returns the database adapter the Store writes through. On a Store bound
 // to a transaction (the tx Transaction hands to fn, or HookContext.Tx in a
@@ -160,9 +163,9 @@ func (s *Store) DB() behemoth.Database { return s.db }
 // wants atomicity can call Transaction whether or not its caller already did.
 //
 // Data hooks fired by writes inside fn run inside the transaction too; see
-// Hooks. Callbacks added with AfterCommit, the data hooks' committed
-// notifications among them, run after the transaction has committed and
-// before Transaction returns.
+// Hooks. Callbacks added with AfterCommit, among them the ones the data hooks
+// queue for their after-commit points, run after the transaction has
+// committed and before Transaction returns.
 func (s *Store) Transaction(ctx context.Context, fn func(ctx context.Context, tx *Store) error) error {
 	if s.inTx {
 		return fn(ctx, s)

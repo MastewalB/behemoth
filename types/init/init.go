@@ -294,7 +294,13 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}), store.WithSchema(app.Resolver),
 		store.WithEncryptor(cryptoSuite.AtRest))
 	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token, ac)
-	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac)
+	// One client-IP configuration for sessions and route rate limiting, so
+	// both see the same address for a request.
+	ipCfg, err := types.NewClientConfig(cfg.Router.TrustedProxies, cfg.Router.ClientIPHeader)
+	if err != nil {
+		return nil, err
+	}
+	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
 
 	// Init before routing, so Routes() and Middlewares() may rely on
 	// anything a plugin sets up in Init.
@@ -323,10 +329,6 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// }
 
 	// Route-scoped rate limiting is baked in once, before any driver sees the routes.
-	ipCfg, err := types.NewClientConfig(cfg.Router.TrustedProxies, cfg.Router.ClientIPHeader)
-	if err != nil {
-		return nil, err
-	}
 	router.ApplyRateLimiting(rateLimiter, app.RateLimits, ipCfg)
 
 	if cfg.HTTP != nil {
@@ -551,18 +553,12 @@ func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPh
 	r.pending[point] = append(r.pending[point], rh)
 	return nil
 }
-func (r *DefaultHookRegistry) OnBefore(point types.HookPoint, fn types.BeforeHookFunc, opts *types.HookOptions) error {
-	return r.register(point, types.BeforeHookPhase, "", fn, opts) // owner filled in by scopedHookRegistry below, never left blank in practice
-}
-func (r *DefaultHookRegistry) OnAfter(point types.HookPoint, fn types.AfterHookFunc, opts *types.HookOptions) error {
-	return r.register(point, types.AfterHookPhase, "", fn, opts)
-}
-func (r *DefaultHookRegistry) OnFailed(point types.HookPoint, fn types.FailedHookFunc, opts *types.HookOptions) error {
-	return r.register(point, types.FailedHookPhase, "", fn, opts)
-}
 
-// scopedHookRegistry injects the registering plugin's identity. A plugin's Register(reg HookRegistry) call receives one
-// of these, typed as the interface, and can't override `owner`.
+// scopedHookRegistry is the types.HookRegistry an owner registers through. It
+// injects the owner's name: a plugin's Register(reg HookRegistry) call
+// receives one of these, typed as the interface, and can't override `owner`.
+// DefaultHookRegistry has no registering methods of its own, so a handler
+// can't be registered without an owner.
 type scopedHookRegistry struct {
 	inner *DefaultHookRegistry
 	owner string
@@ -648,12 +644,13 @@ func resolvePointOrder(point types.HookPoint, handlers []registeredHandler, plug
 
 }
 
-// topoSortBucket resolves handler order within one priority bucket, reusing
-// KahnSort exactly as specified. Ties (no Before/After edge between
-// two handlers) resolve alphabetically by the plugin name
-// KahnSort's fixed signature has no room for a registration-
-// order comparator, so this deliberately matches plugin-level ordering's
-// tie-break rather than inventing a second mechanism.
+// topoSortBucket resolves handler order within one priority bucket with
+// KahnSort, the sort plugin ordering uses. An edge comes from a Before or
+// After that names an owner with a handler in the same bucket; a constraint
+// naming any other owner adds none. Handlers the edges leave unordered run
+// in plugin boot order (pluginOrder, the application last), so a plugin's
+// handler runs after those of the plugins it depends on. A cycle is a
+// configuration error.
 func topoSortBucket(point types.HookPoint, bucket []registeredHandler, pluginOrder []string) ([]registeredHandler, error) {
 	byPlugin := make(map[string]registeredHandler, len(bucket))
 	for _, h := range bucket {
@@ -1120,8 +1117,6 @@ type registeredHandler struct {
 	handler  any // BeforeHookFunc | AfterHookFunc | FailedHookFunc, resolved by the point's declared Phase
 }
 
-var frozenChains map[types.HookPoint][]registeredHandler
-
 type DefaultDispatcher struct {
 	catalog      types.HookCatalog
 	frozenChains map[types.HookPoint][]registeredHandler
@@ -1154,6 +1149,21 @@ func (d *DefaultDispatcher) checkPhase(op string, point types.HookPoint, expecte
 	return def, nil
 }
 
+// forPoint returns the context the handlers of point receive: a shallow copy
+// of the firing site's with Point and Phase set, so a site can't dispatch one
+// point with a context that names another, and a site that leaves them empty
+// (a flow reusing one context for all its points) still gives handlers the
+// right ones. The copy shares the Values map. A nil map is replaced, so a
+// handler's write can't panic; such notes last for this dispatch only.
+func forPoint(hctx *types.HookContext, point types.HookPoint, phase types.HookPhase) *types.HookContext {
+	c := *hctx
+	c.Point, c.Phase = point, phase
+	if c.Values == nil {
+		c.Values = behemoth.M{}
+	}
+	return &c
+}
+
 func (d *DefaultDispatcher) safeInvokeBefore(hctx *types.HookContext, fn types.BeforeHookFunc, payload behemoth.M, point types.HookPoint, plugin string) (m behemoth.M, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1164,11 +1174,13 @@ func (d *DefaultDispatcher) safeInvokeBefore(hctx *types.HookContext, fn types.B
 	return fn(hctx, payload)
 }
 
-func (d *DefaultDispatcher) safeInvokeAfter(hctx *types.HookContext, fn types.AfterHookFunc, result any, point types.HookPoint, plugin string) (err error) {
+// safeInvokeAfter calls an after handler and turns a panic into an internal
+// error. It does not log: the caller decides what an error means. RunAfter
+// logs it and goes on, RunAfterTx returns it. op names the calling method.
+func (d *DefaultDispatcher) safeInvokeAfter(op string, hctx *types.HookContext, fn types.AfterHookFunc, result any, point types.HookPoint, plugin string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = behemotherr.NewInternalError("Dispatcher.RunAfter", fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
-			d.logError(hctx.Ctx, "after-hook panicked", err, behemoth.M{"point": string(point), "plugin": plugin})
+			err = behemotherr.NewInternalError(op, fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
 		}
 	}()
 	return fn(hctx, result)
@@ -1179,6 +1191,7 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 	if _, err := d.checkPhase("Dispatcher.RunBefore", point, types.BeforeHookPhase); err != nil {
 		return nil, err
 	}
+	hctx = forPoint(hctx, point, types.BeforeHookPhase)
 
 	// rate-limiting, evaluated before any registered before-hook handler runs
 	// rate limiter will handle auditing
@@ -1220,6 +1233,7 @@ func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPo
 	if err != nil {
 		return err
 	}
+	hctx = forPoint(hctx, point, types.AfterHookPhase)
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.AfterHookFunc)
@@ -1229,7 +1243,7 @@ func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPo
 			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{"point": string(point), "plugin": h.plugin})
 			continue // execution continues since one bad registration must not stop the rest
 		}
-		if err := d.safeInvokeAfter(hctx, fn, result, point, h.plugin); err != nil {
+		if err := d.safeInvokeAfter("Dispatcher.RunAfter", hctx, fn, result, point, h.plugin); err != nil {
 			// Errors in AfterHookPhase are not propagated
 			d.logError(hctx.Ctx, "after-hook failed", err, behemoth.M{"point": string(point), "plugin": h.plugin})
 		}
@@ -1246,6 +1260,7 @@ func (d *DefaultDispatcher) RunAfterTx(hctx *types.HookContext, point types.Hook
 	if _, err := d.checkPhase("Dispatcher.RunAfterTx", point, types.AfterHookPhase); err != nil {
 		return err
 	}
+	hctx = forPoint(hctx, point, types.AfterHookPhase)
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.AfterHookFunc)
@@ -1255,7 +1270,7 @@ func (d *DefaultDispatcher) RunAfterTx(hctx *types.HookContext, point types.Hook
 			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{"point": string(point), "plugin": h.plugin})
 			return err
 		}
-		if err := d.safeInvokeAfter(hctx, fn, result, point, h.plugin); err != nil {
+		if err := d.safeInvokeAfter("Dispatcher.RunAfterTx", hctx, fn, result, point, h.plugin); err != nil {
 			return err // abort and propagate; the write is rolled back
 		}
 	}
@@ -1276,6 +1291,7 @@ func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint,
 	if err != nil {
 		return err
 	}
+	hctx = forPoint(hctx, point, types.FailedHookPhase)
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.FailedHookFunc)

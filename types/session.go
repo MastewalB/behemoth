@@ -16,14 +16,17 @@ const (
 )
 
 type SessionManager interface {
+	// Create starts a session for userID in meta.State and returns it with
+	// its raw token. Pass the context of the request being handled: the
+	// session's IP address and user agent are read from it (see SessionMeta).
 	Create(ctx context.Context, userID any, meta SessionMeta) (*models.Session, string /* raw token */, error)
 
-	// Validate resolves a raw bearer token to its Session. 
+	// Validate resolves a raw bearer token to its Session.
 	// Only returns State == Active; Use Get() to resolve a Pending session.
 	Validate(ctx context.Context, rawToken string) (*models.Session, error)
 
 	// Get resolves a raw token to its Session regardless of State (Pending or
-	// Active) only enforcing expiry/revocation. 
+	// Active) only enforcing expiry/revocation.
 	// This can be used by plugins like 2FA at verification stage to look up a Pending session before
 	// promoting it.
 	Get(ctx context.Context, rawToken string) (*models.Session, error)
@@ -62,6 +65,12 @@ type SessionManager interface {
 
 // SessionMeta is caller-supplied context at creation time.
 type SessionMeta struct {
+	// IPAddress and UserAgent are optional. Left empty, the session manager
+	// takes them from the request being handled, which it finds on the
+	// context passed to Create (ContextWithRequest); without a request they
+	// stay empty. Set them only to override that, e.g. from a job acting on
+	// a recorded request. Neither is stored unless
+	// SessionConfig.CaptureIPAndAgent is on.
 	IPAddress string
 	UserAgent string
 	State     SessionState // Active or Pending: set by the caller (SignIn passes Active or Pending depending on whether 2FA is required)

@@ -51,7 +51,7 @@ func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
 	if row[models.UserUsername] != "from-hook" {
 		t.Errorf("BeforeCreate did not return the dispatcher's rewrite: %v", row)
 	}
-	h.AfterCreate(ctx, nil, "users", &models.User{})
+	h.AfterCreate(ctx, store.New(nil), "users", &models.User{})
 	if len(d.before) != 1 || d.before[0].Point != hooks.HookUserBeforeCreate || d.before[0].Phase != types.BeforeHookPhase {
 		t.Fatalf("before dispatch = %+v", d.before)
 	}
@@ -65,8 +65,8 @@ func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
 	if err != nil || out["x"] != 1 {
 		t.Errorf("unmapped table: row %v, err %v", out, err)
 	}
-	h.AfterCreate(ctx, nil, "audit_events", &models.User{})
-	if len(d.before) != 1 || len(d.after) != 1 {
+	h.AfterCreate(ctx, store.New(nil), "audit_events", &models.User{})
+	if len(d.before) != 1 || len(d.after) != 1 || len(d.committed) != 1 {
 		t.Error("an unmapped table dispatched a hook")
 	}
 }
@@ -79,7 +79,7 @@ func TestDataHooksUpdatePublishesTheID(t *testing.T) {
 	if _, err := h.BeforeUpdate(ctx, nil, "users", "u1", behemoth.M{models.UserFirstname: "Ada"}); err != nil {
 		t.Fatal(err)
 	}
-	h.AfterUpdate(ctx, nil, "users", &models.User{ID: "u1"})
+	h.AfterUpdate(ctx, store.New(nil), "users", &models.User{ID: "u1"})
 	if len(d.before) != 1 || d.before[0].Point != hooks.HookUserBeforeUpdate || d.before[0].Values[hooks.HookValueUserID] != "u1" {
 		t.Fatalf("before update dispatch = %+v", d.before)
 	}
@@ -153,18 +153,26 @@ func TestDataHooksPublishTheStoreAndReturnAfterErrors(t *testing.T) {
 	}
 }
 
-// The committed notifications dispatch the after-commit points with RunAfter:
-// no transaction is published, and an update carries the row's id.
+// The after-commit points are queued on the write's store by the after
+// hooks and dispatched with RunAfter: no transaction is published, an update
+// carries the row's id, and a failed after hook queues nothing.
 func TestDataHooksDispatchCommittedPoints(t *testing.T) {
 	d := &recordingDispatcher{}
 	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	ctx := context.Background()
+	// A store that is not bound to a transaction runs AfterCommit callbacks
+	// at once, which stands in for the commit here.
+	tx := store.New(nil)
 
-	h.CreateCommitted(ctx, "users", &models.User{ID: "u1"})
-	h.UpdateCommitted(ctx, "users", &models.User{ID: "u1"})
-	h.CreateCommitted(ctx, "audit_events", &models.User{})
-	if len(d.committed) != 2 || len(d.after) != 0 {
-		t.Fatalf("dispatched %d with RunAfter and %d with RunAfterTx, want 2 and 0", len(d.committed), len(d.after))
+	if err := h.AfterCreate(ctx, tx, "users", &models.User{ID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.AfterUpdate(ctx, tx, "users", &models.User{ID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.AfterCreate(ctx, tx, "audit_events", &models.User{})
+	if len(d.committed) != 2 || len(d.after) != 2 {
+		t.Fatalf("dispatched %d with RunAfter and %d with RunAfterTx, want 2 and 2", len(d.committed), len(d.after))
 	}
 	created, updated := d.committed[0], d.committed[1]
 	if created.Point != hooks.HookUserCreated || updated.Point != hooks.HookUserUpdated {
@@ -175,5 +183,61 @@ func TestDataHooksDispatchCommittedPoints(t *testing.T) {
 	}
 	if updated.Values[hooks.HookValueUserID] != "u1" {
 		t.Errorf("the updated point should carry the row's id: %v", updated.Values)
+	}
+
+	d.afterErr = errors.New("rejected by hook")
+	h.AfterCreate(ctx, tx, "users", &models.User{ID: "u2"})
+	if len(d.committed) != 2 {
+		t.Error("a write whose after hook failed was reported as committed")
+	}
+}
+
+// One write is one operation: Begin gives it a Values map that its before,
+// after and after-commit points share. The map starts as a copy of the
+// enclosing operation's, and what the write's handlers add stays out of it.
+func TestDataHooksShareValuesAcrossOneWrite(t *testing.T) {
+	d := &recordingDispatcher{}
+	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	tx := store.New(nil)
+
+	flow := behemoth.M{"invite.id": "inv-1"}
+	outer := types.ContextWithHookValues(context.Background(), flow)
+	ctx := h.Begin(outer, "users")
+
+	if _, err := h.BeforeCreate(ctx, tx, "users", behemoth.M{}); err != nil {
+		t.Fatal(err)
+	}
+	d.before[0].Values["note"] = "from beforeCreate"
+	if err := h.AfterCreate(ctx, tx, "users", &models.User{ID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, hctx := range []*types.HookContext{d.before[0], d.after[0], d.committed[0]} {
+		if hctx.Values["invite.id"] != "inv-1" {
+			t.Errorf("%s does not see the enclosing operation's values: %v", hctx.Point, hctx.Values)
+		}
+		if hctx.Values["note"] != "from beforeCreate" {
+			t.Errorf("%s does not see the note left on the write's before point: %v", hctx.Point, hctx.Values)
+		}
+	}
+	if _, leaked := flow["note"]; leaked {
+		t.Error("the write's note leaked into the enclosing operation's values")
+	}
+
+	// A second write under the same flow starts from the flow's values again.
+	second := h.Begin(outer, "users")
+	if _, err := h.BeforeCreate(second, tx, "users", behemoth.M{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, inherited := d.before[1].Values["note"]; inherited || d.before[1].Values["invite.id"] != "inv-1" {
+		t.Errorf("a second write should start from the flow's values only: %v", d.before[1].Values)
+	}
+
+	// A table without hook points opens no operation.
+	if got := h.Begin(outer, "audit_events"); got != outer {
+		t.Error("Begin changed the context of a table that fires no hooks")
+	}
+	// Outside any operation a write starts empty.
+	if got := types.HookValuesFrom(h.Begin(context.Background(), "users")); got == nil || len(got) != 0 {
+		t.Errorf("a write outside any operation should start with empty values: %v", got)
 	}
 }

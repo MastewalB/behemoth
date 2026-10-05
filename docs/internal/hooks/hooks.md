@@ -62,7 +62,7 @@ The example follows `POST /sign-up/email` from the email/password plugin with on
 | Step | Code | Dispatch |
 | --- | --- | --- |
 | 1 | the router puts the `RequestContext` on the context (`ContextWithRequest`) | |
-| 2 | `handleSignUp` builds a `HookContext` and calls the wrapped flow | |
+| 2 | `handleSignUp` calls `Plugin.SignUp(rctx.Ctx, body)`, which builds the flow's `HookContext` and calls the wrapped flow | |
 | 3 | `WithLifecycle` | `RunBefore(auth.signUp.before)` with the request fields as payload |
 | 4 | `signUpBody` validates, hashes the password, opens `Store.Transaction` | |
 | 5 | `tx.CreateUser` → `Store.create` → `dataHooks.BeforeCreate` | `RunBefore(data.user.beforeCreate)` with the user row |
@@ -70,10 +70,12 @@ The example follows `POST /sign-up/email` from the email/password plugin with on
 | 7 | `dataHooks.AfterCreate` | `RunAfterTx(data.user.afterCreate)`: `profile` writes its row through `hctx.Tx` |
 | 8 | `tx.CreateAccount` inserts the credential account | none: `accounts` fires no hooks |
 | 9 | the transaction commits | |
-| 10 | the commit queue runs `dataHooks.CreateCommitted` | `RunAfter(data.user.created)` |
+| 10 | the commit queue runs the callback `dataHooks.AfterCreate` queued | `RunAfter(data.user.created)` |
 | 11 | `signUpBody` returns the user to `WithLifecycle` | `RunAfter(auth.signUp.after)`: `profile` sends the email |
 
 The two tiers show in this trace. Steps 5 to 10 are Tier 1: the store fires them, and steps 5 and 7 run inside the transaction. Steps 3 and 11 are Tier 2: the flow fires them, outside the transaction.
+
+`HookContext.Values` follows the same nesting. Steps 3 and 11 share one map, the sign-up's. Steps 5, 7 and 10 share another, the user write's, which starts as a copy of the sign-up's. A handler in step 7 can read what a handler in step 3 left; a handler in step 11 does not see what step 7 wrote.
 
 What a failure does depends on where it happens:
 

@@ -58,6 +58,47 @@ The routes sit directly under the router's base path.
 
 ## Hook points
 
+## Calling the flows from code
+
+The routes are thin wrappers around two methods on the plugin. Use them from a CLI, a job, a test or another plugin, after `Boot`:
+
+```go
+user, err := plugin.SignUp(ctx, behemoth.M{
+	"email":    "ada@example.com",
+	"password": "correct horse battery",
+})
+
+result, err := plugin.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{
+	Email: "ada@example.com", Password: "correct horse battery",
+})
+// result.User, result.Session, result.RawToken
+```
+
+- They fire the same hook points as the routes, with the same payloads.
+- `SignUp` stores `email`, `password` and the profile fields listed above. Other keys in the input are not stored, but handlers on `auth.signUp.before` see them, which is how a plugin accepts a field of its own (an invite code, for example).
+- Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `hctx.Request` is nil and the session has neither.
+- `SignIn` returns the raw session token. Delivering it (a cookie, a header) is up to you; the route uses `SessionManager.WriteToken`.
+- Called before `Boot`, both return a configuration error.
+
+`emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points.
+
+## Rejecting a sign-up from a hook
+
+A hook handler can reject a sign-up with its own status and message. Return a typed error from a handler on `auth.signUp.before`, `data.user.beforeCreate` or `data.user.afterCreate`:
+
+```go
+reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
+	if blocked(row[models.UserEmail]) {
+		return nil, behemotherr.NewInvalidInputError("signup", "user", "this email domain is not allowed", nil)
+	}
+	return row, nil
+}, nil)
+```
+
+The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejectedByHook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but the client gets `user create failed` and no failed point fires.
+
+With `SessionConfig.CaptureIPAndAgent` on, the session created at sign-in records the client's IP address and user agent. The address is resolved with `RouterConfig.TrustedProxies` and `ClientIPHeader`, so behind a load balancer it is the client's and not the proxy's.
+
 The plugin fires the `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points. See [hooks.md](hooks.md#flow-points-tier-2) for their payloads and failure codes.
 
 ## Not built yet

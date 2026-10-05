@@ -15,14 +15,24 @@ func NormalizeEmail(email string) string {
 }
 
 // CreateUser inserts u, assigning its ID and timestamps and normalizing its
-// email; BeforeCreate hooks may still rewrite the row. u holds the stored
-// user afterwards.
+// email. BeforeCreate hooks see the normalized email and may rewrite the
+// row; an email they set is normalized again before the insert. u holds the
+// stored user afterwards.
 func (s *Store) CreateUser(ctx context.Context, u *models.User) error {
 	now := s.now()
 	u.ID = s.newID()
 	u.Email = NormalizeEmail(u.Email)
 	u.CreatedAt, u.UpdatedAt = now, now
-	return s.create(ctx, u)
+	return s.create(ctx, u, normalizeUserRow)
+}
+
+// normalizeUserRow puts a user row's email, if it has one, in the stored
+// form. It runs on the row a create or an update is about to write, after
+// the before hooks, so no path stores an email FindUserByEmail can't find.
+func normalizeUserRow(row behemoth.M) {
+	if email, ok := row[models.UserEmail].(string); ok {
+		row[models.UserEmail] = NormalizeEmail(email)
+	}
 }
 
 func (s *Store) FindUserByID(ctx context.Context, id string) (*models.User, error) {
@@ -38,11 +48,7 @@ func (s *Store) FindUserByEmail(ctx context.Context, email string) (*models.User
 // stamps updated_at, and returns the stored user. The caller's map is never
 // modified.
 func (s *Store) UpdateUser(ctx context.Context, id string, updates behemoth.M) (*models.User, error) {
-	updated, err := s.update(ctx, &models.User{}, id, updates, models.UserUpdatedAt, func(changes behemoth.M) {
-		if email, ok := changes[models.UserEmail].(string); ok {
-			changes[models.UserEmail] = NormalizeEmail(email)
-		}
-	})
+	updated, err := s.update(ctx, &models.User{}, id, updates, models.UserUpdatedAt, normalizeUserRow)
 	if err != nil {
 		return nil, err
 	}

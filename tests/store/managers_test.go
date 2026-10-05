@@ -172,7 +172,7 @@ func newSessionManager(t *testing.T, cfg types.SessionConfig) (types.SessionMana
 	if cfg.PendingExpiresIn == 0 {
 		cfg.PendingExpiresIn = 5 * time.Minute
 	}
-	return transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg, d, nil, managersAuth), d
+	return transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg, d, nil, managersAuth, nil), d
 }
 
 // managersAuth is the AuthContext the managers under test are built with. It
@@ -255,12 +255,14 @@ func TestSessionRevokeAllAndEviction(t *testing.T) {
 }
 
 // The manager's own hooks get a complete HookContext: the point and phase
-// being dispatched, the AuthContext, chain Values of their own and the
-// request being handled.
+// being dispatched, the AuthContext, the request being handled, and Values
+// that last for one operation: a create's two points share a map, a revoke's
+// two share another, and both start as a copy of the caller's operation.
 func TestSessionHooksGetACompleteContext(t *testing.T) {
 	sm, d := newSessionManager(t, types.SessionConfig{})
 	rc := &types.RequestContext{Request: httptest.NewRequest("POST", "/sign-in", nil)}
-	ctx := types.ContextWithRequest(context.Background(), rc)
+	flow := behemoth.M{"flow": "sign-in"}
+	ctx := types.ContextWithHookValues(types.ContextWithRequest(context.Background(), rc), flow)
 	sess, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
 	require.NoError(t, err)
 	require.NoError(t, sm.Revoke(ctx, sess.ID, "user_logout"))
@@ -276,15 +278,71 @@ func TestSessionHooksGetACompleteContext(t *testing.T) {
 		assert.Same(t, rc, h.Request, "%s", h.Point)
 		assert.Nil(t, h.Tx, "%s: a Tier 2 point has no transaction", h.Point)
 		require.NotNil(t, h.Values, "%s: a handler writing Values must not panic", h.Point)
-		h.Values["seen"] = true
+		assert.Equal(t, "sign-in", h.Values["flow"], "%s: the caller's operation is visible", h.Point)
 	}
 	assert.Equal(t, []dispatch{
 		{hooks.HookSessionBeforeCreate, types.BeforeHookPhase}, {hooks.HookSessionAfterCreate, types.AfterHookPhase},
 		{hooks.HookSessionBeforeRevoke, types.BeforeHookPhase}, {hooks.HookSessionAfterRevoke, types.AfterHookPhase},
 	}, got)
-	for _, h := range d.seen {
-		assert.Len(t, h.Values, 1, "%s: Values are scoped to one dispatch", h.Point)
-	}
+	beforeCreate, afterCreate, beforeRevoke, afterRevoke := d.seen[0], d.seen[1], d.seen[2], d.seen[3]
+	beforeCreate.Values["note"] = "from beforeCreate"
+	assert.Equal(t, "from beforeCreate", afterCreate.Values["note"], "a create's points share Values")
+	beforeRevoke.Values["why"] = "from beforeRevoke"
+	assert.Equal(t, "from beforeRevoke", afterRevoke.Values["why"], "a revoke's points share Values")
+	assert.NotContains(t, beforeRevoke.Values, "note", "another operation's notes are not visible")
+	assert.Equal(t, behemoth.M{"flow": "sign-in"}, flow, "nothing a nested operation writes reaches the caller's Values")
+}
+
+// A session records the IP address and user agent of the request on the
+// context. The caller's SessionMeta overrides them, no request leaves them
+// empty, and nothing is recorded unless CaptureIPAndAgent is on.
+func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
+	req := httptest.NewRequest("POST", "/sign-in", nil)
+	req.RemoteAddr = "203.0.113.7:51234"
+	req.Header.Set("User-Agent", "test-agent/1.0")
+	req.Header.Set("X-Forwarded-For", "198.51.100.9")
+	inRequest := types.ContextWithRequest(context.Background(), &types.RequestContext{Request: req})
+	capture := types.SessionConfig{CaptureIPAndAgent: true}
+	active := types.SessionMeta{State: types.SessionActive}
+
+	t.Run("from the request", func(t *testing.T) {
+		sm, _ := newSessionManager(t, capture)
+		sess, _, err := sm.Create(inRequest, "u1", active)
+		require.NoError(t, err)
+		assert.Equal(t, "203.0.113.7", sess.IPAddress, "the direct peer, without its port; an untrusted peer's forwarding header is ignored")
+		assert.Equal(t, "test-agent/1.0", sess.UserAgent)
+	})
+	t.Run("the caller's values win", func(t *testing.T) {
+		sm, _ := newSessionManager(t, capture)
+		sess, _, err := sm.Create(inRequest, "u1", types.SessionMeta{State: types.SessionActive, IPAddress: "192.0.2.1", UserAgent: "job"})
+		require.NoError(t, err)
+		assert.Equal(t, "192.0.2.1", sess.IPAddress)
+		assert.Equal(t, "job", sess.UserAgent)
+	})
+	t.Run("no request", func(t *testing.T) {
+		sm, _ := newSessionManager(t, capture)
+		sess, _, err := sm.Create(context.Background(), "u1", active)
+		require.NoError(t, err, "a session can be created outside a request")
+		assert.Empty(t, sess.IPAddress)
+		assert.Empty(t, sess.UserAgent)
+	})
+	t.Run("capture off", func(t *testing.T) {
+		sm, _ := newSessionManager(t, types.SessionConfig{})
+		sess, _, err := sm.Create(inRequest, "u1", active)
+		require.NoError(t, err)
+		assert.Empty(t, sess.IPAddress)
+		assert.Empty(t, sess.UserAgent)
+	})
+	t.Run("behind a trusted proxy", func(t *testing.T) {
+		ipCfg, err := types.NewClientConfig([]string{"203.0.113.0/24"}, "")
+		require.NoError(t, err)
+		sm := transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t),
+			types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, CaptureIPAndAgent: true},
+			&passDispatcher{}, nil, managersAuth, ipCfg)
+		sess, _, err := sm.Create(inRequest, "u1", active)
+		require.NoError(t, err)
+		assert.Equal(t, "198.51.100.9", sess.IPAddress, "the client the proxy forwarded for")
+	})
 }
 
 // The token manager's hooks get the same: issue, a consume, and a failed

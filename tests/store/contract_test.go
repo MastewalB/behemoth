@@ -187,7 +187,7 @@ func usersContract(t *testing.T, st *store.Store) {
 func sessionsContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
 	sm := transport.NewSessionManager(st, nil, testCrypto(t),
-		types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil)
+		types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil, nil)
 
 	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionPending})
 	require.NoError(t, err)

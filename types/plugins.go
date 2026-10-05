@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"sort"
 
@@ -244,10 +245,19 @@ type HookContext struct {
 	// on Tier 2 hooks, which don't run inside a store transaction.
 	Tx *store.Store
 
-	// Values is scratch space scoped to this single dispatch chain; lets one
-	// handler leave a note for a later handler in the same chain (e.g. "password
-	// strength already checked by plugin X"). Distinct from the payload itself,
-	// same idiom as RequestContext.Values but chain-scoped rather than request-scoped.
+	// Values is scratch space for handlers, scoped to one operation: the
+	// before, after and failed points a firing site fires for one call (a
+	// sign-in, a session create, a write to users) share one map. A handler
+	// on the before point can leave a note for a later handler on the same
+	// point or on the operation's after or failed point, e.g. an invite id
+	// it resolved from the input.
+	//
+	// An operation started inside another one (the user write inside a
+	// sign-up) begins with a copy of the outer operation's Values: its
+	// handlers read the outer notes, and what they write stays their own.
+	// See ContextWithHookValues. It is distinct from the payload, which the
+	// firing site reads back, and from RequestContext.Values, which lasts
+	// for the HTTP request and exists only when there is one.
 	Values behemoth.M
 
 	// Request is set only when this lifecycle was triggered from within an HTTP
@@ -275,6 +285,60 @@ func ContextWithRequest(ctx context.Context, rc *RequestContext) context.Context
 func RequestFrom(ctx context.Context) *RequestContext {
 	rc, _ := ctx.Value(requestContextKey{}).(*RequestContext)
 	return rc
+}
+
+type hookValuesKey struct{}
+
+// ContextWithHookValues returns ctx carrying values, the HookContext.Values
+// of the operation being run. Hook dispatches made under ctx for the same
+// operation use the map itself; an operation started under ctx begins with a
+// copy of it (NestedHookValues). This is how the data hooks of a user write
+// see what a sign-up's handlers left, without the store knowing about hooks.
+//
+// Like the request (ContextWithRequest), the values travel in the context
+// because the code in between, the store and the managers, takes only a
+// context. A callee that is handed a fresh context starts without them.
+func ContextWithHookValues(ctx context.Context, values behemoth.M) context.Context {
+	return context.WithValue(ctx, hookValuesKey{}, values)
+}
+
+// HookValuesFrom returns the Values of the operation ctx belongs to, or nil
+// when ctx belongs to none.
+func HookValuesFrom(ctx context.Context) behemoth.M {
+	values, _ := ctx.Value(hookValuesKey{}).(behemoth.M)
+	return values
+}
+
+// NestedHookValues returns the Values a new operation started under ctx
+// begins with: a copy of the enclosing operation's, or an empty map when
+// there is none. The copy is shallow.
+func NestedHookValues(ctx context.Context) behemoth.M {
+	values := behemoth.M{}
+	maps.Copy(values, HookValuesFrom(ctx))
+	return values
+}
+
+// BeginOperation returns ctx for a new operation nested under the one ctx
+// belongs to, if any. A firing site calls it once per call and builds the
+// HookContext of each of its dispatches with HookValuesFrom, so that its
+// points share one Values map.
+func BeginOperation(ctx context.Context) context.Context {
+	return ContextWithHookValues(ctx, NestedHookValues(ctx))
+}
+
+// AsOperation returns a copy of hctx set up as one operation: Values is
+// never nil, and Ctx carries it, so the store writes and manager calls the
+// operation makes with Ctx nest under it. A flow that receives a HookContext
+// from its caller (WithLifecycle, emailpassword.SignOut) calls it first and
+// uses the result for every dispatch. Values that are nil start as a copy of
+// the enclosing operation's.
+func AsOperation(hctx *HookContext) *HookContext {
+	op := *hctx
+	if op.Values == nil {
+		op.Values = NestedHookValues(op.Ctx)
+	}
+	op.Ctx = ContextWithHookValues(op.Ctx, op.Values)
+	return &op
 }
 
 type HookCatalog interface {
@@ -328,6 +392,10 @@ type FailureReason struct {
 
 // Dispatcher runs the handler chains of hook points.
 //
+// Handlers receive a copy of hctx with Point and Phase set to the point being
+// dispatched, so a firing site may leave both empty. The copy shares hctx's
+// Values map.
+//
 // Every method returns a configuration error, and runs no handler, when point
 // was never declared or is declared with a different phase than the method
 // dispatches. That is a mistake in the code firing the point, so callers
@@ -360,13 +428,16 @@ type Dispatcher interface {
 	Fail(hctx *HookContext, point HookPoint, reason FailureReason) error
 }
 
-// HookPointDef formally defines an event type.
-// E.g. 'data.create' owner - 'core' supported phases 'before', 'after'
+// HookPointDef declares one hook point, e.g. "data.user.beforeCreate", owned
+// by "core", phase before.
 type HookPointDef struct {
 	Point HookPoint
-	Owner string     // plugin name, e.g. "core"
-	Phase HookPhase  // which phases are valid for this point - e.g.  data.user hooks support before/after phases but maybe not failed
-	Audit *AuditSpec // nil = not audited; if set, dispatcher auto-records on this phase
+	Owner string // who declared it: "core" or a plugin's name. Set by the catalog the declarer receives.
+	// Phase is the point's one phase. It decides the handler type and the
+	// Dispatcher method the point is fired with. An operation with a before
+	// and an after side declares two points.
+	Phase HookPhase
+	Audit *AuditSpec // nil = not audited; if set, RunAfter and Fail record an audit event after the chain
 }
 
 type HookOptions struct {
@@ -385,6 +456,14 @@ const (
 	PriorityLowest  HookPriority = 100 // observers: logging, analytics; should see the final mutated state
 )
 
+// WithLifecycle wraps fn, the body of a flow, with the flow's three points:
+// before runs on the input and may rewrite it or stop the flow, success runs
+// on fn's result, and failed fires when a before handler stopped the flow.
+// fn fires failed itself for its own business rejections.
+//
+// The wrapped call is one operation (AsOperation): all three points and fn
+// share the HookContext's Values, and what fn does with hctx.Ctx nests under
+// it.
 func WithLifecycle[TIn, TOut any](
 	dispatcher Dispatcher,
 	before, success, failed HookPoint,
@@ -392,6 +471,7 @@ func WithLifecycle[TIn, TOut any](
 ) func(hctx *HookContext, in TIn) (TOut, error) {
 	return func(hctx *HookContext, in TIn) (TOut, error) {
 		var zero TOut
+		hctx = AsOperation(hctx)
 
 		payload, err := structToM(&in)
 		if err != nil {

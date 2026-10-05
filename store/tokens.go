@@ -20,7 +20,7 @@ const ErrorCodeTokenAlreadyConsumed = "token_already_consumed"
 func (s *Store) CreateToken(ctx context.Context, tok *models.Token) error {
 	tok.ID = s.newID()
 	tok.CreatedAt = s.now()
-	return s.create(ctx, tok)
+	return s.create(ctx, tok, nil)
 }
 
 func (s *Store) FindTokenByID(ctx context.Context, id string) (*models.Token, error) {

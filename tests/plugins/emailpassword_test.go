@@ -77,7 +77,7 @@ func authContext(t *testing.T) *types.AuthContext {
 		Dispatcher: passDispatcher{},
 		SessionManager: transport.NewSessionManager(st, nil, c,
 			types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
-			passDispatcher{}, nil, nil),
+			passDispatcher{}, nil, nil, nil),
 	}
 }
 
@@ -241,6 +241,192 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 
 	assert.Equal(t, []types.HookPoint{hooks.HookSignUpAfter, hooks.HookSignInAfter, hooks.HookSignOutAfter}, fired)
 	assert.Equal(t, []string{"invalidCredentials"}, failures)
+}
+
+// A data hook that rejects the new user with a typed error stops the sign-up,
+// its error reaches the route's caller unchanged, and auth.signUp.failed fires.
+func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-veto.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(schema)
+	require.NoError(t, err)
+
+	p := emailpassword.New(emailpassword.Options{})
+	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	require.NoError(t, err)
+
+	veto := behemotherr.NewInvalidInputError("test", "user", "this email domain is not allowed", nil)
+	var failures []types.FailureReason
+	ac, err := binit.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), binit.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
+		},
+		Hooks: func(reg types.HookRegistry) error {
+			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
+				if email, _ := row[models.UserEmail].(string); strings.HasSuffix(email, "@blocked.example") {
+					return nil, veto
+				}
+				return row, nil
+			}, nil); err != nil {
+				return err
+			}
+			return reg.OnFailed(hooks.HookSignUpFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+				failures = append(failures, reason)
+				return nil
+			}, nil)
+		},
+	})
+	require.NoError(t, err)
+
+	var signUp types.Route
+	for _, r := range p.Routes() {
+		if r.Path == "/sign-up/email" {
+			signUp = r
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, signUp.Path, strings.NewReader(`{"email":"eve@blocked.example","password":"correct horse"}`))
+	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+
+	err = signUp.Handler(rctx)
+	assert.ErrorIs(t, err, veto, "the handler's own error, for the router to map")
+	status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "this email domain is not allowed", body["error"])
+
+	require.Len(t, failures, 1)
+	assert.Equal(t, "rejectedByHook", failures[0].Code)
+	assert.ErrorIs(t, failures[0].Cause, veto)
+	_, err = ac.Store.FindUserByEmail(ctx, "eve@blocked.example")
+	assert.True(t, behemotherr.IsNotFound(err), "nothing was written: %v", err)
+
+	w := call(t, ac, signUp, `{"email":"ada@example.com","password":"correct horse"}`)
+	assert.Equal(t, http.StatusCreated, w.Code, "other sign-ups are unaffected")
+	assert.Len(t, failures, 1)
+}
+
+// The exported flows run without an HTTP request, and Values last for one
+// operation: what a handler on a flow's before point leaves is there for the
+// flow's after point and, as a copy, for the operations nested in the flow
+// (the user write, the session create). What those write stays their own.
+func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-values.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(schema)
+	require.NoError(t, err)
+
+	p := emailpassword.New(emailpassword.Options{})
+	_, err = p.SignUp(ctx, behemoth.M{"email": "early@example.com", "password": "correct horse"})
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "a flow called before Boot is a configuration error: %v", err)
+
+	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	require.NoError(t, err)
+
+	type seen struct {
+		point  types.HookPoint
+		phase  types.HookPhase
+		values behemoth.M
+		hasReq bool
+	}
+	var log []seen
+	record := func(hctx *types.HookContext) {
+		values := behemoth.M{}
+		for k, v := range hctx.Values {
+			values[k] = v
+		}
+		log = append(log, seen{hctx.Point, hctx.Phase, values, hctx.Request != nil})
+	}
+	before := func(note string) types.BeforeHookFunc {
+		return func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+			record(hctx)
+			if note != "" {
+				hctx.Values[note] = true
+			}
+			return payload, nil
+		}
+	}
+	after := func(hctx *types.HookContext, _ any) error { record(hctx); return nil }
+
+	_, err = binit.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), binit.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
+		},
+		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, CaptureIPAndAgent: true},
+		Hooks: func(reg types.HookRegistry) error {
+			// An invite plugin in miniature: the code is input, the id it
+			// resolves to is a note for later points.
+			if err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+				record(hctx)
+				if payload["inviteCode"] == "ABC123" {
+					hctx.Values["invite.id"] = "inv-1"
+				}
+				return payload, nil
+			}, nil); err != nil {
+				return err
+			}
+			for point, note := range map[types.HookPoint]string{
+				hooks.HookUserBeforeCreate:    "write.note",
+				hooks.HookSignInBefore:        "signin.note",
+				hooks.HookSessionBeforeCreate: "session.note",
+			} {
+				if err := reg.OnBefore(point, before(note), nil); err != nil {
+					return err
+				}
+			}
+			for _, point := range []types.HookPoint{
+				hooks.HookUserAfterCreate, hooks.HookUserCreated, hooks.HookSignUpAfter,
+				hooks.HookSessionAfterCreate, hooks.HookSignInAfter,
+			} {
+				if err := reg.OnAfter(point, after, nil); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	user, err := p.SignUp(ctx, behemoth.M{"email": "ada@example.com", "password": "correct horse", "inviteCode": "ABC123"})
+	require.NoError(t, err)
+	require.NotEmpty(t, user.ID)
+
+	invite, write := behemoth.M{"invite.id": "inv-1"}, behemoth.M{"invite.id": "inv-1", "write.note": true}
+	assert.Equal(t, []seen{
+		{hooks.HookSignUpBefore, types.BeforeHookPhase, behemoth.M{}, false},
+		{hooks.HookUserBeforeCreate, types.BeforeHookPhase, invite, false},
+		{hooks.HookUserAfterCreate, types.AfterHookPhase, write, false},
+		{hooks.HookUserCreated, types.AfterHookPhase, write, false},
+		{hooks.HookSignUpAfter, types.AfterHookPhase, invite, false},
+	}, log, "the write sees the flow's note; the flow does not see the write's")
+
+	log = nil
+	result, err := p.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "correct horse"})
+	require.NoError(t, err, "sign-in works without an HTTP request")
+	assert.NotEmpty(t, result.RawToken)
+	assert.Empty(t, result.Session.IPAddress, "no request, no address")
+
+	signIn, session := behemoth.M{"signin.note": true}, behemoth.M{"signin.note": true, "session.note": true}
+	assert.Equal(t, []seen{
+		{hooks.HookSignInBefore, types.BeforeHookPhase, behemoth.M{}, false},
+		{hooks.HookSessionBeforeCreate, types.BeforeHookPhase, signIn, false},
+		{hooks.HookSessionAfterCreate, types.AfterHookPhase, session, false},
+		{hooks.HookSignInAfter, types.AfterHookPhase, signIn, false},
+	}, log)
+
+	// Called with a request's context, the same flow gives handlers the request.
+	log = nil
+	req := httptest.NewRequest(http.MethodPost, "/sign-in/email", nil)
+	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+	_, err = p.SignIn(types.ContextWithRequest(req.Context(), rctx),
+		emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "correct horse"})
+	require.NoError(t, err)
+	for _, s := range log {
+		assert.True(t, s.hasReq, "%s: the request on the context reaches the handler", s.point)
+	}
 }
 
 // The email and password rules are the plugin's own options.

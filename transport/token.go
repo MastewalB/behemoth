@@ -81,6 +81,7 @@ func (tm *DefaultTokenManager) Issue(
 	meta behemoth.M,
 ) (*types.Token, string, error) {
 	const op = "TokenManager.Issue"
+	ctx = types.BeginOperation(ctx) // beforeIssue and afterIssue share Values
 
 	def, ok := tm.catalog.Lookup(kind)
 	if !ok {
@@ -226,6 +227,7 @@ func (tm *DefaultTokenManager) Verify(ctx context.Context, kind types.TokenKind,
 
 func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind, rawToken string) (*types.Token, error) {
 	const op = "TokenManager.Consume"
+	ctx = types.BeginOperation(ctx) // one operation for the consume and its consumed or failed point
 
 	def, ok := tm.catalog.Lookup(kind)
 	if !ok {

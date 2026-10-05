@@ -241,10 +241,40 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 		})
 	})
 	if err != nil {
-		return nil, errors.New("user create failed")
+		// A typed error is returned as it is, so the caller keeps its
+		// category and public message: a data hook's veto on
+		// data.user.beforeCreate or afterCreate, or a classified store
+		// error. An untyped one may carry driver detail and is replaced.
+		if _, typed := errors.AsType[*behemotherr.DomainError](err); !typed {
+			return nil, errors.New("user create failed")
+		}
+		if isRejection(err) {
+			if failErr := dispatcher.Fail(hctx, hooks.HookSignUpFailed,
+				types.FailureReason{Code: "rejectedByHook", Cause: err}); failErr != nil {
+				return nil, failErr
+			}
+		}
+		return nil, err
 	}
 
 	return user, nil
+}
+
+// isRejection reports whether err is a refusal of the request, as opposed to
+// a failure of the system: a typed error in one of the categories a hook
+// handler or a rate limit answers with. Only rejections fire a failed point,
+// so an outage is not counted as a refused sign-up.
+func isRejection(err error) bool {
+	de, ok := errors.AsType[*behemotherr.DomainError](err)
+	if !ok {
+		return false
+	}
+	switch de.Category {
+	case behemotherr.CategoryValidation, behemotherr.CategoryConflict, behemotherr.CategoryUnauthorized,
+		behemotherr.CategoryForbidden, behemotherr.CategoryRateLimited:
+		return true
+	}
+	return false
 }
 
 func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*SignInResult, error) {
@@ -308,11 +338,10 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 		state = types.SessionPending
 	}
 
-	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{
-		IPAddress: hctx.Request.Request.RemoteAddr,
-		UserAgent: hctx.Request.Request.UserAgent(),
-		State:     state,
-	})
+	// The session manager reads the IP address and user agent from the
+	// request on hctx.Ctx, so sign-in also works without one (a job, another
+	// plugin calling in).
+	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{State: state})
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +355,63 @@ type SignInResult struct {
 	RawToken string
 }
 
+// SignUp creates a user with an email and a password, and the user's
+// credential account. input holds the sign-up fields under their column
+// names ("email", "password", and optionally "username", "firstname",
+// "lastname", "image_url"); other keys are not stored, but handlers on
+// auth.signUp.before see them. It fires auth.signUp.before, .after and
+// .failed.
+//
+// It is the flow behind POST /sign-up/email, for callers that are not that
+// route: a CLI, a job, another plugin. Pass the context of the request being
+// handled when there is one; hook handlers get the request from it. The
+// plugin must have been initialized by Boot.
+func (p *Plugin) SignUp(ctx context.Context, input behemoth.M) (*models.User, error) {
+	hctx, err := p.operation(ctx, "emailpassword.SignUp")
+	if err != nil {
+		return nil, err
+	}
+	return p.signUp(hctx, input)
+}
+
+// SignIn verifies creds and creates a session for the user. The session is
+// pending instead of active when a handler on auth.signIn.credentialsVerified
+// asked for a second factor. It fires auth.signIn.before, .after and
+// .failed.
+//
+// It is the flow behind POST /sign-in/email. Like SignUp it runs without an
+// HTTP request; the session then records no IP address or user agent unless
+// the caller's context carries a request. The raw session token is in the
+// result and is the caller's to deliver.
+func (p *Plugin) SignIn(ctx context.Context, creds EmailAndPasswordCredentials) (*SignInResult, error) {
+	hctx, err := p.operation(ctx, "emailpassword.SignIn")
+	if err != nil {
+		return nil, err
+	}
+	return p.signIn(hctx, creds)
+}
+
+// operation builds the HookContext one flow call runs with. Its Values start
+// as a copy of the operation ctx already belongs to, if any, and Request is
+// the request ctx carries, or nil.
+func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, error) {
+	if p.authContext == nil {
+		return nil, behemotherr.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+	}
+	return &types.HookContext{
+		Ctx:     ctx,
+		Auth:    p.authContext,
+		Values:  types.NestedHookValues(ctx),
+		Request: types.RequestFrom(ctx),
+	}, nil
+}
+
+// SignOut revokes the session with sessionID. It fires auth.signOut.before
+// and .after around the revoke, as one operation: both points share
+// hctx.Values, and the session manager's revoke points start from a copy of
+// them.
 func SignOut(hctx *types.HookContext, sessionID string) error {
+	hctx = types.AsOperation(hctx)
 	ac := hctx.Auth
 	if _, err := ac.Dispatcher.RunBefore(hctx, hooks.HookSignOutBefore, behemoth.M{"sessionID": sessionID}); err != nil {
 		return err
@@ -343,11 +428,15 @@ func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 		return rctx.Response.Error(http.StatusBadRequest, "invalid request body")
 	}
 
-	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx, Values: behemoth.M{}}
-
-	user, err := p.signUp(hctx, body)
+	user, err := p.SignUp(rctx.Ctx, body)
 	if err != nil {
-		return rctx.Response.Error(http.StatusBadRequest, err.Error()) // real status mapping deferred to HTTP layer pillar
+		// A typed error carries its own status and public message, and the
+		// router maps it (RouterConfig.ErrorMapper). The flow's own untyped
+		// rejections ("invalid email", "user already exists") are a 400.
+		if _, typed := errors.AsType[*behemotherr.DomainError](err); typed {
+			return err
+		}
+		return rctx.Response.Error(http.StatusBadRequest, err.Error())
 	}
 	return rctx.Response.JSON(http.StatusCreated, user)
 }
@@ -359,9 +448,7 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 		// return rctx.Response.Error(http.StatusBadRequest, "invalid request body")
 	}
 
-	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx, Values: behemoth.M{}}
-
-	result, err := p.signIn(hctx, creds)
+	result, err := p.SignIn(rctx.Ctx, creds)
 	if err != nil {
 		return behemotherr.NewValidationError("SignIn", "request", err)
 		// return rctx.Response.Error(http.StatusUnauthorized, err.Error())
@@ -376,7 +463,7 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 
 func (p *Plugin) handleSignOut(rctx *types.RequestContext) error {
 	sessionID, _ := rctx.Values["sessionID"].(string) // populated by session middleware upstream
-	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx, Values: behemoth.M{}}
+	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
 	if err := SignOut(hctx, sessionID); err != nil {
 		return rctx.Response.Error(http.StatusInternalServerError, err.Error())
 	}
