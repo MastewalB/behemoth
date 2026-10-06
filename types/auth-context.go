@@ -3,6 +3,7 @@ package types
 import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 )
 
 type AuthContext struct {
@@ -22,5 +23,8 @@ type AuthContext struct {
 	TokenManager   TokenManager
 	Dispatcher     Dispatcher
 	RateLimiter    RateLimiter
-	Telemetry      Telemetry
+	// Telemetry is never nil on an AuthContext Boot returns, and neither are
+	// its fields. Plugins take their logger from here, usually through
+	// telemetry.Named.
+	Telemetry *telemetry.Telemetry
 }

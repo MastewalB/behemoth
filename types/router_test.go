@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 )
 
 // recordingDriver keeps the routes Build hands it, so tests can call them.
@@ -205,5 +208,129 @@ func TestApplyRateLimitingMatchesRelativeAndAbsolutePaths(t *testing.T) {
 		if got := w.Code == http.StatusTooManyRequests; got != tc.limited {
 			t.Errorf("%s %s: status %d, limited = %v, want %v", tc.method, tc.path, w.Code, got, tc.limited)
 		}
+	}
+}
+
+func TestRouterRequestID(t *testing.T) {
+	var seen string
+	handler := func(rctx *RequestContext) error {
+		seen = telemetry.RequestIDFrom(rctx.Ctx)
+		return behemotherr.NewInternalError("test", errors.New("boom")) // the header is set on error responses too
+	}
+	build := func(cfg RouterConfig) Route {
+		r := NewRouter(cfg, nil)
+		if err := r.Mount("test", "", []Route{{Method: http.MethodGet, Path: "/x", Handler: handler}}); err != nil {
+			t.Fatal(err)
+		}
+		d := &recordingDriver{}
+		if err := r.Build(d); err != nil {
+			t.Fatal(err)
+		}
+		return d.routes[0]
+	}
+	serve := func(rt Route, ctx context.Context, header, value string) string {
+		req := httptest.NewRequest(http.MethodGet, rt.Path, nil)
+		if header != "" {
+			req.Header.Set(header, value)
+		}
+		rctx := &RequestContext{Ctx: ctx, Request: req, Response: NewResponseRecorder(), Values: map[string]any{}}
+		if err := rt.Handler(rctx); err != nil {
+			t.Fatal(err)
+		}
+		return rctx.Response.Headers.Get(header)
+	}
+
+	rt := build(RouterConfig{})
+	const header = telemetry.DefaultRequestIDHeader
+
+	// The caller's ID is kept and echoed.
+	if got := serve(rt, nil, header, "client-id-1"); got != "client-id-1" || seen != "client-id-1" {
+		t.Errorf("echoed %q, handler saw %q; want client-id-1 for both", got, seen)
+	}
+	// An unusable value is replaced.
+	if got := serve(rt, nil, header, "bad id\twith spaces"); got == "" || got != seen || !telemetry.ValidRequestID(got) || strings.Contains(got, "bad") {
+		t.Errorf("echoed %q, handler saw %q; want one generated ID", got, seen)
+	}
+	// No header: one is generated.
+	req := httptest.NewRequest(http.MethodGet, rt.Path, nil)
+	rctx := &RequestContext{Request: req, Response: NewResponseRecorder(), Values: map[string]any{}}
+	if err := rt.Handler(rctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := rctx.Response.Headers.Get(header); len(got) != 32 || got != seen {
+		t.Errorf("echoed %q, handler saw %q; want one generated ID", got, seen)
+	}
+	// An ID the application put on the context wins over the header.
+	ctx := telemetry.ContextWithRequestID(context.Background(), "from-app")
+	if got := serve(rt, ctx, header, "client-id-2"); got != "from-app" || seen != "from-app" {
+		t.Errorf("echoed %q, handler saw %q; want from-app for both", got, seen)
+	}
+
+	// A configured header replaces the default one.
+	custom := build(RouterConfig{RequestIDHeader: "X-Correlation-ID"})
+	if got := serve(custom, nil, "X-Correlation-ID", "corr-1"); got != "corr-1" || seen != "corr-1" {
+		t.Errorf("echoed %q, handler saw %q; want corr-1 for both", got, seen)
+	}
+}
+
+// A 5xx is the server's failure and is logged at Error with the error's
+// taxonomy fields; a rejection is logged at Debug only.
+func TestRouterLogsFailures(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	r := NewRouter(RouterConfig{}, &AuthContext{Telemetry: tel})
+	err := r.Mount("test", "", []Route{
+		{Method: http.MethodGet, Path: "/users/{id}", Handler: func(*RequestContext) error {
+			return behemotherr.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
+		}},
+		{Method: http.MethodGet, Path: "/missing", Handler: func(*RequestContext) error {
+			return behemotherr.NewNotFound("Store.FindUser", "user", nil)
+		}},
+		{Method: http.MethodGet, Path: "/ok", Handler: func(rctx *RequestContext) error {
+			return rctx.Response.JSON(http.StatusOK, map[string]string{})
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &recordingDriver{}
+	if err := r.Build(d); err != nil {
+		t.Fatal(err)
+	}
+
+	w := d.serve(t, http.MethodGet, "/api/auth/users/{id}")
+	d.serve(t, http.MethodGet, "/api/auth/missing")
+	d.serve(t, http.MethodGet, "/api/auth/ok")
+
+	errorLines := rec.Logger.At(slog.LevelError)
+	if len(errorLines) != 1 {
+		t.Fatalf("error lines = %v, want exactly the 500", errorLines)
+	}
+	got := errorLines[0].Fields
+	want := map[string]any{
+		telemetry.FieldComponent:     "router",
+		telemetry.FieldMethod:        http.MethodGet,
+		telemetry.FieldRoute:         "/api/auth/users/{id}",
+		telemetry.FieldStatus:        http.StatusInternalServerError,
+		telemetry.FieldError:         "connection refused",
+		telemetry.FieldErrorCode:     "database_error",
+		telemetry.FieldErrorCategory: "database",
+		telemetry.FieldOp:            "Store.FindUser",
+		telemetry.FieldRequestID:     w.Header().Get(telemetry.DefaultRequestIDHeader),
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
+	}
+	if got[telemetry.FieldRequestID] == "" {
+		t.Error("the error line has no request ID")
+	}
+	if strings.Contains(w.Body.String(), "connection refused") {
+		t.Errorf("the internal message reached the client: %s", w.Body.String())
+	}
+
+	debugLines := rec.Logger.At(slog.LevelDebug)
+	if len(debugLines) != 1 || debugLines[0].Fields[telemetry.FieldStatus] != http.StatusNotFound {
+		t.Errorf("debug lines = %v, want exactly the 404", debugLines)
 	}
 }

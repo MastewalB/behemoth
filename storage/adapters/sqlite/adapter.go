@@ -12,6 +12,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/mattn/go-sqlite3"
 )
@@ -24,10 +25,29 @@ import (
 type SQLiteAdapter struct {
 	DB       adapters.Querier
 	Resolver behemoth.SchemaResolver
+
+	// Logger receives the text of every statement at Debug. nil = none.
+	// Set it with WithLogger.
+	Logger telemetry.Logger
 }
 
 func NewSQLiteAdapter(db adapters.Querier, resolver behemoth.SchemaResolver) *SQLiteAdapter {
 	return &SQLiteAdapter{DB: db, Resolver: resolver}
+}
+
+// WithLogger makes the adapter write the text of every statement it runs to
+// logger at Debug, and returns the adapter. Argument values are never
+// logged: they hold password hashes and token hashes. Adapters bound to a
+// transaction (see Transaction) log to the same logger.
+func (sqlt *SQLiteAdapter) WithLogger(logger telemetry.Logger) *SQLiteAdapter {
+	sqlt.Logger = logger
+	return sqlt
+}
+
+// q is the connection statements run on: DB, logging each statement when a
+// Logger is set.
+func (sqlt *SQLiteAdapter) q() adapters.Querier {
+	return adapters.LogQueries(sqlt.DB, sqlt.Logger, "storage.sqlite")
 }
 
 func (sqlt *SQLiteAdapter) names() behemoth.SchemaResolver {
@@ -60,7 +80,7 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 		placeholders,
 	)
 
-	_, err := sqlt.DB.ExecContext(ctx, query, values...)
+	_, err := sqlt.q().ExecContext(ctx, query, values...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
@@ -89,8 +109,7 @@ func (sqlt *SQLiteAdapter) FindOne(
 	}
 	query += " LIMIT 1"
 
-	fmt.Println("Executing query:", query, "with args:", args)
-	row := sqlt.DB.QueryRowContext(ctx, query, args...)
+	row := sqlt.q().QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
@@ -153,8 +172,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 
 	}
 
-	fmt.Println("Executing query:", query, "with args:", args)
-	rows, err := sqlt.DB.QueryContext(ctx, query, args...)
+	rows, err := sqlt.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
@@ -196,7 +214,7 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 		adapters.PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName()),
 	)
 
-	res, err := sqlt.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	res, err := sqlt.q().ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
@@ -246,7 +264,7 @@ func (sqlt *SQLiteAdapter) UpdateOne(
 	query += " AND (" + whereClause + ")"
 	queryArgs := append(append(values, args...), args...)
 
-	res, err := sqlt.DB.ExecContext(ctx, query, queryArgs...)
+	res, err := sqlt.q().ExecContext(ctx, query, queryArgs...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
@@ -283,8 +301,7 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 		whereExpression,
 	)
 
-	fmt.Println("Executing query ", query)
-	_, err := sqlt.DB.ExecContext(ctx, query, append(values, args...)...)
+	_, err := sqlt.q().ExecContext(ctx, query, append(values, args...)...)
 
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
@@ -295,7 +312,7 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		adapters.PhysicalTable(sqlt.names(), m),
 		adapters.PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName()),
 	)
-	res, err := sqlt.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	res, err := sqlt.q().ExecContext(ctx, query, m.PrimaryKeyField())
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
@@ -332,7 +349,7 @@ func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 
 	// expr is repeated in the outer WHERE so it holds for the row as deleted.
 	query += " AND (" + whereClause + ")"
-	res, err := sqlt.DB.ExecContext(ctx, query, append(args, args...)...)
+	res, err := sqlt.q().ExecContext(ctx, query, append(args, args...)...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
@@ -356,7 +373,7 @@ func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 		whereClause,
 	)
 
-	_, err := sqlt.DB.ExecContext(ctx, query, args...)
+	_, err := sqlt.q().ExecContext(ctx, query, args...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
@@ -366,7 +383,7 @@ func (sqlt *SQLiteAdapter) DeleteAll(ctx context.Context, m behemoth.Model) erro
 		adapters.PhysicalTable(sqlt.names(), m),
 	)
 
-	_, err := sqlt.DB.ExecContext(ctx, query)
+	_, err := sqlt.q().ExecContext(ctx, query)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 }
 
@@ -381,7 +398,7 @@ func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 		query += " WHERE " + whereClause
 	}
 
-	row, err := sqlt.DB.QueryContext(ctx, query, args...)
+	row, err := sqlt.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
 	}
@@ -430,7 +447,7 @@ func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 		}
 	}()
 
-	txAdapter := NewSQLiteAdapter(tx, sqlt.Resolver)
+	txAdapter := NewSQLiteAdapter(tx, sqlt.Resolver).WithLogger(sqlt.Logger)
 	_, err = fn(ctx, txAdapter)
 
 	if err != nil {

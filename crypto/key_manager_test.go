@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -314,6 +315,4 @@ func (m *MockSecretSource) Load(ctx context.Context) (map[int]string, int, error
 	return m.secrets, m.current, nil
 }
 
-var tel = &types.Telemetry{
-	Logger: types.NoOpLogger{},
-}
+var tel = telemetry.New(nil, nil, nil)

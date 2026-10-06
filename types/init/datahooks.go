@@ -7,6 +7,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 )
@@ -170,9 +171,9 @@ func (h dataHooks) AfterUpdate(ctx context.Context, tx *store.Store, table strin
 func (h dataHooks) onCommit(ctx context.Context, tx *store.Store, values behemoth.M, point types.HookPoint, row behemoth.Model) {
 	tx.AfterCommit(ctx, func(ctx context.Context) {
 		hctx := h.hookContext(types.ContextWithHookValues(ctx, values), nil, point, types.AfterHookPhase)
-		if err := h.ac.Dispatcher.RunAfter(hctx, point, row); err != nil && h.ac.Telemetry.Logger != nil {
-			h.ac.Telemetry.Logger.Error(hctx.Ctx, "after-commit data hook could not be dispatched",
-				behemoth.M{"point": string(point), "error": err})
+		if err := h.ac.Dispatcher.RunAfter(hctx, point, row); err != nil && h.ac.Telemetry != nil {
+			telemetry.Named(h.ac.Telemetry.Logger, "hooks").Error(hctx.Ctx, "after-commit data hook could not be dispatched",
+				telemetry.ErrorFields(err, behemoth.M{telemetry.FieldPoint: string(point)}))
 		}
 	})
 }

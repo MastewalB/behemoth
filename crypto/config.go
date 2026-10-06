@@ -4,6 +4,7 @@ import (
 	"context"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 )
 
@@ -23,13 +24,11 @@ type Config struct {
 // New builds every cryptographic component from cfg, all sharing one
 // KeyManager. ctx bounds the KeyManager's secret watch, if the source
 // supports hot rotation, so it should live as long as the application.
-func New(ctx context.Context, cfg Config, tel *types.Telemetry) (types.Crypto, error) {
+func New(ctx context.Context, cfg Config, tel *telemetry.Telemetry) (types.Crypto, error) {
 	if cfg.Secrets == nil {
 		return types.Crypto{}, behemotherr.NewConfigurationError("crypto.New", "a SecretSource is required", nil)
 	}
-	if tel == nil {
-		tel = types.NewTelemetry(nil, nil, nil)
-	}
+	tel = telemetry.OrDefault(tel)
 
 	km, err := NewDefaultKeyManager(ctx, cfg.KeyManager, cfg.Secrets, tel)
 	if err != nil {

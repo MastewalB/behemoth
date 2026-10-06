@@ -9,6 +9,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
@@ -21,7 +22,6 @@ type DefaultTokenManager struct {
 	crypto  types.Crypto
 	cfg     types.TokenConfig
 	disp    types.Dispatcher
-	tel     *types.Telemetry
 	auth    *types.AuthContext
 }
 
@@ -47,6 +47,15 @@ func NewDefaultTokenManager(
 		cfg:     cfg,
 		auth:    auth,
 	}
+}
+
+// log returns the manager's logger. It is read from the AuthContext on use,
+// because Boot hands the manager its AuthContext before every field is set.
+func (tm *DefaultTokenManager) log() telemetry.Logger {
+	if tm.auth == nil || tm.auth.Telemetry == nil {
+		return telemetry.NoOpLogger{}
+	}
+	return telemetry.Named(tm.auth.Telemetry.Logger, "token")
 }
 
 func kvKey(kind types.TokenKind, lookupHash string) string {
@@ -186,7 +195,11 @@ func (tm *DefaultTokenManager) fetch(ctx context.Context, st *store.Store, def t
 		}
 		m = &types.Token{}
 		if err := json.Unmarshal([]byte(raw), m); err != nil {
-			return nil, behemotherr.NewTokenError(op, behemotherr.ErrorCodeTokenNotFound, err) // corrupted cache entry treated as absent
+			// A corrupted entry is treated as absent, so the caller sees an
+			// ordinary "not found". The line is the only sign of it.
+			tm.log().Warn(ctx, "token entry in the key-value store could not be decoded; treating it as absent",
+				telemetry.ErrorFields(err, behemoth.M{"kind": string(kind)}))
+			return nil, behemotherr.NewTokenError(op, behemotherr.ErrorCodeTokenNotFound, err)
 		}
 	default:
 		found, err := st.FindTokenByLookupHash(ctx, kind, lookupHash)

@@ -116,7 +116,6 @@ func mapRowToStruct[T any](row ScannableRow, entity T, columns []string) (T, err
 		} else {
 			var dummy any
 			dest[i] = &dummy
-			fmt.Println("No matching field for column", col)
 			errorList = append(errorList, "In else")
 		}
 	}
@@ -124,7 +123,6 @@ func mapRowToStruct[T any](row ScannableRow, entity T, columns []string) (T, err
 	// Scan the row into the destination slice
 	err := row.Scan(dest...)
 	if err != nil {
-		fmt.Println("Scan error:", err)
 		return entity, errors.New(
 			"Scan error: " +
 				err.Error() +

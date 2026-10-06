@@ -13,6 +13,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
@@ -34,6 +35,7 @@ const pluginVersion = "0.1.0"
 type Plugin struct {
 	opts        Options
 	authContext *types.AuthContext
+	log         telemetry.Logger
 	signUp      func(hctx *types.HookContext, in behemoth.M) (*models.User, error)
 	signIn      func(hctx *types.HookContext, in EmailAndPasswordCredentials) (*SignInResult, error)
 }
@@ -139,6 +141,10 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 		return behemotherr.NewConfigurationError("emailpassword.Init", "AuthContext.Crypto has no password hasher", nil)
 	}
 	p.authContext = ac
+	p.log = telemetry.NoOpLogger{}
+	if ac.Telemetry != nil {
+		p.log = telemetry.Named(ac.Telemetry.Logger, PluginName)
+	}
 	p.signUp = types.WithLifecycle(ac.Dispatcher, hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed, p.signUpBody)
 	p.signIn = types.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.signInBody)
 	return nil
@@ -196,7 +202,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 	if err == nil {
 		hasher.Hash(password) // timing mitigation, unchanged
-		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists"}); err != nil {
+		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("user already exists")
@@ -250,7 +256,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 		}
 		if isRejection(err) {
 			if failErr := dispatcher.Fail(hctx, hooks.HookSignUpFailed,
-				types.FailureReason{Code: "rejectedByHook", Cause: err}); failErr != nil {
+				types.FailureReason{Code: "rejectedByHook", Cause: err, Metadata: behemoth.M{hooks.HookValueEmail: email}}); failErr != nil {
 				return nil, failErr
 			}
 		}
@@ -285,12 +291,20 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 	if err != nil {
 		hasher.Hash(creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
-			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "userNotFound"}); err != nil {
+			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
+				Code: "userNotFound", Metadata: behemoth.M{hooks.HookValueEmail: strings.ToLower(strings.TrimSpace(creds.Email))},
+			}); err != nil {
 				return nil, err
 			}
 			return nil, errors.New("invalid email or password")
 		}
 		return nil, err // infra error (DB down) — must NOT count toward lockout
+	}
+
+	// Every rejection from here on is an attempt on a known account, and
+	// its audit event says which.
+	rejected := func(code string, cause error) types.FailureReason {
+		return types.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID}
 	}
 
 	// The password lives on the user's "credential" account. A user without
@@ -300,7 +314,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 	if err != nil {
 		hasher.Hash(creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
-			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "noCredentialAccount"}); err != nil {
+			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("noCredentialAccount", nil)); err != nil {
 				return nil, err
 			}
 			return nil, errors.New("invalid email or password")
@@ -314,7 +328,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 	}
 
 	if !isValid {
-		if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalidCredentials"}); err != nil {
+		if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("invalidCredentials", nil)); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("invalid email or password")
@@ -327,7 +341,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
 		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed,
-			types.FailureReason{Code: "secondFactorRejected", Cause: err}); failErr != nil {
+			rejected("secondFactorRejected", err)); failErr != nil {
 			return nil, failErr
 		}
 		return nil, err
@@ -353,6 +367,14 @@ type SignInResult struct {
 	User     *models.User
 	Session  *models.Session
 	RawToken string
+}
+
+// AuditSubject implements [types.AuditSubject]: a sign-in is about its user.
+func (r *SignInResult) AuditSubject() (subjectType, subjectID string) {
+	if r == nil || r.User == nil {
+		return "", ""
+	}
+	return models.UserTable, r.User.ID
 }
 
 // SignUp creates a user with an email and a password, and the user's
@@ -412,6 +434,7 @@ func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, 
 // them.
 func SignOut(hctx *types.HookContext, sessionID string) error {
 	hctx = types.AsOperation(hctx)
+	hctx.Values[hooks.HookValueSessionID] = sessionID // for the operation's later points and its audit event
 	ac := hctx.Auth
 	if _, err := ac.Dispatcher.RunBefore(hctx, hooks.HookSignOutBefore, behemoth.M{"sessionID": sessionID}); err != nil {
 		return err
@@ -450,6 +473,12 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 
 	result, err := p.SignIn(rctx.Ctx, creds)
 	if err != nil {
+		// Every failure is answered as a validation error below, so a
+		// system failure (the database is down) never reaches the router as
+		// a 5xx and the router does not log it. It is logged here.
+		if _, typed := errors.AsType[*behemotherr.DomainError](err); typed && !isRejection(err) {
+			p.log.Error(rctx.Ctx, "sign-in failed", telemetry.ErrorFields(err))
+		}
 		return behemotherr.NewValidationError("SignIn", "request", err)
 		// return rctx.Response.Error(http.StatusUnauthorized, err.Error())
 	}
@@ -465,6 +494,9 @@ func (p *Plugin) handleSignOut(rctx *types.RequestContext) error {
 	sessionID, _ := rctx.Values["sessionID"].(string) // populated by session middleware upstream
 	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
 	if err := SignOut(hctx, sessionID); err != nil {
+		// The response is written here and not by the router, so the router
+		// does not log this failure.
+		p.log.Error(rctx.Ctx, "sign-out failed", telemetry.ErrorFields(err))
 		return rctx.Response.Error(http.StatusInternalServerError, err.Error())
 	}
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})

@@ -306,7 +306,7 @@ Both run the same frozen after-chain. They differ in what a handler error means.
 | Handler returns an error | logged, chain continues | chain stops, error returned |
 | Handler panics | logged as an error, chain continues | chain stops, internal error returned |
 | Return value | nil, unless the point can't be dispatched | the first error |
-| Audit event (`HookPointDef.Audit`) | recorded | not recorded |
+| Audit event (`HookPointDef.Audit`) | recorded once the operation is over, best effort | written through the write's transaction; a failed write is returned |
 
 All four dispatcher methods start with `DefaultDispatcher.checkPhase`. A point that was never declared, or is declared with another phase, returns a configuration error and runs no handler. For `RunAfter` and `Fail` this is the only error they return.
 
@@ -353,7 +353,7 @@ Details that matter:
 ### **Limits to know**
 
 - **After-commit delivery is best effort.** The queue is in memory. A process that stops between the commit and the callbacks never runs them. There is no outbox in core; see the decision below.
-- **The in-transaction after points are not audited.** `RunAfterTx` skips the audit record even when the point declares `Audit`, because the row can still be rolled back. The after-commit points are dispatched with `RunAfter`, which records. Core declares no `Audit` on any data point today.
+- **The in-transaction after points are audited inside the transaction.** `data.user.afterCreate` and `data.user.afterUpdate` are declared with an `AuditSpec`. `RunAfterTx` writes the event through `HookContext.Tx`, so it commits or rolls back with the row, and a failed audit insert fails the write. The after-commit points carry no spec, so a write is recorded once. See `../telemetry/audit.md`.
 - **A hook can run more than once on MongoDB.** The Mongo adapter uses `session.WithTransaction`, which runs its callback again on a transient error. A hooked write and its hooks are inside that callback. Writes through `HookContext.Tx` and `Tx.DB()` are rolled back between attempts, so they are unaffected. Anything else a hook does is repeated.
 - **Hooked writes need transaction support.** A write to a table that fires hooks always opens a transaction. MongoDB only supports transactions on a replica set or sharded cluster, so the MongoDB adapter requires one. `Boot` fails on a standalone server (`behemoth.TransactionChecker`, see [`../database/adapters/transactions.md`](../database/adapters/transactions.md)).
 - **Hooks hold the transaction open.** A slow handler keeps locks for as long as it runs. On SQLite that blocks every other writer.

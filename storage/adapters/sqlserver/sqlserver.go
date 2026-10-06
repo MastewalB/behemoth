@@ -25,6 +25,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/utils"
 	mssql "github.com/microsoft/go-mssqldb"
 )
@@ -50,12 +51,31 @@ import (
 type SQLServerAdapter struct {
 	DB       adapters.Querier
 	Resolver behemoth.SchemaResolver
+
+	// Logger receives the text of every statement at Debug. nil = none.
+	// Set it with WithLogger.
+	Logger telemetry.Logger
 }
 
 // NewSQLServerAdapter wraps db (a *sql.DB, or a *sql.Tx). resolver maps
 // canonical names to physical ones; nil uses them as-is.
 func NewSQLServerAdapter(db adapters.Querier, resolver behemoth.SchemaResolver) *SQLServerAdapter {
 	return &SQLServerAdapter{DB: db, Resolver: resolver}
+}
+
+// WithLogger makes the adapter write the text of every statement it runs to
+// logger at Debug, and returns the adapter. Argument values are never
+// logged: they hold password hashes and token hashes. Adapters bound to a
+// transaction (see Transaction) log to the same logger.
+func (ms *SQLServerAdapter) WithLogger(logger telemetry.Logger) *SQLServerAdapter {
+	ms.Logger = logger
+	return ms
+}
+
+// q is the connection statements run on: DB, logging each statement when a
+// Logger is set.
+func (ms *SQLServerAdapter) q() adapters.Querier {
+	return adapters.LogQueries(ms.DB, ms.Logger, "storage.sqlserver")
 }
 
 func (ms *SQLServerAdapter) names() behemoth.SchemaResolver {
@@ -101,8 +121,7 @@ func (ms *SQLServerAdapter) Create(ctx context.Context, m behemoth.Model) error 
 		strings.Join(placeholders, ", "),
 	)
 
-	fmt.Println(query, values)
-	_, err := ms.DB.ExecContext(ctx, query, values...)
+	_, err := ms.q().ExecContext(ctx, query, values...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 
 }
@@ -131,8 +150,7 @@ func (ms *SQLServerAdapter) FindOne(
 		query += " WHERE " + whereClause
 	}
 
-	fmt.Println(query, args)
-	row := ms.DB.QueryRowContext(ctx, query, args...)
+	row := ms.q().QueryRowContext(ctx, query, args...)
 	if err := row.Scan(valuePtrs...); err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 	}
@@ -189,7 +207,7 @@ func (ms *SQLServerAdapter) FindMany(
 		query = appendMSSQLPagination(query, orderBy, options)
 	}
 
-	rows, err := ms.DB.QueryContext(ctx, query, args...)
+	rows, err := ms.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 	}
@@ -229,7 +247,7 @@ func (ms *SQLServerAdapter) Update(ctx context.Context, m behemoth.Model) error 
 		pkPlaceholder,
 	)
 
-	res, err := ms.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	res, err := ms.q().ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 	}
@@ -281,7 +299,7 @@ func (ms *SQLServerAdapter) UpdateOne(
 	query += " AND (" + guard + ")"
 	args = append(args, guardArgs...)
 
-	res, err := ms.DB.ExecContext(ctx, query, args...)
+	res, err := ms.q().ExecContext(ctx, query, args...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 	}
@@ -313,7 +331,7 @@ func (ms *SQLServerAdapter) UpdateMany(
 		whereClause,
 	)
 
-	_, err := ms.DB.ExecContext(ctx, query, append(values, whereArgs...)...)
+	_, err := ms.q().ExecContext(ctx, query, append(values, whereArgs...)...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 }
 
@@ -324,7 +342,7 @@ func (ms *SQLServerAdapter) Delete(ctx context.Context, m behemoth.Model) error 
 		adapters.PhysicalTable(ms.names(), m),
 		adapters.PhysicalColumn(ms.names(), m, m.PrimaryKeyName()),
 	)
-	res, err := ms.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	res, err := ms.q().ExecContext(ctx, query, m.PrimaryKeyField())
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 	}
@@ -366,7 +384,7 @@ func (ms *SQLServerAdapter) DeleteOne(
 	// numbered placeholders continue after the subquery's.
 	guard, guardArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(args)+1))
 	query += " AND (" + guard + ")"
-	res, err := ms.DB.ExecContext(ctx, query, append(args, guardArgs...)...)
+	res, err := ms.q().ExecContext(ctx, query, append(args, guardArgs...)...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 	}
@@ -393,13 +411,13 @@ func (ms *SQLServerAdapter) DeleteMany(
 		whereClause,
 	)
 
-	_, err := ms.DB.ExecContext(ctx, query, args...)
+	_, err := ms.q().ExecContext(ctx, query, args...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 }
 
 func (ms *SQLServerAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf("DELETE FROM %s", adapters.PhysicalTable(ms.names(), m))
-	_, err := ms.DB.ExecContext(ctx, query)
+	_, err := ms.q().ExecContext(ctx, query)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 }
 
@@ -418,7 +436,7 @@ func (ms *SQLServerAdapter) Count(
 		query += " WHERE " + whereClause
 	}
 
-	row, err := ms.DB.QueryContext(ctx, query, args...)
+	row, err := ms.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 	}
@@ -467,7 +485,7 @@ func (ms *SQLServerAdapter) Transaction(ctx context.Context, fn behemoth.Transac
 		}
 	}()
 
-	txAdapter := NewSQLServerAdapter(tx, ms.Resolver)
+	txAdapter := NewSQLServerAdapter(tx, ms.Resolver).WithLogger(ms.Logger)
 	_, err = fn(ctx, txAdapter)
 
 	if err != nil {

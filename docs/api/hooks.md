@@ -367,7 +367,7 @@ reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) err
 - **MongoDB needs a replica set.** A hooked write always opens a transaction, and a standalone MongoDB server has none. `Boot` returns a configuration error on a standalone server. A single-node replica set is enough: start `mongod` with `--replSet rs0` and run `rs.initiate()` once. A sharded cluster also works.
 - **A slow handler holds the transaction open.** It keeps its locks for as long as it runs. On SQLite that blocks every other writer.
 - **To react to a committed row, use the after-commit points.** See [After-commit data points](#after-commit-data-points).
-- **`afterCreate` and `afterUpdate` record no audit events.** See [Audit](#audit).
+- **`afterCreate` and `afterUpdate` write their audit event in the same transaction.** See [Audit](#audit).
 
 ## What each data point carries
 
@@ -400,11 +400,18 @@ A rate-limit rule can be attached to a before point with `HookRateLimitRule`. Th
 
 ## Audit
 
-A point can be declared with an `AuditSpec`. The dispatcher then records an audit event each time the point is dispatched, after its handlers have run. The event type defaults to the point's name.
+A point can be declared with an `AuditSpec`. The dispatcher then records one audit event each time the point is dispatched, after its handlers have run. The event type defaults to the point's name.
 
-- This applies to Tier 2 after points, to failed points and to the after-commit data points (`data.user.created`, `data.user.updated`).
-- The in-transaction after points (`data.user.afterCreate`, `data.user.afterUpdate`) record nothing, even when declared with an `AuditSpec`. Their row may still be rolled back, and the audit log would describe a write that never happened.
-- Core declares no `AuditSpec` on the data points today.
+- Tier 2 after points, failed points and the after-commit data points record best effort: the operation is over, and a failed audit write is logged.
+- The in-transaction after points (`data.user.afterCreate`, `data.user.afterUpdate`) write the event in the write's transaction. The event exists exactly when the row does. A failed audit write fails the write.
+- Before points never record.
+
+Core audits the after and failed points of sign-up, sign-in, sign-out, sessions and tokens, and user creation and updates. [Telemetry](telemetry.md#audit) lists the events and explains how to read them.
+
+Two things let your own flow describe its events:
+
+- A failed point's `FailureReason` can name what was targeted (`SubjectType`, `SubjectID`) and add detail (`Metadata`).
+- An after point's result can implement `types.AuditSubject` when it is not a model.
 
 ## Declaring and firing your own points
 
@@ -488,7 +495,7 @@ Core declares these, so a handler can be registered on any of them.
 | `auth.signIn.before` | before | email/password sign-in | `email`, `password` |
 | `auth.signIn.credentialsVerified` | before | sign-in, after the password check | `HookValueUserID`. A second-factor plugin stops the sign-in here. |
 | `auth.signIn.after` | after | email/password sign-in | the sign-in result |
-| `auth.signIn.failed` | failed | email/password sign-in | codes `userNotFound`, `noCredentialAccount`, `invalidCredentials`, `secondFactorRejected`, `rejectedByHook`. Audited. |
+| `auth.signIn.failed` | failed | email/password sign-in | codes `userNotFound`, `noCredentialAccount`, `invalidCredentials`, `secondFactorRejected`, `rejectedByHook` |
 | `auth.signOut.before` | before | sign-out | `sessionID` |
 | `auth.signOut.after` | after | sign-out | nil |
 | `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent. The last two come from the request being handled unless the caller of `SessionManager.Create` set them, and are empty when `CaptureIPAndAgent` is off or there is no request. |

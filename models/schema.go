@@ -118,3 +118,34 @@ func RateLimitTableSchema() schema.Table {
 		Indexes: []schema.Index{{Name: "idx_rate_limits_expires_at", Columns: []string{RateLimitExpiresAt}}},
 	}
 }
+
+// AuditLogTableSchema has an index per column Store.QueryAuditEvents filters
+// on. The id needs none beyond the primary key, which is also the order
+// events are paged in.
+func AuditLogTableSchema() schema.Table {
+	return schema.Table{
+		Name: AuditLogTable,
+		Columns: []schema.Column{
+			{Name: AuditLogID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true},
+			{Name: AuditLogEventType, Type: schema.ColTypeString, Length: 128},
+			{Name: AuditLogOutcome, Type: schema.ColTypeString, Length: 16},
+			{Name: AuditLogActorType, Type: schema.ColTypeString, Length: 16},
+			{Name: AuditLogActorID, Type: schema.ColTypeString, Length: 255, Nullable: true},
+			{Name: AuditLogSubjectType, Type: schema.ColTypeString, Length: 64, Nullable: true},
+			{Name: AuditLogSubjectID, Type: schema.ColTypeString, Length: 255, Nullable: true},
+			{Name: AuditLogSessionID, Type: schema.ColTypeString, Length: 36, Nullable: true},
+			{Name: AuditLogRequestID, Type: schema.ColTypeString, Length: 128, Nullable: true},
+			{Name: AuditLogIPAddress, Type: schema.ColTypeString, Length: 64, Nullable: true},
+			{Name: AuditLogUserAgent, Type: schema.ColTypeText, Nullable: true},
+			{Name: AuditLogMetadata, Type: schema.ColTypeJson, Nullable: true},
+			{Name: AuditLogCreatedAt, Type: schema.ColTypeTimestamp},
+		},
+		Indexes: []schema.Index{
+			{Name: "idx_audit_log_event_type", Columns: []string{AuditLogEventType}},
+			{Name: "idx_audit_log_actor_id", Columns: []string{AuditLogActorID}},
+			{Name: "idx_audit_log_subject_id", Columns: []string{AuditLogSubjectID}},
+			{Name: "idx_audit_log_request_id", Columns: []string{AuditLogRequestID}},
+			{Name: "idx_audit_log_created_at", Columns: []string{AuditLogCreatedAt}},
+		},
+	}
+}

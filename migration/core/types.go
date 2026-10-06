@@ -6,7 +6,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -201,9 +201,9 @@ type GenerateDeps struct {
 type MigrationDeps struct {
 	Introspector SchemaIntrospector
 	Runner       MigrationRunner
-	GenerateDeps GenerateDeps        // reused as-is from the Path I/II round. Presenter/Generator live here
-	Presenter    ResolutionPresenter // duplicated reference for baseline's own resolve call — same underlying FilePresenter instance as GenerateDeps.Presenter, not a second one
-	Telemetry    *types.Telemetry    // optional; used for non-fatal warnings (e.g. a script file that couldn't be written after Apply)
+	GenerateDeps GenerateDeps         // reused as-is from the Path I/II round. Presenter/Generator live here
+	Presenter    ResolutionPresenter  // duplicated reference for baseline's own resolve call — same underlying FilePresenter instance as GenerateDeps.Presenter, not a second one
+	Telemetry    *telemetry.Telemetry // optional; used for non-fatal warnings (e.g. a script file that couldn't be written after Apply)
 }
 
 type MigrationConfig struct {

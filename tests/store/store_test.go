@@ -18,6 +18,7 @@ import (
 	"github.com/MastewalB/behemoth/models"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	binit "github.com/MastewalB/behemoth/types/init"
@@ -38,6 +39,8 @@ func usersDB(t *testing.T) behemoth.Database {
 		id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, username TEXT, firstname TEXT, lastname TEXT,
 		email_verified BOOLEAN NOT NULL DEFAULT 0, image_url TEXT,
 		created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)`)
+	require.NoError(t, err)
+	_, err = db.Exec(testutils.AuditLogSQLiteSchema)
 	require.NoError(t, err)
 	return sqliteAdapter.NewSQLiteAdapter(db, nil)
 }

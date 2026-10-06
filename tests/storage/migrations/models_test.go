@@ -10,8 +10,8 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/tests/testutils"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -203,7 +203,7 @@ func runnerUsesConfiguredTables(
 
 	resolver := core.NewSchemaResolver()
 	resolver.Freeze(core.BuildSchemaResolverTable(schema.NewRegistry(), cfg))
-	runner := core.NewMigrationRunner(newAdapter(resolver), newDriver(resolver), cfg, types.NewTelemetry(nil, nil, nil))
+	runner := core.NewMigrationRunner(newAdapter(resolver), newDriver(resolver), cfg, telemetry.New(nil, nil, nil))
 
 	users, posts := usersTable(), postsTable()
 	first := core.Migration{ID: "0001_users", Up: []core.SchemaOperation{createTableOp(users)}}

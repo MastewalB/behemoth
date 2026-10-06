@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 
 	"github.com/MastewalB/behemoth"
@@ -71,7 +70,6 @@ func (g *Google) FetchUserInfo(client *http.Client, ctx context.Context, token *
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
-	log.Println(string(body))
 	if err != nil {
 		return &behemoth.UserInfo{}, err
 	}

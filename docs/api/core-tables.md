@@ -75,6 +75,12 @@ Use `ac.TokenManager`.
 
 `rate_limits` holds the rate limiter's counters. `Store.IncrementRateLimit` increments a counter atomically and starts a new window when the old one has passed. A direct write can lose increments under concurrency or leave a window that never resets.
 
+## Audit log
+
+`audit_log` holds the audit events. `Store.RecordAuditEvent` assigns the id that events are ordered and paged by; a row written directly with another kind of id appears out of order in `Store.QueryAuditEvents`. To record an event of your own, use `ac.Telemetry.RecordAudit`, which also fills in the request ID and redacts the metadata. See [Telemetry](telemetry.md#audit).
+
+The table is created by the migration engine like the other core tables. While Behemoth records to it, which is the default, writes to `users` fail if it is missing.
+
 ## Reading directly
 
 Reading a core table through the adapter is fine and is the intended way to list or search: a dashboard that lists users can call `FindMany`. Two things differ from a read through the store:

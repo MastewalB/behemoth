@@ -143,7 +143,8 @@ From outermost (runs first) to innermost:
 ```
 adapter: build RequestContext (Request, Params, empty Response, Values)
   │
-  ├─ withRequestScope         sets rctx.Auth, puts rctx on rctx.Ctx            (Build)
+  ├─ withRequestScope         sets rctx.Auth, assigns the request ID,         (Build)
+  │                           puts both the ID and rctx on rctx.Ctx
   ├─ wrapWithErrorMapping     returned error → mapped JSON response             (Build)
   ├─ global middleware[0]                                                      (Build)
   ├─ …
@@ -175,6 +176,7 @@ How each step builds it:
 ### **Why this order**
 
 - **Request scope outermost.** `withRequestScope` sets `rctx.Auth` before anything else runs, so every middleware — global or per-route — and the handler can rely on it. The router captured the `AuthContext` in `NewRouter`; adapters build the `RequestContext` without ever knowing about it. It also puts the `RequestContext` on `rctx.Ctx` (`types.ContextWithRequest`), so code that only receives a `context.Context` still knows which request it serves — the store's data hooks read it back with `types.RequestFrom` to give hooks `HookContext.Request`. `[Convention]` Only the request travels through the context, because it is request-scoped by definition; everything else is passed explicitly. A `context.Context` without one (CLI, background job) is a call made outside any request.
+- **Request ID with the scope.** `withRequestScope` also assigns the request ID: the one already on the context, else a usable value of the `RouterConfig.RequestIDHeader` request header (default `X-Request-ID`), else a generated one. It stores the ID on `rctx.Ctx` (`telemetry.ContextWithRequestID`) and sets it on the response header. Doing this in the outermost wrapper means every log line written for the request carries the ID, and an error response has the header too. See `docs/internal/telemetry/foundations.md`.
 - **Error mapping directly inside it, outside everything that can fail.** An error from a global middleware, the rate limiter, a route middleware or the handler all become a response through the same mapper. Before this order, only handler errors were mapped; a rate-limit rejection reached the adapter as a raw error.
 - **Global middleware outside route-specific layers.** Cross-cutting concerns (request IDs, security headers, CSRF) see every request first, including ones the rate limiter is about to reject.
 - **Route middleware innermost.** It is the route's own concern and sees the request last, after everything general has passed.
@@ -183,11 +185,12 @@ How each step builds it:
 
 ### **Error mapping**
 
-`wrapWithErrorMapping` is the only place a returned error becomes a response:
+`wrapWithErrorMapping` is the only place a returned error becomes a response, and the place it is logged:
 
 - `RouterConfig.ErrorMapper.Map(err)` returns `(status, body)`. The default, `behemotherr.DefaultErrorMapper`, maps a `*DomainError` through its category (`categoryToStatus`) to a status and `{"error": PublicMessage, "code": Code}`. Anything else — a plain error, or a `DomainError` whose category has no status, such as configuration or internal errors — becomes `500 {"error": "internal server error"}`, so raw error text never reaches a client.
 - A `*DomainError` with `RetryAfter > 0` (rate limiting) also sets the `Retry-After` header, in whole seconds.
 - The mapped body is written with `rctx.Response.JSON`, and the wrapper returns `nil`.
+- The error is logged here, once: at Error when the status is 5xx, at Debug otherwise, with the route's method and pattern, the status and the fields of `telemetry.ErrorFields`. Components below the router return their errors without logging them. See `docs/internal/telemetry/logging.md`.
 
 `[Convention]` Because the mapper always handles the error, **a route reaching an adapter never returns a mapped error**. An error returned to the adapter therefore means the response itself could not be built (e.g. JSON marshalling failed), and every adapter answers it with a bare `500` instead of flushing. Adapters take no error mapper of their own.
 

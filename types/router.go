@@ -8,7 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/telemetry"
 )
 
 type RouterConfig struct {
@@ -20,14 +22,21 @@ type RouterConfig struct {
 	// allowed to set ClientIPHeader. Empty = the direct peer is the client.
 	TrustedProxies []string
 	ClientIPHeader string // default "X-Forwarded-For"
+
+	// RequestIDHeader is the header a request's ID is read from and echoed
+	// in. A request without a usable value gets a generated ID. Default
+	// "X-Request-ID".
+	RequestIDHeader string
 }
 
 type Router struct {
-	basePath    string
-	routes      []mountedRoute
-	errorMapper ErrorMapper
-	routeOwners map[routeKey]string
-	auth        *AuthContext
+	basePath        string
+	routes          []mountedRoute
+	errorMapper     ErrorMapper
+	routeOwners     map[routeKey]string
+	auth            *AuthContext
+	requestIDHeader string
+	log             telemetry.Logger
 }
 
 // The route method and full path must be unique (eg. "GET" - /api/auth/health )
@@ -52,11 +61,20 @@ func NewRouter(cfg RouterConfig, auth *AuthContext) *Router {
 	if cfg.ErrorMapper == nil {
 		cfg.ErrorMapper = &behemotherr.DefaultErrorMapper{}
 	}
+	if cfg.RequestIDHeader == "" {
+		cfg.RequestIDHeader = telemetry.DefaultRequestIDHeader
+	}
+	var log telemetry.Logger = telemetry.NoOpLogger{}
+	if auth != nil && auth.Telemetry != nil {
+		log = telemetry.Named(auth.Telemetry.Logger, "router")
+	}
 	return &Router{
-		basePath:    cfg.BasePath,
-		errorMapper: cfg.ErrorMapper,
-		routeOwners: map[routeKey]string{},
-		auth:        auth,
+		log:             log,
+		basePath:        cfg.BasePath,
+		errorMapper:     cfg.ErrorMapper,
+		routeOwners:     map[routeKey]string{},
+		auth:            auth,
+		requestIDHeader: cfg.RequestIDHeader,
 	}
 }
 
@@ -134,10 +152,26 @@ func (r *Router) Routes() []Route {
 	return routes
 }
 
-func (r *Router) wrapWithErrorMapping(next HandlerFunc) HandlerFunc {
+// wrapWithErrorMapping turns an error returned by route's chain into a
+// response, and logs it. This is the one place a request's failure is
+// logged, so components below return their errors without logging them. A
+// 5xx is logged at Error: behemoth failed at something it owed. Anything
+// else is a rejection of the request (a wrong password, a rate limit) and is
+// logged at Debug.
+func (r *Router) wrapWithErrorMapping(route Route, next HandlerFunc) HandlerFunc {
 	return func(rctx *RequestContext) error {
 		if err := next(rctx); err != nil {
 			status, body := r.errorMapper.Map(err)
+			fields := telemetry.ErrorFields(err, behemoth.M{
+				telemetry.FieldMethod: route.Method,
+				telemetry.FieldRoute:  route.Path,
+				telemetry.FieldStatus: status,
+			})
+			if status >= 500 {
+				r.log.Error(rctx.Ctx, "request failed", fields)
+			} else {
+				r.log.Debug(rctx.Ctx, "request rejected", fields)
+			}
 			if de, ok := errors.AsType[*behemotherr.DomainError](err); ok && de.RetryAfter > 0 {
 				rctx.Response.Headers.Set("Retry-After", strconv.Itoa(int(de.RetryAfter.Seconds())))
 			}
@@ -152,6 +186,10 @@ func (r *Router) wrapWithErrorMapping(next HandlerFunc) HandlerFunc {
 // only receives a context.Context — the store's data hooks — still knows the
 // request. Adapters always set Ctx; the fallbacks keep a bare RequestContext
 // (tests, custom drivers) safe.
+//
+// It also gives the request its ID (see requestID), puts it on rctx.Ctx for
+// logs and audit events, and sets it on the response header so a client can
+// quote it when reporting a problem.
 func (r *Router) withRequestScope(next HandlerFunc) HandlerFunc {
 	return func(rctx *RequestContext) error {
 		rctx.Auth = r.auth
@@ -162,9 +200,29 @@ func (r *Router) withRequestScope(next HandlerFunc) HandlerFunc {
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		id := r.requestID(ctx, rctx)
+		ctx = telemetry.ContextWithRequestID(ctx, id)
+		if rctx.Response != nil {
+			rctx.Response.Headers.Set(r.requestIDHeader, id)
+		}
 		rctx.Ctx = ContextWithRequest(ctx, rctx)
 		return next(rctx)
 	}
+}
+
+// requestID picks the ID for a request: the one already on ctx (set by the
+// application's own middleware), else the request header's value when it is
+// usable (telemetry.ValidRequestID), else a generated one.
+func (r *Router) requestID(ctx context.Context, rctx *RequestContext) string {
+	if id := telemetry.RequestIDFrom(ctx); id != "" {
+		return id
+	}
+	if rctx.Request != nil {
+		if id := rctx.Request.Header.Get(r.requestIDHeader); telemetry.ValidRequestID(id) {
+			return id
+		}
+	}
+	return telemetry.NewRequestID()
 }
 
 // ApplyRateLimiting resolves, for each mounted route, its single most-specific matching RouteRateLimitRule once,
@@ -201,7 +259,7 @@ func (r *Router) Build(driver FrameworkDriver, globalMiddleware ...Middleware) e
 		for j := len(globalMiddleware) - 1; j >= 0; j-- {
 			h = globalMiddleware[j](h)
 		}
-		rt.Handler = r.withRequestScope(r.wrapWithErrorMapping(h))
+		rt.Handler = r.withRequestScope(r.wrapWithErrorMapping(rt, h))
 		routes[i] = rt
 	}
 	return driver.Mount(routes...)

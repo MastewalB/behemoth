@@ -10,6 +10,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"golang.org/x/crypto/hkdf"
 )
@@ -40,10 +41,11 @@ type DefaultKeyManager struct {
 	current int
 	cache   map[derivedKeyCacheKey][]byte
 	cfg     KeyManagerConfig
-	tel     *types.Telemetry
+	tel     *telemetry.Telemetry
 }
 
-func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source types.SecretSource, tel *types.Telemetry) (*DefaultKeyManager, error) {
+func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source types.SecretSource, tel *telemetry.Telemetry) (*DefaultKeyManager, error) {
+	tel = telemetry.OrDefault(tel).Named("crypto")
 	raw, current, err := source.Load(ctx)
 	if err != nil {
 		return nil, behemotherr.NewConfigurationError("KeyManager.Load", "initial secret load failed", err)
@@ -61,7 +63,7 @@ func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source type
 
 	if watchable, ok := source.(types.WatchableSecretSource); ok {
 		if err := watchable.Watch(ctx, km.applyUpdate); err != nil {
-			tel.Logger.Warn(ctx, "failed to start secret watch; rotation will require a restart", behemoth.M{"error": err.Error()})
+			tel.Logger.Warn(ctx, "failed to start secret watch; rotation will require a restart", telemetry.ErrorFields(err))
 		} else {
 			tel.Logger.Info(ctx, "secret hot-rotation enabled", nil)
 		}
@@ -159,7 +161,7 @@ func (km *DefaultKeyManager) deriveKey(purpose types.KeyPurpose, version int) ([
 func (km *DefaultKeyManager) applyUpdate(rawSecrets map[int]string, newCurrent int) {
 	decoded, err := decodeAndValidate(rawSecrets, newCurrent, km.cfg)
 	if err != nil {
-		km.tel.Logger.Error(context.Background(), "rejected invalid secret rotation update", behemoth.M{"error": err})
+		km.tel.Logger.Error(context.Background(), "rejected invalid secret rotation update", telemetry.ErrorFields(err))
 		return // old state keeps serving untouched
 	}
 	km.mu.Lock()
@@ -171,6 +173,10 @@ func (km *DefaultKeyManager) applyUpdate(rawSecrets map[int]string, newCurrent i
 
 	km.current = newCurrent
 	km.tel.Logger.Info(context.Background(), "secret rotation applied", behemoth.M{"newCurrent": newCurrent})
+	km.tel.RecordAudit(context.Background(), telemetry.AuditEvent{
+		Type: telemetry.AuditSecretRotated, ActorType: telemetry.ActorSystem,
+		Metadata: behemoth.M{"current_version": newCurrent},
+	})
 
 }
 
@@ -202,7 +208,7 @@ func (km *DefaultKeyManager) RemoveVersion(version int) error {
 	return nil
 }
 
-func buildKeyManager(secrets map[int][]byte, current int, cfg KeyManagerConfig, tel *types.Telemetry) (*DefaultKeyManager, error) {
+func buildKeyManager(secrets map[int][]byte, current int, cfg KeyManagerConfig, tel *telemetry.Telemetry) (*DefaultKeyManager, error) {
 	if _, ok := secrets[current]; !ok {
 		return nil, behemotherr.NewConfigurationError("KeyManager.Build",
 			fmt.Sprintf("current version %d missing after decode", current), nil) // defensive; decodeAndValidate already guarantees this

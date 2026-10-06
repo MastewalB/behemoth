@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +20,8 @@ import (
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
@@ -42,7 +46,11 @@ CREATE TABLE sessions (
 	id TEXT PRIMARY KEY, user_id TEXT NOT NULL, lookup_hash TEXT NOT NULL UNIQUE, token_hash TEXT NOT NULL,
 	key_version INTEGER NOT NULL, state TEXT NOT NULL, expires_at TIMESTAMP NOT NULL, last_active_at TIMESTAMP,
 	fresh_at TIMESTAMP, ip_address TEXT, user_agent TEXT, impersonator_id TEXT, revoked_at TIMESTAMP,
-	revoked_reason TEXT, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL);`
+	revoked_reason TEXT, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL);
+CREATE TABLE audit_log (
+	id TEXT PRIMARY KEY, event_type TEXT NOT NULL, outcome TEXT NOT NULL, actor_type TEXT NOT NULL,
+	actor_id TEXT, subject_type TEXT, subject_id TEXT, session_id TEXT, request_id TEXT,
+	ip_address TEXT, user_agent TEXT, metadata TEXT, created_at TIMESTAMP NOT NULL);`
 
 type passDispatcher struct{}
 
@@ -482,3 +490,288 @@ func TestEmailPasswordOptions(t *testing.T) {
 		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
 	})
 }
+
+// What an application sees in its logs: a boot summary, a warning for a
+// configuration that is probably a mistake, the SQL statements without their
+// values, and a sign-in that failed because the database did.
+func TestEmailPasswordLogging(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-log.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(schema)
+	require.NoError(t, err)
+
+	tel, rec := telemetrytest.New()
+	p := emailpassword.New(emailpassword.Options{})
+	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	require.NoError(t, err)
+	ac, err := binit.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil).WithLogger(tel.Logger), binit.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
+		},
+		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Telemetry: tel,
+		Router:    types.RouterConfig{ClientIPHeader: "X-Real-IP"}, // no TrustedProxies: the header is ignored
+	})
+	require.NoError(t, err)
+
+	find := func(level slog.Level, component string) []telemetrytest.LogEntry {
+		var out []telemetrytest.LogEntry
+		for _, e := range rec.Logger.At(level) {
+			if e.Fields[telemetry.FieldComponent] == component {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+
+	boot := find(slog.LevelInfo, "boot")
+	require.Len(t, boot, 1)
+	assert.Equal(t, "behemoth booted", boot[0].Message)
+	assert.Equal(t, []string{emailpassword.PluginName}, boot[0].Fields["plugins"])
+	assert.Equal(t, 3, boot[0].Fields["routes"])
+	assert.Equal(t, false, boot[0].Fields["routes_mounted"])
+	require.Len(t, find(slog.LevelWarn, "boot"), 1, "ClientIPHeader without TrustedProxies is warned about")
+
+	routes := map[string]types.Route{}
+	for _, r := range p.Routes() {
+		routes[r.Path] = r
+	}
+	w := call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	// The sign-up's statements were logged, including the insert that ran
+	// inside its transaction, and none of them carries a value.
+	statements := find(slog.LevelDebug, "storage.sqlite")
+	require.NotEmpty(t, statements)
+	var sawInsert bool
+	for _, e := range statements {
+		stmt := e.Fields[telemetry.FieldStatement].(string)
+		sawInsert = sawInsert || strings.HasPrefix(stmt, "INSERT INTO users")
+		assert.NotContains(t, fmt.Sprint(e.Fields), "ada@example.com")
+		assert.NotContains(t, fmt.Sprint(e.Fields), "argon2")
+	}
+	assert.True(t, sawInsert, "the insert inside the sign-up transaction was not logged")
+
+	// A wrong password is a rejection: nothing is logged at Error.
+	call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"wrong password"}`)
+	assert.Empty(t, rec.Logger.At(slog.LevelError))
+
+	// With the database gone, the sign-in fails for a reason the client is
+	// not told. The plugin logs it.
+	require.NoError(t, db.Close())
+	call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	failed := find(slog.LevelError, emailpassword.PluginName)
+	require.Len(t, failed, 1)
+	assert.Equal(t, "sign-in failed", failed[0].Message)
+	assert.Equal(t, "database", failed[0].Fields[telemetry.FieldErrorCategory])
+}
+
+// auditApp boots the email/password plugin over a fresh database and returns
+// what an audit test needs. tel == nil boots with the default telemetry.
+func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg types.HookRegistry) error) (*types.AuthContext, map[string]types.Route) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-audit.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(schema)
+	require.NoError(t, err)
+
+	p := emailpassword.New(emailpassword.Options{})
+	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	require.NoError(t, err)
+	ac, err := binit.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), binit.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
+		},
+		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Telemetry: tel,
+		Hooks:     appHooks,
+	})
+	require.NoError(t, err)
+	routes := map[string]types.Route{}
+	for _, r := range p.Routes() {
+		routes[r.Path] = r
+	}
+	return ac, routes
+}
+
+// With no telemetry configured, Boot records audit events to the audit_log
+// table: who signed up and in, which attempts failed and on which account.
+func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
+	ctx := context.Background()
+	var rawToken string
+	ac, routes := auditApp(t, nil, func(reg types.HookRegistry) error {
+		return reg.OnAfter(hooks.HookSignInAfter, func(_ *types.HookContext, result any) error {
+			rawToken = result.(*emailpassword.SignInResult).RawToken
+			return nil
+		}, nil)
+	})
+
+	w := call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"wrong password"}`)
+	call(t, ac, routes["/sign-in/email"], `{"email":"nobody@example.com","password":"whatever it is"}`)
+	w = call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	user, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
+	require.NoError(t, err)
+
+	one := func(eventType string) telemetry.AuditEvent {
+		t.Helper()
+		page, err := ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{Types: []string{eventType}})
+		require.NoError(t, err)
+		require.Len(t, page.Events, 1, eventType)
+		return page.Events[0]
+	}
+
+	// The user's creation, written in the insert's transaction. Sign-up has
+	// no session yet, so the new user is its own actor.
+	created := one(telemetry.AuditUserCreated)
+	assert.Equal(t, telemetry.OutcomeSuccess, created.Outcome)
+	assert.Equal(t, models.UserTable, created.SubjectType)
+	assert.Equal(t, user.ID, created.SubjectID)
+	assert.Equal(t, telemetry.ActorUser, created.ActorType)
+	assert.Equal(t, user.ID, created.ActorID)
+	assert.Equal(t, user.ID, one(string(hooks.HookSignUpAfter)).SubjectID)
+
+	// The two failed sign-ins, newest first: an unknown address, then a
+	// wrong password for a known account. Neither is attributed to a user.
+	failed, err := ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{Outcome: telemetry.OutcomeFailure})
+	require.NoError(t, err)
+	require.Len(t, failed.Events, 2)
+	unknown, wrong := failed.Events[0], failed.Events[1]
+	assert.Equal(t, string(hooks.HookSignInFailed), unknown.Type)
+	assert.Equal(t, "userNotFound", unknown.Metadata["code"])
+	assert.Equal(t, "nobody@example.com", unknown.Metadata["email"], "the address that was tried is kept")
+	assert.Empty(t, unknown.SubjectID)
+	assert.Equal(t, "invalidCredentials", wrong.Metadata["code"])
+	assert.Equal(t, user.ID, wrong.SubjectID, "a failed sign-in names the account it targeted")
+	assert.Equal(t, telemetry.ActorAnonymous, wrong.ActorType)
+	assert.Empty(t, wrong.ActorID)
+	assert.Equal(t, "192.0.2.1", wrong.IPAddress, "the request's address")
+
+	// The successful sign-in and the session it created.
+	signedIn := one(string(hooks.HookSignInAfter))
+	assert.Equal(t, user.ID, signedIn.ActorID)
+	assert.Equal(t, user.ID, signedIn.SubjectID)
+	session := one(string(hooks.HookSessionAfterCreate))
+	assert.Equal(t, models.SessionTable, session.SubjectType)
+	assert.Equal(t, session.SubjectID, session.SessionID)
+	assert.Equal(t, user.ID, session.ActorID)
+
+	// Everything about one user, as an application would ask for it.
+	about, err := ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{SubjectType: models.UserTable, SubjectID: user.ID})
+	require.NoError(t, err)
+	assert.Len(t, about.Events, 4, "created, signed up, one failed sign-in, signed in")
+
+	// Sign-out through its route middleware: the actor is the session's user.
+	signOut := routes["/sign-out"].Handler
+	for i := len(routes["/sign-out"].Middlewares) - 1; i >= 0; i-- {
+		signOut = routes["/sign-out"].Middlewares[i](signOut)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	require.NoError(t, signOut(rctx))
+	require.Equal(t, http.StatusOK, rctx.Response.Code)
+	signedOut := one(string(hooks.HookSignOutAfter))
+	assert.Equal(t, user.ID, signedOut.ActorID)
+	assert.Equal(t, session.SessionID, signedOut.SessionID)
+	assert.Equal(t, session.SessionID, one(string(hooks.HookSessionAfterRevoke)).SubjectID)
+}
+
+// The user.created event is part of the insert's transaction: when the
+// insert is rolled back, so is the event.
+func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
+	ctx := context.Background()
+	veto := behemotherr.NewInvalidInputError("test", "user", "not allowed", nil)
+	ac, routes := auditApp(t, nil, func(reg types.HookRegistry) error {
+		// Runs after the user row is inserted, inside its transaction.
+		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, _ any) error {
+			if hctx.Request != nil && hctx.Request.Request.Header.Get("X-Veto") != "" {
+				return veto
+			}
+			return nil
+		}, nil)
+	})
+
+	route := routes["/sign-up/email"]
+	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(`{"email":"ada@example.com","password":"correct horse"}`))
+	req.Header.Set("X-Veto", "1")
+	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	require.ErrorIs(t, route.Handler(rctx), veto)
+
+	_, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
+	require.True(t, behemotherr.IsNotFound(err), "the user was rolled back")
+	page, err := ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{Types: []string{telemetry.AuditUserCreated}})
+	require.NoError(t, err)
+	assert.Empty(t, page.Events, "an event describes a user that was never created")
+
+	// The refused sign-up itself is recorded, with the address it was for.
+	refused, err := ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{Types: []string{string(hooks.HookSignUpFailed)}})
+	require.NoError(t, err)
+	require.Len(t, refused.Events, 1)
+	assert.Equal(t, "ada@example.com", refused.Events[0].Metadata["email"])
+
+	// Without the veto the same sign-up commits both.
+	w := call(t, ac, route, `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	page, err = ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{Types: []string{telemetry.AuditUserCreated}})
+	require.NoError(t, err)
+	assert.Len(t, page.Events, 1)
+}
+
+// An application's own recorder replaces the table, a no-op recorder turns
+// auditing off, and a MultiRecorder feeds both the table and another sink.
+func TestAuditRecorderChoices(t *testing.T) {
+	ctx := context.Background()
+	signUp := func(ac *types.AuthContext, routes map[string]types.Route) {
+		t.Helper()
+		w := call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	}
+	stored := func(ac *types.AuthContext) int {
+		t.Helper()
+		page, err := ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{})
+		require.NoError(t, err)
+		return len(page.Events)
+	}
+
+	t.Run("own recorder", func(t *testing.T) {
+		tel, rec := telemetrytest.New()
+		ac, routes := auditApp(t, tel, nil)
+		signUp(ac, routes)
+		assert.Len(t, rec.Audit.OfType(telemetry.AuditUserCreated), 1, "recorded once the insert committed")
+		assert.Len(t, rec.Audit.OfType(string(hooks.HookSignUpAfter)), 1)
+		assert.Zero(t, stored(ac), "nothing goes to the table")
+		assert.Empty(t, rec.Logger.At(slog.LevelError))
+	})
+
+	t.Run("off", func(t *testing.T) {
+		ac, routes := auditApp(t, telemetry.New(nil, telemetry.NoOpAuditRecorder{}, nil), nil)
+		signUp(ac, routes)
+		assert.Zero(t, stored(ac))
+	})
+
+	t.Run("table and another sink", func(t *testing.T) {
+		sink := &telemetrytest.AuditRecorder{}
+		var ac *types.AuthContext
+		var routes map[string]types.Route
+		// The database recorder needs the database, which auditApp opens;
+		// lateRecorder forwards to it once it exists.
+		late := &lateRecorder{}
+		ac, routes = auditApp(t, telemetry.New(nil, telemetry.MultiRecorder(late, sink), nil), nil)
+		late.AuditRecorder = store.NewAuditRecorder(store.New(ac.DB))
+		signUp(ac, routes)
+		assert.Len(t, sink.OfType(telemetry.AuditUserCreated), 1)
+		assert.Equal(t, len(sink.Events()), stored(ac), "both received every event")
+	})
+}
+
+// lateRecorder is a database recorder whose database is set after Boot.
+type lateRecorder struct{ *store.AuditRecorder }

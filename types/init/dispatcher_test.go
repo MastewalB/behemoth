@@ -7,20 +7,18 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 )
 
 type countingAudit struct{ events int }
 
-func (a *countingAudit) Record(context.Context, types.AuditEvent) error { a.events++; return nil }
-func (a *countingAudit) Query(context.Context, types.AuditFilter) ([]types.AuditEvent, error) {
-	return nil, nil
-}
+func (a *countingAudit) Record(context.Context, telemetry.AuditEvent) error { a.events++; return nil }
 
 // afterDispatcher builds a dispatcher with one audited after-phase point and
 // the given handlers on it, in order.
-func afterDispatcher(t *testing.T, audit types.AuditRecorder, handlers ...types.AfterHookFunc) (*DefaultDispatcher, types.HookPoint) {
+func afterDispatcher(t *testing.T, audit telemetry.AuditRecorder, handlers ...types.AfterHookFunc) (*DefaultDispatcher, types.HookPoint) {
 	t.Helper()
 	const point types.HookPoint = "data.test.afterCreate"
 	catalog := NewDefaultHookCatalog()
@@ -33,12 +31,12 @@ func afterDispatcher(t *testing.T, audit types.AuditRecorder, handlers ...types.
 		chain[i] = registeredHandler{plugin: "test", handler: h}
 	}
 	chains := map[types.HookPoint][]registeredHandler{point: chain}
-	return NewDefaultDispatcher(catalog, chains, nil, types.NewTelemetry(nil, audit, nil)), point
+	return NewDefaultDispatcher(catalog, chains, nil, telemetry.New(nil, audit, nil)), point
 }
 
 // A data-level after hook runs inside the write's transaction: the first
 // failing handler ends the chain and its error reaches the caller, and no
-// audit event is recorded for a write that may not commit.
+// audit event is recorded for a write that is about to be rolled back.
 func TestRunAfterTxStopsAtTheFirstError(t *testing.T) {
 	rejected := errors.New("rejected by hook")
 	var ran []int
@@ -80,8 +78,11 @@ func TestRunAfterTxSucceedsAndTurnsPanicsIntoErrors(t *testing.T) {
 	if err := d.RunAfterTx(hctx, point, nil); err != nil {
 		t.Fatalf("RunAfterTx = %v, want nil", err)
 	}
-	if audit.events != 0 {
-		t.Errorf("a successful RunAfterTx recorded %d audit events, want none before commit", audit.events)
+	// hctx has no Tx, so there is no transaction to write the event in and
+	// it is recorded directly. Under the store it is written through the
+	// write's transaction; tests/plugins covers that against a database.
+	if audit.events != 1 {
+		t.Errorf("a successful RunAfterTx recorded %d audit events, want 1", audit.events)
 	}
 
 	d, point = afterDispatcher(t, nil, func(*types.HookContext, any) error { panic("boom") })

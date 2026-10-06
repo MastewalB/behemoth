@@ -193,3 +193,12 @@ func NewGormTestUser(id string) *GormTestUser {
 		Username: fmt.Sprintf("user%s", id),
 	}
 }
+
+// AuditLogSQLiteSchema is the audit_log table models.AuditLog maps to, for
+// tests that create their tables by hand. Boot records audit events to it
+// by default, and writes to users fail without it.
+var AuditLogSQLiteSchema = `
+CREATE TABLE audit_log (
+	id TEXT PRIMARY KEY, event_type TEXT NOT NULL, outcome TEXT NOT NULL, actor_type TEXT NOT NULL,
+	actor_id TEXT, subject_type TEXT, subject_id TEXT, session_id TEXT, request_id TEXT,
+	ip_address TEXT, user_agent TEXT, metadata TEXT, created_at TIMESTAMP NOT NULL);`

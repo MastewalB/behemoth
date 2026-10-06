@@ -34,7 +34,7 @@ The rest of this document describes the parts that work, then the plan for conne
 1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). Each carries a `Limit{Max, Window}`, an `Algorithm` (a `Limiter`), and an action.
 2. At request time `DefaultRateLimiter` builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.route:1.2.3.4`.
 3. `evaluate` calls `Algorithm.Allow(ctx, key, limit)`.
-4. If the attempt is not allowed, it records an audit event and returns a `rate_limited` error with a retry-after. With `ActionLockout` and a `LockoutFor`, the retry-after is the lockout duration.
+4. If the attempt is not allowed, it records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) and returns a `rate_limited` error with a retry-after. With `ActionLockout` and a `LockoutFor`, the retry-after is the lockout duration.
 5. If `Allow` itself fails, `RateLimitConfig.FailureMode` decides: `FailOpen` (the default) lets the request through and logs a warning; `FailClosed` rejects it.
 
 Route rules and hook rules differ in one way. For a route, the single most specific matching rule applies. For a hook point, every declared rule is evaluated and all must pass.

@@ -9,6 +9,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -17,11 +18,11 @@ type DefaultMigrationRunner struct {
 	db     behemoth.Database
 	driver SchemaDriver
 	cfg    MigrationConfig
-	tel    *types.Telemetry
+	tel    *telemetry.Telemetry
 }
 
-func NewMigrationRunner(db behemoth.Database, driver SchemaDriver, cfg MigrationConfig, tel *types.Telemetry) *DefaultMigrationRunner {
-	return &DefaultMigrationRunner{db: db, driver: driver, cfg: cfg, tel: tel}
+func NewMigrationRunner(db behemoth.Database, driver SchemaDriver, cfg MigrationConfig, tel *telemetry.Telemetry) *DefaultMigrationRunner {
+	return &DefaultMigrationRunner{db: db, driver: driver, cfg: cfg, tel: telemetry.OrDefault(tel).Named("migration")}
 }
 
 // Apply implements [MigrationRunner].
@@ -70,7 +71,13 @@ func (r *DefaultMigrationRunner) applyOne(ctx context.Context, m Migration, snap
 	}
 
 	snapshot.Version, snapshot.Tables = m.ID, nextTables
-	r.tel.Audit.Record(ctx, types.AuditEvent{Type: "migration.applied", SubjectID: m.ID, Metadata: behemoth.M{"baseline": m.IsBaseline}, Timestamp: time.Now()})
+	// Best effort: the migration is applied whether or not the event is
+	// stored. RecordAudit logs a failed write.
+	r.tel.RecordAudit(ctx, telemetry.AuditEvent{
+		Type: telemetry.AuditMigrationApplied, ActorType: telemetry.ActorSystem,
+		SubjectType: "migration", SubjectID: m.ID,
+		Metadata: behemoth.M{"baseline": m.IsBaseline},
+	})
 	return nil
 }
 

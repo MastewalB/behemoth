@@ -25,6 +25,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/go-sql-driver/mysql"
 )
@@ -37,12 +38,31 @@ import (
 type MySQLAdapter struct {
 	DB       adapters.Querier
 	Resolver behemoth.SchemaResolver
+
+	// Logger receives the text of every statement at Debug. nil = none.
+	// Set it with WithLogger.
+	Logger telemetry.Logger
 }
 
 // NewMySQLAdapter wraps db (a *sql.DB, or a *sql.Tx). resolver maps canonical
 // names to physical ones; nil uses them as-is.
 func NewMySQLAdapter(db adapters.Querier, resolver behemoth.SchemaResolver) *MySQLAdapter {
 	return &MySQLAdapter{DB: db, Resolver: resolver}
+}
+
+// WithLogger makes the adapter write the text of every statement it runs to
+// logger at Debug, and returns the adapter. Argument values are never
+// logged: they hold password hashes and token hashes. Adapters bound to a
+// transaction (see Transaction) log to the same logger.
+func (my *MySQLAdapter) WithLogger(logger telemetry.Logger) *MySQLAdapter {
+	my.Logger = logger
+	return my
+}
+
+// q is the connection statements run on: DB, logging each statement when a
+// Logger is set.
+func (my *MySQLAdapter) q() adapters.Querier {
+	return adapters.LogQueries(my.DB, my.Logger, "storage.mysql")
 }
 
 func (my *MySQLAdapter) names() behemoth.SchemaResolver {
@@ -112,7 +132,7 @@ func (my *MySQLAdapter) Create(ctx context.Context, m behemoth.Model) error {
 		placeholders,
 	)
 
-	_, err := my.DB.ExecContext(ctx, query, values...)
+	_, err := my.q().ExecContext(ctx, query, values...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
@@ -140,7 +160,7 @@ func (my *MySQLAdapter) FindOne(
 	}
 	query += " LIMIT 1"
 
-	row := my.DB.QueryRowContext(ctx, query, args...)
+	row := my.q().QueryRowContext(ctx, query, args...)
 	if err := row.Scan(valuePtrs...); err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -204,8 +224,7 @@ func (my *MySQLAdapter) FindMany(
 		}
 	}
 
-	fmt.Println(query, args)
-	rows, err := my.DB.QueryContext(ctx, query, args...)
+	rows, err := my.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -242,7 +261,7 @@ func (my *MySQLAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	)
 
 	// MySQL reports changed rows unless the connection sets clientFoundRows.
-	res, err := my.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	res, err := my.q().ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -291,7 +310,7 @@ func (my *MySQLAdapter) UpdateOne(
 	query += " AND (" + whereClause + ")"
 	args := append(append(values, whereArgs...), whereArgs...)
 
-	res, err := my.DB.ExecContext(ctx, query, args...)
+	res, err := my.q().ExecContext(ctx, query, args...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -323,7 +342,7 @@ func (my *MySQLAdapter) UpdateMany(
 		whereClause,
 	)
 
-	_, err := my.DB.ExecContext(ctx, query, append(values, whereArgs...)...)
+	_, err := my.q().ExecContext(ctx, query, append(values, whereArgs...)...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 
 }
@@ -334,7 +353,7 @@ func (my *MySQLAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		adapters.PhysicalTable(my.names(), m),
 		adapters.PhysicalColumn(my.names(), m, m.PrimaryKeyName()),
 	)
-	res, err := my.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	res, err := my.q().ExecContext(ctx, query, m.PrimaryKeyField())
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -371,7 +390,7 @@ func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cl
 
 	// expr is repeated in the outer WHERE so it holds for the row as deleted.
 	query += " AND (" + whereClause + ")"
-	res, err := my.DB.ExecContext(ctx, query, append(args, args...)...)
+	res, err := my.q().ExecContext(ctx, query, append(args, args...)...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -394,13 +413,13 @@ func (my *MySQLAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr c
 		whereClause,
 	)
 
-	_, err := my.DB.ExecContext(ctx, query, args...)
+	_, err := my.q().ExecContext(ctx, query, args...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
 func (my *MySQLAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf("DELETE FROM %s", adapters.PhysicalTable(my.names(), m))
-	_, err := my.DB.ExecContext(ctx, query)
+	_, err := my.q().ExecContext(ctx, query)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 }
 
@@ -415,7 +434,7 @@ func (my *MySQLAdapter) Count(ctx context.Context, m behemoth.Model, expr clause
 		query += " WHERE " + whereClause
 	}
 
-	row, err := my.DB.QueryContext(ctx, query, args...)
+	row, err := my.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -464,7 +483,7 @@ func (my *MySQLAdapter) Transaction(ctx context.Context, fn behemoth.Transaction
 		}
 	}()
 
-	txAdapter := NewMySQLAdapter(tx, my.Resolver)
+	txAdapter := NewMySQLAdapter(tx, my.Resolver).WithLogger(my.Logger)
 	_, err = fn(ctx, txAdapter)
 
 	if err != nil {

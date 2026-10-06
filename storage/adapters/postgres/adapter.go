@@ -12,6 +12,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -23,10 +24,29 @@ import (
 type PostgresAdapter struct {
 	DB       adapters.Querier
 	Resolver behemoth.SchemaResolver
+
+	// Logger receives the text of every statement at Debug. nil = none.
+	// Set it with WithLogger.
+	Logger telemetry.Logger
 }
 
 func NewPostgresAdapter(db adapters.Querier, resolver behemoth.SchemaResolver) *PostgresAdapter {
 	return &PostgresAdapter{DB: db, Resolver: resolver}
+}
+
+// WithLogger makes the adapter write the text of every statement it runs to
+// logger at Debug, and returns the adapter. Argument values are never
+// logged: they hold password hashes and token hashes. Adapters bound to a
+// transaction (see Transaction) log to the same logger.
+func (pg *PostgresAdapter) WithLogger(logger telemetry.Logger) *PostgresAdapter {
+	pg.Logger = logger
+	return pg
+}
+
+// q is the connection statements run on: DB, logging each statement when a
+// Logger is set.
+func (pg *PostgresAdapter) q() adapters.Querier {
+	return adapters.LogQueries(pg.DB, pg.Logger, "storage.postgres")
 }
 
 func (pg *PostgresAdapter) names() behemoth.SchemaResolver {
@@ -106,7 +126,7 @@ func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 		strings.Join(adapters.PhysicalColumns(pg.names(), m, columns), ", "),
 		placeholders,
 	)
-	_, err := pg.DB.ExecContext(ctx, query, values...)
+	_, err := pg.q().ExecContext(ctx, query, values...)
 
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
@@ -136,8 +156,7 @@ func (pg *PostgresAdapter) FindOne(
 	}
 	query += " LIMIT 1"
 
-	fmt.Println("Executing query:", query, "with args:", args)
-	row := pg.DB.QueryRowContext(ctx, query, args...)
+	row := pg.q().QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
@@ -200,9 +219,7 @@ func (pg *PostgresAdapter) FindMany(
 
 	}
 
-	fmt.Println("Executing query:", query, "with args:", args)
-
-	rows, err := pg.DB.QueryContext(ctx, query, args...)
+	rows, err := pg.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
@@ -243,9 +260,8 @@ func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 		adapters.PhysicalColumn(pg.names(), m, m.PrimaryKeyName()),
 		len(values)+1,
 	)
-	fmt.Println(query, values)
 
-	res, err := pg.DB.ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
+	res, err := pg.q().ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
@@ -301,7 +317,7 @@ func (pg *PostgresAdapter) UpdateOne(
 	query += " AND (" + guard + ")"
 	queryArgs = append(queryArgs, guardArgs...)
 
-	res, err := pg.DB.ExecContext(ctx, query, queryArgs...)
+	res, err := pg.q().ExecContext(ctx, query, queryArgs...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
@@ -338,8 +354,7 @@ func (pg *PostgresAdapter) UpdateMany(
 		whereExpression,
 	)
 
-	fmt.Println("Executing query ", query)
-	_, err := pg.DB.ExecContext(ctx, query, append(values, args...)...)
+	_, err := pg.q().ExecContext(ctx, query, append(values, args...)...)
 
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
@@ -351,7 +366,7 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 		adapters.PhysicalColumn(pg.names(), m, m.PrimaryKeyName()),
 	)
 
-	res, err := pg.DB.ExecContext(ctx, query, m.PrimaryKeyField())
+	res, err := pg.q().ExecContext(ctx, query, m.PrimaryKeyField())
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
@@ -390,7 +405,7 @@ func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 	// (see UpdateOne); numbered placeholders continue after the subquery's.
 	guard, guardArgs := pg.where(m, &expr, NewPostgresClauseOptions(len(args)+1))
 	query += " AND (" + guard + ")"
-	res, err := pg.DB.ExecContext(ctx, query, append(args, guardArgs...)...)
+	res, err := pg.q().ExecContext(ctx, query, append(args, guardArgs...)...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
@@ -414,7 +429,7 @@ func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 		whereClause,
 	)
 
-	_, err := pg.DB.ExecContext(ctx, query, args...)
+	_, err := pg.q().ExecContext(ctx, query, args...)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
@@ -424,7 +439,7 @@ func (pg *PostgresAdapter) DeleteAll(ctx context.Context, m behemoth.Model) erro
 		adapters.PhysicalTable(pg.names(), m),
 	)
 
-	_, err := pg.DB.ExecContext(ctx, query)
+	_, err := pg.q().ExecContext(ctx, query)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 }
 
@@ -439,7 +454,7 @@ func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 		query += " WHERE " + whereClause
 	}
 
-	row, err := pg.DB.QueryContext(ctx, query, args...)
+	row, err := pg.q().QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
 	}
@@ -488,7 +503,7 @@ func (pg *PostgresAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 		}
 	}()
 
-	txAdapter := NewPostgresAdapter(tx, pg.Resolver)
+	txAdapter := NewPostgresAdapter(tx, pg.Resolver).WithLogger(pg.Logger)
 	_, err = fn(ctx, txAdapter)
 
 	if err != nil {

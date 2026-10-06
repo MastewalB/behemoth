@@ -11,7 +11,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -262,18 +262,18 @@ func applyWithDDL(ctx context.Context, cfg MigrationConfig, deps MigrationDeps, 
 	}
 
 	if renderErr != nil {
-		warn(ctx, deps.Telemetry, "failed to render migration script", behemoth.M{"id": m.ID, "error": renderErr.Error()})
+		warn(ctx, deps.Telemetry, "failed to render migration script", telemetry.ErrorFields(renderErr, behemoth.M{"id": m.ID}))
 		return nil
 	}
 	if err := ddl.write(cfg, m); err != nil {
-		warn(ctx, deps.Telemetry, "failed to write migration script", behemoth.M{"id": m.ID, "error": err.Error()})
+		warn(ctx, deps.Telemetry, "failed to write migration script", telemetry.ErrorFields(err, behemoth.M{"id": m.ID}))
 	}
 	return nil
 }
 
-func warn(ctx context.Context, tel *types.Telemetry, msg string, fields behemoth.M) {
+func warn(ctx context.Context, tel *telemetry.Telemetry, msg string, fields behemoth.M) {
 	if tel != nil && tel.Logger != nil {
-		tel.Logger.Warn(ctx, msg, fields)
+		telemetry.Named(tel.Logger, "migration").Warn(ctx, msg, fields)
 	}
 }
 

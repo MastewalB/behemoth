@@ -21,8 +21,9 @@ type Plugin interface {
 	// Version is the plugin version. e.g. "1.0.0"
 	Version() string
 
-	// Init is called once when behemoth starts up.
-	// Plugins receive a PluginContext that contains access to core services.
+	// Init is called once when behemoth starts up, with the AuthContext
+	// that holds behemoth's services. A plugin that logs takes its logger
+	// from it: telemetry.Named(ctx.Telemetry.Logger, <plugin name>).
 	Init(ctx *AuthContext) error
 
 	// Routes returns the HTTP endpoints this plugin wants to register.
@@ -36,21 +37,6 @@ type Plugin interface {
 	Declare(ic *PluginInitContext) error
 
 	Register(reg HookRegistry) error
-}
-
-// PluginContext is injected into every plugin's Init method.
-// It gives plugins access to behemoth's core services without leaking
-// internal implementation details.
-//
-// All fields are interfaces - plugins are decoupled from concrete adapters.
-type PluginContext struct {
-
-	// Logger is always non-nil. If no logger was provided to the core,
-	// a silent no-op implementation is used so plugins never need nil checks.
-	Logger Logger
-
-	// A unique identifier of the plugin
-	PluginName string
 }
 
 // RequestContext is the normalized, framework-agnostic context every plugin
@@ -388,6 +374,18 @@ type FailedHookFunc func(hctx *HookContext, reason FailureReason) error
 type FailureReason struct {
 	Code  string // "invalidCredentials", "userNotFound", "secondFactorRejected", ...
 	Cause error  // underlying error, if any. nil for pure business rejections
+
+	// SubjectType and SubjectID name what the rejected operation targeted,
+	// for the audit event of an audited failed point: the account a failed
+	// sign-in was for. Optional. Without them the event's subject is the
+	// operation's user (HookContext.Values[HookValueUserID]), if any.
+	SubjectType string
+	SubjectID   string
+
+	// Metadata is added to that audit event's metadata: what was attempted
+	// when there is no subject to name, such as the email address of a
+	// sign-in for an account that doesn't exist. Optional.
+	Metadata behemoth.M
 }
 
 // Dispatcher runs the handler chains of hook points.
@@ -416,9 +414,9 @@ type Dispatcher interface {
 	// RunAfterTx executes the frozen after-chain for a Tier 1 data point,
 	// inside the write's transaction. Unlike RunAfter it stops at the first
 	// handler error (or panic) and returns it, so the store can roll the
-	// write back. It records no audit event, because the write is not
-	// committed yet. The after-commit data points (data.user.created, ...)
-	// are dispatched with RunAfter and can be audited.
+	// write back. A point declared with an AuditSpec has its audit event
+	// written in the same transaction, once the chain has passed; a failure
+	// to write it is returned like a handler's error.
 	RunAfterTx(hctx *HookContext, point HookPoint, result any) error
 
 	// Fail dispatches the frozen failed-chain for point with reason.
@@ -426,6 +424,22 @@ type Dispatcher interface {
 	// Handler errors are logged. The returned error is non-nil only when
 	// point can't be dispatched (see below).
 	Fail(hctx *HookContext, point HookPoint, reason FailureReason) error
+}
+
+// AuditSpec marks a hook point as audited: every dispatch of the point
+// records one audit event. See HookPointDef.Audit for when and how reliably.
+type AuditSpec struct {
+	Type string // audit event Type; defaults to the HookPoint string if empty
+}
+
+// AuditSubject is implemented by a hook result that is not a behemoth.Model
+// and still names what the operation was about, so the audit event of its
+// point has a subject. A Model needs no method: its table and primary key
+// are used.
+type AuditSubject interface {
+	// AuditSubject returns the subject's type, a table's canonical name for
+	// a row ("users"), and its id.
+	AuditSubject() (subjectType, subjectID string)
 }
 
 // HookPointDef declares one hook point, e.g. "data.user.beforeCreate", owned
@@ -437,7 +451,12 @@ type HookPointDef struct {
 	// Dispatcher method the point is fired with. An operation with a before
 	// and an after side declares two points.
 	Phase HookPhase
-	Audit *AuditSpec // nil = not audited; if set, RunAfter and Fail record an audit event after the chain
+	// Audit, when set, records one audit event per dispatch, after the
+	// chain. RunAfter and Fail record best effort: a failed write is logged.
+	// RunAfterTx records inside the write's transaction, so the event
+	// commits or rolls back with the row, and a failed write fails the row's
+	// write too. A before point is never audited.
+	Audit *AuditSpec
 }
 
 type HookOptions struct {

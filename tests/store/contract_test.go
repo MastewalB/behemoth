@@ -19,6 +19,7 @@ import (
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
@@ -45,6 +46,7 @@ func coreSchema(t *testing.T) ([]schema.Table, behemoth.SchemaResolver) {
 	require.NoError(t, reg.Declare(&models.Token{}, models.TokenTableSchema()))
 	require.NoError(t, reg.Declare(&models.Account{}, models.AccountTableSchema()))
 	require.NoError(t, reg.Declare(&models.RateLimit{}, models.RateLimitTableSchema()))
+	require.NoError(t, reg.Declare(&models.AuditLog{}, models.AuditLogTableSchema()))
 	tfa := twoFactorEnabled.Contribution(schema.Column{Type: schema.ColTypeBoolean, Default: false})
 	tfa.Owner = "two-factor"
 	require.NoError(t, reg.ExtendColumn(tfa))
@@ -56,7 +58,7 @@ func coreSchema(t *testing.T) ([]schema.Table, behemoth.SchemaResolver) {
 	resolver := core.NewSchemaResolver()
 	resolver.Freeze(core.BuildSchemaResolverTable(reg, core.NewMigrationConfig(core.MigrationConfig{})))
 	var tables []schema.Table
-	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable, models.AccountTable, models.RateLimitTable} {
+	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable, models.AccountTable, models.RateLimitTable, models.AuditLogTable} {
 		t, _ := reg.Lookup(name)
 		t.ForeignKeys = nil // created without them: the contract doesn't depend on FK enforcement
 		tables = append(tables, t)
@@ -146,6 +148,7 @@ func TestStoreContract(t *testing.T) {
 			t.Run("Tokens", func(t *testing.T) { tokensContract(t, st) })
 			t.Run("Accounts", func(t *testing.T) { accountsContract(t, st, db) })
 			t.Run("RateLimits", func(t *testing.T) { rateLimitsContract(t, db, resolver) })
+			t.Run("AuditLog", func(t *testing.T) { auditLogContract(t, st) })
 		})
 	}
 }
@@ -347,4 +350,95 @@ func rateLimitsContract(t *testing.T, db behemoth.Database, resolver behemoth.Sc
 	left, err := db.Count(ctx, &models.RateLimit{}, clause.Expression{})
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, left, "only passed windows are purged")
+}
+
+// auditLogContract records events and reads them back: every field
+// round-trips, filters select, pages are newest first and don't overlap, and
+// a purge removes what is older than its cutoff.
+func auditLogContract(t *testing.T, st *store.Store) {
+	ctx := context.Background()
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+
+	full := telemetry.AuditEvent{
+		Type: "auth.signIn.failed", Outcome: telemetry.OutcomeFailure,
+		ActorType:   telemetry.ActorAnonymous,
+		SubjectType: models.UserTable, SubjectID: "user-1",
+		SessionID: "sess-1", RequestID: "req-1", IPAddress: "203.0.113.7", UserAgent: "curl/8",
+		Metadata:  behemoth.M{"code": "invalidCredentials", "email": "ada@example.com"},
+		Timestamp: base,
+	}
+	require.NoError(t, st.RecordAuditEvent(ctx, full))
+	// Five sign-ins by user-1, one minute apart, then one by user-2.
+	for i := 1; i <= 5; i++ {
+		require.NoError(t, st.RecordAuditEvent(ctx, telemetry.AuditEvent{
+			Type: "auth.signIn.after", Outcome: telemetry.OutcomeSuccess, ActorType: telemetry.ActorUser, ActorID: "user-1",
+			SubjectType: models.UserTable, SubjectID: "user-1", Timestamp: base.Add(time.Duration(i) * time.Minute),
+		}))
+	}
+	require.NoError(t, st.RecordAuditEvent(ctx, telemetry.AuditEvent{
+		Type: "auth.signIn.after", Outcome: telemetry.OutcomeSuccess, ActorType: telemetry.ActorUser, ActorID: "user-2",
+		SubjectType: models.UserTable, SubjectID: "user-2", Timestamp: base.Add(10 * time.Minute),
+	}))
+
+	// Every field of the first event round-trips. Optional fields that were
+	// empty read back empty.
+	page, err := st.QueryAuditEvents(ctx, telemetry.AuditFilter{RequestID: "req-1"})
+	require.NoError(t, err)
+	require.Len(t, page.Events, 1)
+	got := page.Events[0]
+	assert.NotEmpty(t, got.ID)
+	assert.True(t, got.Timestamp.Equal(base), "timestamp: %v", got.Timestamp)
+	got.ID, got.Timestamp, full.Timestamp = "", time.Time{}, time.Time{}
+	assert.Equal(t, full, got)
+
+	all, err := st.QueryAuditEvents(ctx, telemetry.AuditFilter{})
+	require.NoError(t, err)
+	require.Len(t, all.Events, 7)
+	assert.Empty(t, all.NextCursor)
+	assert.Equal(t, "user-2", all.Events[0].ActorID, "newest first")
+	assert.Equal(t, "auth.signIn.failed", all.Events[6].Type, "oldest last")
+	assert.Empty(t, all.Events[0].RequestID)
+	assert.Nil(t, all.Events[0].Metadata)
+
+	count := func(f telemetry.AuditFilter) int {
+		p, err := st.QueryAuditEvents(ctx, f)
+		require.NoError(t, err)
+		return len(p.Events)
+	}
+	assert.Equal(t, 5, count(telemetry.AuditFilter{ActorID: "user-1"}))
+	assert.Equal(t, 6, count(telemetry.AuditFilter{SubjectType: models.UserTable, SubjectID: "user-1"}))
+	assert.Equal(t, 1, count(telemetry.AuditFilter{Outcome: telemetry.OutcomeFailure}))
+	assert.Equal(t, 6, count(telemetry.AuditFilter{Types: []string{"auth.signIn.after"}}))
+	assert.Equal(t, 7, count(telemetry.AuditFilter{Types: []string{"auth.signIn.after", "auth.signIn.failed"}}))
+	assert.Equal(t, 0, count(telemetry.AuditFilter{Types: []string{"auth.signOut.after"}}))
+	assert.Equal(t, 1, count(telemetry.AuditFilter{SessionID: "sess-1"}))
+	// From is inclusive, To exclusive: minutes 2, 3 and 4.
+	assert.Equal(t, 3, count(telemetry.AuditFilter{From: base.Add(2 * time.Minute), To: base.Add(5 * time.Minute)}))
+
+	// Paging: 7 events in pages of 3 are 3 + 3 + 1, without overlap, and in
+	// the same order as the unpaged query.
+	var paged []string
+	filter := telemetry.AuditFilter{Limit: 3}
+	for pages := 0; ; pages++ {
+		require.Less(t, pages, 4, "paging does not end")
+		p, err := st.QueryAuditEvents(ctx, filter)
+		require.NoError(t, err)
+		for _, e := range p.Events {
+			paged = append(paged, e.ID)
+		}
+		if p.NextCursor == "" {
+			break
+		}
+		require.Len(t, p.Events, 3)
+		filter.Cursor = p.NextCursor
+	}
+	var unpaged []string
+	for _, e := range all.Events {
+		unpaged = append(unpaged, e.ID)
+	}
+	assert.Equal(t, unpaged, paged)
+
+	// Purge removes what was recorded before the cutoff and keeps the rest.
+	require.NoError(t, st.PurgeAuditEvents(ctx, base.Add(3*time.Minute)))
+	assert.Equal(t, 4, count(telemetry.AuditFilter{}), "minutes 3, 4, 5 and 10 remain")
 }

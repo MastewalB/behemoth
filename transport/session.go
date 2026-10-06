@@ -12,6 +12,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
@@ -23,7 +24,7 @@ type DefaultSessionManager struct {
 	crypto types.Crypto
 	cfg    types.SessionConfig
 	disp   types.Dispatcher
-	tel    *types.Telemetry
+	tel    *telemetry.Telemetry
 	auth   *types.AuthContext
 	ipCfg  *types.ClientIPConfig // how the client's address is resolved from a request; see requestMeta
 }
@@ -44,7 +45,7 @@ func NewSessionManager(
 	crypto types.Crypto,
 	cfg types.SessionConfig,
 	disp types.Dispatcher,
-	tel *types.Telemetry,
+	tel *telemetry.Telemetry,
 	auth *types.AuthContext,
 	ipCfg *types.ClientIPConfig,
 ) types.SessionManager {
@@ -57,7 +58,7 @@ func NewSessionManager(
 		crypto: crypto,
 		cfg:    cfg,
 		disp:   disp,
-		tel:    tel,
+		tel:    telemetry.OrDefault(tel).Named("session"),
 		auth:   auth,
 		ipCfg:  ipCfg,
 	}
@@ -441,8 +442,8 @@ func (sm *DefaultSessionManager) cacheSet(ctx context.Context, m *models.Session
 	if ttl <= 0 {
 		return
 	}
-	if err := sm.kv.Set(ctx, cacheKey(m.LookupHash), string(data), ttl); err != nil && sm.tel != nil {
-		sm.tel.Logger.Warn(ctx, "session cache write failed", behemoth.M{"error": err.Error()}) // logged, never propagated
+	if err := sm.kv.Set(ctx, cacheKey(m.LookupHash), string(data), ttl); err != nil {
+		sm.tel.Logger.Warn(ctx, "session cache write failed", telemetry.ErrorFields(err)) // logged, never propagated
 	}
 }
 
@@ -450,8 +451,8 @@ func (sm *DefaultSessionManager) cacheDelete(ctx context.Context, lookupHash str
 	if sm.kv == nil {
 		return
 	}
-	if err := sm.kv.Delete(ctx, cacheKey(lookupHash)); err != nil && sm.tel != nil {
-		sm.tel.Logger.Warn(ctx, "session cache invalidation failed", behemoth.M{"error": err.Error()})
+	if err := sm.kv.Delete(ctx, cacheKey(lookupHash)); err != nil {
+		sm.tel.Logger.Warn(ctx, "session cache invalidation failed", telemetry.ErrorFields(err))
 	}
 }
 

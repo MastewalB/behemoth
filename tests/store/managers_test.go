@@ -45,7 +45,7 @@ func sessionsTokensDB(t *testing.T) behemoth.Database {
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "managers.db")+"?_busy_timeout=10000")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(sessionsTokensSQLite)
+	_, err = db.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
 	require.NoError(t, err)
 	return sqliteAdapter.NewSQLiteAdapter(db, nil)
 }
