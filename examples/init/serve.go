@@ -18,7 +18,7 @@ import (
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
-	binit "github.com/MastewalB/behemoth/types/init"
+	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -88,7 +88,7 @@ func serve(ctx context.Context) error {
 func boot(ctx context.Context, driver types.FrameworkDriver, tel *telemetry.Telemetry) (*types.AuthContext, *emailpassword.Plugin, *sql.DB, error) {
 	// 1. Declarations: plugins, hooks, tokens, rate limits, schema -> resolver.
 	all, ep := plugins()
-	app, err := binit.Prepare(all, prepareConfig())
+	app, err := bmth.Prepare(all, prepareConfig())
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -106,7 +106,7 @@ func boot(ctx context.Context, driver types.FrameworkDriver, tel *telemetry.Tele
 		sqlDB.Close()
 		return nil, nil, nil, err
 	}
-	ac, err := binit.Boot(ctx, app, db, binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
 		Crypto:    cryptoCfg,
 		HTTP:      driver,
 		Telemetry: tel,

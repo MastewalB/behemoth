@@ -17,7 +17,7 @@ The code lives in:
 engine := gin.New()
 engine.GET("/", ...) // the application's own routes
 
-ac, err := binit.Boot(ctx, app, db, binit.BootConfig{
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
 	Crypto: cryptoCfg,
 	Router: types.RouterConfig{BasePath: "/api/auth"}, // optional; defaults shown
 	HTTP:   ginadapter.New(engine),

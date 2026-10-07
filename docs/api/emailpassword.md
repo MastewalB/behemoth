@@ -11,9 +11,9 @@ import "github.com/MastewalB/behemoth/plugins/emailpassword"
 
 plugin := emailpassword.New(emailpassword.Options{})
 
-app, err := binit.Prepare([]types.Plugin{plugin}, binit.PrepareConfig{})
+app, err := bmth.Prepare([]types.Plugin{plugin}, bmth.PrepareConfig{})
 // ...
-ac, err := binit.Boot(ctx, app, db, binit.BootConfig{ /* ... */ })
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{ /* ... */ })
 ```
 
 The plugin's name is `emailpassword` (`emailpassword.PluginName`). Use it in `PluginMeta.Dependencies` to build on the plugin, and in `HookOptions.Before`/`After` to order a handler around it.

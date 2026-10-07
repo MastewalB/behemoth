@@ -1,7 +1,7 @@
 // Package chi mounts behemoth's routes onto an application's chi.Router:
 //
 //	r := chi.NewRouter()
-//	ac, err := binit.Boot(ctx, app, db, binit.BootConfig{HTTP: chiadapter.New(r), ...})
+//	ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{HTTP: chiadapter.New(r), ...})
 //
 // chi and behemoth share the {param} path syntax, so paths are used as-is.
 package chi

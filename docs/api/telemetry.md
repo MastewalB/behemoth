@@ -22,7 +22,7 @@ tel := telemetry.New(
 	nil, // metrics: none
 )
 
-ac, err := binit.Boot(ctx, app, db, binit.BootConfig{
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
 	Crypto:    cryptoCfg,
 	Telemetry: tel,
 })
@@ -525,7 +525,7 @@ tel := telemetry.New(
 	telemetry.WithTracer(behemothotel.NewTracer(tracerProvider)),
 )
 
-ac, err := binit.Boot(ctx, app, db, binit.BootConfig{Crypto: cryptoCfg, Telemetry: tel})
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{Crypto: cryptoCfg, Telemetry: tel})
 
 // Before the process exits:
 tracerProvider.Shutdown(ctx)

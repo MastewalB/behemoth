@@ -7,7 +7,7 @@ import (
 
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
-	binit "github.com/MastewalB/behemoth/types/init"
+	bmth "github.com/MastewalB/behemoth/types/init"
 )
 
 // migrate needs the full declared schema but must not boot the
@@ -15,7 +15,7 @@ import (
 // the migration driver needs.
 func migrate(ctx context.Context, confirm bool) error {
 	all, _ := plugins()
-	app, err := binit.Prepare(all, prepareConfig())
+	app, err := bmth.Prepare(all, prepareConfig())
 	if err != nil {
 		return err
 	}

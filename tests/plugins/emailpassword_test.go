@@ -25,7 +25,7 @@ import (
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	binit "github.com/MastewalB/behemoth/types/init"
+	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -174,7 +174,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{emailpassword.PluginName}, app.Order)
 
@@ -192,7 +192,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 			return nil
 		}
 	}
-	ac, err := binit.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -262,12 +262,12 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 	require.NoError(t, err)
 
 	veto := behemotherr.NewInvalidInputError("test", "user", "this email domain is not allowed", nil)
 	var failures []types.FailureReason
-	ac, err := binit.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -331,7 +331,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	_, err = p.SignUp(ctx, behemoth.M{"email": "early@example.com", "password": "correct horse"})
 	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "a flow called before Boot is a configuration error: %v", err)
 
-	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 	require.NoError(t, err)
 
 	type seen struct {
@@ -359,7 +359,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	}
 	after := func(hctx *types.HookContext, _ any) error { record(hctx); return nil }
 
-	_, err = binit.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), binit.BootConfig{
+	_, err = bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -504,9 +504,9 @@ func TestEmailPasswordLogging(t *testing.T) {
 
 	tel, rec := telemetrytest.New()
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := binit.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil).WithLogger(tel.Logger), binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil).WithLogger(tel.Logger), bmth.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -579,9 +579,9 @@ func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg types.Ho
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := binit.Prepare([]types.Plugin{p}, binit.PrepareConfig{})
+	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := binit.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), binit.BootConfig{
+	ac, err := bmth.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},

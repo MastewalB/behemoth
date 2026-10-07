@@ -21,7 +21,7 @@ import (
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	binit "github.com/MastewalB/behemoth/types/init"
+	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -348,7 +348,7 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 // The token manager's hooks get the same: issue, a consume, and a failed
 // second consume each dispatch with their own point and phase.
 func TestTokenHooksGetACompleteContext(t *testing.T) {
-	catalog := binit.NewDefaultTokenCatalog()
+	catalog := bmth.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	d := &passDispatcher{}
 	tm := transport.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), d, types.TokenConfig{}, managersAuth)
@@ -386,7 +386,7 @@ const kindAPI types.TokenKind = "api_key"
 
 func newTokenManager(t *testing.T) (types.TokenManager, *store.Store) {
 	t.Helper()
-	catalog := binit.NewDefaultTokenCatalog()
+	catalog := bmth.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindAPI, Backend: types.TokenBackendDB, Owner: "core"}))
 	st := store.New(sessionsTokensDB(t))
@@ -471,7 +471,7 @@ func TestTokenRevoke(t *testing.T) {
 // before and an after point, and core declares all four.
 func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 	ctx := context.Background()
-	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
 	require.NoError(t, err)
 
 	var fired []types.HookPoint
@@ -484,7 +484,7 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 		fired, auths = append(fired, hctx.Point), append(auths, hctx.Auth)
 		return nil
 	}
-	ac, err := binit.Boot(ctx, app, sessionsTokensDB(t), binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, sessionsTokensDB(t), bmth.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("cd", 32)}, Current: 1},
 		},

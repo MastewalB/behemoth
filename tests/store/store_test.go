@@ -21,7 +21,7 @@ import (
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	binit "github.com/MastewalB/behemoth/types/init"
+	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -520,9 +520,9 @@ func (usernamePlugin) Register(reg types.HookRegistry) error {
 // data.user.beforeCreate handler shapes the stored user.
 func TestBootWiresStoreToPluginHooks(t *testing.T) {
 	ctx := context.Background()
-	app, err := binit.Prepare([]types.Plugin{usernamePlugin{}}, binit.PrepareConfig{})
+	app, err := bmth.Prepare([]types.Plugin{usernamePlugin{}}, bmth.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := binit.Boot(ctx, app, usersDB(t), binit.BootConfig{Crypto: crypto.Config{
+	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{Crypto: crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 	}})
 	require.NoError(t, err)
@@ -547,13 +547,13 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 	cryptoCfg := crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 	}
-	app, err := binit.Prepare([]types.Plugin{usernamePlugin{}}, binit.PrepareConfig{})
+	app, err := bmth.Prepare([]types.Plugin{usernamePlugin{}}, bmth.PrepareConfig{})
 	require.NoError(t, err)
 
 	var sawUsername any
 	rejected := errors.New("rejected by the application")
 	reject := false
-	ac, err := binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
 		Crypto: cryptoCfg,
 		Hooks: func(reg types.HookRegistry) error {
 			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
@@ -590,9 +590,9 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 	assert.True(t, behemotherr.IsNotFound(err), "the application's after-hook error rolled the user back: %v", err)
 
 	// A registration error is a boot error.
-	app, err = binit.Prepare(nil, binit.PrepareConfig{})
+	app, err = bmth.Prepare(nil, bmth.PrepareConfig{})
 	require.NoError(t, err)
-	_, err = binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+	_, err = bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
 		Crypto: cryptoCfg,
 		Hooks: func(reg types.HookRegistry) error {
 			return reg.OnBefore("no.such.point", func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) { return p, nil }, nil)
@@ -610,17 +610,17 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 	}
 	pluginName := usernamePlugin{}.Meta().Name
 
-	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, "app", app.AppName, "the default name")
 
-	app, err = binit.Prepare([]types.Plugin{usernamePlugin{}}, binit.PrepareConfig{AppName: "shop"})
+	app, err = bmth.Prepare([]types.Plugin{usernamePlugin{}}, bmth.PrepareConfig{AppName: "shop"})
 	require.NoError(t, err)
 	assert.Equal(t, "shop", app.AppName)
 
 	// The application asks to run before the plugin, which names it "shop".
 	var sawUsername any = "unset"
-	ac, err := binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
 		Crypto: cryptoCfg,
 		Hooks: func(reg types.HookRegistry) error {
 			return reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
@@ -633,11 +633,11 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 	require.NoError(t, ac.Store.CreateUser(ctx, &models.User{Email: "grace@example.com"}))
 	assert.NotEqual(t, "grace", sawUsername, "the application's handler ran before the plugin's")
 
-	for name, cfg := range map[string]binit.PrepareConfig{
+	for name, cfg := range map[string]bmth.PrepareConfig{
 		"an application named core":   {AppName: "core"},
 		"a plugin named like the app": {AppName: pluginName},
 	} {
-		_, err = binit.Prepare([]types.Plugin{usernamePlugin{}}, cfg)
+		_, err = bmth.Prepare([]types.Plugin{usernamePlugin{}}, cfg)
 		assert.Error(t, err, name)
 	}
 }
@@ -646,11 +646,11 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 // instead of being dropped by the chain ordering.
 func TestSecondHandlerOnAPointIsRejected(t *testing.T) {
 	ctx := context.Background()
-	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
 	require.NoError(t, err)
 	pass := func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) { return row, nil }
 
-	_, err = binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+	_, err = bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
@@ -710,10 +710,10 @@ func (p *signupPlugin) Register(reg types.HookRegistry) error {
 func TestDataHooksSeeTheRequestBeingHandled(t *testing.T) {
 	ctx := context.Background()
 	plugin := &signupPlugin{}
-	app, err := binit.Prepare([]types.Plugin{plugin}, binit.PrepareConfig{})
+	app, err := bmth.Prepare([]types.Plugin{plugin}, bmth.PrepareConfig{})
 	require.NoError(t, err)
 	driver := &capturingDriver{}
-	ac, err := binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
 		HTTP: driver,
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
@@ -755,19 +755,19 @@ func (d noTransactionsDB) CheckTransactions(context.Context) error { return d.er
 // refuses to start when they don't: hooked writes would fail later.
 func TestBootChecksTheDatabaseHasTransactions(t *testing.T) {
 	ctx := context.Background()
-	cfg := binit.BootConfig{Crypto: crypto.Config{
+	cfg := bmth.BootConfig{Crypto: crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 	}}
-	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
 	require.NoError(t, err)
 
 	standalone := behemotherr.NewConfigurationError("test", "standalone server", nil)
-	_, err = binit.Boot(ctx, app, noTransactionsDB{Database: usersDB(t), err: standalone}, cfg)
+	_, err = bmth.Boot(ctx, app, noTransactionsDB{Database: usersDB(t), err: standalone}, cfg)
 	require.Error(t, err)
 	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
 	assert.ErrorIs(t, err, standalone)
 
-	_, err = binit.Boot(ctx, app, noTransactionsDB{Database: usersDB(t)}, cfg)
+	_, err = bmth.Boot(ctx, app, noTransactionsDB{Database: usersDB(t)}, cfg)
 	assert.NoError(t, err, "a database whose check passes boots")
 }
 
@@ -868,11 +868,11 @@ func TestCommittedHooksWaitForTheOutermostTransaction(t *testing.T) {
 // transaction, and can't fail the write.
 func TestCommittedDataPointsUnderBoot(t *testing.T) {
 	ctx := context.Background()
-	app, err := binit.Prepare(nil, binit.PrepareConfig{})
+	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
 	require.NoError(t, err)
 
 	var seen []string
-	ac, err := binit.Boot(ctx, app, usersDB(t), binit.BootConfig{
+	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},

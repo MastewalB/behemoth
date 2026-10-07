@@ -23,7 +23,7 @@ import (
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
-	binit "github.com/MastewalB/behemoth/types/init"
+	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -211,7 +211,7 @@ func sessionsContract(t *testing.T, st *store.Store) {
 
 func tokensContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
-	catalog := binit.NewDefaultTokenCatalog()
+	catalog := bmth.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	tm := transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, nil)
 

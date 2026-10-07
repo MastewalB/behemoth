@@ -7,7 +7,7 @@ import (
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/types"
-	binit "github.com/MastewalB/behemoth/types/init"
+	bmth "github.com/MastewalB/behemoth/types/init"
 	_ "github.com/lib/pq"
 )
 
@@ -23,8 +23,8 @@ func plugins() ([]types.Plugin, *emailpassword.Plugin) {
 	return []types.Plugin{ep, &AuditLogPlugin{}}, ep
 }
 
-func prepareConfig() binit.PrepareConfig {
-	return binit.PrepareConfig{
+func prepareConfig() bmth.PrepareConfig {
+	return bmth.PrepareConfig{
 		Migration: core.MigrationConfig{
 			FolderPath: "migrations",
 			// Path is left empty: PathGenerateOnly, behemoth writes files

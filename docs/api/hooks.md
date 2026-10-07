@@ -176,7 +176,7 @@ There are two places to get one, and both run during `Boot`.
 An application registers its handlers with `BootConfig.Hooks`. No plugin is needed:
 
 ```go
-ac, err := binit.Boot(ctx, app, db, binit.BootConfig{
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
 	Crypto: cryptoCfg,
 	Hooks: func(reg types.HookRegistry) error {
 		return reg.OnBefore(hooks.HookUserBeforeCreate, requireCompanyEmail, nil)
@@ -197,7 +197,7 @@ Both use the same registry and the same points, and their handlers share one cha
 Each handler is recorded under an owner name. For a plugin it is the plugin's name. For the application it is `PrepareConfig.AppName`, which defaults to `app`:
 
 ```go
-app, err := binit.Prepare(plugins, binit.PrepareConfig{AppName: "shop"})
+app, err := bmth.Prepare(plugins, bmth.PrepareConfig{AppName: "shop"})
 ```
 
 The owner name is what ordering constraints and error messages use. `Prepare` rejects an `AppName` of `core`, and a plugin named `core` or named like the application.
