@@ -76,7 +76,6 @@ func (r *DefaultSchemaResolver) ResolveColumn(canonicalTable string, canonicalCo
 	return canonicalColumn
 }
 
-
 // Columns implements [SchemaResolver]: the table's declared columns,
 // contributions included, or nil for a table that isn't declared.
 func (r *DefaultSchemaResolver) Columns(canonicalTable string) []string {
