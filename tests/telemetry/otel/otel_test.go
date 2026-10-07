@@ -1,4 +1,4 @@
-package behemothotel_test
+package otel_test
 
 import (
 	"context"
