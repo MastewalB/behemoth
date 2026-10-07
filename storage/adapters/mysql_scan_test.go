@@ -1,11 +1,11 @@
-package mysql
+package adapters
 
 import (
 	"testing"
 	"time"
 )
 
-func TestConvertValue(t *testing.T) {
+func TestConvertMySQLValue(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 123456000, time.UTC)
 	cases := []struct {
 		name     string
@@ -34,7 +34,7 @@ func TestConvertValue(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := convertValue(c.typeName, c.in)
+			got, err := ConvertMySQLValue(c.typeName, c.in)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -56,7 +56,7 @@ func TestConvertValue(t *testing.T) {
 		})
 	}
 
-	if _, err := convertValue("DATETIME", []byte("not a time")); err == nil {
+	if _, err := ConvertMySQLValue("DATETIME", []byte("not a time")); err == nil {
 		t.Fatal("a malformed time is an error")
 	}
 }

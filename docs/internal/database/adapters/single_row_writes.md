@@ -18,10 +18,13 @@ The store builds its at-most-once operations on the second point. `ConsumeToken`
 | PostgreSQL, SQLite | `UPDATE t SET ... WHERE pk = (SELECT pk FROM t WHERE <expr> LIMIT 1) AND (<expr>)` |
 | MySQL | `UPDATE t SET ... WHERE <expr> LIMIT 1` |
 | SQL Server | `UPDATE TOP (1) t SET ... WHERE <expr>` |
+| GORM, Bun | the MySQL form on MySQL, the subquery form on every other database |
 
 `DeleteOne` has the same three shapes with `DELETE`.
 
 PostgreSQL and SQLite have no `LIMIT` on `UPDATE`, so the row is picked by a subquery on the primary key. The expression is repeated in the outer `WHERE` because PostgreSQL runs the subquery once, before it waits on a concurrent writer, and afterwards re-checks only the outer condition.
+
+The GORM and Bun adapters build their statement in one helper, `oneRow`, which checks the dialect. They use the subquery form on SQL Server as well. Both pass the store contract there without a deadlock, which has not been explained; see `docs/ongoing.md`.
 
 MySQL and SQL Server used the subquery form too, until the store contract test ran against them. The next section explains why it fails there.
 

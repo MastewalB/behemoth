@@ -27,7 +27,7 @@ A failed assertion in `FromMap` is silent: the field keeps its zero value. Befor
 ### Dates are decoded by a registry, not converted after the read
 **Context:** A BSON date has to reach `FromMap` as a `time.Time`.
 **Options considered:**
-- *Convert after decoding.* Walk each decoded map and replace `primitive.DateTime` values. The MySQL adapter works this way (`scanRow`), because its driver offers nothing else. Every read path has to call the conversion, and nested documents need a recursive walk.
+- *Convert after decoding.* Walk each decoded map and replace `primitive.DateTime` values. The MySQL adapter works this way (`adapters.ScanMySQLRow`), because its driver offers nothing else. Every read path has to call the conversion, and nested documents need a recursive walk.
 - *A BSON registry with a type map entry.* `RegisterTypeMapEntry(bson.TypeDateTime, reflect.TypeOf(time.Time{}))` tells the driver which Go type to produce when it decodes a date into an untyped value. It applies wherever the driver decodes, nested documents and arrays included, and to both read paths in `FindMany` (the plain find and the distinct pipeline) without either calling a conversion.
 **Decision:** The registry. `newRegistry` builds it and `NewMongoAdapter` opens the database handle with it:
 

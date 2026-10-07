@@ -15,6 +15,7 @@ import (
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"gorm.io/gorm"
+	gormclause "gorm.io/gorm/clause"
 )
 
 // GormAdapter runs behemoth's operations through an application's *gorm.DB —
@@ -27,15 +28,25 @@ import (
 // SchemaResolver's physical names apply. Since GORM never sees a struct, GORM
 // model hooks (BeforeCreate, ...) don't run on behemoth's models; behemoth's
 // data hooks are the extension point for these writes.
+//
+// On MySQL the adapter does three things differently, for the reasons the
+// plain MySQL adapter does (docs/internal/database/adapters/mysql.md): it
+// converts scanned values, picks the row of UpdateOne and DeleteOne with
+// LIMIT 1, and re-counts with FOR SHARE after an update that changed no rows.
 type GormAdapter struct {
 	db       *gorm.DB
 	resolver behemoth.SchemaResolver
+	mysql    bool // db's dialect is MySQL
 }
 
 // NewGormAdapter wraps db. resolver maps canonical names to physical ones; nil
 // uses them as-is.
 func NewGormAdapter(db *gorm.DB, resolver behemoth.SchemaResolver) *GormAdapter {
-	return &GormAdapter{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
+	return &GormAdapter{
+		db:       db,
+		resolver: adapters.ResolverOrIdentity(resolver),
+		mysql:    db.Dialector != nil && db.Dialector.Name() == "mysql",
+	}
 }
 
 func (ga *GormAdapter) table(ctx context.Context, m behemoth.Model) *gorm.DB {
@@ -54,9 +65,15 @@ func (ga *GormAdapter) where(tx *gorm.DB, m behemoth.Model, expr *clause.Express
 
 // oneRow restricts tx to a single row matching expr. expr is applied both in
 // the subquery picking the row and to the row itself, so it holds for the row
-// as written (the UpdateOne / DeleteOne convention). The pick is wrapped in a
-// derived table because MySQL rejects a subquery on the table being updated.
+// as written (the UpdateOne / DeleteOne convention).
+//
+// On MySQL the row is picked with LIMIT 1 and no subquery: there the
+// subquery's read takes a shared lock, and two concurrent statements deadlock
+// (docs/internal/database/adapters/single_row_writes.md).
 func (ga *GormAdapter) oneRow(ctx context.Context, tx *gorm.DB, m behemoth.Model, expr *clause.Expression) *gorm.DB {
+	if ga.mysql {
+		return ga.where(tx, m, expr).Limit(1)
+	}
 	pk := adapters.PhysicalColumn(ga.resolver, m, m.PrimaryKeyName())
 	pick := ga.where(ga.table(ctx, m).Select(pk), m, expr).Limit(1)
 	sub := ga.db.WithContext(ctx).Table("(?) AS _sub", pick).Select(pk)
@@ -93,9 +110,22 @@ func (ga *GormAdapter) row(m behemoth.Model) (map[string]any, error) {
 func (ga *GormAdapter) scan(m behemoth.Model, rows *sql.Rows, columns []string) ([]behemoth.Model, error) {
 	defer rows.Close()
 	values, ptrs := adapters.ScanTargets(len(columns))
+	var types []*sql.ColumnType
+	if ga.mysql {
+		// The MySQL driver returns []byte for strings and times.
+		var err error
+		if types, err = rows.ColumnTypes(); err != nil {
+			return nil, ga.err(m, err)
+		}
+	}
 	var out []behemoth.Model
 	for rows.Next() {
-		if err := rows.Scan(ptrs...); err != nil {
+		if ga.mysql {
+			var err error
+			if values, err = adapters.ScanMySQLRow(rows, types); err != nil {
+				return nil, ga.err(m, err)
+			}
+		} else if err := rows.Scan(ptrs...); err != nil {
 			return nil, ga.err(m, err)
 		}
 		model, err := models.GenerateModelFromRows(m, columns, values)
@@ -192,7 +222,7 @@ func (ga *GormAdapter) Update(ctx context.Context, m behemoth.Model) error {
 		return ga.err(m, res.Error)
 	}
 	// GORM reports what its dialect reports: changed rows on MySQL.
-	return adapters.ExpectOneRow("Update", m, res.RowsAffected, func() (int64, error) { return ga.Count(ctx, m, adapters.ByPrimaryKey(m)) })
+	return adapters.ExpectOneRow("Update", m, res.RowsAffected, func() (int64, error) { return ga.recount(ctx, m, adapters.ByPrimaryKey(m)) })
 }
 
 func (ga *GormAdapter) UpdateOne(
@@ -209,7 +239,7 @@ func (ga *GormAdapter) UpdateOne(
 		return ga.err(m, res.Error)
 	}
 	// GORM reports what its dialect reports: changed rows on MySQL.
-	return adapters.ExpectOneRow("UpdateOne", m, res.RowsAffected, func() (int64, error) { return ga.Count(ctx, m, expr) })
+	return adapters.ExpectOneRow("UpdateOne", m, res.RowsAffected, func() (int64, error) { return ga.recount(ctx, m, expr) })
 }
 
 func (ga *GormAdapter) UpdateMany(
@@ -272,6 +302,23 @@ func (ga *GormAdapter) Count(
 ) (int64, error) {
 	var count int64
 	err := ga.where(ga.table(ctx, m), m, &expr).Count(&count).Error
+	return count, ga.err(m, err)
+}
+
+// recount counts the rows matching expr after an update that reported no
+// changed rows (adapters.ExpectOneRow). On MySQL it reads with FOR SHARE:
+// inside a transaction a plain SELECT reads the transaction's snapshot, which
+// can still show a row another transaction has since changed, and a lost
+// guarded update would then be reported as applied.
+func (ga *GormAdapter) recount(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	if !ga.mysql {
+		return ga.Count(ctx, m, expr)
+	}
+	var count int64
+	err := ga.where(ga.table(ctx, m), m, &expr).
+		Select("COUNT(*)").
+		Clauses(gormclause.Locking{Strength: gormclause.LockingStrengthShare}).
+		Scan(&count).Error
 	return count, ga.err(m, err)
 }
 

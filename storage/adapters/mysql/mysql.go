@@ -9,7 +9,7 @@
 // migrations agree on physical table and column names.
 //
 // The adapter converts what the driver returns into the Go types the models
-// read (scan.go), so the DSN does not need parseTime. A signed TINYINT column
+// read (adapters.ScanMySQLRow), so the DSN does not need parseTime. A signed TINYINT column
 // is read as a bool.
 //
 // The migration driver works with any database/sql MySQL driver. The adapter
@@ -179,7 +179,7 @@ func (my *MySQLAdapter) FindOne(
 		}
 		return nil, adapters.WrapWithCaller(sql.ErrNoRows, m.SchemaName(), mapMySQLErrors)
 	}
-	values, err := scanRow(rows, types)
+	values, err := adapters.ScanMySQLRow(rows, types)
 	if err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -253,7 +253,7 @@ func (my *MySQLAdapter) FindMany(
 
 	var results []behemoth.Model
 	for rows.Next() {
-		values, err := scanRow(rows, types)
+		values, err := adapters.ScanMySQLRow(rows, types)
 		if err != nil {
 			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 		}

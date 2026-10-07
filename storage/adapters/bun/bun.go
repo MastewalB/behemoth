@@ -10,6 +10,8 @@ import (
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect"
+	"github.com/uptrace/bun/schema"
 )
 
 // BunAdapter runs behemoth's operations through an application's bun.IDB —
@@ -22,15 +24,54 @@ import (
 // SchemaResolver's physical names apply. Since bun never sees a struct, bun
 // model hooks (BeforeAppendModel, ...) don't run on behemoth's models;
 // behemoth's data hooks are the extension point for these writes.
+//
+// On MySQL the adapter does three things differently, for the reasons the
+// plain MySQL adapter does (docs/internal/database/adapters/mysql.md): it
+// converts scanned values, picks the row of UpdateOne and DeleteOne with
+// LIMIT 1, and re-counts with FOR SHARE after an update that changed no rows.
+//
+// On SQL Server it works around two things bun does there
+// (docs/internal/database/adapters/bun.md): scan discards the sort column bun
+// adds to a limited SELECT, and every bool is passed as a dialectBool.
 type BunAdapter struct {
 	db       bun.IDB
 	resolver behemoth.SchemaResolver
+	mysql    bool // db's dialect is MySQL
+	mssql    bool // db's dialect is SQL Server
 }
 
 // NewBunAdapter wraps db (a *bun.DB, or a bun.Tx). resolver maps canonical
 // names to physical ones; nil uses them as-is.
 func NewBunAdapter(db bun.IDB, resolver behemoth.SchemaResolver) *BunAdapter {
-	return &BunAdapter{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
+	return &BunAdapter{
+		db:       db,
+		resolver: adapters.ResolverOrIdentity(resolver),
+		mysql:    db.Dialect().Name() == dialect.MySQL,
+		mssql:    db.Dialect().Name() == dialect.MSSQL,
+	}
+}
+
+// dialectBool is a bool that bun renders the way the connection's dialect
+// does. bun formats a plain bool argument as TRUE or FALSE on every dialect
+// (schema.QueryGen.Append takes a shortcut for the type), and SQL Server has
+// no such literals: it reads FALSE as a column name. Its dialect's own
+// AppendBool writes 0 and 1, and a value of this type asks the dialect. The
+// other dialects write TRUE and FALSE either way, so the adapter wraps every
+// bool it hands to bun and needs no dialect check for it.
+type dialectBool bool
+
+// AppendQuery implements schema.QueryAppender.
+func (v dialectBool) AppendQuery(gen schema.QueryGen, b []byte) ([]byte, error) {
+	return gen.Dialect().AppendBool(b, bool(v)), nil
+}
+
+// arg prepares a value for bun: an inserted or updated value, or the
+// argument of a condition. A bool becomes a dialectBool.
+func arg(v any) any {
+	if b, ok := v.(bool); ok {
+		return dialectBool(b)
+	}
+	return v
 }
 
 func (ba *BunAdapter) table(m behemoth.Model) bun.Ident {
@@ -43,7 +84,11 @@ func (ba *BunAdapter) column(m behemoth.Model, canonical string) bun.Ident {
 
 // whereClause renders expr with physical columns; "" for an empty expression.
 func (ba *BunAdapter) whereClause(m behemoth.Model, expr *clause.Expression) (string, []any) {
-	return adapters.BuildSQLWhereClause(adapters.PhysicalExpression(ba.resolver, m, expr), adapters.DefaultClauseOption)
+	query, args := adapters.BuildSQLWhereClause(adapters.PhysicalExpression(ba.resolver, m, expr), adapters.DefaultClauseOption)
+	for i, v := range args {
+		args[i] = arg(v)
+	}
+	return query, args
 }
 
 // where is implemented by every bun query taking a WHERE.
@@ -60,11 +105,24 @@ func applyWhere[Q where[Q]](ba *BunAdapter, q Q, m behemoth.Model, expr *clause.
 	return q.Where(query, args...)
 }
 
-// oneRow restricts q to a single row matching expr. expr is applied both in
-// the subquery picking the row and to the row itself, so it holds for the row
-// as written (the UpdateOne / DeleteOne convention). The pick is wrapped in a
-// derived table because MySQL rejects a subquery on the table being updated.
+// oneRow restricts q, an update or a delete, to a single row matching expr.
+// expr is applied both in the subquery picking the row and to the row itself,
+// so it holds for the row as written (the UpdateOne / DeleteOne convention).
+//
+// On MySQL the row is picked with LIMIT 1 and no subquery: there the
+// subquery's read takes a shared lock, and two concurrent statements deadlock
+// (docs/internal/database/adapters/single_row_writes.md).
 func oneRow[Q where[Q]](ba *BunAdapter, q Q, m behemoth.Model, expr *clause.Expression) Q {
+	if ba.mysql {
+		q = applyWhere(ba, q, m, expr)
+		switch limited := any(q).(type) {
+		case *bun.UpdateQuery:
+			return any(limited.Limit(1)).(Q)
+		case *bun.DeleteQuery:
+			return any(limited.Limit(1)).(Q)
+		}
+		return q
+	}
 	pk := ba.column(m, m.PrimaryKeyName())
 	pick := applyWhere(ba, ba.db.NewSelect().TableExpr("?", ba.table(m)).ColumnExpr("?", pk), m, expr).Limit(1)
 	sub := ba.db.NewSelect().TableExpr("(?) AS _sub", pick).ColumnExpr("?", pk)
@@ -81,13 +139,17 @@ func (ba *BunAdapter) row(m behemoth.Model) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return adapters.PhysicalDocument(ba.resolver, m, data), nil
+	row := adapters.PhysicalDocument(ba.resolver, m, data)
+	for col, val := range row {
+		row[col] = arg(val)
+	}
+	return row, nil
 }
 
 // set adds a SET for each update, keyed by physical column.
 func (ba *BunAdapter) set(q *bun.UpdateQuery, m behemoth.Model, updates map[string]any) *bun.UpdateQuery {
 	for col, val := range updates {
-		q = q.Set("? = ?", ba.column(m, col), val)
+		q = q.Set("? = ?", ba.column(m, col), arg(val))
 	}
 	return q
 }
@@ -100,13 +162,42 @@ func (ba *BunAdapter) selectColumns(q *bun.SelectQuery, m behemoth.Model, column
 	return q
 }
 
+// sortColumn is the column bun's SQL Server dialect puts first in a SELECT
+// that has a limit and no order. SQL Server only limits an ordered result, so
+// bun selects the constant "0 AS _temp_sort" and orders by it.
+const sortColumn = "_temp_sort"
+
 // scan reads rows of the canonical columns into new models.
 func (ba *BunAdapter) scan(m behemoth.Model, rows *sql.Rows, columns []string) ([]behemoth.Model, error) {
 	defer rows.Close()
 	values, ptrs := adapters.ScanTargets(len(columns))
+	if ba.mssql {
+		// FindOne, and FindMany with a limit and no order, get sortColumn in
+		// front of the columns they asked for. It is scanned and dropped.
+		names, err := rows.Columns()
+		if err != nil {
+			return nil, ba.err(m, err)
+		}
+		if len(names) == len(columns)+1 && names[0] == sortColumn {
+			ptrs = append([]any{new(any)}, ptrs...)
+		}
+	}
+	var types []*sql.ColumnType
+	if ba.mysql {
+		// The MySQL driver returns []byte for strings and times.
+		var err error
+		if types, err = rows.ColumnTypes(); err != nil {
+			return nil, ba.err(m, err)
+		}
+	}
 	var out []behemoth.Model
 	for rows.Next() {
-		if err := rows.Scan(ptrs...); err != nil {
+		if ba.mysql {
+			var err error
+			if values, err = adapters.ScanMySQLRow(rows, types); err != nil {
+				return nil, ba.err(m, err)
+			}
+		} else if err := rows.Scan(ptrs...); err != nil {
 			return nil, ba.err(m, err)
 		}
 		model, err := models.GenerateModelFromRows(m, columns, values)
@@ -212,7 +303,7 @@ func (ba *BunAdapter) Update(ctx context.Context, m behemoth.Model) error {
 		return ba.err(m, err)
 	}
 	// bun reports what its dialect reports: changed rows on MySQL.
-	return adapters.ExpectOneRow("Update", m, n, func() (int64, error) { return ba.Count(ctx, m, adapters.ByPrimaryKey(m)) })
+	return adapters.ExpectOneRow("Update", m, n, func() (int64, error) { return ba.recount(ctx, m, adapters.ByPrimaryKey(m)) })
 }
 
 func (ba *BunAdapter) UpdateOne(
@@ -234,7 +325,7 @@ func (ba *BunAdapter) UpdateOne(
 		return ba.err(m, err)
 	}
 	// bun reports what its dialect reports: changed rows on MySQL.
-	return adapters.ExpectOneRow("UpdateOne", m, n, func() (int64, error) { return ba.Count(ctx, m, expr) })
+	return adapters.ExpectOneRow("UpdateOne", m, n, func() (int64, error) { return ba.recount(ctx, m, expr) })
 }
 
 func (ba *BunAdapter) UpdateMany(
@@ -316,6 +407,22 @@ func (ba *BunAdapter) Count(
 ) (int64, error) {
 	count, err := applyWhere(ba, ba.db.NewSelect().TableExpr("?", ba.table(m)), m, &expr).Count(ctx)
 	return int64(count), ba.err(m, err)
+}
+
+// recount counts the rows matching expr after an update that reported no
+// changed rows (adapters.ExpectOneRow). On MySQL it reads with FOR SHARE:
+// inside a transaction a plain SELECT reads the transaction's snapshot, which
+// can still show a row another transaction has since changed, and a lost
+// guarded update would then be reported as applied.
+func (ba *BunAdapter) recount(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	if !ba.mysql {
+		return ba.Count(ctx, m, expr)
+	}
+	var count int64
+	err := applyWhere(ba, ba.db.NewSelect().TableExpr("?", ba.table(m)).ColumnExpr("COUNT(*)"), m, &expr).
+		For("SHARE").
+		Scan(ctx, &count)
+	return count, ba.err(m, err)
 }
 
 // Transaction runs fn in a transaction: a new one on a *bun.DB, a savepoint

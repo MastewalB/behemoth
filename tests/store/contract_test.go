@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -31,10 +32,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/mssqldialect"
+	"github.com/uptrace/bun/dialect/mysqldialect"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
+	gormmysql "gorm.io/driver/mysql"
 	gormpostgres "gorm.io/driver/postgres"
 	gormsqlite "gorm.io/driver/sqlite"
+	gormsqlserver "gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -131,7 +136,11 @@ func contractBackends() map[string]func(t *testing.T, tables []schema.Table, r b
 		createTables(t, sqlserverAdapter.NewSQLServerDriver(db, r), tables)
 		return db
 	}
-	quiet := &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)}
+	// A new Config for every database. gorm.Open stores the dialect's clause
+	// builders and callbacks on the Config it is given, so one shared between
+	// backends carries SQLite's rules to MySQL: SQLite drops FOR clauses, and
+	// the MySQL re-count then runs without its FOR SHARE.
+	quiet := func() *gorm.Config { return &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)} }
 
 	return map[string]func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database{
 		"sql/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
@@ -147,14 +156,30 @@ func contractBackends() map[string]func(t *testing.T, tables []schema.Table, r b
 			return sqlserverAdapter.NewSQLServerAdapter(openSQLServer(t, tables, r), r)
 		},
 		"gorm/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
-			gdb, err := gorm.Open(gormsqlite.New(gormsqlite.Config{Conn: openSQLite(t, tables, r)}), quiet)
+			gdb, err := gorm.Open(gormsqlite.New(gormsqlite.Config{Conn: openSQLite(t, tables, r)}), quiet())
 			require.NoError(t, err)
 			return gormAdapter.NewGormAdapter(gdb, r)
 		},
 		"gorm/postgres": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
-			gdb, err := gorm.Open(gormpostgres.New(gormpostgres.Config{Conn: openPostgres(t, tables, r)}), quiet)
+			gdb, err := gorm.Open(gormpostgres.New(gormpostgres.Config{Conn: openPostgres(t, tables, r)}), quiet())
 			require.NoError(t, err)
 			return gormAdapter.NewGormAdapter(gdb, r)
+		},
+		"gorm/mysql": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			gdb, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: openMySQL(t, tables, r)}), quiet())
+			require.NoError(t, err)
+			return gormAdapter.NewGormAdapter(gdb, r)
+		},
+		"bun/mysql": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			return bunAdapter.NewBunAdapter(bun.NewDB(openMySQL(t, tables, r), mysqldialect.New()), r)
+		},
+		"gorm/sqlserver": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			gdb, err := gorm.Open(gormsqlserver.New(gormsqlserver.Config{Conn: openSQLServer(t, tables, r)}), quiet())
+			require.NoError(t, err)
+			return gormAdapter.NewGormAdapter(gdb, r)
+		},
+		"bun/sqlserver": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			return bunAdapter.NewBunAdapter(bun.NewDB(openSQLServer(t, tables, r), mssqldialect.New()), r)
 		},
 		"bun/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
 			return bunAdapter.NewBunAdapter(bun.NewDB(openSQLite(t, tables, r), sqlitedialect.New()), r)
@@ -179,6 +204,56 @@ func TestStoreContract(t *testing.T) {
 			t.Run("Accounts", func(t *testing.T) { accountsContract(t, st, db) })
 			t.Run("RateLimits", func(t *testing.T) { rateLimitsContract(t, db, resolver) })
 			t.Run("AuditLog", func(t *testing.T) { auditLogContract(t, st) })
+		})
+	}
+}
+
+// TestGuardedUpdateInATransactionOnMySQL checks that the loser of a guarded
+// update gets NotFound when it read the row earlier in its transaction. MySQL
+// reports changed rows, so an adapter re-counts after an update that changed
+// none; with a plain read that count sees the transaction's snapshot, where
+// the guard still matches, and the lost update is reported as applied.
+func TestGuardedUpdateInATransactionOnMySQL(t *testing.T) {
+	ctx := context.Background()
+	tables, resolver := coreSchema(t)
+	for _, name := range []string{"sql/mysql", "gorm/mysql", "bun/mysql"} {
+		t.Run(name, func(t *testing.T) {
+			db := contractBackends()[name](t, tables, resolver)
+			for round := range 3 {
+				key := fmt.Sprintf("guarded-%d", round)
+				require.NoError(t, db.Create(ctx, &models.RateLimit{Key: key, ExpiresAt: t0.Add(time.Hour)}))
+				guard := clause.Expression{Logic: clause.OpAnd, Conditions: []clause.Condition{
+					{Field: models.RateLimitKey, Operator: clause.OpEqual, Value: key},
+					{Field: models.RateLimitCount, Operator: clause.OpEqual, Value: int64(0)},
+				}}
+
+				const calls = 12
+				var applied, lost atomic.Int64
+				var wg sync.WaitGroup
+				for range calls {
+					wg.Go(func() {
+						err := db.Transaction(ctx, func(ctx context.Context, tx behemoth.Database) (any, error) {
+							// A plain read first: it fixes the transaction's snapshot.
+							if _, err := tx.Count(ctx, &models.RateLimit{}, guard); err != nil {
+								return nil, err
+							}
+							time.Sleep(20 * time.Millisecond) // let every transaction read before one writes
+							return nil, tx.UpdateOne(ctx, &models.RateLimit{}, guard, behemoth.M{models.RateLimitCount: int64(1)})
+						})
+						switch {
+						case err == nil:
+							applied.Add(1)
+						case behemotherr.IsNotFound(err):
+							lost.Add(1)
+						default:
+							assert.NoError(t, err)
+						}
+					})
+				}
+				wg.Wait()
+				assert.EqualValues(t, 1, applied.Load(), "one update wins")
+				assert.EqualValues(t, calls-1, lost.Load(), "the others get NotFound")
+			}
 		})
 	}
 }
@@ -231,6 +306,19 @@ func usersContract(t *testing.T, st *store.Store) {
 	p, _, err := plan.Get(found)
 	require.NoError(t, err)
 	assert.Equal(t, "pro", p, "a contributed column under another physical name round-trips")
+
+	// A bool as the value of a condition, and a limit without an order. Both
+	// need the Bun adapter's help on SQL Server, where there are no boolean
+	// literals and a limit needs an order.
+	unverified := clause.Expression{Conditions: []clause.Condition{
+		{Field: models.UserEmailVerified, Operator: clause.OpEqual, Value: false}}}
+	n, err := st.DB().Count(ctx, &models.User{}, unverified)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n, "a bool condition matches the stored bool")
+	limited, err := st.DB().FindMany(ctx, &models.User{}, unverified, &behemoth.QueryOptions{Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, limited, 1)
+	assert.Equal(t, u.ID, limited[0].(*models.User).ID, "a limited read without an order returns the row's own columns")
 
 	changes, err := twoFactorEnabled.Update(true)
 	require.NoError(t, err)
