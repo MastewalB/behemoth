@@ -22,6 +22,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 COPY storage/adapters/postgres/go.mod storage/adapters/postgres/go.sum storage/adapters/postgres/
 COPY plugins/adapters/gin/go.mod plugins/adapters/gin/go.sum plugins/adapters/gin/
+COPY telemetry/adapters/otel/go.mod telemetry/adapters/otel/go.sum telemetry/adapters/otel/
 COPY examples/init/go.mod examples/init/go.sum examples/init/
 RUN --mount=type=cache,target=/go/pkg/mod \
     cd examples/init && go mod download

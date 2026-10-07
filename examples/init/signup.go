@@ -17,7 +17,12 @@ import (
 // The application's handler on auth.signUp.before picks it up from the
 // payload (hooks.go).
 func signup(ctx context.Context, email, password, invite string) error {
-	_, ep, sqlDB, err := boot(ctx, nil)
+	obs, err := newObservability(ctx)
+	if err != nil {
+		return err
+	}
+	defer obs.shutdown(ctx) // a short-lived command has to flush before it exits
+	_, ep, sqlDB, err := boot(ctx, nil, obs.tel)
 	if err != nil {
 		return err
 	}

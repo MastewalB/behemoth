@@ -12,7 +12,11 @@ import (
 )
 
 // AuditLogPlugin is a minimal third-party plugin that owns one table. It
-// declares it in Declare, next to hooks, tokens and rate limits, so Prepare
+// exists to show how a plugin declares a table and fills it from hooks. It
+// is not how an application gets an audit trail: behemoth records one itself,
+// in the audit_log table (see audit.go and docs/api/telemetry.md).
+//
+// It declares its table in Declare, next to hooks, tokens and rate limits, so Prepare
 // collects it for migrations and the resolver without booting anything.
 //
 // In Register it hooks the email/password flows and the user write to fill
