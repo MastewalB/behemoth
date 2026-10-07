@@ -241,7 +241,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		// to the audit_log table. The recorder gets a store of its own,
 		// without data hooks or an encryptor, because it is needed before
 		// either exists and the table uses neither.
-		tel.Audit = store.NewAuditRecorder(store.New(db, store.WithSchema(app.Resolver)))
+		tel.Audit = store.NewAuditRecorder(store.New(db, store.WithSchema(app.Resolver), store.WithTelemetry(tel)))
 	}
 
 	cryptoSuite, err := crypto.New(ctx, cfg.Crypto, tel)
@@ -279,7 +279,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 
 	// Counters fire no data hooks, so they get a store of their own: the
 	// one plugins use is built later, from the dispatcher this feeds.
-	counterStore, err := resolveRateLimitStore(kv, store.New(db, store.WithSchema(app.Resolver))) // backend selection, below
+	counterStore, err := resolveRateLimitStore(kv, store.New(db, store.WithSchema(app.Resolver), store.WithTelemetry(tel))) // backend selection, below
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +300,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// The store's data hooks dispatch with ac, and the managers persist
 	// through the store, so they are built in that order.
 	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}), store.WithSchema(app.Resolver),
-		store.WithEncryptor(cryptoSuite.AtRest))
+		store.WithEncryptor(cryptoSuite.AtRest), store.WithTelemetry(tel))
 	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token, ac)
 	// One client-IP configuration for sessions and route rate limiting, so
 	// both see the same address for a request.
@@ -849,7 +849,24 @@ func (rl *DefaultRateLimiter) evaluate(
 	action types.RateLimitAction,
 	lockoutFor time.Duration,
 ) error {
-	allowed, retryAfter, err := algo.Allow(ctx, key, limit)
+	var spanAttrs behemoth.M
+	if rl.tel.TracingEnabled() {
+		spanAttrs = behemoth.M{telemetry.AttrRule: name}
+	}
+	spanCtx, span := rl.tel.StartSpan(ctx, telemetry.SpanRateLimitCheck, spanAttrs)
+	allowed, retryAfter, err := algo.Allow(spanCtx, key, limit)
+	result := "allowed"
+	switch {
+	case err != nil:
+		result = "error"
+	case !allowed:
+		result = "limited"
+	}
+	if rl.tel.TracingEnabled() {
+		span.SetAttributes(behemoth.M{telemetry.AttrResult: result})
+	}
+	telemetry.FinishSpan(span, err)
+	rl.countCheck(ctx, name, result)
 	if err != nil {
 		return rl.handleStoreFailure(ctx, name, err)
 	}
@@ -868,6 +885,15 @@ func (rl *DefaultRateLimiter) evaluate(
 	}
 
 	return nil
+}
+
+// countCheck counts one evaluation of rule: "allowed", "limited", or
+// "error" when the counter store could not be reached (what happens to the
+// request then is RateLimitConfig.FailureMode's decision).
+func (rl *DefaultRateLimiter) countCheck(ctx context.Context, rule, result string) {
+	if rl.tel.MetricsEnabled() {
+		rl.tel.Count(ctx, telemetry.MetricRateLimitChecks, behemoth.M{telemetry.AttrRule: rule, telemetry.AttrResult: result})
+	}
 }
 
 func (rl *DefaultRateLimiter) handleStoreFailure(ctx context.Context, rule string, err error) error {
@@ -1226,6 +1252,7 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 		return nil, err
 	}
 	hctx = forPoint(hctx, point, types.BeforeHookPhase)
+	defer d.chainSpan(hctx, point, types.BeforeHookPhase).End()
 
 	// rate-limiting, evaluated before any registered before-hook handler runs
 	// rate limiter will handle auditing
@@ -1250,7 +1277,10 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 			return nil, err
 		}
 
-		result, err := d.safeInvokeBefore(hctx, fn, mutated, point, h.plugin)
+		start := time.Now()
+		handlerCtx, span := d.handlerSpan(hctx, point, h.plugin)
+		result, err := d.safeInvokeBefore(handlerCtx, fn, mutated, point, h.plugin)
+		d.observeHandler(hctx, point, types.BeforeHookPhase, h.plugin, start, span, err)
 		if err != nil {
 			return nil, err // abort and propagate error (caller decides whether/how to Fail)
 		}
@@ -1268,6 +1298,7 @@ func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPo
 		return err
 	}
 	hctx = forPoint(hctx, point, types.AfterHookPhase)
+	defer d.chainSpan(hctx, point, types.AfterHookPhase).End()
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.AfterHookFunc)
@@ -1277,12 +1308,17 @@ func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPo
 			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			continue // execution continues since one bad registration must not stop the rest
 		}
-		if err := d.safeInvokeAfter("Dispatcher.RunAfter", hctx, fn, result, point, h.plugin); err != nil {
+		start := time.Now()
+		handlerCtx, span := d.handlerSpan(hctx, point, h.plugin)
+		err := d.safeInvokeAfter("Dispatcher.RunAfter", handlerCtx, fn, result, point, h.plugin)
+		d.observeHandler(hctx, point, types.AfterHookPhase, h.plugin, start, span, err)
+		if err != nil {
 			// Errors in AfterHookPhase are not propagated
 			d.logError(hctx.Ctx, "after-hook failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 		}
 	}
 
+	d.countPoint(hctx, point, result, nil)
 	d.recordAudit(hctx, point, def, result, nil)
 	return nil
 }
@@ -1296,6 +1332,7 @@ func (d *DefaultDispatcher) RunAfterTx(hctx *types.HookContext, point types.Hook
 		return err
 	}
 	hctx = forPoint(hctx, point, types.AfterHookPhase)
+	defer d.chainSpan(hctx, point, types.AfterHookPhase).End()
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.AfterHookFunc)
@@ -1305,7 +1342,11 @@ func (d *DefaultDispatcher) RunAfterTx(hctx *types.HookContext, point types.Hook
 			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			return err
 		}
-		if err := d.safeInvokeAfter("Dispatcher.RunAfterTx", hctx, fn, result, point, h.plugin); err != nil {
+		start := time.Now()
+		handlerCtx, span := d.handlerSpan(hctx, point, h.plugin)
+		err := d.safeInvokeAfter("Dispatcher.RunAfterTx", handlerCtx, fn, result, point, h.plugin)
+		d.observeHandler(hctx, point, types.AfterHookPhase, h.plugin, start, span, err)
+		if err != nil {
 			return err // abort and propagate; the write is rolled back
 		}
 	}
@@ -1325,6 +1366,7 @@ func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint,
 		return err
 	}
 	hctx = forPoint(hctx, point, types.FailedHookPhase)
+	defer d.chainSpan(hctx, point, types.FailedHookPhase).End()
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.FailedHookFunc)
@@ -1334,11 +1376,16 @@ func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint,
 			d.logError(hctx.Ctx, "failed-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			continue
 		}
-		if err := d.safeInvokeFailed(hctx, fn, reason, point, h.plugin); err != nil {
+		start := time.Now()
+		handlerCtx, span := d.handlerSpan(hctx, point, h.plugin)
+		err := d.safeInvokeFailed(handlerCtx, fn, reason, point, h.plugin)
+		d.observeHandler(hctx, point, types.FailedHookPhase, h.plugin, start, span, err)
+		if err != nil {
 			d.logError(hctx.Ctx, "failed-hook handler errored", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 		}
 	}
 
+	d.countPoint(hctx, point, nil, &reason)
 	d.recordAudit(hctx, point, def, nil, &reason)
 	return nil
 }
@@ -1350,6 +1397,98 @@ func (d *DefaultDispatcher) safeInvokeFailed(hctx *types.HookContext, fn types.F
 		}
 	}()
 	return fn(hctx, reason)
+}
+
+// chainSpan starts the span of one dispatch and makes hctx, the dispatch's
+// own copy of the hook context (forPoint), carry it, so that the handlers,
+// the rate-limit check and the audit record nest under it. A point without
+// handlers gets no span: most dispatches have none, and an empty span per
+// point would bury a trace. The caller ends the span.
+func (d *DefaultDispatcher) chainSpan(hctx *types.HookContext, point types.HookPoint, phase types.HookPhase) telemetry.Span {
+	if len(d.frozenChains[point]) == 0 || !d.tel.TracingEnabled() {
+		return telemetry.SpanFrom(context.Background()) // records nothing
+	}
+	ctx, span := d.tel.StartSpan(hctx.Ctx, telemetry.SpanHookChain,
+		behemoth.M{telemetry.AttrPoint: string(point), telemetry.AttrPhase: string(phase)})
+	hctx.Ctx = ctx
+	return span
+}
+
+// handlerSpan starts the span of one handler call and returns the hook
+// context the handler receives: a copy of hctx carrying the span, so what
+// the handler does with HookContext.Ctx nests under it. The copy shares
+// hctx's Values. observeHandler ends the span.
+func (d *DefaultDispatcher) handlerSpan(hctx *types.HookContext, point types.HookPoint, plugin string) (*types.HookContext, telemetry.Span) {
+	if !d.tel.TracingEnabled() {
+		return hctx, telemetry.SpanFrom(context.Background())
+	}
+	ctx, span := d.tel.StartSpan(hctx.Ctx, telemetry.SpanHookHandler,
+		behemoth.M{telemetry.AttrPoint: string(point), telemetry.AttrPlugin: plugin})
+	c := *hctx
+	c.Ctx = ctx
+	return &c, span
+}
+
+// observeHandler measures one handler call: its duration, and an error
+// count when it returned an error or panicked. On a before point a returned
+// error is a veto, which is how a handler refuses an operation; the phase
+// attribute tells those apart from the failures of after and failed
+// handlers.
+func (d *DefaultDispatcher) observeHandler(hctx *types.HookContext, point types.HookPoint, phase types.HookPhase, plugin string, start time.Time, span telemetry.Span, err error) {
+	telemetry.FinishSpan(span, err) // a veto is not marked as a failed span; see FinishSpan
+	if !d.tel.MetricsEnabled() {
+		return
+	}
+	attrs := behemoth.M{telemetry.AttrPoint: string(point), telemetry.AttrPhase: string(phase), telemetry.AttrPlugin: plugin}
+	d.tel.ObserveSince(hctx.Ctx, telemetry.MetricHookDuration, start, attrs)
+	if err != nil {
+		d.tel.Count(hctx.Ctx, telemetry.MetricHookErrors, attrs)
+	}
+}
+
+// pointMetric is the counter a core point increments when it is dispatched,
+// with the outcome it stands for.
+type pointMetric struct {
+	name    string
+	outcome telemetry.AuditOutcome // "" for a counter that has no outcome attribute
+}
+
+// corePointMetrics maps core's after and failed points to the counters of
+// the metric catalog, so that the flows and managers firing them are counted
+// without reporting anything themselves. A point declared by a plugin has no
+// entry: the plugin counts what it needs through AuthContext.Telemetry.
+var corePointMetrics = map[types.HookPoint]pointMetric{
+	hooks.HookSignInAfter:  {telemetry.MetricSignIn, telemetry.OutcomeSuccess},
+	hooks.HookSignInFailed: {telemetry.MetricSignIn, telemetry.OutcomeFailure},
+	hooks.HookSignUpAfter:  {telemetry.MetricSignUp, telemetry.OutcomeSuccess},
+	hooks.HookSignUpFailed: {telemetry.MetricSignUp, telemetry.OutcomeFailure},
+
+	hooks.HookSessionAfterCreate: {name: telemetry.MetricSessionCreated},
+	hooks.HookSessionAfterRevoke: {name: telemetry.MetricSessionRevoked},
+
+	hooks.HookTokenAfterIssue: {name: telemetry.MetricTokenIssued},
+	hooks.HookTokenConsumed:   {name: telemetry.MetricTokenConsumed},
+	hooks.HookTokenFailed:     {name: telemetry.MetricTokenFailed},
+}
+
+// countPoint increments the counter of a core point, if it has one. A
+// failure adds its code as the reason, and a token result its kind.
+func (d *DefaultDispatcher) countPoint(hctx *types.HookContext, point types.HookPoint, result any, reason *types.FailureReason) {
+	metric, ok := corePointMetrics[point]
+	if !ok || !d.tel.MetricsEnabled() {
+		return
+	}
+	attrs := behemoth.M{}
+	if metric.outcome != "" {
+		attrs[telemetry.AttrOutcome] = string(metric.outcome)
+	}
+	if reason != nil {
+		attrs[telemetry.AttrReason] = reason.Code
+	}
+	if tok, ok := result.(*models.Token); ok {
+		attrs[telemetry.AttrKind] = string(tok.Kind)
+	}
+	d.tel.Count(hctx.Ctx, metric.name, attrs)
 }
 
 func (d *DefaultDispatcher) logError(ctx context.Context, msg string, err error, fields behemoth.M) {
@@ -1387,6 +1526,7 @@ func (d *DefaultDispatcher) recordAuditTx(hctx *types.HookContext, point types.H
 	inTx, rest := telemetry.SplitAuditRecorders(d.tel.Audit)
 	for _, rec := range inTx {
 		if err := rec.RecordTx(hctx.Ctx, hctx.Tx.DB(), event); err != nil {
+			d.tel.AuditFailed(hctx.Ctx, event.Type, err)
 			return fmt.Errorf("audit event %q could not be recorded with the write: %w", event.Type, err)
 		}
 	}
@@ -1394,7 +1534,7 @@ func (d *DefaultDispatcher) recordAuditTx(hctx *types.HookContext, point types.H
 		hctx.Tx.AfterCommit(hctx.Ctx, func(ctx context.Context) {
 			for _, rec := range rest {
 				if err := rec.Record(ctx, event); err != nil {
-					d.tel.Logger.Error(ctx, "audit event could not be recorded", telemetry.ErrorFields(err, behemoth.M{"audit_type": event.Type}))
+					d.tel.AuditFailed(ctx, event.Type, err)
 				}
 			}
 		})

@@ -70,7 +70,7 @@ type AuditEvent struct {
 | `ActorType` | `user` if `ActorID` is set, `anonymous` inside a request, `system` otherwise |
 | `Metadata` | always replaced by a redacted copy. The log redaction rules apply, except that email addresses are kept. |
 
-`Telemetry.RecordAudit(ctx, event)` normalizes, calls `Audit.Record`, and logs a failed write at Error with the event's type. Every producer outside the dispatcher's transaction path records through it, so no audit failure is dropped silently. Before this phase the rate limiter and the migration runner ignored the error.
+`Telemetry.RecordAudit(ctx, event)` normalizes, calls `Audit.Record`, and reports a failed write through `Telemetry.AuditFailed`: an Error line with the event's type and one `behemoth.audit.record_failures`. Every producer outside the dispatcher's transaction path records through it, so no audit failure is dropped silently. Before this phase the rate limiter and the migration runner ignored the error.
 
 ### Event types
 
@@ -241,4 +241,3 @@ To keep the table and add a sink, the application passes `telemetry.MultiRecorde
 - An HTTP route to query events. It needs an authorization model behemoth does not have. Reading is a Go API: `ac.Store.QueryAuditEvents`.
 - Tamper evidence, such as a hash chain over rows.
 - A fail-closed mode for best-effort events.
-- The `audit.record_failures` metric. It arrives with the metrics phase; a failure is logged at Error today.

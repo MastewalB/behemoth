@@ -775,3 +775,137 @@ func TestAuditRecorderChoices(t *testing.T) {
 
 // lateRecorder is a database recorder whose database is set after Boot.
 type lateRecorder struct{ *store.AuditRecorder }
+
+// What an application's dashboards are built on: requests are not involved
+// here (no router), so this checks the store, auth, session and audit
+// metrics a sign-up and two sign-ins produce.
+func TestEmailPasswordMetrics(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	ac, routes := auditApp(t, tel, nil)
+	m := rec.Metrics
+
+	w := call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"wrong password"}`)
+	w = call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	assert.EqualValues(t, 1, m.Count(telemetry.MetricSignUp, behemoth.M{telemetry.AttrOutcome: "success"}))
+	assert.EqualValues(t, 1, m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "success"}))
+	assert.EqualValues(t, 1, m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrReason: "invalidCredentials"}))
+	assert.EqualValues(t, 1, m.Count(telemetry.MetricSessionCreated, nil))
+
+	// The store's operations are timed by table and operation, those inside
+	// the sign-up's transaction included.
+	assert.Len(t, m.Observations(telemetry.MetricStoreDuration, behemoth.M{telemetry.AttrOp: "create", telemetry.AttrEntity: models.UserTable}), 1)
+	assert.Len(t, m.Observations(telemetry.MetricStoreDuration, behemoth.M{telemetry.AttrOp: "create", telemetry.AttrEntity: models.AccountTable}), 1)
+	assert.NotEmpty(t, m.Observations(telemetry.MetricStoreDuration, behemoth.M{telemetry.AttrOp: "transaction"}))
+	// Sign-up looked the address up first and found nothing: an error of
+	// category not_found, which is not a failure of the database.
+	assert.EqualValues(t, 1, m.Count(telemetry.MetricStoreErrors, behemoth.M{
+		telemetry.AttrOp: "find_one", telemetry.AttrEntity: models.UserTable, telemetry.AttrErrorCategory: "not_found"}))
+	assert.Zero(t, m.Count(telemetry.MetricStoreErrors, behemoth.M{telemetry.AttrErrorCategory: "database"}))
+
+	// No attribute holds an identifier or an address.
+	for _, sample := range append(m.Counters(), m.Histograms()...) {
+		assert.NotContains(t, fmt.Sprint(sample.Attrs), "ada@example.com", sample.Name)
+	}
+
+	// A session lookup by token is counted with its cache state.
+	_, err := ac.SessionManager.Validate(context.Background(), "not-a-token")
+	require.Error(t, err)
+	assert.EqualValues(t, 1, m.Count(telemetry.MetricSessionValidated, behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrCache: "miss"}))
+
+	// An audit event that can't be stored is counted by type.
+	rec.Audit.Err = errors.New("sink down")
+	call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"wrong password"}`)
+	assert.EqualValues(t, 1, m.Count(telemetry.MetricAuditRecordFailures, behemoth.M{telemetry.AttrType: string(hooks.HookSignInFailed)}))
+}
+
+// The spans of a sign-up and a sign-in form one tree per flow call: store
+// operations under their transaction, handlers under their chain, and every
+// span ended once.
+func TestEmailPasswordTracing(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	ac, routes := auditApp(t, tel, func(reg types.HookRegistry) error {
+		// A handler that reads through its context: the read is traced
+		// under the handler's span.
+		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, _ any) error {
+			_, err := hctx.Tx.FindUserByEmail(hctx.Ctx, "ada@example.com")
+			return err
+		}, nil)
+	})
+	tr := rec.Tracer
+
+	w := call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	under := func(span *telemetrytest.Span, ancestor string) bool {
+		for p := span.Parent; p != nil; p = p.Parent {
+			if p.Name == ancestor {
+				return true
+			}
+		}
+		return false
+	}
+	named := func(name string, attrs behemoth.M) []*telemetrytest.Span {
+		var out []*telemetrytest.Span
+	spans:
+		for _, s := range tr.Named(name) {
+			for k, v := range attrs {
+				if s.Attrs()[k] != v {
+					continue spans
+				}
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+
+	require.Len(t, tr.Named(telemetry.SpanPasswordHash), 1)
+
+	// The user and the account are inserted in one transaction.
+	tx := telemetry.SpanStorePrefix + "transaction"
+	userInsert := named(telemetry.SpanStorePrefix+"create", behemoth.M{telemetry.AttrEntity: models.UserTable})
+	accountInsert := named(telemetry.SpanStorePrefix+"create", behemoth.M{telemetry.AttrEntity: models.AccountTable})
+	require.Len(t, userInsert, 1)
+	require.Len(t, accountInsert, 1)
+	assert.True(t, under(userInsert[0], tx), "the user insert is not under the transaction")
+	assert.True(t, under(accountInsert[0], tx), "the account insert is not under the transaction")
+
+	// The application's handler on data.user.afterCreate: a handler span
+	// under the point's chain span, inside the transaction, with the
+	// handler's own read under it.
+	handlers := named(telemetry.SpanHookHandler, behemoth.M{telemetry.AttrPoint: string(hooks.HookUserAfterCreate), telemetry.AttrPlugin: "app"})
+	require.Len(t, handlers, 1)
+	require.NotNil(t, handlers[0].Parent)
+	assert.Equal(t, telemetry.SpanHookChain, handlers[0].Parent.Name)
+	assert.True(t, under(handlers[0], tx))
+	var readUnderHandler bool
+	for _, s := range named(telemetry.SpanStorePrefix+"find_one", behemoth.M{telemetry.AttrEntity: models.UserTable}) {
+		readUnderHandler = readUnderHandler || s.Parent == handlers[0]
+	}
+	assert.True(t, readUnderHandler, "the handler's read is not a child of its span")
+
+	// Points without handlers get no chain span.
+	assert.Empty(t, named(telemetry.SpanHookChain, behemoth.M{telemetry.AttrPoint: string(hooks.HookSignUpAfter)}))
+
+	// A refused sign-in: the lookup that finds nothing is not a failed span.
+	call(t, ac, routes["/sign-in/email"], `{"email":"nobody@example.com","password":"whatever it is"}`)
+	for _, s := range tr.Spans() {
+		assert.NoError(t, s.Err(), "span %q failed", s.Name)
+	}
+
+	w = call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, tr.Named(telemetry.SpanPasswordVerify), 1)
+	creates := tr.Named(telemetry.SpanSessionCreate)
+	require.Len(t, creates, 1)
+	sessionInsert := named(telemetry.SpanStorePrefix+"create", behemoth.M{telemetry.AttrEntity: models.SessionTable})
+	require.Len(t, sessionInsert, 1)
+	assert.Equal(t, creates[0], sessionInsert[0].Parent, "the session insert is not a child of the create span")
+
+	for _, s := range tr.Spans() {
+		assert.Equal(t, 1, s.Ended(), "span %q", s.Name)
+	}
+}

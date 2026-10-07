@@ -49,6 +49,15 @@ func NewDefaultTokenManager(
 	}
 }
 
+// telemetry returns the AuthContext's Telemetry, or nil before Boot has set
+// it. A nil Telemetry starts no spans.
+func (tm *DefaultTokenManager) telemetry() *telemetry.Telemetry {
+	if tm.auth == nil {
+		return nil
+	}
+	return tm.auth.Telemetry
+}
+
 // log returns the manager's logger. It is read from the AuthContext on use,
 // because Boot hands the manager its AuthContext before every field is set.
 func (tm *DefaultTokenManager) log() telemetry.Logger {
@@ -84,6 +93,23 @@ func checkConsumable(tok *types.Token) error {
 }
 
 func (tm *DefaultTokenManager) Issue(
+	ctx context.Context,
+	kind types.TokenKind,
+	subject any,
+	meta behemoth.M,
+) (*types.Token, string, error) {
+	var spanAttrs behemoth.M
+	if tm.telemetry().TracingEnabled() {
+		spanAttrs = behemoth.M{telemetry.AttrKind: string(kind)}
+	}
+	ctx, span := tm.telemetry().StartSpan(ctx, telemetry.SpanTokenIssue, spanAttrs)
+	tok, rawToken, err := tm.issue(ctx, kind, subject, meta)
+	telemetry.FinishSpan(span, err)
+	return tok, rawToken, err
+}
+
+// issue is Issue without its span.
+func (tm *DefaultTokenManager) issue(
 	ctx context.Context,
 	kind types.TokenKind,
 	subject any,
@@ -239,6 +265,18 @@ func (tm *DefaultTokenManager) Verify(ctx context.Context, kind types.TokenKind,
 }
 
 func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind, rawToken string) (*types.Token, error) {
+	var spanAttrs behemoth.M
+	if tm.telemetry().TracingEnabled() {
+		spanAttrs = behemoth.M{telemetry.AttrKind: string(kind)}
+	}
+	ctx, span := tm.telemetry().StartSpan(ctx, telemetry.SpanTokenConsume, spanAttrs)
+	tok, err := tm.consume(ctx, kind, rawToken)
+	telemetry.FinishSpan(span, err)
+	return tok, err
+}
+
+// consume is Consume without its span.
+func (tm *DefaultTokenManager) consume(ctx context.Context, kind types.TokenKind, rawToken string) (*types.Token, error) {
 	const op = "TokenManager.Consume"
 	ctx = types.BeginOperation(ctx) // one operation for the consume and its consumed or failed point
 

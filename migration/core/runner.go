@@ -38,12 +38,20 @@ func (r *DefaultMigrationRunner) Apply(ctx context.Context, migrations []Migrati
 	}
 
 	for _, m := range migrations {
-		if err := r.applyOne(ctx, m, &currentSnapshot); err != nil {
+		if err := r.applyTraced(ctx, m, &currentSnapshot); err != nil {
 			return behemotherr.WrapOp("MigrationRunner.Apply", "migration:"+m.ID, err)
 		}
 	}
 	return nil
 
+}
+
+// applyTraced is applyOne inside a span, one per migration.
+func (r *DefaultMigrationRunner) applyTraced(ctx context.Context, m Migration, snapshot *SchemaSnapshot) error {
+	ctx, span := r.tel.StartSpan(ctx, telemetry.SpanMigrationApply, behemoth.M{"id": m.ID, "baseline": m.IsBaseline})
+	err := r.applyOne(ctx, m, snapshot)
+	telemetry.FinishSpan(span, err)
+	return err
 }
 
 func (r *DefaultMigrationRunner) applyOne(ctx context.Context, m Migration, snapshot *SchemaSnapshot) error {

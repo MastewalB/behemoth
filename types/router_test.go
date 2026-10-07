@@ -334,3 +334,112 @@ func TestRouterLogsFailures(t *testing.T) {
 		t.Errorf("debug lines = %v, want exactly the 404", debugLines)
 	}
 }
+
+// Each request is counted once and timed, under its route's pattern and the
+// status the client got, whether the handler answered or returned an error.
+func TestRouterMetrics(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	r := NewRouter(RouterConfig{}, &AuthContext{Telemetry: tel})
+	err := r.Mount("test", "", []Route{
+		{Method: http.MethodGet, Path: "/users/{id}", Handler: func(rctx *RequestContext) error {
+			return rctx.Response.JSON(http.StatusOK, map[string]string{})
+		}},
+		{Method: http.MethodPost, Path: "/broken", Handler: func(*RequestContext) error {
+			return behemotherr.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &recordingDriver{}
+	if err := r.Build(d); err != nil {
+		t.Fatal(err)
+	}
+	d.serve(t, http.MethodGet, "/api/auth/users/{id}")
+	d.serve(t, http.MethodGet, "/api/auth/users/{id}")
+	d.serve(t, http.MethodPost, "/api/auth/broken")
+
+	ok := map[string]any{telemetry.AttrMethod: http.MethodGet, telemetry.AttrRoute: "/api/auth/users/{id}", telemetry.AttrStatus: http.StatusOK}
+	failed := map[string]any{telemetry.AttrMethod: http.MethodPost, telemetry.AttrRoute: "/api/auth/broken", telemetry.AttrStatus: http.StatusInternalServerError}
+	if n := rec.Metrics.Count(telemetry.MetricHTTPRequests, ok); n != 2 {
+		t.Errorf("200 requests counted = %d, want 2", n)
+	}
+	if n := rec.Metrics.Count(telemetry.MetricHTTPRequests, failed); n != 1 {
+		t.Errorf("500 requests counted = %d, want 1 with the mapped status", n)
+	}
+	if n := rec.Metrics.Count(telemetry.MetricHTTPRequests, nil); n != 3 {
+		t.Errorf("requests counted = %d, want 3", n)
+	}
+	if n := len(rec.Metrics.Observations(telemetry.MetricHTTPDuration, nil)); n != 3 {
+		t.Errorf("durations observed = %d, want 3", n)
+	}
+
+	// Without a metrics sink the route is not wrapped at all.
+	plain := NewRouter(RouterConfig{}, nil)
+	called := false
+	h := plain.withMetrics(Route{}, func(*RequestContext) error { called = true; return nil })
+	if err := h(nil); err != nil || !called {
+		t.Error("withMetrics without a sink did not return the handler itself")
+	}
+}
+
+// A request to a behemoth route is one span, and what the handler does with
+// its context nests under it. Only a server error fails the span.
+func TestRouterTracing(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	r := NewRouter(RouterConfig{}, &AuthContext{Telemetry: tel})
+	err := r.Mount("test", "", []Route{
+		{Method: http.MethodGet, Path: "/ok", Handler: func(rctx *RequestContext) error {
+			_, span := tel.StartSpan(rctx.Ctx, "inner", nil)
+			span.End()
+			return rctx.Response.JSON(http.StatusOK, map[string]string{})
+		}},
+		{Method: http.MethodGet, Path: "/missing", Handler: func(*RequestContext) error {
+			return behemotherr.NewNotFound("Store.FindUser", "user", nil)
+		}},
+		{Method: http.MethodGet, Path: "/broken", Handler: func(*RequestContext) error {
+			return behemotherr.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &recordingDriver{}
+	if err := r.Build(d); err != nil {
+		t.Fatal(err)
+	}
+	w := d.serve(t, http.MethodGet, "/api/auth/ok")
+	d.serve(t, http.MethodGet, "/api/auth/missing")
+	d.serve(t, http.MethodGet, "/api/auth/broken")
+
+	requests := rec.Tracer.Named(telemetry.SpanRequest)
+	if len(requests) != 3 {
+		t.Fatalf("request spans = %d, want 3", len(requests))
+	}
+	ok, missing, broken := requests[0], requests[1], requests[2]
+	want := map[string]any{
+		telemetry.AttrMethod:    http.MethodGet,
+		telemetry.AttrRoute:     "/api/auth/ok",
+		telemetry.AttrStatus:    http.StatusOK,
+		telemetry.AttrRequestID: w.Header().Get(telemetry.DefaultRequestIDHeader),
+	}
+	for k, v := range want {
+		if ok.Attrs()[k] != v {
+			t.Errorf("%s = %v, want %v", k, ok.Attrs()[k], v)
+		}
+	}
+	if inner := rec.Tracer.Named("inner"); len(inner) != 1 || inner[0].Parent != ok {
+		t.Errorf("the handler's span is not a child of the request's: %v", inner)
+	}
+	if missing.Err() != nil || missing.Attrs()[telemetry.AttrStatus] != http.StatusNotFound {
+		t.Errorf("a 404 failed its span: err %v, attrs %v", missing.Err(), missing.Attrs())
+	}
+	if broken.Err() == nil || broken.Attrs()[telemetry.AttrStatus] != http.StatusInternalServerError {
+		t.Errorf("a 500 did not fail its span: err %v, attrs %v", broken.Err(), broken.Attrs())
+	}
+	for _, span := range rec.Tracer.Spans() {
+		if span.Ended() != 1 {
+			t.Errorf("span %q ended %d times", span.Name, span.Ended())
+		}
+	}
+}

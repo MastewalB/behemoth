@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 )
@@ -216,5 +219,101 @@ func TestDispatcherSetsPointAndPhaseOnACopy(t *testing.T) {
 	// A context without Values must not make a handler's write panic.
 	if err := d.RunAfterTx(&types.HookContext{Ctx: context.Background()}, point, nil); err != nil {
 		t.Fatalf("a nil Values map reached the handler: %v", err)
+	}
+}
+
+// Every handler call is timed, a failing one is counted, and a core point
+// increments its counter in the metric catalog.
+func TestDispatcherMetrics(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	catalog := NewDefaultHookCatalog()
+	for _, def := range []types.HookPointDef{
+		{Point: hooks.HookSignInAfter, Owner: "core", Phase: types.AfterHookPhase},
+		{Point: hooks.HookSignInFailed, Owner: "core", Phase: types.FailedHookPhase},
+		{Point: hooks.HookTokenAfterIssue, Owner: "core", Phase: types.AfterHookPhase},
+	} {
+		if err := catalog.Declare(def); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chains := map[types.HookPoint][]registeredHandler{
+		hooks.HookSignInAfter: {
+			{plugin: "mailer", handler: types.AfterHookFunc(func(*types.HookContext, any) error { return errors.New("smtp down") })},
+			{plugin: "analytics", handler: types.AfterHookFunc(func(*types.HookContext, any) error { return nil })},
+		},
+	}
+	d := NewDefaultDispatcher(catalog, chains, nil, tel)
+	hctx := &types.HookContext{Ctx: context.Background()}
+
+	if err := d.RunAfter(hctx, hooks.HookSignInAfter, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalidCredentials"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RunAfter(hctx, hooks.HookTokenAfterIssue, &models.Token{Kind: "password_reset"}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := rec.Metrics
+	point := string(hooks.HookSignInAfter)
+	if n := len(m.Observations(telemetry.MetricHookDuration, behemoth.M{telemetry.AttrPoint: point})); n != 2 {
+		t.Errorf("handler durations = %d, want one per handler", n)
+	}
+	if n := m.Count(telemetry.MetricHookErrors, behemoth.M{telemetry.AttrPoint: point, telemetry.AttrPlugin: "mailer", telemetry.AttrPhase: "after"}); n != 1 {
+		t.Errorf("mailer errors = %d, want 1", n)
+	}
+	if n := m.Count(telemetry.MetricHookErrors, nil); n != 1 {
+		t.Errorf("hook errors = %d, want only the mailer's", n)
+	}
+	if n := m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "success"}); n != 1 {
+		t.Errorf("successful sign-ins = %d, want 1", n)
+	}
+	if n := m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrReason: "invalidCredentials"}); n != 1 {
+		t.Errorf("failed sign-ins = %d, want 1 with its reason", n)
+	}
+	if n := m.Count(telemetry.MetricTokenIssued, behemoth.M{telemetry.AttrKind: "password_reset"}); n != 1 {
+		t.Errorf("tokens issued = %d, want 1 with its kind", n)
+	}
+}
+
+// fixedLimiter answers every check the same way.
+type fixedLimiter struct {
+	allowed bool
+	err     error
+}
+
+func (l fixedLimiter) Allow(context.Context, string, types.Limit) (bool, time.Duration, error) {
+	return l.allowed, time.Second, l.err
+}
+
+// Each evaluated rule is counted once with how it ended, and a rejection is
+// also an audit event with the outcome "denied".
+func TestRateLimiterMetrics(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	rl := &DefaultRateLimiter{tel: tel}
+	ctx := context.Background()
+	check := func(l types.Limiter) error {
+		return rl.evaluate(ctx, "signin", "signin:203.0.113.7", "203.0.113.7", l, types.Limit{}, "", 0)
+	}
+
+	if err := check(fixedLimiter{allowed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := check(fixedLimiter{allowed: false}); !behemotherr.Is(err, behemotherr.CategoryRateLimited) {
+		t.Fatalf("a rejected check returned %v", err)
+	}
+	if err := check(fixedLimiter{err: errors.New("redis down")}); err != nil {
+		t.Fatalf("a store failure with fail-open returned %v", err)
+	}
+
+	for result, want := range map[string]int64{"allowed": 1, "limited": 1, "error": 1} {
+		if n := rec.Metrics.Count(telemetry.MetricRateLimitChecks, behemoth.M{telemetry.AttrRule: "signin", telemetry.AttrResult: result}); n != want {
+			t.Errorf("checks with result %q = %d, want %d", result, n, want)
+		}
+	}
+	events := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
+	if len(events) != 1 || events[0].Outcome != telemetry.OutcomeDenied || events[0].IPAddress != "203.0.113.7" {
+		t.Errorf("audit events = %+v, want one denied event with the address", events)
 	}
 }

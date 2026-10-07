@@ -11,7 +11,8 @@ The code lives in:
 - `telemetry/requestid.go`: the request ID on a `context.Context`
 - `telemetry/slog.go`: the `log/slog` backend
 - `telemetry/audit.go`: the audit event and recorder interfaces, described in `audit.md`
-- `telemetry/metrics.go`: the metrics interface, unchanged from before the move
+- `telemetry/metrics.go`: the metrics interface and catalog, described in `metrics.md`
+- `telemetry/tracer.go`: the tracer interface and span names, described in `tracing.md`
 - `telemetry/telemetrytest/`: in-memory sinks for tests
 - `types/router.go`: `withRequestScope`, which assigns the request ID
 
@@ -30,6 +31,7 @@ type Telemetry struct {
 	Logger  Logger
 	Audit   AuditRecorder
 	Metrics Metrics
+	Tracer  Tracer // set with the WithTracer option
 }
 
 func New(logger Logger, audit AuditRecorder, metrics Metrics, opts ...Option) *Telemetry
@@ -146,12 +148,13 @@ Audit events carry the ID too: `telemetry.NormalizeAuditEvent` fills `AuditEvent
 
 ## Test helpers
 
-`telemetrytest.New(opts...)` returns a `*telemetry.Telemetry` and a `Recorder` holding its three sinks.
+`telemetrytest.New(opts...)` returns a `*telemetry.Telemetry` and a `Recorder` holding its four sinks.
 
 | Sink | Reads |
 | --- | --- |
 | `Logger` | `Entries()`, `At(level)`, `Reset()` |
 | `AuditRecorder` | `Events()`, `OfType(type)`; set `Err` to make `Record` fail |
-| `Metrics` | `Counters()`, `Gauges()` |
+| `Metrics` | `Count(name, attrs)`, `Observations(name, attrs)`, `Counters()`, `Histograms()` |
+| `Tracer` | `Spans()`, `Named(name)`; each span has `Parent`, `Attrs()`, `Err()`, `Ended()` |
 
 The telemetry goes through `telemetry.New`, so recorded log lines are what a real backend would receive: redacted, with the request ID. All sinks are safe for concurrent use.

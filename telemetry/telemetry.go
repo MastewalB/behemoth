@@ -7,7 +7,8 @@
 // Logger in this package covers stdout; other backends live in their own
 // modules. Every component receives a *Telemetry built by New.
 //
-// Tracing is not part of this package yet. See docs/internal/telemetry/plan.md.
+// Tracing follows the same shape: Tracer and Span are defined here, and the
+// OpenTelemetry adapter records the spans.
 package telemetry
 
 // Telemetry groups the sinks a component reports to. Build it with New, which
@@ -20,6 +21,9 @@ type Telemetry struct {
 	Logger  Logger
 	Audit   AuditRecorder
 	Metrics Metrics
+	// Tracer is set with the WithTracer option. Components start spans with
+	// StartSpan.
+	Tracer Tracer
 }
 
 // Option changes how New builds a Telemetry.
@@ -28,6 +32,7 @@ type Option func(*options)
 type options struct {
 	allowEmails bool
 	extraKeys   []string
+	tracer      Tracer
 }
 
 // WithEmailsInLogs lets email addresses through to the log backend. Without
@@ -64,7 +69,10 @@ func New(logger Logger, audit AuditRecorder, metrics Metrics, opts ...Option) *T
 	if metrics == nil {
 		metrics = NoOpMetrics{}
 	}
-	return &Telemetry{Logger: guard(logger, newRedactor(o)), Audit: audit, Metrics: metrics}
+	if o.tracer == nil {
+		o.tracer = NoOpTracer{}
+	}
+	return &Telemetry{Logger: guard(logger, newRedactor(o)), Audit: audit, Metrics: metrics, Tracer: o.tracer}
 }
 
 // Named returns a copy of t whose Logger adds component to every line (see
@@ -83,5 +91,8 @@ func OrDefault(t *Telemetry) *Telemetry {
 	if t == nil {
 		return New(nil, nil, nil)
 	}
-	return New(t.Logger, t.Audit, t.Metrics)
+	if t.Tracer == nil {
+		return New(t.Logger, t.Audit, t.Metrics)
+	}
+	return New(t.Logger, t.Audit, t.Metrics, WithTracer(t.Tracer))
 }

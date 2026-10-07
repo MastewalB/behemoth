@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types/cryptotypes"
 	"github.com/MastewalB/behemoth/utils"
 )
@@ -76,7 +77,8 @@ type Store struct {
 	encryptor cryptotypes.Encryptor   // seals at-rest secrets; see WithEncryptor
 	newID     func() string
 	now       func() time.Time
-	inTx      bool // db is a transaction; see Transaction
+	tel       *telemetry.Telemetry // set by WithTelemetry; New wraps db with it
+	inTx      bool                 // db is a transaction; see Transaction
 	// commit collects the callbacks to run once the transaction s is bound
 	// to has committed. nil on a Store that is not bound to one.
 	commit *commitQueue
@@ -118,6 +120,7 @@ func New(db behemoth.Database, opts ...Option) *Store {
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.db = instrumented(s.db, s.tel)
 	return s
 }
 

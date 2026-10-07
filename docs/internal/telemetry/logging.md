@@ -118,7 +118,7 @@ The logger is opt-in per adapter and separate from `BootConfig.Telemetry`, becau
 - *A log call in each method.* Explicit, and each line can name its operation (`FindOne`). About fifty call sites across four adapters, and a new method can forget its line.
 - *Wrap the `Querier`.* One implementation for all four adapters, and no statement can be missed. The line does not know which adapter method ran it.
 **Decision:** Wrap the `Querier`. The statement text identifies the operation well enough for a Debug line.
-**Revisit if:** tracing (phase 5) needs per-operation spans in the adapters, which would put a hook in each method anyway.
+**Revisit if:** statement lines need the name of the adapter method. Tracing did not need a hook per method: the store's spans are started one layer up, around the adapter (`tracing.md`).
 
 ## Removed prints
 

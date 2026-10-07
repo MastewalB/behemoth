@@ -1,8 +1,8 @@
 # Telemetry
 
-Behemoth reports what it does through three sinks: a logger, an audit recorder and a metrics sink. The logger and the metrics sink are optional and silent when you leave them out. Audit is on by default and writes to the `audit_log` table.
+Behemoth reports what it does in four ways: log lines, audit events, metrics and trace spans. Each goes to a sink you provide. The logger, the metrics sink and the tracer are optional and silent when you leave them out. Audit is on by default and writes to the `audit_log` table.
 
-This page covers logging, request IDs and the audit log. The metric catalog and tracing are not built yet; the metrics interface exists so the configuration below will not change shape when they arrive.
+For stdout logging you need nothing beyond this package. For metrics and traces, the [OpenTelemetry adapter](#opentelemetry) connects Behemoth to a collector, Jaeger or any other OTLP destination.
 
 ## Setup
 
@@ -140,7 +140,7 @@ Behemoth uses the same keys in every line. They are constants in the `telemetry`
 | `FieldRoute` | `route` | a route's pattern |
 | `FieldStatus` | `status` | HTTP status code |
 | `FieldStatement` | `statement` | SQL text without values |
-| `FieldTraceID`, `FieldSpanID` | `trace_id`, `span_id` | reserved for tracing backends |
+| `FieldTraceID`, `FieldSpanID` | `trace_id`, `span_id` | the trace a line belongs to; added by the OpenTelemetry adapter's `WithTraceIDs` |
 
 ## Request IDs
 
@@ -339,6 +339,230 @@ User creation and updates are still written to the table in their transaction. Y
 
 `QueryAuditEvents` and `PurgeAuditEvents` always work on the `audit_log` table. With only your own recorder, or with auditing off, the table stays empty.
 
+## Metrics
+
+Behemoth measures its own work and hands the numbers to a sink you provide, the third argument of `telemetry.New`. Without one nothing is measured.
+
+```go
+type Metrics interface {
+	Counter(ctx context.Context, name string, delta int64, attrs behemoth.M)
+	Histogram(ctx context.Context, name string, value float64, attrs behemoth.M)
+}
+```
+
+The [OpenTelemetry adapter](#opentelemetry) is a ready-made sink. For another metrics library, implement the two methods yourself. A sketch over the Prometheus client:
+
+```go
+type promMetrics struct {
+	requests *prometheus.CounterVec   // labels: method, route, status
+	// ... one vector per metric you want
+}
+
+func (p *promMetrics) Counter(_ context.Context, name string, delta int64, attrs behemoth.M) {
+	if name == telemetry.MetricHTTPRequests {
+		p.requests.WithLabelValues(
+			fmt.Sprint(attrs[telemetry.AttrMethod]), fmt.Sprint(attrs[telemetry.AttrRoute]), fmt.Sprint(attrs[telemetry.AttrStatus]),
+		).Add(float64(delta))
+	}
+}
+```
+
+Durations are in seconds. Attribute values come from fixed sets (a route pattern, a table name, a failure code) and never hold a user id, an IP address or an email, so every attribute is safe to use as a label.
+
+### What is measured
+
+| Metric | Type | Attributes | Counts or times |
+| --- | --- | --- | --- |
+| `behemoth.http.requests` | counter | `method`, `route`, `status` | requests to Behemoth's routes |
+| `behemoth.http.duration` | histogram | `method`, `route`, `status` | how long each took |
+| `behemoth.auth.sign_in` | counter | `outcome`, `reason` | sign-ins that finished or were refused |
+| `behemoth.auth.sign_up` | counter | `outcome`, `reason` | sign-ups that finished or were refused |
+| `behemoth.session.created` | counter | | sessions created |
+| `behemoth.session.revoked` | counter | | sessions revoked |
+| `behemoth.session.validated` | counter | `cache`, `outcome`, `reason` | session lookups by token, one per authenticated request |
+| `behemoth.token.issued` | counter | `kind` | tokens issued |
+| `behemoth.token.consumed` | counter | `kind` | tokens used |
+| `behemoth.token.failed` | counter | `reason` | tokens refused |
+| `behemoth.ratelimit.checks` | counter | `rule`, `result` | rate-limit rules evaluated |
+| `behemoth.hook.duration` | histogram | `point`, `phase`, `plugin` | each hook handler call |
+| `behemoth.hook.errors` | counter | `point`, `phase`, `plugin` | handler calls that returned an error or panicked |
+| `behemoth.store.duration` | histogram | `op`, `entity` | each database operation Behemoth makes |
+| `behemoth.store.errors` | counter | `op`, `entity`, `error_category` | database operations that returned an error |
+| `behemoth.audit.record_failures` | counter | `type` | audit events that could not be stored |
+
+The names and attribute keys are constants in the `telemetry` package (`telemetry.MetricSignIn`, `telemetry.AttrOutcome`).
+
+Attribute values:
+
+| Attribute | Values |
+| --- | --- |
+| `route` | the route's pattern, such as `/api/auth/sign-in/email` or `/users/{id}` |
+| `status` | the HTTP status the client received |
+| `outcome` | `success` or `failure` |
+| `reason` | on failure only: the failure's code, such as `invalidCredentials`, `userNotFound`, `session_expired` |
+| `cache` | `hit` or `miss` |
+| `result` | `allowed`, `limited`, or `error` when the rate-limit store could not be reached |
+| `phase` | `before`, `after` or `failed` |
+| `plugin` | the owner of the hook handler: a plugin's name, or your application's |
+| `op` | `create`, `find_one`, `find_many`, `count`, `update`, `update_one`, `update_many`, `delete`, `delete_one`, `delete_many`, `delete_all`, `transaction` |
+| `entity` | the table, such as `users`; empty for `transaction` |
+| `error_category` | the error's category, such as `not_found`, `duplicate_key`, `database` |
+
+### Reading them
+
+- **Failed sign-ins:** `behemoth.auth.sign_in` with `outcome="failure"`, split by `reason`. A rise in `invalidCredentials` for a steady `success` rate is what a password-guessing run looks like.
+- **Session cache hit ratio:** `behemoth.session.validated` with `cache="hit"` over all of them.
+- **Database health:** alert on `behemoth.store.errors` with `error_category="database"`. `not_found` is counted too and is a normal answer: sign-up looks an address up and expects to find nothing.
+- **A slow hook handler:** `behemoth.hook.duration` by `plugin`. Handlers on data points run inside a database transaction, so a slow one also holds locks.
+- **Hook errors:** with `phase="before"` they are refusals, which is how a handler stops an operation. With `phase="after"` or `"failed"` a handler did not do its work.
+- **Rate limiting:** `behemoth.ratelimit.checks` with `result="limited"` by `rule`. `result="error"` means the counter store is down.
+
+### Measuring your own code
+
+A plugin uses the same sink:
+
+```go
+ac.Telemetry.Count(ctx, "invites.redeemed", behemoth.M{"plan": plan})
+ac.Telemetry.ObserveSince(ctx, "invites.lookup.duration", start, nil)
+```
+
+Keep attribute values to a small fixed set, as Behemoth does.
+
+What your plugin does through `ac.Store`, and through `ac.Store.DB()` for its own tables, is already timed in `behemoth.store.duration`. With a metrics sink configured, `ac.Store.DB()` returns a wrapper around your database adapter; `ac.DB` is the adapter itself.
+
+## Tracing
+
+With a tracer, Behemoth records a span for each piece of its work, so a trace of one request shows where the time went.
+
+Set the tracer with an option:
+
+```go
+tel := telemetry.New(logger, nil, metrics, telemetry.WithTracer(tracer))
+```
+
+### Spans
+
+| Span | Attributes | Covers |
+| --- | --- | --- |
+| `behemoth.request` | `method`, `route`, `request_id`, `status` | one request to a Behemoth route |
+| `behemoth.hook.chain` | `point`, `phase` | the handlers of one hook point |
+| `behemoth.hook.handler` | `point`, `plugin` | one handler call |
+| `behemoth.store.<op>` | `entity` | one database operation, such as `behemoth.store.find_one` on `users` |
+| `behemoth.store.transaction` | | a transaction, with the operations inside as children |
+| `behemoth.session.create`, `.validate`, `.revoke` | | the session manager |
+| `behemoth.token.issue`, `.consume` | `kind` | the token manager |
+| `behemoth.password.hash`, `.verify` | | password hashing in the email/password plugin |
+| `behemoth.ratelimit.check` | `rule`, `result` | one rate-limit rule |
+| `behemoth.migration.apply` | `id`, `baseline` | one applied migration |
+
+A span of an operation that returned an error also has `error_code`, and `error_category` when the error is one of Behemoth's.
+
+Things worth knowing:
+
+- **Behemoth joins your trace.** It does not read `traceparent` or any other header. Your HTTP framework's tracing middleware starts the server span, and `behemoth.request` becomes its child. Without such middleware, each request to a Behemoth route is a trace of its own.
+- **Only real failures mark a span as failed.** A database error or a panic does. A wrong password, an expired session, a lookup that finds nothing or a hook handler that refuses an operation does not; the span carries the `error_code` and stays unfailed.
+- **Hook points without handlers have no chain span.**
+- **`request_id`** on the request span is the ID in the `X-Request-ID` response header and in the log lines.
+
+### Tracing your own code
+
+Start spans from the context Behemoth gives you, and they appear in the right place:
+
+```go
+func (p *Plugin) onUserCreated(hctx *types.HookContext, result any) error {
+	ctx, span := hctx.Auth.Telemetry.StartSpan(hctx.Ctx, "invites.attach", nil)
+	err := p.attach(ctx, result.(*models.User))
+	telemetry.FinishSpan(span, err)
+	return err
+}
+```
+
+`telemetry.FinishSpan` ends the span and describes the error on it, with the rule above for what counts as a failure. A hook handler already runs inside a `behemoth.hook.handler` span, so calls you make with `hctx.Ctx` are traced under it without any code of yours. The same goes for `rctx.Ctx` in a route handler.
+
+## OpenTelemetry
+
+The adapter is a separate module, so applications that do not use OpenTelemetry do not download it:
+
+```
+go get github.com/MastewalB/behemoth/telemetry/adapters/otel
+```
+
+It provides three things:
+
+| Function | Gives Behemoth |
+| --- | --- |
+| `behemothotel.NewTracer(tracerProvider)` | a tracer |
+| `behemothotel.NewMetrics(meterProvider)` | a metrics sink |
+| `behemothotel.WithTraceIDs(logger)` | a logger that adds `trace_id` and `span_id` to its lines |
+
+You build the OpenTelemetry SDK, its providers and exporters, and shut them down. The adapter only needs the providers. Passing nil uses the global ones (`otel.GetTracerProvider`, `otel.GetMeterProvider`).
+
+```go
+import (
+	"github.com/MastewalB/behemoth/telemetry"
+	behemothotel "github.com/MastewalB/behemoth/telemetry/adapters/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+// The exporters read OTEL_EXPORTER_OTLP_ENDPOINT, e.g. http://localhost:4318.
+traceExporter, err := otlptracehttp.New(ctx)
+metricExporter, err := otlpmetrichttp.New(ctx)
+
+res := resource.NewSchemaless(attribute.String("service.name", "my-app"))
+tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExporter), sdktrace.WithResource(res))
+meterProvider := sdkmetric.NewMeterProvider(
+	sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)), sdkmetric.WithResource(res))
+
+tel := telemetry.New(
+	behemothotel.WithTraceIDs(telemetry.NewJSONLogger(os.Stdout, slog.LevelInfo)),
+	nil, // audit: the audit_log table
+	behemothotel.NewMetrics(meterProvider),
+	telemetry.WithTracer(behemothotel.NewTracer(tracerProvider)),
+)
+
+ac, err := binit.Boot(ctx, app, db, binit.BootConfig{Crypto: cryptoCfg, Telemetry: tel})
+
+// Before the process exits:
+tracerProvider.Shutdown(ctx)
+meterProvider.Shutdown(ctx)
+```
+
+- **Shut the providers down before exiting.** They export in batches, so a process that stops without it loses its last few seconds of traces and metrics. For a server that means handling SIGINT and SIGTERM; for a short command, calling `Shutdown` before it returns.
+- **Jaeger** needs nothing special. Jaeger accepts OTLP, so point the trace exporter at it: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces`. Jaeger takes traces and no metrics, so set the traces variable and not the general one, or the metric exporter will log errors.
+- **Incoming traces** are picked up by your framework's middleware, such as `otelgin`, `otelecho` or `otelhttp`, not by Behemoth. Add it to your router as usual.
+- **SQL statements** as spans come from your driver's instrumentation, such as `otelsql`. They appear under Behemoth's `behemoth.store.*` spans.
+- **Metrics** arrive under the names in the [Metrics](#metrics) table, in the instrumentation scope `github.com/MastewalB/behemoth`. Durations have the unit `s`.
+- **Logs** still go where your logger writes them. `WithTraceIDs` adds the two IDs so a line can be matched to its trace. To export logs through OpenTelemetry as well, build a slog logger over the `otelslog` bridge and pass it to `telemetry.NewSlogLogger`.
+
+## A complete example
+
+`examples/init` wires everything on this page into one application:
+
+| File | Shows |
+| --- | --- |
+| `telemetry.go` | building the `Telemetry`: a text logger, the default audit table, and OTLP traces and metrics when an endpoint is set |
+| `serve.go` | passing it to `Boot`, giving the same logger to the database adapter, adding the framework's tracing middleware, and flushing on shutdown |
+| `audit.go` | reading the audit log with `QueryAuditEvents` |
+
+```
+docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/jaeger
+
+cd examples/init
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces LOG_LEVEL=debug go run . serve
+
+curl -X POST localhost:8080/api/auth/sign-up/email \
+  -d '{"email":"ada@example.com","password":"correct horse","inviteCode":"WELCOME2026"}'
+
+go run . audit -email ada@example.com
+```
+
+The trace of the sign-up is at http://localhost:16686 under the service `behemoth-example`. The example needs PostgreSQL and its migration applied first; the comment at the top of `main.go` has the steps.
+
 ## Testing
 
 `telemetry/telemetrytest` records what was emitted:
@@ -351,6 +575,8 @@ for _, line := range rec.Logger.At(slog.LevelError) {
 	t.Errorf("unexpected error line: %s %v", line.Message, line.Fields)
 }
 events := rec.Audit.OfType("auth.signIn.failed")
+failed := rec.Metrics.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "failure"})
+spans := rec.Tracer.Named(telemetry.SpanSessionCreate)
 ```
 
 Passing `tel` replaces the default recorder, so in such a test events go to `rec.Audit` and not to the `audit_log` table.

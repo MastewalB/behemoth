@@ -85,6 +85,14 @@ func (sm *DefaultSessionManager) requestMeta(ctx context.Context, meta types.Ses
 }
 
 func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta types.SessionMeta) (*models.Session, string, error) {
+	ctx, span := sm.tel.StartSpan(ctx, telemetry.SpanSessionCreate, nil)
+	session, rawToken, err := sm.create(ctx, userID, meta)
+	telemetry.FinishSpan(span, err)
+	return session, rawToken, err
+}
+
+// create is Create without its span.
+func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta types.SessionMeta) (*models.Session, string, error) {
 	const op = "SessionManager.Create"
 	ctx = types.BeginOperation(ctx) // beforeCreate and afterCreate share Values
 
@@ -181,31 +189,49 @@ func (sm *DefaultSessionManager) evictOldest(ctx context.Context, userID any) er
 }
 
 func (sm *DefaultSessionManager) Get(ctx context.Context, rawToken string) (*models.Session, error) {
+	ctx, span := sm.tel.StartSpan(ctx, telemetry.SpanSessionValidate, nil)
+	session, err := sm.get(ctx, rawToken)
+	telemetry.FinishSpan(span, err)
+	return session, err
+}
+
+// get is Get without its span.
+func (sm *DefaultSessionManager) get(ctx context.Context, rawToken string) (*models.Session, error) {
 	const op = "SessionManager.Get"
 	lookupHash := utils.LookupHashOf(rawToken)
 
 	m, fromCache, err := sm.fetchByLookupHash(ctx, lookupHash)
 	if err != nil {
-		return nil, behemotherr.WrapOp(op, "session", err)
+		err = behemotherr.WrapOp(op, "session", err)
+		sm.countValidated(ctx, false, err)
+		return nil, err
 	}
 
 	ok, err := sm.crypto.Secrets.Verify(rawToken, m.TokenHash, m.KeyVersion)
 	if err != nil {
+		sm.countValidated(ctx, fromCache, err)
 		return nil, err
 	}
 
 	if !ok {
 		// LookupHash matched but the keyed HMAC didn't; collapse into the
 		// same NotFound response
-		return nil, behemotherr.NewNotFound(op, "session", nil)
+		err := behemotherr.NewNotFound(op, "session", nil)
+		sm.countValidated(ctx, fromCache, err)
+		return nil, err
 	}
 
 	if m.State == models.SessionRevoked {
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionRevoked, nil)
+		err := behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionRevoked, nil)
+		sm.countValidated(ctx, fromCache, err)
+		return nil, err
 	}
 	if time.Now().After(m.ExpiresAt) {
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionExpired, nil)
+		err := behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionExpired, nil)
+		sm.countValidated(ctx, fromCache, err)
+		return nil, err
 	}
+	sm.countValidated(ctx, fromCache, nil)
 
 	// Rotate key on-use: migrate to the current key version transparently
 	if m.KeyVersion != sm.crypto.Keys.CurrentVersion() {
@@ -223,6 +249,24 @@ func (sm *DefaultSessionManager) Get(ctx context.Context, rawToken string) (*mod
 	}
 
 	return m, nil
+}
+
+// countValidated counts one session lookup by token: whether the session
+// came from the cache, and how the lookup ended. A refused lookup carries the
+// error's code as its reason (session_expired, session_revoked, ...).
+func (sm *DefaultSessionManager) countValidated(ctx context.Context, fromCache bool, err error) {
+	if !sm.tel.MetricsEnabled() {
+		return
+	}
+	attrs := behemoth.M{telemetry.AttrCache: "miss", telemetry.AttrOutcome: string(telemetry.OutcomeSuccess)}
+	if fromCache {
+		attrs[telemetry.AttrCache] = "hit"
+	}
+	if err != nil {
+		attrs[telemetry.AttrOutcome] = string(telemetry.OutcomeFailure)
+		attrs[telemetry.AttrReason] = behemotherr.ClassifyCode(err)
+	}
+	sm.tel.Count(ctx, telemetry.MetricSessionValidated, attrs)
 }
 
 func (sm *DefaultSessionManager) Validate(ctx context.Context, rawToken string) (*models.Session, error) {
@@ -318,6 +362,14 @@ func (sm *DefaultSessionManager) ListForUser(ctx context.Context, userID any) ([
 
 // Revoke implements [types.SessionManager].
 func (sm *DefaultSessionManager) Revoke(ctx context.Context, sessionID string, reason string) error {
+	ctx, span := sm.tel.StartSpan(ctx, telemetry.SpanSessionRevoke, nil)
+	err := sm.revoke(ctx, sessionID, reason)
+	telemetry.FinishSpan(span, err)
+	return err
+}
+
+// revoke is Revoke without its span.
+func (sm *DefaultSessionManager) revoke(ctx context.Context, sessionID string, reason string) error {
 	const op = "SessionManager.Revoke"
 
 	m, err := sm.st.FindSessionByID(ctx, sessionID)

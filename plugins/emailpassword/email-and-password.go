@@ -181,7 +181,6 @@ type EmailAndPasswordCredentials struct {
 
 func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, error) {
 	ac := hctx.Auth
-	hasher := ac.Crypto.Passwords
 	dispatcher := ac.Dispatcher
 
 	emailStr, ok := userData["email"].(string)
@@ -201,7 +200,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 
 	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 	if err == nil {
-		hasher.Hash(password) // timing mitigation, unchanged
+		hashPassword(hctx, password) // timing mitigation, unchanged
 		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
 			return nil, err
 		}
@@ -211,7 +210,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 		return nil, err // infra error (DB down): not "no such user"
 	}
 
-	passwordHash, err := hasher.Hash(password)
+	passwordHash, err := hashPassword(hctx, password)
 	if err != nil {
 		return nil, err // infra error - no Fail()
 	}
@@ -266,6 +265,17 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 	return user, nil
 }
 
+// hashPassword hashes password inside a span. Hashing is the slowest step of
+// a sign-up and of a refused sign-in, where it runs to keep the response
+// time the same, so a trace shows it by name. The span lives here and not in
+// the hasher because PasswordHasher's methods take no context.
+func hashPassword(hctx *types.HookContext, password string) (string, error) {
+	_, span := hctx.Auth.Telemetry.StartSpan(hctx.Ctx, telemetry.SpanPasswordHash, nil)
+	hash, err := hctx.Auth.Crypto.Passwords.Hash(password)
+	telemetry.FinishSpan(span, err)
+	return hash, err
+}
+
 // isRejection reports whether err is a refusal of the request, as opposed to
 // a failure of the system: a typed error in one of the categories a hook
 // handler or a rate limit answers with. Only rejections fire a failed point,
@@ -289,7 +299,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 	dispatcher := ac.Dispatcher
 	user, err := ac.Store.FindUserByEmail(hctx.Ctx, creds.Email) // the store normalizes the email
 	if err != nil {
-		hasher.Hash(creds.Password) // timing mitigation
+		hashPassword(hctx, creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
 			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
 				Code: "userNotFound", Metadata: behemoth.M{hooks.HookValueEmail: strings.ToLower(strings.TrimSpace(creds.Email))},
@@ -312,7 +322,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 	// match, and is answered exactly like a wrong password.
 	credential, err := ac.Store.FindAccount(hctx.Ctx, models.ProviderCredential, user.ID)
 	if err != nil {
-		hasher.Hash(creds.Password) // timing mitigation
+		hashPassword(hctx, creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
 			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("noCredentialAccount", nil)); err != nil {
 				return nil, err
@@ -322,7 +332,9 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 		return nil, err // infra error — must NOT count toward lockout
 	}
 
+	_, span := ac.Telemetry.StartSpan(hctx.Ctx, telemetry.SpanPasswordVerify, nil) // the hasher takes no context; the span times the call
 	isValid, err := hasher.Verify(credential.PasswordHash, creds.Password)
+	telemetry.FinishSpan(span, err)
 	if err != nil {
 		return nil, err // a malformed stored hash or key error — not a wrong password, so not counted as one
 	}

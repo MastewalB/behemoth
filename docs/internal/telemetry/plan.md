@@ -1,30 +1,19 @@
 # Telemetry Plan: Logging, Audit, Metrics and Tracing
 
-This document is the plan for finishing behemoth's logging, audit, metrics and tracing. It describes what exists today, the target design for each concept, the order of work, and the decisions already made. Nothing in the "target" sections is built yet unless the "Where things stand" section says so.
+This document is the record of how behemoth's telemetry was planned and built. All six phases are done. It keeps what the per-topic documents do not: the overall shape, where the result differs from the first plan, the decisions made before the work started, and what was left out on purpose.
 
-When a phase lands, its section moves into a document of its own under `docs/internal/telemetry/` that describes the code as built, and the phase is struck from this plan.
+To learn how the code works, start at [`telemetry.md`](telemetry.md). This document is for the question "why is it built this way".
 
-## Where things stand
+## Phases
 
-Three phases are built:
-
-- Phase 1, foundations (`foundations.md`): the `telemetry` package, field keys, `ErrorFields`, redaction, the request ID, the slog logger, `telemetrytest`.
-- Phase 2, logging (`logging.md`): named loggers per component, request failures logged by the router, statement logging in the SQL adapters, the boot summary.
-- Phase 3, audit (`audit.md`): the event model, the `audit_log` core table, the database recorder with querying and purging, in-transaction recording for user writes, actor and subject, audited core points.
-
-The interfaces live in `telemetry/` and reach components as a `*telemetry.Telemetry` taken from `BootConfig.Telemetry`. A nil value becomes a set of no-ops through `telemetry.OrDefault`, except for audit, where `Boot` then uses the database recorder.
-
-| Concept | Defined | Used by |
+| Phase | Content | Described in |
 | --- | --- | --- |
-| Logger | `Debug`, `Info`, `Warn`, `Error`, each taking a `context.Context`, a message and a `behemoth.M` of fields. Redacted and tagged with the request ID by `telemetry.New`. | every component that swallows an error, the router for request failures, `Boot`, the SQL adapters. See the table in `logging.md`. |
-| Audit | `AuditRecorder`, `TxAuditRecorder`, `AuditReader`, the database recorder in `store` | the hook dispatcher for audited points, the rate limiter, the migration runner, the key manager. See the event table in `audit.md`. |
-| Metrics | `Counter`, `Gauge` | no call sites |
-| Tracing | nothing | nothing |
-
-Gaps the remaining phases close:
-
-- **Nothing is measured.** `Metrics` has no call sites, so rejections, failed audit writes and hook errors are visible only as log lines or audit rows.
-- **Nothing is traced.**
+| 1. Foundations | the `telemetry` package, field keys, `ErrorFields`, redaction, the request ID, the slog logger, `telemetrytest` | `foundations.md` |
+| 2. Logging | named loggers per component, request failures logged by the router, statement logging in the SQL adapters, the boot summary | `logging.md` |
+| 3. Audit | the event model, the `audit_log` core table, the database recorder with querying and purging, in-transaction recording for user writes, actor and subject, audited core points | `audit.md` |
+| 4. Metrics | the counter and histogram interface, the metric catalog, measurements in the router, the store, the dispatcher, the session manager and the rate limiter | `metrics.md` |
+| 5. Tracing | the `Tracer` interface, spans around requests, hooks, store operations, sessions, tokens, password hashing, rate-limit checks and migrations, the OpenTelemetry adapter module | `tracing.md` |
+| 6. Docs and example | `docs/api/telemetry.md`, the index `telemetry.md`, and `examples/init` wired for stdout logs, the audit table and OTLP | `telemetry.md`, the example's `telemetry.go` |
 
 ## Shape: taxonomy in core, backends in adapter modules
 
@@ -36,7 +25,7 @@ Behemoth's part is a thin layer: interfaces, names and conventions. A real backe
 | Logger backed by `log/slog` | `telemetry/` in the root module | standard library |
 | In-memory recorder for tests | `telemetry/telemetrytest/` | standard library |
 | Database audit recorder | `store/` | the store, like other core tables |
-| OpenTelemetry logger, metrics and tracer | `telemetry/adapters/otel/`, with its own `go.mod` | the OpenTelemetry API |
+| OpenTelemetry tracer and metrics, trace IDs on log lines | `telemetry/adapters/otel/`, with its own `go.mod` | the OpenTelemetry API |
 
 Notes on backends:
 
@@ -45,160 +34,63 @@ Notes on backends:
 - **Jaeger** has no adapter of its own. Jaeger's client libraries are deprecated and Jaeger ingests OTLP, so it is the OpenTelemetry adapter with an OTLP exporter pointed at a Jaeger endpoint.
 - **Exporter lifecycle** belongs to the application. It creates the providers and exporters, passes them to the adapter, and flushes and shuts them down. This matches the HTTP ownership boundary described in `docs/internal/http/request_routing.md`.
 
-The first three rows are built. `types` imports `telemetry`; `telemetry` imports only the root package and `errors`.
+## Where the result differs from the first plan
 
-## 1. Logging
-
-### Interface
-
-The four methods stay as they are. One helper is added:
-
-```go
-// Named returns a Logger that adds component to every line.
-sessionLog := telemetry.Named(tel.Logger, "session")
-```
-
-Each component takes a named logger at construction, so a reader can filter a deployment's logs down to `component=ratelimit`.
-
-### Standard fields
-
-Field keys are constants in `telemetry/`, not strings at call sites.
-
-| Key | Meaning |
-| --- | --- |
-| `component` | the behemoth component writing the line, set by `Named` |
-| `op` | the operation, in the same form as `DomainError.Op` |
-| `request_id` | see Request correlation below |
-| `trace_id`, `span_id` | added by a tracing-aware backend from the context |
-| `user_id`, `session_id` | when known |
-| `plugin`, `point` | for hook dispatch |
-| `error`, `error_code`, `error_category` | see below |
-
-`telemetry.ErrorFields(err)` returns the last three plus the internal message. For a `*DomainError` it reads `Category`, `Code` and `InternalMessage`; for any other error it sets `error` to `err.Error()` and `error_code` to `unknown_error`. Call sites use it instead of building the `error` field by hand.
-
-### Levels
-
-| Level | Meaning | Examples |
-| --- | --- | --- |
-| Error | behemoth failed at something it owed | a 5xx response, a hook handler panic, a failed audit write |
-| Warn | behemoth continued in a degraded state | session cache write failed, rate-limit store unavailable with fail-open, secret watch could not start |
-| Info | lifecycle events | boot summary, migration applied, key rotation applied |
-| Debug | per-request detail | SQL statement text, hook chain steps |
-
-A business rejection (wrong password, expired token) is not an Error. It is an audit event and a metric, and a Debug line at most.
-
-### Redaction
-
-The logger wrapper applies redaction before a backend sees the fields.
-
-- A key denylist replaces the value of `password`, `token`, `secret`, `hash`, `cookie` and `authorization` (matched case-insensitively, also as a suffix such as `refresh_token`).
-- Email addresses are not logged by default. See the decision "Email addresses in logs".
-- SQL argument values are never logged. Debug lines carry the statement text only.
-
-### Integration work
-
-Done; see `logging.md`. Two points differ from what this plan first said:
+### Logging
 
 - The store logs nothing, and the token manager logs one line. On inspection neither swallows errors: they return them, and the router logs what reaches it.
 - `PluginContext` was deleted. A plugin names its own logger from `AuthContext.Telemetry`.
 
-## 2. Audit
+- The boot summary reports whether a key-value store is configured, not the names of the session and rate-limit backends, and has one configuration warning.
 
-Done; see `audit.md`. Points that differ from what this plan first said:
+### Audit
 
 - `ActorID` and `SubjectID` are strings, not `any`. Every id behemoth stores is a string, and a typed column can be indexed and filtered.
 - Audit ids are UUIDv7, and pages are ordered by id. The plan did not say how paging would stay stable.
 - In-transaction recording goes through an optional interface, `TxAuditRecorder`, so an application's own recorder is still honored for the data points: it is called after the commit.
 - The data events are named `user.created` and `user.updated`, not after their hook points.
 - There is no "password changed" event, because no flow changes a password yet.
-- A failed best-effort write is logged at Error. The `audit.record_failures` metric waits for phase 4.
+- A failed write is logged at Error and, since phase 4, counted in `behemoth.audit.record_failures`.
 
 Still deferred: an HTTP route for querying (needs an authorization model), tamper evidence, and a fail-closed mode for best-effort events.
 
-## 3. Metrics and tracing
+### Metrics
 
-### Metrics interface
+- The sign-in and sign-up counters have no `plugin` attribute. They are counted in the dispatcher, which does not know which plugin fired a core point.
+- The hook metrics have a `phase` attribute, so a before handler's veto can be told apart from a failing after handler.
+- `behemoth.session.validated` and the two failure-carrying flow counters have a `reason` attribute with the failure's code.
+- The store metrics name the operation after the `Database` method (`find_one`), because they are taken by wrapping the store's adapter.
 
-```go
-type Metrics interface {
-	Counter(ctx context.Context, name string, delta int64, attrs behemoth.M)
-	Histogram(ctx context.Context, name string, value float64, attrs behemoth.M)
-}
-```
+### Tracing
 
-The context lets a backend attach exemplars that link a measurement to a trace. `Gauge` is removed: nothing in the library reports a level, and no call site uses it.
+- The tracer is set with the option `telemetry.WithTracer`, not as a fourth argument of `New`.
+- The password spans are started in the email/password plugin, not in `crypto`: `PasswordHasher` takes no context, so the hasher cannot start a span with a parent.
+- A hook point without handlers gets no chain span.
+- A rejection (not found, an expired session, a hook's veto) does not fail its span. It sets `error_code` and `error_category` only.
+- The adapter has no log exporter. `WithTraceIDs` adds the trace and span IDs to the lines of any logger.
+- The adapter's package is named `behemothotel`, since `otel` is the name of the package it imports.
 
-Attribute values are bounded. A route is its pattern (`/users/{id}`), not the request path. User IDs, session IDs, IP addresses and emails are never attributes.
+### Related areas
 
-### Metric catalog
+- **Health.** `AuthContext.Health(ctx)` was listed and is not built. See "Left out" below.
+- **Request correlation, test helpers and the catalogs as a contract** are built as planned.
 
-| Metric | Type | Attributes |
-| --- | --- | --- |
-| `behemoth.http.requests` | counter | route, method, status |
-| `behemoth.http.duration` | histogram | route, method, status |
-| `behemoth.auth.sign_in`, `behemoth.auth.sign_up` | counter | plugin, outcome, reason code |
-| `behemoth.session.created`, `behemoth.session.revoked` | counter | |
-| `behemoth.session.validated` | counter | cache hit or miss, outcome |
-| `behemoth.token.issued`, `behemoth.token.consumed`, `behemoth.token.failed` | counter | kind |
-| `behemoth.ratelimit.checks` | counter | rule, result |
-| `behemoth.hook.duration` | histogram | point, plugin |
-| `behemoth.hook.errors` | counter | point, plugin |
-| `behemoth.store.duration` | histogram | op, entity |
-| `behemoth.store.errors` | counter | op, entity, error category |
-| `behemoth.audit.record_failures` | counter | type |
+## Left out
 
-### Tracing interface
+Each of these was considered and deferred. None is started.
 
-`Telemetry` gains a `Tracer`, with a no-op default.
-
-```go
-type Tracer interface {
-	Start(ctx context.Context, name string, attrs behemoth.M) (context.Context, Span)
-}
-
-type Span interface {
-	SetAttributes(attrs behemoth.M)
-	RecordError(err error)
-	End()
-}
-```
-
-### Span sites
-
-| Span | Started by |
+| Item | Why it waits |
 | --- | --- |
-| one per behemoth route | the router's wrapping pipeline |
-| one per hook chain, with a child per handler | `DefaultDispatcher` |
-| store operations and `Store.Transaction` | `store` |
-| session create, validate, revoke | `DefaultSessionManager` |
-| token issue, consume | `DefaultTokenManager` |
-| password hashing and verification | `crypto` |
-| rate-limit check | `DefaultRateLimiter` |
-| each applied migration | the migration runner |
+| `AuthContext.Health(ctx)`, a check of the database, the key-value store and the key manager | it is not telemetry, and no phase needed it. It belongs with a readiness story for the whole library. |
+| An HTTP route to query audit events | needs an authorization model behemoth does not have |
+| Tamper evidence for the audit log (a hash chain over rows) | no requirement yet |
+| A fail-closed mode for best-effort audit events | no requirement yet |
+| A "password changed" audit event | no flow changes a password yet |
+| Metrics for hook points declared by plugins | the dispatcher counts core points from a table; plugins count their own |
+| A log exporter in the OpenTelemetry adapter | `otelslog` covers it; see the decision in `tracing.md` |
+| A level check on `Logger` | recorded in `docs/ongoing.md` |
 
-Behemoth does not read trace headers. The application's framework middleware puts the parent span on the request context, and behemoth's spans nest under it because every span is started from that context.
-
-SQL-level spans are left to driver instrumentation such as `otelsql`. Behemoth's store spans describe the operation (`store.users.create`), not the statement.
-
-## Related areas
-
-- **Request correlation.** Built for logs and audit events; see `foundations.md` and `audit.md`. Spans get the ID in phase 5 through `telemetry.RequestIDFrom(ctx)`.
-- **Health.** `AuthContext.Health(ctx)` checks the database, the KV store and the key manager and returns a per-component result. The application exposes it on its own readiness endpoint; behemoth mounts no health route.
-- **Test helpers.** `telemetrytest` has an in-memory logger, audit recorder and metrics sink. A tracer is added in phase 5.
-- **Catalogs as contract.** Field keys, audit event types, metric names and span names are public once released. Renaming one is a breaking change for dashboards and alerts, so they are documented in `docs/api/telemetry.md` and changed only with a release note.
-
-## Order of work
-
-| Phase | Content |
-| --- | --- |
-| ~~1. Foundations~~ | done; see `foundations.md` |
-| ~~2. Logging~~ | done; see `logging.md` |
-| ~~3. Audit~~ | done; see `audit.md` |
-| 4. Metrics | new interface, the metric catalog, call sites |
-| 5. Tracing | `Tracer`, span sites, the `telemetry/adapters/otel` module |
-| 6. Docs and example | `docs/api/telemetry.md`, per-concept internal docs, an example wiring stdout and OTLP |
-
-Phase 5 can be built before or after phase 4.
+Open questions that came up during the work are in `docs/ongoing.md`, each marked with the phase that raised it.
 
 ## Design decisions
 

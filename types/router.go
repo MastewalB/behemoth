@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
@@ -37,6 +39,7 @@ type Router struct {
 	auth            *AuthContext
 	requestIDHeader string
 	log             telemetry.Logger
+	tel             *telemetry.Telemetry // for request metrics; never nil
 }
 
 // The route method and full path must be unique (eg. "GET" - /api/auth/health )
@@ -64,12 +67,14 @@ func NewRouter(cfg RouterConfig, auth *AuthContext) *Router {
 	if cfg.RequestIDHeader == "" {
 		cfg.RequestIDHeader = telemetry.DefaultRequestIDHeader
 	}
-	var log telemetry.Logger = telemetry.NoOpLogger{}
-	if auth != nil && auth.Telemetry != nil {
-		log = telemetry.Named(auth.Telemetry.Logger, "router")
+	var tel *telemetry.Telemetry
+	if auth != nil {
+		tel = auth.Telemetry
 	}
+	tel = telemetry.OrDefault(tel).Named("router")
 	return &Router{
-		log:             log,
+		log:             tel.Logger,
+		tel:             tel,
 		basePath:        cfg.BasePath,
 		errorMapper:     cfg.ErrorMapper,
 		routeOwners:     map[routeKey]string{},
@@ -168,6 +173,7 @@ func (r *Router) wrapWithErrorMapping(route Route, next HandlerFunc) HandlerFunc
 				telemetry.FieldStatus: status,
 			})
 			if status >= 500 {
+				telemetry.SpanFrom(rctx.Ctx).RecordError(err)
 				r.log.Error(rctx.Ctx, "request failed", fields)
 			} else {
 				r.log.Debug(rctx.Ctx, "request rejected", fields)
@@ -178,6 +184,58 @@ func (r *Router) wrapWithErrorMapping(route Route, next HandlerFunc) HandlerFunc
 			return rctx.Response.JSON(status, body)
 		}
 		return nil
+	}
+}
+
+// withTracing runs route inside a span, the parent of everything behemoth
+// does for the request. It is started from the request's context, so it is
+// a child of the span the application's HTTP middleware started, if any:
+// behemoth reads no trace headers itself.
+//
+// The span is not marked as failed here. Error mapping, further in, knows
+// the error and whether it is the server's (see wrapWithErrorMapping).
+func (r *Router) withTracing(route Route, next HandlerFunc) HandlerFunc {
+	if !r.tel.TracingEnabled() {
+		return next
+	}
+	return func(rctx *RequestContext) error {
+		ctx, span := r.tel.StartSpan(rctx.Ctx, telemetry.SpanRequest, behemoth.M{
+			telemetry.AttrMethod:    route.Method,
+			telemetry.AttrRoute:     route.Path,
+			telemetry.AttrRequestID: telemetry.RequestIDFrom(rctx.Ctx),
+		})
+		rctx.Ctx = ctx
+		err := next(rctx)
+		status := http.StatusInternalServerError
+		if err == nil && rctx.Response != nil {
+			status = rctx.Response.Code
+		}
+		span.SetAttributes(behemoth.M{telemetry.AttrStatus: status})
+		span.RecordError(err) // nil unless the response could not be built
+		span.End()
+		return err
+	}
+}
+
+// withMetrics counts each request to route and measures how long it took.
+// It sits outside error mapping, so the status it reports is the one the
+// client gets, mapped errors included. The route attribute is the route's
+// pattern, which keeps the number of series fixed by the route table.
+func (r *Router) withMetrics(route Route, next HandlerFunc) HandlerFunc {
+	if !r.tel.MetricsEnabled() {
+		return next
+	}
+	return func(rctx *RequestContext) error {
+		start := time.Now()
+		err := next(rctx)
+		status := http.StatusInternalServerError // the adapter's answer when the response could not be built
+		if err == nil && rctx.Response != nil {
+			status = rctx.Response.Code
+		}
+		attrs := behemoth.M{telemetry.AttrMethod: route.Method, telemetry.AttrRoute: route.Path, telemetry.AttrStatus: status}
+		r.tel.Count(rctx.Ctx, telemetry.MetricHTTPRequests, attrs)
+		r.tel.ObserveSince(rctx.Ctx, telemetry.MetricHTTPDuration, start, attrs)
+		return err
 	}
 }
 
@@ -245,7 +303,7 @@ func (r *Router) ApplyRateLimiting(rl RateLimiter, catalog RateLimitCatalog, ipC
 // Build wraps every route in the request pipeline and hands the table to
 // driver. From outermost to innermost, a request passes through:
 //
-//	request scope (Auth, request on Ctx) -> error mapping -> global middlewares -> route rate limit -> route middlewares -> handler
+//	request scope (Auth, request on Ctx) -> tracing -> metrics -> error mapping -> global middlewares -> route rate limit -> route middlewares -> handler
 //
 // Error mapping sits outside everything that can fail, so an error from a
 // middleware or the rate limiter becomes a response the same way a handler
@@ -259,7 +317,7 @@ func (r *Router) Build(driver FrameworkDriver, globalMiddleware ...Middleware) e
 		for j := len(globalMiddleware) - 1; j >= 0; j-- {
 			h = globalMiddleware[j](h)
 		}
-		rt.Handler = r.withRequestScope(r.wrapWithErrorMapping(rt, h))
+		rt.Handler = r.withRequestScope(r.withTracing(rt, r.withMetrics(rt, r.wrapWithErrorMapping(rt, h))))
 		routes[i] = rt
 	}
 	return driver.Mount(routes...)

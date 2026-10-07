@@ -189,9 +189,17 @@ func (t *Telemetry) RecordAudit(ctx context.Context, event AuditEvent) error {
 	event = NormalizeAuditEvent(ctx, event)
 	err := t.Audit.Record(ctx, event)
 	if err != nil {
-		t.Logger.Error(ctx, "audit event could not be recorded", ErrorFields(err, behemoth.M{"audit_type": event.Type}))
+		t.AuditFailed(ctx, event.Type, err)
 	}
 	return err
+}
+
+// AuditFailed reports an audit event of eventType that could not be stored:
+// an Error line and one MetricAuditRecordFailures. RecordAudit calls it;
+// code that calls a recorder itself calls it for the same result.
+func (t *Telemetry) AuditFailed(ctx context.Context, eventType string, err error) {
+	t.Logger.Error(ctx, "audit event could not be recorded", ErrorFields(err, behemoth.M{"audit_type": eventType}))
+	t.Count(ctx, MetricAuditRecordFailures, behemoth.M{AttrType: eventType})
 }
 
 // MultiRecorder returns an AuditRecorder that records each event to every

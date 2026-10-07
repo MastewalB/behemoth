@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
@@ -26,7 +27,7 @@ func TestNewFillsNoOps(t *testing.T) {
 	if err := tel.Audit.Record(context.Background(), telemetry.AuditEvent{}); err != nil {
 		t.Errorf("no-op Record = %v", err)
 	}
-	tel.Metrics.Counter("x", nil)
+	tel.Metrics.Counter(context.Background(), "x", 1, nil)
 }
 
 func TestOrDefault(t *testing.T) {
@@ -253,10 +254,19 @@ func TestRecorderSinks(t *testing.T) {
 		t.Error("Record did not return Err")
 	}
 
-	tel.Metrics.Counter("c", nil)
-	tel.Metrics.Gauge("g", 2.5, nil)
-	if len(rec.Metrics.Counters()) != 1 || rec.Metrics.Gauges()[0].Value != 2.5 {
-		t.Errorf("counters = %v, gauges = %v", rec.Metrics.Counters(), rec.Metrics.Gauges())
+	if tel.MetricsEnabled() == false || telemetry.New(nil, nil, nil).MetricsEnabled() {
+		t.Error("MetricsEnabled is wrong for a recording sink or for the no-op")
+	}
+	tel.Count(context.Background(), "c", behemoth.M{"rule": "a"})
+	tel.Metrics.Counter(context.Background(), "c", 2, behemoth.M{"rule": "b"})
+	tel.Metrics.Histogram(context.Background(), "h", 2.5, nil)
+	tel.ObserveSince(context.Background(), "h", time.Now().Add(-time.Second), nil)
+	if rec.Metrics.Count("c", nil) != 3 || rec.Metrics.Count("c", behemoth.M{"rule": "b"}) != 2 {
+		t.Errorf("counters = %v", rec.Metrics.Counters())
+	}
+	obs := rec.Metrics.Observations("h", nil)
+	if len(obs) != 2 || obs[0].Value != 2.5 || obs[1].Value < 1 {
+		t.Errorf("observations = %v, want 2.5 and about one second", obs)
 	}
 }
 
@@ -320,6 +330,9 @@ func TestRecordAuditLogsAFailedWrite(t *testing.T) {
 	if err := tel.RecordAudit(context.Background(), telemetry.AuditEvent{Type: "ratelimit.exceeded"}); err == nil {
 		t.Error("RecordAudit did not return the recorder's error")
 	}
+	if n := rec.Metrics.Count(telemetry.MetricAuditRecordFailures, behemoth.M{telemetry.AttrType: "ratelimit.exceeded"}); n != 1 {
+		t.Errorf("audit failures counted = %d, want 1", n)
+	}
 	lines := rec.Logger.At(slog.LevelError)
 	if len(lines) != 1 || lines[0].Fields["audit_type"] != "ratelimit.exceeded" || lines[0].Fields[telemetry.FieldError] != "db down" {
 		t.Errorf("error lines = %+v, want one naming the event type", lines)
@@ -357,5 +370,73 @@ func TestMultiRecorder(t *testing.T) {
 	}
 	if inTx, rest := telemetry.SplitAuditRecorders(a); len(inTx) != 0 || len(rest) != 1 {
 		t.Errorf("a plain recorder split into %d and %d", len(inTx), len(rest))
+	}
+}
+
+func TestSpans(t *testing.T) {
+	// Without a tracer nothing is started and nothing panics.
+	off := telemetry.New(nil, nil, nil)
+	if off.TracingEnabled() {
+		t.Error("TracingEnabled without a tracer")
+	}
+	ctx, span := off.StartSpan(context.Background(), "x", nil)
+	span.SetAttributes(behemoth.M{"a": 1})
+	telemetry.FinishSpan(span, errors.New("boom"))
+	telemetry.SpanFrom(ctx).RecordError(errors.New("boom"))
+	var none *telemetry.Telemetry
+	if _, span := none.StartSpan(context.Background(), "x", nil); span == nil {
+		t.Error("a nil Telemetry returned a nil span")
+	}
+
+	tel, rec := telemetrytest.New()
+	if !tel.TracingEnabled() || !telemetry.OrDefault(tel).TracingEnabled() || !tel.Named("x").TracingEnabled() {
+		t.Error("the tracer was lost by OrDefault or Named")
+	}
+
+	ctx, parent := tel.StartSpan(context.Background(), "parent", behemoth.M{"k": "v"})
+	_, child := tel.StartSpan(ctx, "child", nil)
+	// The innermost span is found again from the context alone.
+	telemetry.SpanFrom(ctx).SetAttributes(behemoth.M{"late": true})
+
+	// A rejection describes itself on the span without failing it. A
+	// system failure fails it.
+	telemetry.FinishSpan(child, behemotherr.NewNotFound("Store.FindUser", "user", nil))
+	telemetry.FinishSpan(parent, behemotherr.NewDatabaseError("Store.FindUser", errors.New("connection refused")))
+
+	spans := rec.Tracer.Spans()
+	if len(spans) != 2 || spans[1].Parent != spans[0] || spans[0].Parent != nil {
+		t.Fatalf("spans = %v, want child under parent", spans)
+	}
+	p, c := spans[0], spans[1]
+	if p.Ended() != 1 || c.Ended() != 1 {
+		t.Errorf("ended %d and %d times, want once each", p.Ended(), c.Ended())
+	}
+	if c.Err() != nil || c.Attrs()[telemetry.AttrErrorCode] != "user_not_found" || c.Attrs()[telemetry.AttrErrorCategory] != "not_found" {
+		t.Errorf("rejection span: err %v, attrs %v", c.Err(), c.Attrs())
+	}
+	if p.Err() == nil || p.Attrs()[telemetry.AttrErrorCategory] != "database" {
+		t.Errorf("failure span: err %v, attrs %v", p.Err(), p.Attrs())
+	}
+	if p.Attrs()["k"] != "v" || p.Attrs()["late"] != true {
+		t.Errorf("parent attrs = %v", p.Attrs())
+	}
+}
+
+func TestIsSystemFailure(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("plain"), true},
+		{behemotherr.NewDatabaseError("op", errors.New("x")), true},
+		{behemotherr.NewInternalError("op", errors.New("x")), true},
+		{behemotherr.NewNotFound("op", "user", nil), false},
+		{behemotherr.NewRateLimited("op", "rule", 0), false},
+		{fmt.Errorf("wrapped: %w", behemotherr.NewDuplicateKey("op", "user", nil)), false},
+	} {
+		if got := telemetry.IsSystemFailure(tc.err); got != tc.want {
+			t.Errorf("IsSystemFailure(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }
