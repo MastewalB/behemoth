@@ -1,149 +1,137 @@
-# Behemoth: Authentication Library for Golang ( <img src="./docs/repairing-tools-svgrepo-com.svg" alt="Behemoth is currently under maintenance" width="20"> )
+# Behemoth: Authentication Library for Go ( <img src="./docs/repairing-tools-svgrepo-com.svg" alt="Behemoth is currently under maintenance" width="20"> )
 
-Behemoth is a flexible authentication library for Go applications. It simplifies adding common authentication strategies like password-based login and OAuth 2.0 with JWT or Sessions. It handles user registration, authentication, and management, with various database integrations like Postgres and SQLite through a configurable interface. Behemoth provides a basic User Model with full built in CRUD features. It’s also compatible with custom user models and supports additional OAuth providers.
+Behemoth adds authentication to a Go application through plugins. You pick the plugins and the database, and Behemoth sets up the tables, the routes, sessions, hooks and telemetry around them.
 
+The project is under active development, and the API may still change.
 
+## Features
 
+- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in and sign-out.
+- **Migrations.** Behemoth builds a migration from the tables your plugins and your own schema declare, and writes it to a folder for you to review.
+- **Hooks.** Run your code before or after a user is written, or around a whole flow such as sign-up. A handler can change data, stop an operation or react afterwards.
+- **Sessions and tokens.** Sessions are stored in your database or a key-value store, and delivered as a cookie or a header.
+- **Router adapters.** Mount the routes on Gin, Echo or chi.
+- **Telemetry.** Logs, audit events, metrics and traces, with an OpenTelemetry adapter.
+- **Rate limiting** and **Argon2id password hashing** out of the box.
 
 ## Installation
 
 ```bash
-$ go get github.com/MastewalB/behemoth
+go get github.com/MastewalB/behemoth
 ```
 
+Database and router adapters are separate modules, so you only download what you use:
 
-## Supported Databases
-Via `database/sql`
-* PostgreSQL
-* SQLite
-* MySQL
-* MS SQL Server
+```bash
+go get github.com/MastewalB/behemoth/storage/adapters/postgres
+go get github.com/MastewalB/behemoth/plugins/adapters/gin
+```
 
-Others
-* MongoDB
-* Bun ORM
-* GORM ORM
-* Redis (For Key-Value Storage)
+## Quick start
 
-## Examples
-Create a Behemoth instance with built-in User Model. 
+Setup has two steps. `Prepare` collects the declarations of your plugins and schema. `Boot` connects them to a database and a router.
 
 ```go
 import (
-    "github.com/MastewalB/behemoth"
-    "github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/plugins/emailpassword"
+	"github.com/MastewalB/behemoth/storage/adapters/postgres"
+	"github.com/MastewalB/behemoth/types"
+	bmth "github.com/MastewalB/behemoth/types/init"
+	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
 )
 
-// Custom providers can be added to this list
-oauthProviders := []behemoth.Provider{
-		providers.NewGoogle(
-			"GoogleClientID",
-			"GoogleClientSecret",
-			"GoogleRedirectURL",
-			"email", "profile",
-		),
-		providers.NewFacebook(
-			"FBClientID",
-			"FBClientSecret",
-			"FBRedirectURL",
-			"email", "public_profile",
-		),
-	}
+plugin := emailpassword.New(emailpassword.Options{})
 
-func main() {
-	pgCfg := &behemoth.Config[*models.User]{
-		DatabaseConfig: behemoth.DatabaseConfig[*models.User]{
-			Name:           behemoth.Postgres,
-			DB:             pg,
-			UseDefaultUser: true,
-		},
-		Password:       &behemoth.PasswordConfig{HashCost: 10},
-		OAuthProviders: oauthProviders,
-		JWT:            &behemoth.JWTConfig{Secret: "mysecret", Expiry: 24 * time.Hour},
-		UseSessions:    true,
-		Session: &behemoth.SessionConfig{
-			CookieName: "session_id",
-			Expiry:     2 * time.Hour,
-			Factory: func(id string) behemoth.Session {
-				return behemoth.NewDefaultSession(id, time.Hour)
-			},
-		},
-	}
-	
-	behemoth, err := auth.New(config)
-
+// 1. Declarations: plugins, hooks, schema.
+app, err := bmth.Prepare([]types.Plugin{plugin}, bmth.PrepareConfig{})
+if err != nil {
+	log.Fatal(err)
 }
 
-```
-Check [examples](https://github.com/MastewalB/behemoth/tree/main/examples) for a demo application using PostgreSQL and SQLite.
+// 2. Runtime: storage, routes, sessions.
+db := postgres.NewPostgresAdapter(sqlDB, app.Resolver)
+engine := gin.New()
 
-Clone the repo and create `.env` file containing the client credentials for the providers used in `examples/main.go`.
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+	Crypto: cryptoCfg, // the master secret(s) every key is derived from
+	HTTP:   ginadapter.New(engine),
+	Session: types.SessionConfig{
+		ExpiresIn: 24 * time.Hour,
+		Transport: types.TransportHeader,
+	},
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+engine.Run(":8080")
+```
+
+The routes are now live under `/api/auth`:
 
 ```bash
-$ cd examples/
-$ go run main.go
-```
-Open http://localhost:8080 in your browser.
-
-
-## Supported Providers
-* Google
-* Facebook
-* Github
-* Apple
-* Amazon
-
-Custom providers can be added by implementing the `Provider` interface.
-
-## User Models
-Behemoth accepts any User model which implements the `User` interface. It also provides a built-in lightweight user model.
-
-The User Model is configured together with the database using the `DatabaseConfig` type:
-```go
-type DatabaseConfig[T User] struct {
-	Name           DatabaseName
-	DB             *sql.DB
-	UserTable      string
-	PrimaryKey     string
-	FindUserFn     FindUserFn
-	UserModel      User
-	UseDefaultUser bool
-}
+curl -X POST localhost:8080/api/auth/sign-up/email \
+  -d '{"email":"ada@example.com","password":"correct horse battery"}'
+curl -X POST localhost:8080/api/auth/sign-in/email \
+  -d '{"email":"ada@example.com","password":"correct horse battery"}'
 ```
 
-A `UserModel` type should be provided if the `UseDefaultUser` flag is not set to `true`. Either a Database connection(`DB`) or a User Finder Function(`FindUserFn`) must be provided to retrieve users. To retrieve a user from the database, the `FindUserFn` is called if present, otherwise type reflection will be used to construct the user entity.
+Without a router, call the same flows from code with `plugin.SignUp` and `plugin.SignIn`.
 
+## Examples
 
-## JWT 
-The JWTService type is responsible for handling JSON Web Token operations. It uses the `golang-jwt` package to sign and validate tokens. Tokens can be configured through the `JWTConfig` struct
+[examples/init](./examples/init) is a complete application on PostgreSQL and Gin. It shows migrations, a custom plugin, hooks, and telemetry with OpenTelemetry.
 
-```go
-import "github.com/golang-jwt/jwt/v5"
-
-type JWTConfig struct {
-	Secret        string
-	Expiry        time.Duration
-	SigningMethod jwt.SigningMethod
-	Claims        jwt.Claims
-}
+```bash
+cd examples/init
+go run . migrate -confirm   # write the first migration to ./migrations
+go run . serve              # Prepare + Boot, then serve HTTP
+go run . signup -email ada@example.com -password 'correct horse'
 ```
 
-By default tokens are signed with `jwt.SigningMethodHS256`. JWT tokens will be used as default authentication method if Sessions are not configured explicitly. Claims can be customized as long as they implement the `jwt.Claims` interface.
+`DATABASE_URL` defaults to a local PostgreSQL at `postgres://postgres:postgres@localhost:5432/behemoth`.
 
-## Session
-Sessions can be enabled using the `UseSession` flag in the config struct. A default Config will be used if no custom `SessionConfig` is provided.
+## Supported databases
 
-```go
-type SessionConfig struct {
-	CookieName string
-	Expiry     time.Duration
-	Factory    SessionFactory
-}
-```
+| Kind | Options |
+| --- | --- |
+| `database/sql` | PostgreSQL, MySQL, SQLite, SQL Server |
+| Document | MongoDB |
+| ORM | Bun, GORM |
+| Key-value (sessions, rate limits) | Redis |
 
-A custom session type should implement the `Session` interface and provide a `SessionFactory` function.
+Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server.
 
-## Upcoming Features
+## Documentation
 
-* Revocable JWT Tokens
-* Support for Gin and Echo routers
+| Page | Covers |
+| --- | --- |
+| [Email and password](./docs/api/emailpassword.md) | The plugin's options, routes and hook points |
+| [Hooks](./docs/api/hooks.md) | Hook points, handlers, ordering and failure behavior |
+| [Telemetry](./docs/api/telemetry.md) | Loggers, audit, metrics, tracing and the OpenTelemetry adapter |
+| [Core tables](./docs/api/core-tables.md) | Writing Behemoth's tables from a plugin |
+| [Internal docs](./docs/internal) | How the system works, for contributors |
+
+## Roadmap
+
+Not built yet:
+
+- Password reset, password change and email verification
+- OAuth 2.0 providers (the `providers/` package predates the plugin system and is likely to move)
+
+## Benchmarks
+
+Not available yet.
+
+## Contributing
+
+Contributions are welcome. Open an issue to discuss a change before sending a large pull request.
+
+1. Fork the repository and create a branch.
+2. Format the code with `gofmt` and follow the Go Code Review Comments.
+3. Add tests for your change and run `go test ./...`. The `tests` module and each adapter module have their own `go.mod`, so run their tests from their directories.
+4. Update the docs in `docs/` together with the code.
+
+## License
+
+MIT. See [LICENSE.txt](./LICENSE.txt).
