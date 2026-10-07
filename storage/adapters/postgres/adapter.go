@@ -287,6 +287,10 @@ func (pg *PostgresAdapter) UpdateOne(
 	table := adapters.PhysicalTable(pg.names(), m)
 	pk := adapters.PhysicalColumn(pg.names(), m, m.PrimaryKeyName())
 
+	// Postgres has no LIMIT on UPDATE, so a subquery picks the row. Its read
+	// takes no row lock, so concurrent updates of one row queue on the write
+	// lock. The MySQL and SQL Server adapters don't use this form: there the
+	// subquery's read takes a shared lock and two statements deadlock.
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
 		pk,

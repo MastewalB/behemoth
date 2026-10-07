@@ -47,20 +47,7 @@ Under MySQL's default isolation level (`REPEATABLE READ`) a plain `SELECT` in a 
 **Revisit if:** MySQL versions before 8.0 have to be supported (`FOR SHARE` is `LOCK IN SHARE MODE` there).
 
 ### `UpdateOne` and `DeleteOne` use `LIMIT 1`, not a subquery
-**Context:** Both operations change at most one row matching an expression. The adapter used to select that row's primary key in a subquery, wrapped in a derived table because MySQL does not let an `UPDATE` select from its own table directly:
 
-```sql
-UPDATE rate_limits SET count = 9
-WHERE limit_key = (SELECT limit_key FROM (SELECT limit_key FROM rate_limits WHERE limit_key = 'k' AND count = 8 LIMIT 1) AS _sub)
-  AND (limit_key = 'k' AND count = 8)
-```
-
-A `SELECT` inside an `UPDATE` takes a shared lock on the rows it reads. The update then asks for the exclusive lock on the same row. Two concurrent statements both get the shared lock, each waits for the other to release it, and InnoDB ends one with error 1213. The deadlock report (`SHOW ENGINE INNODB STATUS`) showed exactly that: both transactions hold `lock mode S` on the row's primary key record and wait for `lock_mode X` on it. `IncrementRateLimit` races on one row on purpose, and with 20 concurrent hits between 7 and 11 of them failed in the runs observed.
-**Options considered:**
-- *`UPDATE ... WHERE <expr> LIMIT 1` and `DELETE ... WHERE <expr> LIMIT 1`.* The statement asks for the exclusive lock directly, so concurrent statements queue. The one that waited checks the expression against the committed row, matches nothing and reports `NotFound`, which callers such as the rate limiter already treat as a lost race.
-- *Keep the subquery and retry on error 1213 in the store.* The deadlock still happens and costs a rollback each time. A retry is still the answer for deadlocks the adapter cannot prevent, see below.
-**Decision:** `LIMIT 1`. It works for any table and expression, and the expression appears once in the statement.
-
-`[Known limitation]` Deadlocks remain possible where the adapter cannot prevent them: a transaction of several statements that locks rows in a different order than another, or two statements that reach one row through different indexes. The store does not retry on a deadlock error. Without an `ORDER BY`, which row `LIMIT 1` picks among several matches is up to MySQL, and MySQL marks such a statement unsafe for statement-based replication (row-based is the default). Both are tracked in `docs/ongoing.md`.
+Both statements let MySQL pick the row with `LIMIT 1`. Selecting the row's key in a subquery first, as the PostgreSQL and SQLite adapters do, deadlocks on MySQL under concurrency. The explanation, the deadlock report and the decision are in [`single_row_writes.md`](single_row_writes.md), which covers SQL Server as well.
 
 `[Known limitation]` The GORM and Bun adapters use the same re-count with a plain read. They have not been tested on MySQL, see `docs/ongoing.md`.

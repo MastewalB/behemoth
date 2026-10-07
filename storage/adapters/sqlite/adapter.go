@@ -240,6 +240,11 @@ func (sqlt *SQLiteAdapter) UpdateOne(
 	table := adapters.PhysicalTable(sqlt.names(), m)
 	pk := adapters.PhysicalColumn(sqlt.names(), m, m.PrimaryKeyName())
 
+	// SQLite has no LIMIT on UPDATE in its default build, so a subquery picks
+	// the row. A write locks the whole database, so concurrent updates run
+	// one after another. The MySQL and SQL Server adapters don't use this
+	// form: there the subquery's read takes a shared row lock and two
+	// statements deadlock.
 	selectQuery := fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s LIMIT 1",
 		pk,

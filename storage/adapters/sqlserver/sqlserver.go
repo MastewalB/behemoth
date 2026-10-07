@@ -273,31 +273,23 @@ func (ms *SQLServerAdapter) UpdateOne(
 	// SET args occupy @p1 … @pN; WHERE args start at @p(N+1).
 	setClause := mssqlSETClause(adapters.PhysicalColumns(ms.names(), m, columns), 1)
 	whereClause, whereArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(values)+1))
-	table := adapters.PhysicalTable(ms.names(), m)
-	pk := adapters.PhysicalColumn(ms.names(), m, m.PrimaryKeyName())
 
-	// SQL Server allows a plain subquery on the same table in an UPDATE.
-	subQuery := fmt.Sprintf(
-		"SELECT TOP 1 %s FROM %s WHERE %s",
-		pk,
-		table,
-		whereClause,
-	)
-
+	// TOP (1) picks the one row, and expr is checked on the row as written
+	// (the UpdateOne convention). The statement takes the row's update lock as
+	// it finds the row, so concurrent updates of one row run one after
+	// another. Selecting the row's key in a subquery first would take a shared
+	// lock, which one statement can still hold while another has the update
+	// lock; each then waits for the other and SQL Server ends one with a
+	// deadlock error. SQL Server reports matched rows.
 	query := fmt.Sprintf(
-		"UPDATE %s SET %s WHERE %s = (%s)",
-		table,
+		"UPDATE TOP (1) %s SET %s",
+		adapters.PhysicalTable(ms.names(), m),
 		setClause,
-		pk,
-		subQuery,
 	)
-	// expr is repeated in the outer WHERE so it holds for the row as written
-	// (the UpdateOne convention); numbered placeholders continue after the
-	// subquery's. SQL Server reports matched rows.
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
 	args := append(values, whereArgs...)
-	guard, guardArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(args)+1))
-	query += " AND (" + guard + ")"
-	args = append(args, guardArgs...)
 
 	res, err := ms.q().ExecContext(ctx, query, args...)
 	if err != nil {
@@ -363,28 +355,13 @@ func (ms *SQLServerAdapter) DeleteOne(
 		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 
-	table := adapters.PhysicalTable(ms.names(), m)
-	pk := adapters.PhysicalColumn(ms.names(), m, m.PrimaryKeyName())
-
-	subQuery := fmt.Sprintf(
-		"SELECT TOP 1 %s FROM %s WHERE %s",
-		pk,
-		table,
+	// TOP (1) and no subquery, for the reason given in UpdateOne.
+	query := fmt.Sprintf(
+		"DELETE TOP (1) FROM %s WHERE %s",
+		adapters.PhysicalTable(ms.names(), m),
 		whereClause,
 	)
-
-	query := fmt.Sprintf(
-		"DELETE FROM %s WHERE %s = (%s)",
-		table,
-		pk,
-		subQuery,
-	)
-
-	// expr is repeated in the outer WHERE so it holds for the row as deleted;
-	// numbered placeholders continue after the subquery's.
-	guard, guardArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(args)+1))
-	query += " AND (" + guard + ")"
-	res, err := ms.q().ExecContext(ctx, query, append(args, guardArgs...)...)
+	res, err := ms.q().ExecContext(ctx, query, args...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
 	}
