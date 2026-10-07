@@ -7,12 +7,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"time"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/bsoncodec"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -40,11 +43,38 @@ type MongoAdapter struct {
 
 // NewMongoAdapter returns an adapter for the dbName database of client.
 // resolver maps canonical names to physical ones; nil uses them as-is.
+//
+// The adapter opens its own handle on the database with the registry from
+// newRegistry. A registry set on client is not used for the adapter's reads
+// and writes; the application's own use of client is not affected.
 func NewMongoAdapter(client *mongo.Client, dbName string, resolver behemoth.SchemaResolver) *MongoAdapter {
 	return &MongoAdapter{
-		db:       client.Database(dbName),
+		db:       client.Database(dbName, options.Database().SetRegistry(newRegistry())),
 		Resolver: resolver,
 	}
+}
+
+// newRegistry returns the BSON registry the adapter decodes with. It is the
+// driver's default plus one rule: a BSON date read into an untyped value
+// becomes a time.Time, in UTC.
+//
+// Reads decode a document into a map[string]any and hand it to the model's
+// FromMap, which asserts Go types. By default the driver puts its own types
+// into such a map, and a primitive.DateTime fails the time.Time assertion, so
+// every timestamp read back as zero. The rule applies wherever the driver
+// decodes, nested documents and arrays included, so no read path converts
+// values itself.
+//
+// Other BSON types still arrive as driver types: a nested document as
+// primitive.M (declared as a named type, so a "case map[string]any" does not
+// match it), an array as primitive.A, binary data as primitive.Binary, an
+// ObjectID as primitive.ObjectID. Behemoth's models store none of them. A
+// model that does needs another RegisterTypeMapEntry here; see
+// docs/internal/database/adapters/mongo.md.
+func newRegistry() *bsoncodec.Registry {
+	registry := bson.NewRegistry()
+	registry.RegisterTypeMapEntry(bson.TypeDateTime, reflect.TypeFor[time.Time]())
+	return registry
 }
 
 var _ behemoth.TransactionChecker = (*MongoAdapter)(nil)

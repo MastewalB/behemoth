@@ -195,7 +195,23 @@ func TestStoreAuditLogMongo(t *testing.T) {
 	client, cleanup := testutils.SetupMongoTestDB(ctx, t)
 	t.Cleanup(cleanup)
 	db := mongoAdapter.NewMongoAdapter(client, "contract", resolver)
-	auditLogContract(t, store.New(db, store.WithSchema(resolver), store.WithEncryptor(testCrypto(t).AtRest)))
+	st := store.New(db, store.WithSchema(resolver), store.WithEncryptor(testCrypto(t).AtRest))
+	auditLogContract(t, st)
+
+	// The adapter's registry decodes a BSON date as a time.Time in UTC. With
+	// the driver's default it is a primitive.DateTime, and the model reads a
+	// zero time. The contract above purges its oldest events, so record one more.
+	require.NoError(t, st.RecordAuditEvent(ctx, telemetry.AuditEvent{
+		Type: "auth.signIn.after", Outcome: telemetry.OutcomeSuccess, ActorType: telemetry.ActorUser, ActorID: "user-1",
+		RequestID: "req-utc", Timestamp: time.Date(2026, 10, 1, 14, 0, 0, 0, time.FixedZone("EAT", 3*60*60)),
+	}))
+	found, err := db.FindOne(ctx, &models.AuditLog{}, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.AuditLogRequestID, Operator: clause.OpEqual, Value: "req-utc"},
+	}})
+	require.NoError(t, err)
+	createdAt := found.(*models.AuditLog).CreatedAt
+	assert.False(t, createdAt.IsZero())
+	assert.Equal(t, time.UTC, createdAt.Location())
 }
 
 func usersContract(t *testing.T, st *store.Store) {
