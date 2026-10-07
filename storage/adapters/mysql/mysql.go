@@ -8,6 +8,10 @@
 // Both take the same behemoth.SchemaResolver, so application queries and
 // migrations agree on physical table and column names.
 //
+// The adapter converts what the driver returns into the Go types the models
+// read (scan.go), so the DSN does not need parseTime. A signed TINYINT column
+// is read as a bool.
+//
 // The migration driver works with any database/sql MySQL driver. The adapter
 // classifies errors using github.com/go-sql-driver/mysql's error type, which
 // is what makes this module depend on it.
@@ -147,7 +151,6 @@ func (my *MySQLAdapter) FindOne(
 
 	// columns stay canonical: they key the map handed to FromMap.
 	columns := adapters.ReadColumns(my.names(), m, nil)
-	values, valuePtrs := adapters.ScanTargets(len(columns))
 
 	query := fmt.Sprintf(
 		"SELECT %s FROM %s",
@@ -160,8 +163,24 @@ func (my *MySQLAdapter) FindOne(
 	}
 	query += " LIMIT 1"
 
-	row := my.q().QueryRowContext(ctx, query, args...)
-	if err := row.Scan(valuePtrs...); err != nil {
+	rows, err := my.q().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	defer rows.Close()
+
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		}
+		return nil, adapters.WrapWithCaller(sql.ErrNoRows, m.SchemaName(), mapMySQLErrors)
+	}
+	values, err := scanRow(rows, types)
+	if err != nil {
 		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
 
@@ -181,8 +200,6 @@ func (my *MySQLAdapter) FindMany(
 
 	var (
 		columns        []string
-		values         []any
-		valuePtrs      []any
 		distinctClause string
 		query          string
 	)
@@ -193,7 +210,6 @@ func (my *MySQLAdapter) FindMany(
 		selected = options.Select
 	}
 	columns = adapters.ReadColumns(my.names(), m, selected)
-	values, valuePtrs = adapters.ScanTargets(len(columns))
 
 	if options != nil && options.Distinct {
 		distinctClause = "DISTINCT "
@@ -230,9 +246,15 @@ func (my *MySQLAdapter) FindMany(
 	}
 	defer rows.Close()
 
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	}
+
 	var results []behemoth.Model
 	for rows.Next() {
-		if err := rows.Scan(valuePtrs...); err != nil {
+		values, err := scanRow(rows, types)
+		if err != nil {
 			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
@@ -240,6 +262,9 @@ func (my *MySQLAdapter) FindMany(
 			return nil, err
 		}
 		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
 
 	return results, nil
@@ -269,7 +294,7 @@ func (my *MySQLAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
-	return adapters.ExpectOneRow("Update", m, n, func() (int64, error) { return my.Count(ctx, m, adapters.ByPrimaryKey(m)) })
+	return adapters.ExpectOneRow("Update", m, n, func() (int64, error) { return my.count(ctx, m, adapters.ByPrimaryKey(m), true) })
 }
 
 func (my *MySQLAdapter) UpdateOne(
@@ -284,31 +309,23 @@ func (my *MySQLAdapter) UpdateOne(
 
 	columns, values := utils.MapToSlice(updates)
 	whereClause, whereArgs := my.where(m, &expr)
-	table := adapters.PhysicalTable(my.names(), m)
-	pk := adapters.PhysicalColumn(my.names(), m, m.PrimaryKeyName())
 
-	// MySQL forbids "UPDATE t SET ... WHERE pk = (SELECT pk FROM t WHERE ...)"
-	// when the subquery references the same table. We work around this by
-	// wrapping the subquery in a derived table aliased as `_sub`.
-	selectQuery := fmt.Sprintf(
-		"SELECT %s FROM %s WHERE %s LIMIT 1",
-		pk,
-		table,
-		whereClause,
-	)
-
+	// LIMIT 1 picks the one row, and expr is checked on the row as written
+	// (the UpdateOne convention). The statement asks for the row's exclusive
+	// lock directly, so concurrent updates of one row run one after another.
+	// Selecting the row's key in a subquery first would take a shared lock
+	// that two statements can both hold while each waits to upgrade it, which
+	// MySQL ends with a deadlock error.
 	query := fmt.Sprintf(
-		"UPDATE %s SET %s WHERE %s = (SELECT %s FROM (%s) AS _sub)",
-		table,
+		"UPDATE %s SET %s",
+		adapters.PhysicalTable(my.names(), m),
 		generateMySQLSETClause(adapters.PhysicalColumns(my.names(), m, columns)),
-		pk,
-		pk,
-		selectQuery,
 	)
-	// expr is repeated in the outer WHERE so it holds for the row as written
-	// (the UpdateOne convention).
-	query += " AND (" + whereClause + ")"
-	args := append(append(values, whereArgs...), whereArgs...)
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
+	query += " LIMIT 1"
+	args := append(values, whereArgs...)
 
 	res, err := my.q().ExecContext(ctx, query, args...)
 	if err != nil {
@@ -319,7 +336,7 @@ func (my *MySQLAdapter) UpdateOne(
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
 	// MySQL reports changed rows unless the connection sets clientFoundRows.
-	return adapters.ExpectOneRow("UpdateOne", m, n, func() (int64, error) { return my.Count(ctx, m, expr) })
+	return adapters.ExpectOneRow("UpdateOne", m, n, func() (int64, error) { return my.count(ctx, m, expr, true) })
 }
 
 func (my *MySQLAdapter) UpdateMany(
@@ -370,27 +387,13 @@ func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cl
 		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 
-	table := adapters.PhysicalTable(my.names(), m)
-	pk := adapters.PhysicalColumn(my.names(), m, m.PrimaryKeyName())
-
-	selectQuery := fmt.Sprintf(
-		"SELECT %s FROM %s WHERE %s LIMIT 1",
-		pk,
-		table,
+	// LIMIT 1 and no subquery, for the reason given in UpdateOne.
+	query := fmt.Sprintf(
+		"DELETE FROM %s WHERE %s LIMIT 1",
+		adapters.PhysicalTable(my.names(), m),
 		whereClause,
 	)
-
-	query := fmt.Sprintf(
-		"DELETE FROM %s WHERE %s = (SELECT %s FROM (%s) AS _sub)",
-		table,
-		pk,
-		pk,
-		selectQuery,
-	)
-
-	// expr is repeated in the outer WHERE so it holds for the row as deleted.
-	query += " AND (" + whereClause + ")"
-	res, err := my.q().ExecContext(ctx, query, append(args, args...)...)
+	res, err := my.q().ExecContext(ctx, query, args...)
 	if err != nil {
 		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
 	}
@@ -424,6 +427,16 @@ func (my *MySQLAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 }
 
 func (my *MySQLAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
+	return my.count(ctx, m, expr, false)
+}
+
+// count is Count, with current set for the re-count after an update that
+// reported no changed rows. Inside a transaction a plain SELECT reads the
+// transaction's snapshot, which can still show a row that another transaction
+// has since changed: a writer that lost a guarded update would count its
+// guard as matching and report success. FOR SHARE reads the committed row
+// instead, as the UPDATE itself did.
+func (my *MySQLAdapter) count(ctx context.Context, m behemoth.Model, expr clause.Expression, current bool) (int64, error) {
 	whereClause, args := my.where(m, &expr)
 
 	query := fmt.Sprintf(
@@ -432,6 +445,9 @@ func (my *MySQLAdapter) Count(ctx context.Context, m behemoth.Model, expr clause
 	)
 	if whereClause != "" {
 		query += " WHERE " + whereClause
+	}
+	if current {
+		query += " FOR SHARE"
 	}
 
 	row, err := my.q().QueryContext(ctx, query, args...)

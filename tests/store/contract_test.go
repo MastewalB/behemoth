@@ -16,8 +16,11 @@ import (
 	"github.com/MastewalB/behemoth/models"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
 	gormAdapter "github.com/MastewalB/behemoth/storage/adapters/gorm"
+	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
+	mysqlAdapter "github.com/MastewalB/behemoth/storage/adapters/mysql"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	sqlserverAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/tests/testutils"
@@ -107,6 +110,27 @@ func contractBackends() map[string]func(t *testing.T, tables []schema.Table, r b
 		createTables(t, pgAdapter.NewPostgreSQLDriver(db, r), tables)
 		return db
 	}
+	openMySQL := func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) *sql.DB {
+		if testing.Short() {
+			t.Skip("starts a MySQL container")
+		}
+		ctx := context.Background()
+		db, cleanup := testutils.SetupMySQLTestDB(t, ctx)
+		t.Cleanup(cleanup)
+		require.Eventually(t, func() bool { return db.PingContext(ctx) == nil }, 30*time.Second, 200*time.Millisecond)
+		createTables(t, mysqlAdapter.NewMySQLDriver(db, r), tables)
+		return db
+	}
+	openSQLServer := func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) *sql.DB {
+		if testing.Short() {
+			t.Skip("starts a SQL Server container")
+		}
+		db, cleanup := testutils.SetupMSSQLTestDB(t)
+		t.Cleanup(cleanup)
+		require.Eventually(t, func() bool { return db.PingContext(context.Background()) == nil }, 30*time.Second, 200*time.Millisecond)
+		createTables(t, sqlserverAdapter.NewSQLServerDriver(db, r), tables)
+		return db
+	}
 	quiet := &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)}
 
 	return map[string]func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database{
@@ -115,6 +139,12 @@ func contractBackends() map[string]func(t *testing.T, tables []schema.Table, r b
 		},
 		"sql/postgres": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
 			return pgAdapter.NewPostgresAdapter(openPostgres(t, tables, r), r)
+		},
+		"sql/mysql": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			return mysqlAdapter.NewMySQLAdapter(openMySQL(t, tables, r), r)
+		},
+		"sql/sqlserver": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			return sqlserverAdapter.NewSQLServerAdapter(openSQLServer(t, tables, r), r)
 		},
 		"gorm/sqlite": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
 			gdb, err := gorm.Open(gormsqlite.New(gormsqlite.Config{Conn: openSQLite(t, tables, r)}), quiet)
@@ -151,6 +181,21 @@ func TestStoreContract(t *testing.T) {
 			t.Run("AuditLog", func(t *testing.T) { auditLogContract(t, st) })
 		})
 	}
+}
+
+// TestStoreAuditLogMongo runs the audit log part of the contract on MongoDB.
+// The rest of the contract is not run there: MongoDB has no migration driver,
+// so nothing creates the unique indexes the other parts rely on.
+func TestStoreAuditLogMongo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a MongoDB container")
+	}
+	ctx := context.Background()
+	_, resolver := coreSchema(t)
+	client, cleanup := testutils.SetupMongoTestDB(ctx, t)
+	t.Cleanup(cleanup)
+	db := mongoAdapter.NewMongoAdapter(client, "contract", resolver)
+	auditLogContract(t, store.New(db, store.WithSchema(resolver), store.WithEncryptor(testCrypto(t).AtRest)))
 }
 
 func usersContract(t *testing.T, st *store.Store) {
@@ -314,13 +359,11 @@ func rateLimitsContract(t *testing.T, db behemoth.Database, resolver behemoth.Sc
 	counts := make(chan int64, calls)
 	var wg sync.WaitGroup
 	for range calls {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			n, err := st.IncrementRateLimit(ctx, "signin:1.2.3.4", time.Minute)
 			assert.NoError(t, err)
 			counts <- n
-		}()
+		})
 	}
 	wg.Wait()
 	close(counts)

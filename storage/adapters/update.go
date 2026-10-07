@@ -17,8 +17,10 @@ import (
 // already held these values". For those, countMatching (rows matching the
 // update's expression) is consulted when affected is 0: a match means the
 // update did apply. That keeps guarded writes correct too: a writer that lost
-// the race re-counts with its own guard and finds nothing. Pass nil when the
-// driver reports matched rows (SQLite, Postgres, SQL Server).
+// the race re-counts with its own guard and finds nothing, provided the count
+// reads committed data: inside a MySQL transaction a plain SELECT reads the
+// transaction's snapshot, so the MySQL adapter counts with FOR SHARE. Pass nil
+// when the driver reports matched rows (SQLite, Postgres, SQL Server).
 func ExpectOneRow(op string, m behemoth.Model, affected int64, countMatching func() (int64, error)) error {
 	if affected > 0 {
 		return nil
