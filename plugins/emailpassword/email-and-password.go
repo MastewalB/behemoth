@@ -293,6 +293,19 @@ func isRejection(err error) bool {
 	return false
 }
 
+// ErrorCodeInvalidCredentials is the code of the error sign-in returns for an
+// unknown email, a user without a password and a wrong password.
+const ErrorCodeInvalidCredentials = "invalid_credentials"
+
+// errInvalidCredentials is sign-in's one answer to every credential it
+// refuses. The three cases share a code and a message so the response does
+// not tell which emails have an account. It is typed (unauthorized, 401), so
+// a caller can tell it from a failure of the system, which is any other
+// error SignIn returns apart from a hook handler's typed rejection.
+func errInvalidCredentials() error {
+	return behemotherr.NewUnauthorized("emailpassword.SignIn", ErrorCodeInvalidCredentials, "invalid email or password")
+}
+
 func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*SignInResult, error) {
 	ac := hctx.Auth
 	hasher := ac.Crypto.Passwords
@@ -306,7 +319,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 			}); err != nil {
 				return nil, err
 			}
-			return nil, errors.New("invalid email or password")
+			return nil, errInvalidCredentials()
 		}
 		return nil, err // infra error (DB down) — must NOT count toward lockout
 	}
@@ -327,7 +340,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("noCredentialAccount", nil)); err != nil {
 				return nil, err
 			}
-			return nil, errors.New("invalid email or password")
+			return nil, errInvalidCredentials()
 		}
 		return nil, err // infra error — must NOT count toward lockout
 	}
@@ -343,7 +356,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 		if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("invalidCredentials", nil)); err != nil {
 			return nil, err
 		}
-		return nil, errors.New("invalid email or password")
+		return nil, errInvalidCredentials()
 	}
 
 	// The seam a 2FA plugin hooks. requireStepUp travels back via the mutated
@@ -476,23 +489,20 @@ func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 	return rctx.Response.JSON(http.StatusCreated, user)
 }
 
+// handleSignIn returns the flow's error unchanged, and the router maps and
+// logs it (RouterConfig.ErrorMapper). A refused credential is a typed
+// unauthorized error (401), and a hook handler's typed rejection keeps its
+// own status. Anything else is a failure of the system: the router answers
+// 500 without the error's text and logs it at Error.
 func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 	var creds EmailAndPasswordCredentials
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&creds); err != nil {
 		return behemotherr.NewValidationError("SignIn", "request", err)
-		// return rctx.Response.Error(http.StatusBadRequest, "invalid request body")
 	}
 
 	result, err := p.SignIn(rctx.Ctx, creds)
 	if err != nil {
-		// Every failure is answered as a validation error below, so a
-		// system failure (the database is down) never reaches the router as
-		// a 5xx and the router does not log it. It is logged here.
-		if _, typed := errors.AsType[*behemotherr.DomainError](err); typed && !isRejection(err) {
-			p.log.Error(rctx.Ctx, "sign-in failed", telemetry.ErrorFields(err))
-		}
-		return behemotherr.NewValidationError("SignIn", "request", err)
-		// return rctx.Response.Error(http.StatusUnauthorized, err.Error())
+		return err
 	}
 
 	rctx.Auth.SessionManager.WriteToken(rctx, result.RawToken, result.Session) // honors SessionConfig.Transport
@@ -502,14 +512,15 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, result.User)
 }
 
+// handleSignOut returns SignOut's error unchanged, like handleSignIn. A typed
+// error keeps its status (a hook handler's rejection, a session that no
+// longer exists). A failed revoke is a 500 from the router, which does not
+// send the error's text.
 func (p *Plugin) handleSignOut(rctx *types.RequestContext) error {
 	sessionID, _ := rctx.Values["sessionID"].(string) // populated by session middleware upstream
 	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
 	if err := SignOut(hctx, sessionID); err != nil {
-		// The response is written here and not by the router, so the router
-		// does not log this failure.
-		p.log.Error(rctx.Ctx, "sign-out failed", telemetry.ErrorFields(err))
-		return rctx.Response.Error(http.StatusInternalServerError, err.Error())
+		return err
 	}
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})
 }

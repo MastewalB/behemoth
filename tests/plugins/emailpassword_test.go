@@ -3,6 +3,7 @@ package plugins_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -89,6 +90,18 @@ func authContext(t *testing.T) *types.AuthContext {
 	}
 }
 
+// mountedRoutes is a FrameworkDriver that keeps the routes Boot mounts, by
+// path. They arrive wrapped by the router, so calling one runs the router's
+// error mapping and logging, which a plugin's own route does not.
+type mountedRoutes map[string]types.Route
+
+func (m mountedRoutes) Mount(routes ...types.Route) error {
+	for _, r := range routes {
+		m[r.Path] = r
+	}
+	return nil
+}
+
 // call invokes a plugin route the way the router does.
 func call(t *testing.T, ac *types.AuthContext, route types.Route, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -98,7 +111,10 @@ func call(t *testing.T, ac *types.AuthContext, route types.Route, body string) *
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
-		w.Code = http.StatusUnauthorized // the router's error mapping, approximated
+		// The router's error mapping, with its default mapper.
+		status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+		w.Code = status
+		require.NoError(t, json.NewEncoder(w.Body).Encode(body))
 		return w
 	}
 	rctx.Response.Flush(w)
@@ -152,6 +168,58 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 	require.NoError(t, ac.Store.CreateAccount(ctx, &models.Account{UserID: oauthOnly.ID, ProviderID: "google", AccountID: "g-1"}))
 	w = call(t, ac, routes["/sign-in/email"], `{"email":"grace@example.com","password":"correct horse"}`)
 	assert.NotEqual(t, http.StatusOK, w.Code, "no credential account, no password sign-in")
+}
+
+// Sign-in and sign-out return their errors to the router, which decides the
+// status: 401 for a refused credential, 500 without the error's text for a
+// failure of the system.
+func TestEmailPasswordSignInAndSignOutErrors(t *testing.T) {
+	ctx := context.Background()
+	ac := authContext(t)
+	p := emailpassword.New(emailpassword.Options{})
+	require.NoError(t, p.Init(ac))
+	routes := map[string]types.Route{}
+	for _, r := range p.Routes() {
+		routes[r.Path] = r
+	}
+	require.Equal(t, http.StatusCreated,
+		call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`).Code)
+	oauthOnly := &models.User{Email: "grace@example.com"}
+	require.NoError(t, ac.Store.CreateUser(ctx, oauthOnly))
+
+	// The three refusals are one answer, so the response does not tell
+	// which emails have an account.
+	wrongPassword := call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"wrong password"}`)
+	assert.Equal(t, http.StatusUnauthorized, wrongPassword.Code)
+	assert.JSONEq(t, `{"error":"invalid email or password","code":"invalid_credentials"}`, wrongPassword.Body.String())
+	for name, body := range map[string]string{
+		"unknown email":         `{"email":"nobody@example.com","password":"correct horse"}`,
+		"no credential account": `{"email":"grace@example.com","password":"correct horse"}`,
+	} {
+		w := call(t, ac, routes["/sign-in/email"], body)
+		assert.Equal(t, wrongPassword.Code, w.Code, name)
+		assert.JSONEq(t, wrongPassword.Body.String(), w.Body.String(), name)
+	}
+
+	// Called from code, the refusal is told from a failure by its type.
+	_, err := p.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "wrong password"})
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryUnauthorized), "%v", err)
+	assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "%v", err)
+
+	assert.Equal(t, http.StatusBadRequest, call(t, ac, routes["/sign-in/email"], `not json`).Code)
+
+	// A sign-out handler reached without its middleware, for a session that
+	// does not exist: a typed error with its own status, not a 500.
+	w := call(t, ac, routes["/sign-out"], ``)
+	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+
+	// With the database gone, both answer 500 and send none of the error.
+	require.NoError(t, ac.Store.DB().(*sqliteAdapter.SQLiteAdapter).DB.(*sql.DB).Close())
+	for _, path := range []string{"/sign-in/email", "/sign-out"} {
+		w := call(t, ac, routes[path], `{"email":"ada@example.com","password":"correct horse"}`)
+		assert.Equal(t, http.StatusInternalServerError, w.Code, path)
+		assert.JSONEq(t, `{"error":"an internal error occurred","code":"database_error"}`, w.Body.String(), path)
+	}
 }
 
 func TestEmailPasswordPluginMetadata(t *testing.T) {
@@ -503,6 +571,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 	require.NoError(t, err)
 
 	tel, rec := telemetrytest.New()
+	mounted := mountedRoutes{}
 	p := emailpassword.New(emailpassword.Options{})
 	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 	require.NoError(t, err)
@@ -513,6 +582,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
 		Telemetry: tel,
 		Router:    types.RouterConfig{ClientIPHeader: "X-Real-IP"}, // no TrustedProxies: the header is ignored
+		HTTP:      mounted,
 	})
 	require.NoError(t, err)
 
@@ -531,7 +601,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 	assert.Equal(t, "behemoth booted", boot[0].Message)
 	assert.Equal(t, []string{emailpassword.PluginName}, boot[0].Fields["plugins"])
 	assert.Equal(t, 3, boot[0].Fields["routes"])
-	assert.Equal(t, false, boot[0].Fields["routes_mounted"])
+	assert.Equal(t, true, boot[0].Fields["routes_mounted"])
 	require.Len(t, find(slog.LevelWarn, "boot"), 1, "ClientIPHeader without TrustedProxies is warned about")
 
 	routes := map[string]types.Route{}
@@ -554,18 +624,35 @@ func TestEmailPasswordLogging(t *testing.T) {
 	}
 	assert.True(t, sawInsert, "the insert inside the sign-up transaction was not logged")
 
-	// A wrong password is a rejection: nothing is logged at Error.
-	call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"wrong password"}`)
+	// The rest goes through the router, which maps and logs a route's error.
+	signIn := mounted["/api/auth/sign-in/email"]
+	require.NotNil(t, signIn.Handler)
+	viaRouter := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, signIn.Path, strings.NewReader(body))
+		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		require.NoError(t, signIn.Handler(rctx))
+		w := httptest.NewRecorder()
+		rctx.Response.Flush(w)
+		return w
+	}
+
+	// A wrong password is a rejection: 401, and nothing is logged at Error.
+	w = viaRouter(`{"email":"ada@example.com","password":"wrong password"}`)
+	assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 	assert.Empty(t, rec.Logger.At(slog.LevelError))
 
 	// With the database gone, the sign-in fails for a reason the client is
-	// not told. The plugin logs it.
+	// not told. The router answers 500 and logs it, once.
 	require.NoError(t, db.Close())
-	call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
-	failed := find(slog.LevelError, emailpassword.PluginName)
+	w = viaRouter(`{"email":"ada@example.com","password":"correct horse"}`)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.NotContains(t, w.Body.String(), "closed", "the response carries none of the error's text")
+	failed := rec.Logger.At(slog.LevelError)
 	require.Len(t, failed, 1)
-	assert.Equal(t, "sign-in failed", failed[0].Message)
+	assert.Equal(t, "request failed", failed[0].Message)
+	assert.Equal(t, "router", failed[0].Fields[telemetry.FieldComponent])
 	assert.Equal(t, "database", failed[0].Fields[telemetry.FieldErrorCategory])
+	assert.Equal(t, http.StatusInternalServerError, failed[0].Fields[telemetry.FieldStatus])
 }
 
 // auditApp boots the email/password plugin over a fresh database and returns

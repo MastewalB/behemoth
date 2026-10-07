@@ -31,7 +31,8 @@ The wrapped flows are reached through two exported methods, `Plugin.SignUp(ctx, 
 
 - `[Not built]` Password reset, password change and email verification. They would declare their token kinds in `Declare`.
 - `[Not built]` Rehash on sign-in. `PasswordHasher.NeedsRehash` exists but sign-in does not call it.
-- Sign-up returns a typed error (`behemotherr.DomainError`) to the router, which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejectedByHook` for it (`isRejection`). Sign-up's own untyped rejections are a `400`. Sign-in and sign-out still map every flow error to a validation error or a `500`.
+- Sign-up returns a typed error (`behemotherr.DomainError`) to the router, which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejectedByHook` for it (`isRejection`). Sign-up's own untyped rejections are a `400`.
+- Sign-in and sign-out return every error to the router unchanged (`handleSignIn`, `handleSignOut`). See *Sign-in's refusals are typed* below.
 - `Options.ValidateEmail` and `ValidatePassword` errors are replaced by `invalid email` and `invalid password` in the response, so a custom message does not reach the client.
 
 ### The email and password rules belong to the plugin
@@ -41,3 +42,26 @@ The wrapped flows are reached through two exported methods, `Plugin.SignUp(ctx, 
 - *Make them options of the plugin: `emailpassword.New(Options)`.* The dependency is visible where it is used, the zero value has defaults, and `AuthContext` loses two fields. A second plugin that sets passwords can't read the policy from the `AuthContext`.
 **Decision:** The second option. `types.Validator`, `types.PasswordOptions` and the two `AuthContext` fields are removed. The hasher was never a policy choice of the plugin: it comes from `AuthContext.Crypto.Passwords`, which `Boot` builds from `BootConfig.Crypto`. The default email check is `utils.IsValidEmail`, a plain function other plugins can call. Plugins that set passwords are expected to depend on this one and go through it.
 **Revisit if:** plugins that don't depend on `emailpassword` need to set passwords. A shared policy on `AuthContext` would then be justified.
+
+### Sign-in's refusals are typed
+**Context:** `signInBody` returned `errors.New("invalid email or password")` for an unknown email, a user without a credential account and a wrong password. An untyped error could therefore be a wrong password or a broken system, and `handleSignIn` could not tell them apart. It wrapped every error in a validation error, so a database outage was answered with `400` and never reached the router's log. `handleSignOut` wrote its own `500` with `err.Error()` as the body, which sent internal error text to the client.
+**Options considered:**
+- *Return typed errors from the handlers and keep the untyped refusal.* The router maps an untyped error to `500`, so a wrong password would become a `500`.
+- *Make the refusal a typed error and return everything to the router.* `errInvalidCredentials` is an unauthorized error (`behemotherr.NewUnauthorized`) with the code `invalid_credentials`. After that, every error out of `SignIn` is a typed rejection or a failure of the system, and the handler has nothing to decide.
+**Decision:** The second, for sign-in. Sign-out needed only the first half: `SignOut` already returned typed errors. Both handlers now end in `return err`.
+
+What the router does with each error:
+
+| Error from the flow | Status | Body |
+| --- | --- | --- |
+| `errInvalidCredentials` (all three refusals) | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
+| a hook handler's typed rejection | the status of its category | its public message and code |
+| a rate limit | `429` with `Retry-After` | the rate limit message |
+| a database error, or any category without a status | `500` | the category's public message, never the error's text |
+| an untyped error (a hook handler's `errors.New`, an unexpected failure) | `500` | `{"error": "internal server error"}` |
+
+The three refusals share one code and one message on purpose: a different answer for an unknown email would tell a caller which addresses have an account. The failure code a hook handler sees on `auth.signIn.failed` still tells them apart (`userNotFound`, `noCredentialAccount`, `invalidCredentials`).
+
+Two changes a client can observe: a wrong password is a `401` where it was a `400`, and an untyped error from a handler on a sign-in point is a `500` where it was a `400`. The second matches what the hook docs ask for, a typed error from a handler that rejects.
+
+`[Limit]` Sign-up still has untyped refusals (`invalid email`, `user already exists`), answered with `400` by `handleSignUp` itself. Giving them types would let that handler end in `return err` as well.

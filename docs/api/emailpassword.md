@@ -56,6 +56,22 @@ The routes sit directly under the router's base path.
 | `POST /sign-in/email` | `email`, `password` | `200` with the user, and the session token written the way `SessionConfig.Transport` says. `{"status": "requires_second_factor"}` when a plugin asked for a second step. |
 | `POST /sign-out` | none; needs a valid session | `200`, and the session is revoked. |
 
+### Error responses
+
+An error response is JSON with an `error` message and, for most errors, a `code`.
+
+| Route | When | Status | Body |
+| --- | --- | --- | --- |
+| `POST /sign-in/email` | the body is not valid JSON | `400` | `{"error": "request validation error", "code": "request_validation_error"}` |
+| `POST /sign-in/email` | unknown email, wrong password, or a user who has no password | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
+| `POST /sign-in/email`, `POST /sign-out` | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
+| any | too many requests | `429` with a `Retry-After` header | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
+| any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
+
+Sign-in gives the same answer for an unknown email and a wrong password, so the response does not show which addresses have an account.
+
+A handler on a sign-in or sign-out hook point that rejects a request should return one of the `errors` package's types. An untyped error (`errors.New`) is treated as a failure of the system: the client gets a `500` and the error is logged.
+
 ## Hook points
 
 ## Calling the flows from code
@@ -79,6 +95,19 @@ result, err := plugin.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{
 - Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `hctx.Request` is nil and the session has neither.
 - `SignIn` returns the raw session token. Delivering it (a cookie, a header) is up to you; the route uses `SessionManager.WriteToken`.
 - Called before `Boot`, both return a configuration error.
+- `SignIn` returns a typed error for a refused credential, so you can tell it from a failure:
+
+```go
+result, err := plugin.SignIn(ctx, creds)
+switch {
+case err == nil:
+	// signed in
+case behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials):
+	// unknown email, wrong password, or no password: ask again
+default:
+	// a hook's rejection, a rate limit, or a failure such as a database outage
+}
+```
 
 `emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points.
 

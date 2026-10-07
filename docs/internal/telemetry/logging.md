@@ -62,16 +62,13 @@ if status >= 500 {
 
 `wrapWithErrorMapping` takes the `Route` for this, where it used to take only the next handler.
 
-`[Limit]` The router logs only what is returned to it. A handler that writes its own error response returns nil and is not seen. Two handlers of the email/password plugin do this; see the next section.
+`[Limit]` The router logs only what is returned to it. A handler that writes its own error response returns nil and is not seen.
 
 ## The email/password plugin
 
-The flows (`signUpBody`, `signInBody`) return their errors and log nothing. The HTTP handlers log in two places where the router cannot:
+The flows (`signUpBody`, `signInBody`) return their errors and log nothing. So do the three handlers: `handleSignIn` and `handleSignOut` return every error to the router, and `handleSignUp` returns the typed ones. A failed sign-in or sign-out is therefore logged once, by the router, as `request failed` at Error when the status is 5xx and as `request rejected` at Debug otherwise.
 
-- **`handleSignIn`** answers every failure as a validation error, so a database outage during sign-in is a 400 to the client and never reaches the router as a 5xx. The handler logs it at Error when the error is typed and `isRejection` says it is not a refusal.
-- **`handleSignOut`** writes a 500 itself with `Response.Error` and returns nil. It logs the failure at Error.
-
-Both are workarounds for how these handlers answer, which is recorded in `docs/ongoing.md` ("Sign-in and sign-out answer system failures themselves"). If the handlers return their typed errors to the router, both lines go away and the router's line replaces them.
+The plugin still takes a logger in `Init` (`p.log`) and writes nothing to it at present. `handleSignUp` answers sign-up's untyped refusals itself with a `400`; those are rejections, so nothing is lost by not logging them.
 
 `PluginContext` was deleted. It was declared with a `Logger` field, but no plugin ever received one. A plugin takes its logger from the `AuthContext` in `Init`:
 

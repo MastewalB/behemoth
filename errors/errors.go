@@ -93,6 +93,20 @@ func NewRateLimited(op, ruleName string, retryAfter time.Duration) *DomainError 
 	}
 }
 
+// NewUnauthorized reports that the caller could not be authenticated: wrong
+// credentials at sign-in, for example. message is sent to the client, so it
+// should not say which part was wrong. It maps to 401. A request that is
+// authenticated but not allowed is CategoryForbidden instead.
+func NewUnauthorized(op, code, message string) error {
+	return &DomainError{
+		Category:        CategoryUnauthorized,
+		Op:              op,
+		Code:            code,
+		PublicMessage:   message,
+		InternalMessage: fmt.Sprintf("%s: %s", op, message),
+	}
+}
+
 // NewInternalError classifies an unexpected failure inside the system
 func NewInternalError(op string, original error) *DomainError {
 	return &DomainError{
