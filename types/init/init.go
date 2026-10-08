@@ -857,10 +857,23 @@ func (rl *DefaultRateLimiter) limiterFor(rule string, algorithm types.RateLimitA
 	return nil, behemotherr.NewConfigurationError("RateLimiter", fmt.Sprintf("rule %q names the algorithm %q, which has no limiter", rule, algorithm), nil)
 }
 
-// checkRateLimitRule is what the catalog requires of a rule's strategy: a
-// known algorithm with a limit that can be counted, or a Limiter of its own,
-// whose limit is its own business.
-func checkRateLimitRule(name string, algorithm types.RateLimitAlgorithm, own types.Limiter, limit types.Limit) error {
+// checkRateLimitRule is what the catalog requires of a rule's strategy: an
+// action that is built, and a known algorithm with a limit that can be
+// counted, or a Limiter of its own, whose limit is its own business.
+//
+// ActionLockout is refused here, at Prepare, and not at request time: a rule
+// that asked for a lockout would otherwise get an ordinary rejection and its
+// author would not find out. The check comes before the rule's own Limiter
+// is accepted, because the lockout is the rate limiter's to enforce, not the
+// Limiter's.
+func checkRateLimitRule(name string, action types.RateLimitAction, algorithm types.RateLimitAlgorithm, own types.Limiter, limit types.Limit) error {
+	switch action {
+	case "", types.ActionReject:
+	case types.ActionLockout:
+		return fmt.Errorf("ratelimit: rule %q uses ActionLockout, which is not built; use ActionReject", name)
+	default:
+		return fmt.Errorf("ratelimit: rule %q names an unknown Action %q", name, action)
+	}
 	if own != nil {
 		return nil
 	}
@@ -929,7 +942,12 @@ func (rl *DefaultRateLimiter) GetBestMatchforRoute(ctx context.Context, method, 
 // evaluate is the shared core: it asks the rule's limiter and turns a
 // refusal into an audit event and a rate-limited error. Both the
 // point-scoped path and route-scoped path call through here, so there is
-// exactly one place that handles a refusal, a lockout and a failing counter.
+// exactly one place that handles a refusal and a failing counter.
+//
+// Deferred: ActionLockout. No rule reaches here with it, because the catalog
+// rejects it at declaration. When it is built it belongs here, around the
+// call to the limiter: check a lockout key before counting and set it on the
+// first refusal. action and lockoutFor are passed for that and not read.
 func (rl *DefaultRateLimiter) evaluate(
 	ctx context.Context,
 	name, key string,
@@ -967,9 +985,6 @@ func (rl *DefaultRateLimiter) evaluate(
 				Type: telemetry.AuditRateLimitExceeded, Outcome: telemetry.OutcomeDenied,
 				IPAddress: ip, Metadata: behemoth.M{"rule": name, "key": key},
 			})
-		}
-		if action == types.ActionLockout && lockoutFor > 0 {
-			retryAfter = lockoutFor
 		}
 		return behemotherr.NewRateLimited(name, name, retryAfter)
 	}
@@ -1170,7 +1185,7 @@ func (c *DefaultRateLimitCatalog) DeclareHookRateLimitRule(rule types.HookRateLi
 	if c.names[rule.Name] {
 		return fmt.Errorf("ratelimit: rule %q already declared", rule.Name)
 	}
-	if err := checkRateLimitRule(rule.Name, rule.Algorithm, rule.Limiter, rule.Limit); err != nil {
+	if err := checkRateLimitRule(rule.Name, rule.Action, rule.Algorithm, rule.Limiter, rule.Limit); err != nil {
 		return err
 	}
 
@@ -1214,7 +1229,7 @@ func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule types.RouteRate
 		return fmt.Errorf("ratelimitcatalog: rule name %q already declared", rule.Name)
 	}
 	if !rule.Disabled {
-		if err := checkRateLimitRule(rule.Name, rule.Algorithm, rule.Limiter, rule.Limit); err != nil {
+		if err := checkRateLimitRule(rule.Name, rule.Action, rule.Algorithm, rule.Limiter, rule.Limit); err != nil {
 			return err
 		}
 	}

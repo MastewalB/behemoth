@@ -38,12 +38,21 @@ type Limit struct {
 	Window time.Duration
 }
 
+// RateLimitAction is what a rule does with an attempt over its limit. The
+// empty value means ActionReject.
 type RateLimitAction string
 type FailureMode string
 
 const (
-	ActionReject  RateLimitAction = "reject"  // hard block, return immediately
-	ActionLockout RateLimitAction = "lockout" // block for a fixed penalty duration, independent of window reset
+	// ActionReject refuses the attempt until the rule's window ends.
+	ActionReject RateLimitAction = "reject"
+	// ActionLockout is to refuse the key for the rule's LockoutFor, whatever
+	// the window does. It is not built: the rate-limit catalog rejects a
+	// rule that asks for it, so no rule can rely on a lockout it would not
+	// get. The value and LockoutFor are kept so that rules need no new
+	// field once it is. docs/internal/ratelimit/rate_limiter.md has the
+	// plan.
+	ActionLockout RateLimitAction = "lockout"
 )
 
 const (
@@ -68,8 +77,8 @@ type RouteRateLimitRule struct {
 	// It is for a strategy core does not have; it has to bring its own
 	// storage, since it exists before Boot.
 	Limiter    Limiter
-	Action     RateLimitAction
-	LockoutFor time.Duration
+	Action     RateLimitAction // empty means ActionReject; ActionLockout is rejected at declaration (not built)
+	LockoutFor time.Duration   // reserved for ActionLockout; not read
 
 	Disabled bool // true = explicitly exempt this pattern from broader rule that would otherwise match
 	Owner    string
@@ -95,7 +104,7 @@ type HookRateLimitRule struct {
 	Algorithm  RateLimitAlgorithm // which strategy this rule uses; empty means AlgorithmFixedWindow
 	Limiter    Limiter            // optional: the rule's own limiter, used instead of Algorithm's (see RouteRateLimitRule)
 	Action     RateLimitAction
-	LockoutFor time.Duration // only relevant if Action == ActionLockout
+	LockoutFor time.Duration // reserved for ActionLockout, which the catalog rejects (not built); not read
 
 	Owner string // plugin name; same ownership discipline as HookPointDef/TokenKindDef
 }

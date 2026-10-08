@@ -458,6 +458,7 @@ ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
 - Every rule declared on the point is checked, and all must pass.
 - A rejected attempt returns a `rate_limited` error with a retry-after. No handler runs, and the caller can't tell it apart from a before handler stopping the operation.
 - Rules can only be attached to before points.
+- `Action` can be left empty or set to `types.ActionReject`; both refuse the attempt until the window ends. `types.ActionLockout` is not built yet, and `Prepare` returns an error for a rule that uses it.
 - The attempt is counted before the operation runs, so one that succeeds counts like one that fails.
 
 A route rule limits an HTTP path. A hook rule limits the operation, whoever calls it: "5 invite tokens a minute per team" on `token.beforeIssue` holds for a route, a CLI command and a background job alike.

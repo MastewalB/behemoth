@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -372,10 +373,27 @@ func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
 		"no window":                     {types.RouteRateLimitRule{Name: "e", Limit: types.Limit{Max: 5}}, false},
 		"its own limiter, any limit":    {types.RouteRateLimitRule{Name: "f", Limiter: fixedLimiter{allowed: true}}, true},
 		"disabled rules are not judged": {types.RouteRateLimitRule{Name: "g", Disabled: true}, true},
+		"reject by name":                {types.RouteRateLimitRule{Name: "h", Limit: limit, Action: types.ActionReject}, true},
+		"lockout is not built":          {types.RouteRateLimitRule{Name: "i", Limit: limit, Action: types.ActionLockout, LockoutFor: time.Hour}, false},
+		"lockout with its own limiter":  {types.RouteRateLimitRule{Name: "j", Limiter: fixedLimiter{allowed: true}, Action: types.ActionLockout}, false},
+		"an unknown action":             {types.RouteRateLimitRule{Name: "k", Limit: limit, Action: "ban"}, false},
 	} {
 		if err := declare(tc.rule); (err == nil) != tc.ok {
 			t.Errorf("%s: Declare = %v, want ok=%v", name, err, tc.ok)
 		}
+	}
+
+	// A hook rule goes through the same check.
+	hookCatalog := NewDefaultHookCatalog()
+	if err := hookCatalog.Declare(types.HookPointDef{Point: "test.thing.before", Owner: "test", Phase: types.BeforeHookPhase}); err != nil {
+		t.Fatal(err)
+	}
+	err := NewRateLimitCatalog(hookCatalog).DeclareHookRateLimitRule(types.HookRateLimitRule{
+		Name: "l", Point: "test.thing.before", KeyFunc: types.KeyByValues("email"), Limit: limit,
+		Action: types.ActionLockout, LockoutFor: time.Hour, Owner: "test",
+	})
+	if err == nil || !strings.Contains(err.Error(), "ActionLockout") {
+		t.Errorf("a hook rule with ActionLockout: Declare = %v, want an error naming the action", err)
 	}
 
 	built, own := fixedLimiter{allowed: true}, fixedLimiter{allowed: false}

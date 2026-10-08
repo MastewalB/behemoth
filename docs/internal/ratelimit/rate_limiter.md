@@ -23,7 +23,7 @@ The code lives in:
 | Database counter (`Store.IncrementRateLimit`) | works; used when no key-value storage can count |
 | Redis counter (`RedisAdapter.Increment`) | works; used when Redis is the configured key-value storage |
 | Core rules | two: sign-in and sign-up, each 10 attempts a minute per client address |
-| Lockout (`ActionLockout`) | `[Not built]` only changes the retry-after hint; see *Limits to know* |
+| Lockout (`ActionLockout`) | `[Not built]` the catalog rejects a rule that asks for it; see *Lockout is declared and rejected* |
 | Sliding window, token bucket | `[Not built]` |
 | Removal of old database counters | the method exists, nothing schedules it |
 
@@ -31,11 +31,11 @@ The code lives in:
 
 # **How a check flows**
 
-1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name and a limit without a positive `Max` and `Window`.
+1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
 2. At `Boot`, `resolveRateLimitStore` picks the counter storage and `newLimiters` builds one `Limiter` per algorithm over it.
 3. At request time `DefaultRateLimiter` builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.route:1.2.3.4`, and `limiterFor` picks the rule's limiter. A hook rule's `KeyFunc` also returns whether the rule applies; when it does not, the rule is skipped and the steps below don't run for it.
 4. `evaluate` calls `limiter.Allow(ctx, key, limit)`.
-5. If the attempt is not allowed, it records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) and returns a `rate_limited` error with a retry-after: the time left in the window. The router answers `429` and sets `Retry-After` to that time in whole seconds, rounded up. With `ActionLockout` and a `LockoutFor`, the retry-after is the lockout duration.
+5. If the attempt is not allowed, it records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) and returns a `rate_limited` error with a retry-after: the time left in the window. The router answers `429` and sets `Retry-After` to that time in whole seconds, rounded up.
 6. If `Allow` itself fails, `RateLimitConfig.FailureMode` decides: `FailOpen` (the default) lets the request through and logs a warning; `FailClosed` rejects it.
 
 Route rules and hook rules differ in one way. For a route, the single most specific matching rule applies. For a hook point, every declared rule is evaluated and all must pass.
@@ -267,7 +267,7 @@ return {count, ttl}
 
 # **Limits to know**
 
-- **`ActionLockout` does not lock anything out.** `evaluate` replaces the retry-after hint with `LockoutFor` and nothing else. The count still resets when its window ends, so a client that ignores the hint is let in again then. [`../../ongoing.md`](../../ongoing.md) has the entry.
+- **There is no lockout.** `ActionLockout` and `LockoutFor` exist on the rule types, and a rule that uses the action fails at `Prepare`. A refused key is let in again when its window ends.
 - **A burst across the window boundary.** A client can make `Max` attempts at the end of one window and `Max` at the start of the next.
 - **Sign-up's limit equals sign-in's.** Sign-ups are rarer than sign-ins, so a lower number would fit; 10 a minute was chosen to match. There is no password-reset route yet, and so no rule for one.
 - **A deployment without the `rate_limits` table and without Redis is not limited.** The counter fails, and with the default `FailOpen` the request goes through with a Warn line under the `ratelimit` component. `behemoth.ratelimit.checks{result="error"}` counts it.
@@ -284,7 +284,7 @@ return {count, ttl}
 | Test | File | Covers |
 | --- | --- | --- |
 | `TestFixedWindow` | `types/ratelimit/ratelimiter_test.go` | allowed up to `Max`, refused after, retry-after from the window's end and its caps, a failing counter |
-| `TestRateLimitRulesNameTheirAlgorithm` | `types/init/dispatcher_test.go` | what the catalog accepts, and `limiterFor` |
+| `TestRateLimitRulesNameTheirAlgorithm` | `types/init/dispatcher_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on route and hook rules, also when the rule has its own `Limiter` |
 | `TestRateLimiterMetrics` | `types/init/dispatcher_test.go` | `evaluate`: the three results, the audit event |
 | `TestStoreContract/*/RateLimits` | `tests/store/contract_test.go` | the database counter on every backend: concurrent counts, the window's end, the reset |
 | `TestRedisIncrement` | `tests/storage/kv_storage_test.go` | the Redis counter: concurrent counts, the expiry, the reset, a counter without an expiry |
@@ -333,6 +333,24 @@ return {count, ttl}
 - *A second return value.* `KeyFunc` returns `(key, ok)`. Skipping is something the author writes, and `"", true` stays a valid shared count. It changes the signature of `HookRateLimitRule.KeyFunc`; no rule existed outside tests.
 **Decision:** The second value, with `KeyByValues` as the helper that returns `false` for a missing or empty entry, and firing sites that don't publish empty values. The helper matters as much as the signature: an author can still write `return email, true`, and the helper makes the correct form the short one. Route rules keep one return value because they have no such case.
 **Revisit if:** a route rule needs to say it does not apply (a rule per session on a path that also serves anonymous requests, for example). The two `KeyFunc` signatures would then be made the same.
+
+### Lockout is declared and rejected
+**Context:** `ActionLockout` was documented as blocking a key for `LockoutFor`, whatever the window does. `evaluate` only replaced the retry-after it returned with `LockoutFor`. Nothing was stored, so with a 1-minute window and a 15-minute lockout a client that ignored the header was let in after a minute. The lockout held only for clients that obeyed it. No core rule used the action.
+**Options considered:**
+- *Build it.* A second key per rule key, `lockout:<key>`, that lives for `LockoutFor`. It needs a "set if absent, with expiry" on both counter backends, which `AtomicIncrementer` does not have, and one more read on every attempt. Nothing needs a lockout yet.
+- *Remove the action and `LockoutFor`.* Nothing can ask for what it does not get. The rule types change now and again when the lockout is built.
+- *Keep the types and reject the rule.* `checkRateLimitRule` refuses `ActionLockout` at `Prepare`, so the mistake is found at startup and not in production. The rule types keep their shape.
+**Decision:** Keep and reject. The same check refuses an action it does not know, which before was treated as a rejection without a word. The retry-after swap is removed from `evaluate`; its `action` and `lockoutFor` parameters stay, unread, so the call sites don't change when the lockout is built.
+
+To build it:
+
+1. Give the counter storage a "set if absent, with expiry": `SET key value NX PX` on Redis, and on the database an insert into `rate_limits` that treats a duplicate key as "already locked" and replaces a row that has expired. A plain set would let every refused attempt push the end of the lockout further out.
+2. In `evaluate`, before `algo.Allow`: read `lockout:<key>`. If it is there, refuse with the time it has left and don't count.
+3. In `evaluate`, on a refusal: set `lockout:<key>` for `lockoutFor`, if absent.
+4. Remove the `ActionLockout` case from `checkRateLimitRule`, and require a positive `LockoutFor` there.
+
+The lockout sits in `evaluate` and not in a `Limiter`, so it also covers a rule that brings its own `Limiter`. That is why the check rejects the action before it accepts such a rule.
+**Revisit if:** a rule needs a penalty longer than its window. Decide the key with it: a lockout per account lets anyone lock a user out for the whole `LockoutFor`, which is worse than the same trade for a plain limit (see *What a hook rule can key on*).
 
 ### `Increment` returns the end of the window
 See *Why it returns the window's end*. The alternative kept the interface and reported the whole window as the retry-after, which tells a client to wait up to a window too long.
