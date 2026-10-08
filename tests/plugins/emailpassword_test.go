@@ -1,6 +1,7 @@
 package plugins_test
 
 import (
+	"maps"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -505,6 +506,87 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	}
 }
 
+// Sign-in's input beyond the email and password reaches the handlers on
+// auth.signIn.before as top-level payload keys, from the route's body and
+// from a caller's Extra alike, and a handler's rewrite comes back into the
+// credentials.
+func TestEmailPasswordSignInPassesExtraInputToBeforeHandlers(t *testing.T) {
+	var payloads []behemoth.M
+	ac, p, routes := bootedPlugin(t, nil, func(reg types.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignInBefore, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+			seen := behemoth.M{}
+			maps.Copy(seen, payload)
+			payloads = append(payloads, seen)
+			if payload["captchaToken"] == "bad" {
+				return nil, behemotherr.NewValidationError("captcha", "captchaToken", errors.New("captcha failed"))
+			}
+			return nil, nil
+		}, nil)
+	})
+	w := call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	t.Run("from the route", func(t *testing.T) {
+		payloads = nil
+		w := call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"correct horse","captchaToken":"ok","device":{"id":"d1"}}`)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Equal(t, []behemoth.M{{
+			"email": "ada@example.com", "password": "correct horse",
+			"captchaToken": "ok", "device": map[string]any{"id": "d1"},
+		}}, payloads)
+	})
+	t.Run("a handler rejects on an extra field", func(t *testing.T) {
+		w := call(t, ac, routes["/sign-in/email"], `{"email":"ada@example.com","password":"correct horse","captchaToken":"bad"}`)
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+	t.Run("from code", func(t *testing.T) {
+		payloads = nil
+		extra := behemoth.M{"captchaToken": "ok", "email": "someone@else.example"}
+		_, err := p.SignIn(context.Background(), emailpassword.EmailAndPasswordCredentials{
+			Email: "ada@example.com", Password: "correct horse", Extra: extra,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []behemoth.M{{"email": "ada@example.com", "password": "correct horse", "captchaToken": "ok"}}, payloads,
+			"the Email field wins over an Extra key of the same name")
+	})
+	t.Run("an email that is not a string", func(t *testing.T) {
+		payloads = nil
+		w := call(t, ac, routes["/sign-in/email"], `{"email":5,"password":"correct horse"}`)
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		assert.Empty(t, payloads, "refused before the before chain")
+	})
+	t.Run("no email", func(t *testing.T) {
+		w := call(t, ac, routes["/sign-in/email"], `{"password":"correct horse"}`)
+		assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	})
+}
+
+// The credentials' payload form: Extra's keys sit next to the two fields, and
+// FromMap takes them apart again.
+func TestEmailAndPasswordCredentialsPayload(t *testing.T) {
+	extra := behemoth.M{"captchaToken": "ok"}
+	creds := emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "pw", Extra: extra}
+	m, err := creds.ToMap()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"email": "ada@example.com", "password": "pw", "captchaToken": "ok"}, m)
+
+	m["added"] = true
+	assert.Equal(t, behemoth.M{"captchaToken": "ok"}, extra, "the payload is a copy; a handler's write does not reach the caller's map")
+
+	var back emailpassword.EmailAndPasswordCredentials
+	require.NoError(t, back.FromMap(m))
+	assert.Equal(t, emailpassword.EmailAndPasswordCredentials{
+		Email: "ada@example.com", Password: "pw", Extra: behemoth.M{"captchaToken": "ok", "added": true},
+	}, back)
+
+	require.NoError(t, back.FromMap(map[string]any{"email": "ada@example.com"}))
+	assert.Equal(t, emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com"}, back,
+		"Extra is replaced, and a missing password is empty")
+
+	err = back.FromMap(map[string]any{"email": "ada@example.com", "password": 5})
+	assert.True(t, behemotherr.IsValidationError(err), "got %v", err)
+}
+
 // The email and password rules are the plugin's own options.
 func TestEmailPasswordOptions(t *testing.T) {
 	signUp := func(t *testing.T, opts emailpassword.Options, body string) int {
@@ -659,6 +741,14 @@ func TestEmailPasswordLogging(t *testing.T) {
 // what an audit test needs. tel == nil boots with the default telemetry.
 func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg types.HookRegistry) error) (*types.AuthContext, map[string]types.Route) {
 	t.Helper()
+	ac, _, routes := bootedPlugin(t, tel, appHooks)
+	return ac, routes
+}
+
+// bootedPlugin is auditApp that also returns the plugin, for tests that call
+// its flows from code.
+func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg types.HookRegistry) error) (*types.AuthContext, *emailpassword.Plugin, map[string]types.Route) {
+	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-audit.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
@@ -681,7 +771,7 @@ func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg types.Ho
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
-	return ac, routes
+	return ac, p, routes
 }
 
 // With no telemetry configured, Boot records audit events to the audit_log

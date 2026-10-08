@@ -53,7 +53,7 @@ The routes sit directly under the router's base path.
 | Route | Body | Result |
 | --- | --- | --- |
 | `POST /sign-up/email` | `email`, `password`, and optionally `username`, `firstname`, `lastname`, `image_url` | `201` with the user. Other fields in the body are ignored. |
-| `POST /sign-in/email` | `email`, `password` | `200` with the user, and the session token written the way `SessionConfig.Transport` says. `{"status": "requires_second_factor"}` when a plugin asked for a second step. |
+| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with the user, and the session token written the way `SessionConfig.Transport` says. `{"status": "requires_second_factor"}` when a plugin asked for a second step. |
 | `POST /sign-out` | none; needs a valid session | `200`, and the session is revoked. |
 
 ### Error responses
@@ -90,8 +90,31 @@ result, err := plugin.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{
 // result.User, result.Session, result.RawToken
 ```
 
+The two flows take their input in different forms. Sign-up's fields are open-ended (the profile fields, plus whatever a plugin adds), so it takes a `behemoth.M`. Sign-in needs exactly an email and a password, so it takes a struct, with an `Extra` map for input that only hook handlers read:
+
+```go
+result, err := plugin.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{
+	Email:    "ada@example.com",
+	Password: "correct horse battery",
+	Extra:    behemoth.M{"captchaToken": token},
+})
+```
+
+A handler on `auth.signIn.before` reads it as `payload["captchaToken"]`, next to `payload["email"]`. The route fills `Extra` from the request body, so the same handler works for a request and for a call from code:
+
+```go
+reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	token, _ := payload["captchaToken"].(string)
+	if !captchaPasses(hctx.Ctx, token) {
+		return nil, behemotherr.NewInvalidInputError("signin", "captcha", "captcha check failed", nil)
+	}
+	return nil, nil
+}, nil)
+```
+
 - They fire the same hook points as the routes, with the same payloads.
 - `SignUp` stores `email`, `password` and the profile fields listed above. Other keys in the input are not stored, but handlers on `auth.signUp.before` see them, which is how a plugin accepts a field of its own (an invite code, for example).
+- `Extra` is not stored, and a key in it named `email` or `password` is ignored: the struct's fields are used.
 - Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `hctx.Request` is nil and the session has neither.
 - `SignIn` returns the raw session token. Delivering it (a cookie, a header) is up to you; the route uses `SessionManager.WriteToken`.
 - Called before `Boot`, both return a configuration error.

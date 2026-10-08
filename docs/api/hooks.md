@@ -494,7 +494,7 @@ Core declares these, so a handler can be registered on any of them.
 | `auth.signUp.before` | before | email/password sign-up | the sign-up fields from the request, including `email` and the plaintext `password`. The returned payload becomes the sign-up's input. |
 | `auth.signUp.after` | after | email/password sign-up | the created `*models.User` |
 | `auth.signUp.failed` | failed | email/password sign-up | codes `userExists`, `rejectedByHook` (a handler on `auth.signUp.before` or on a `data.user.*` create point rejected the sign-up) |
-| `auth.signIn.before` | before | email/password sign-in | `email`, `password`. The returned payload becomes the sign-in's input. |
+| `auth.signIn.before` | before | email/password sign-in | `email`, the plaintext `password`, and any other field of the request (the keys of `EmailAndPasswordCredentials.Extra` for a call from code). The returned payload becomes the sign-in's input. An `email` or `password` that is not a string is a validation error. |
 | `auth.signIn.credentialsVerified` | before | sign-in, after the password check | `HookValueUserID`. A second-factor plugin stops the sign-in here, or sets `requireStepUp` to `true` to make the session pending. No other key is read back. |
 | `auth.signIn.after` | after | email/password sign-in | the sign-in result |
 | `auth.signIn.failed` | failed | email/password sign-in | codes `userNotFound`, `noCredentialAccount`, `invalidCredentials`, `secondFactorRejected`, `rejectedByHook` |

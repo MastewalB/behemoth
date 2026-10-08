@@ -1,6 +1,7 @@
 package emailpassword
 
 import (
+	"maps"
 	"context"
 	"encoding/json"
 	"errors"
@@ -174,9 +175,76 @@ func (p *Plugin) Routes() []types.Route {
 	}
 }
 
+// EmailAndPasswordCredentials is sign-in's input. Email and Password are all
+// the flow itself reads.
+//
+// It implements [behemoth.Serializable], which is how WithLifecycle turns it
+// into the auth.signIn.before payload and back: handlers see "email",
+// "password" and the keys of Extra side by side, the way they see a sign-up's
+// fields.
 type EmailAndPasswordCredentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+
+	// Extra holds input the flow does not read but a handler on
+	// auth.signIn.before may: a captcha token, a device id. The route fills
+	// it with the request fields other than email and password. Nothing in
+	// it is stored. After the before chain it holds what the handlers left.
+	Extra behemoth.M `json:"-"`
+}
+
+// Payload keys of the credentials' two fields.
+const (
+	credentialEmailKey    = "email"
+	credentialPasswordKey = "password"
+)
+
+// ToMap returns the credentials as a hook payload: a copy of Extra with
+// "email" and "password" set from the fields, so a key of Extra with one of
+// those names does not replace them.
+func (c *EmailAndPasswordCredentials) ToMap() (map[string]any, error) {
+	m := make(map[string]any, len(c.Extra)+2)
+	maps.Copy(m, c.Extra)
+	m[credentialEmailKey], m[credentialPasswordKey] = c.Email, c.Password
+	return m, nil
+}
+
+// FromMap sets the credentials from a request body or a rewritten payload.
+// "email" and "password" fill the fields and every other key goes to Extra,
+// which is replaced. A missing or null email or password is left empty, for
+// sign-in to refuse; one that is not a string is a validation error.
+func (c *EmailAndPasswordCredentials) FromMap(data map[string]any) error {
+	field := func(key string) (string, error) {
+		switch v := data[key].(type) {
+		case nil:
+			return "", nil
+		case string:
+			return v, nil
+		default:
+			return "", behemotherr.NewValidationError("emailpassword.SignIn", key, fmt.Errorf("%s must be a string", key))
+		}
+	}
+	email, err := field(credentialEmailKey)
+	if err != nil {
+		return err
+	}
+	password, err := field(credentialPasswordKey)
+	if err != nil {
+		return err
+	}
+
+	var extra behemoth.M
+	for k, v := range data {
+		if k == credentialEmailKey || k == credentialPasswordKey {
+			continue
+		}
+		if extra == nil {
+			extra = behemoth.M{}
+		}
+		extra[k] = v
+	}
+	c.Email, c.Password, c.Extra = email, password, extra
+	return nil
 }
 
 func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, error) {
@@ -424,7 +492,8 @@ func (p *Plugin) SignUp(ctx context.Context, input behemoth.M) (*models.User, er
 // SignIn verifies creds and creates a session for the user. The session is
 // pending instead of active when a handler on auth.signIn.credentialsVerified
 // asked for a second factor. It fires auth.signIn.before, .after and
-// .failed.
+// .failed. Handlers on auth.signIn.before see creds.Extra next to the email
+// and password.
 //
 // It is the flow behind POST /sign-in/email. Like SignUp it runs without an
 // HTTP request; the session then records no IP address or user agent unless
@@ -497,9 +566,15 @@ func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 // own status. Anything else is a failure of the system: the router answers
 // 500 without the error's text and logs it at Error.
 func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
-	var creds EmailAndPasswordCredentials
-	if err := json.NewDecoder(rctx.Request.Body).Decode(&creds); err != nil {
+	// The body is decoded as a map so that fields other than the email and
+	// password reach the before handlers, in creds.Extra.
+	var body behemoth.M
+	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return behemotherr.NewValidationError("SignIn", "request", err)
+	}
+	var creds EmailAndPasswordCredentials
+	if err := creds.FromMap(body); err != nil {
+		return err
 	}
 
 	result, err := p.SignIn(rctx.Ctx, creds)

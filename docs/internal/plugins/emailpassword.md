@@ -25,6 +25,26 @@ Compare with a plugin such as the example `auditlog`: that one declares a table 
 
 The wrapped flows are reached through two exported methods, `Plugin.SignUp(ctx, input)` and `Plugin.SignIn(ctx, creds)`. Each builds the flow's `HookContext` (`Plugin.operation`): the `AuthContext` kept by `Init`, the request found on `ctx` or nil, and `Values` copied from the operation `ctx` belongs to, if any. The route handlers call these methods with `rctx.Ctx`, so a route, a CLI and another plugin all enter the flow the same way. Called before `Boot` has run `Init`, they return a configuration error.
 
+### Sign-in's input
+
+`Plugin.SignIn` takes an `EmailAndPasswordCredentials`: `Email`, `Password` and an `Extra` map. `signInBody` reads the two fields. `Extra` exists for handlers on `auth.signIn.before`.
+
+The struct implements `behemoth.Serializable`, so `WithLifecycle` converts it with its own methods and not with a JSON round trip:
+
+| Step | Method | What happens |
+| --- | --- | --- |
+| route to struct | `FromMap(body)` | `handleSignIn` decodes the body into a `behemoth.M` first, so unknown fields survive |
+| struct to payload | `ToMap()` | a copy of `Extra`, then `email` and `password` set from the fields |
+| payload to struct | `FromMap(payload)` | `email` and `password` fill the fields, every other key goes to a new `Extra` |
+
+Rules that follow from the two methods:
+
+- The payload is flat. `Extra: {"captchaToken": "x"}` is `payload["captchaToken"]`, the same lookup a handler uses on `auth.signUp.before`.
+- The fields win. An `Extra` key named `email` or `password` is overwritten in `ToMap`, so a caller can't hand handlers one email and the flow another.
+- The payload is a copy. A handler's write does not reach the map the caller passed.
+- `Extra` is replaced, not merged, on the way back. A key a handler deleted is gone, and `Extra` is nil when no other key is left.
+- A missing or null `email` or `password` becomes an empty string, which sign-in refuses with `invalid_credentials`. A value of another type is a validation error (`400`), from the route's body and from a handler's rewrite alike.
+
 `SignOut` is an exported function that takes a `HookContext` and only uses the `AuthContext` on it, so other plugins can call it. It turns the context into one operation with `types.AsOperation`.
 
 ## Limits to know
@@ -42,6 +62,16 @@ The wrapped flows are reached through two exported methods, `Plugin.SignUp(ctx, 
 - *Make them options of the plugin: `emailpassword.New(Options)`.* The dependency is visible where it is used, the zero value has defaults, and `AuthContext` loses two fields. A second plugin that sets passwords can't read the policy from the `AuthContext`.
 **Decision:** The second option. `types.Validator`, `types.PasswordOptions` and the two `AuthContext` fields are removed. The hasher was never a policy choice of the plugin: it comes from `AuthContext.Crypto.Passwords`, which `Boot` builds from `BootConfig.Crypto`. The default email check is `utils.IsValidEmail`, a plain function other plugins can call. Plugins that set passwords are expected to depend on this one and go through it.
 **Revisit if:** plugins that don't depend on `emailpassword` need to set passwords. A shared policy on `AuthContext` would then be justified.
+
+### Sign-in takes a struct with an `Extra` map
+**Context:** Sign-up takes a `behemoth.M`, so a field a plugin adds to the request (an invite code) reaches `auth.signUp.before`. Sign-in decoded the body into a two-field struct, so a captcha token or a device id was gone before the before chain ran. A handler could not read it from `hctx.Request` either, since the body had been consumed, and a caller of `Plugin.SignIn` had no way to pass it.
+**Options considered:**
+- *Take a `behemoth.M`, like sign-up.* One convention and the least code. `SignIn(ctx, behemoth.M{"emial": ...})` compiles, the two required values are checked at run time only, and the exported signature changes.
+- *Add `Extra behemoth.M` and keep the JSON round trip.* Small. Handlers get `payload["extra"]["captchaToken"]` on sign-in and `payload["inviteCode"]` on sign-up, so one captcha handler for both points needs two lookups.
+- *Add `Extra` and implement `behemoth.Serializable`.* The required input stays typed, the payload is flat, and `Plugin.SignIn` keeps its signature. It costs two methods and a rule for a key that collides with a field.
+
+**Decision:** The third. A fixed shape checked by the compiler is preferred over a map, and sign-in's shape is fixed: two required values and an open tail. Sign-up keeps its map because its profile fields are open-ended. Other plugins with a flow of fixed input are expected to follow the same shape: a struct for what the flow reads, an `Extra` map for what only handlers read, and `ToMap`/`FromMap` that keep the payload flat.
+**Revisit if:** several plugins repeat the same two methods. A helper in `types` that flattens a struct with an `Extra` field would then be worth having.
 
 ### Sign-in's refusals are typed
 **Context:** `signInBody` returned `errors.New("invalid email or password")` for an unknown email, a user without a credential account and a wrong password. An untyped error could therefore be a wrong password or a broken system, and `handleSignIn` could not tell them apart. It wrapped every error in a validation error, so a database outage was answered with `400` and never reached the router's log. `handleSignOut` wrote its own `500` with `err.Error()` as the body, which sent internal error text to the client.
