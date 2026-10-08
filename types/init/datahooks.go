@@ -6,6 +6,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
@@ -16,13 +17,14 @@ import (
 // idValue is the HookContext.Values key an update's target id is published
 // under (the payload carries only the changes).
 //
-// created and updated are the after-commit points: they fire once the
-// transaction the write ran in has committed, not for a write that was
+// created, updated and deleted are the after-commit points: they fire once
+// the transaction the write ran in has committed, not for a write that was
 // rolled back.
 type tableHookPoints struct {
 	beforeCreate, afterCreate types.HookPoint
 	beforeUpdate, afterUpdate types.HookPoint
-	created, updated          types.HookPoint
+	beforeDelete, afterDelete types.HookPoint
+	created, updated, deleted types.HookPoint
 	idValue                   string
 }
 
@@ -42,7 +44,8 @@ var coreDataHookPoints = map[string]tableHookPoints{
 	"users": {
 		beforeCreate: hooks.HookUserBeforeCreate, afterCreate: hooks.HookUserAfterCreate,
 		beforeUpdate: hooks.HookUserBeforeUpdate, afterUpdate: hooks.HookUserAfterUpdate,
-		created: hooks.HookUserCreated, updated: hooks.HookUserUpdated,
+		beforeDelete: hooks.HookUserBeforeDelete, afterDelete: hooks.HookUserAfterDelete,
+		created: hooks.HookUserCreated, updated: hooks.HookUserUpdated, deleted: hooks.HookUserDeleted,
 		idValue: hooks.HookValueUserID,
 	},
 }
@@ -58,7 +61,8 @@ func checkDataHookPoints(catalog types.HookCatalog, points map[string]tableHookP
 		}{
 			{p.beforeCreate, types.BeforeHookPhase}, {p.afterCreate, types.AfterHookPhase},
 			{p.beforeUpdate, types.BeforeHookPhase}, {p.afterUpdate, types.AfterHookPhase},
-			{p.created, types.AfterHookPhase}, {p.updated, types.AfterHookPhase},
+			{p.beforeDelete, types.BeforeHookPhase}, {p.afterDelete, types.AfterHookPhase},
+			{p.created, types.AfterHookPhase}, {p.updated, types.AfterHookPhase}, {p.deleted, types.AfterHookPhase},
 		} {
 			def, ok := catalog.Lookup(want.point)
 			if !ok {
@@ -157,6 +161,66 @@ func (h dataHooks) AfterUpdate(ctx context.Context, tx *store.Store, table strin
 		return err
 	}
 	h.onCommit(ctx, tx, hctx.Values, p.updated, updated)
+	return nil
+}
+
+// BeforeDelete fires the table's beforeDelete point with the row as its
+// payload. The returned payload is not read: a handler can stop the delete,
+// but it can't change what is deleted.
+func (h dataHooks) BeforeDelete(ctx context.Context, tx *store.Store, table string, row behemoth.Model) error {
+	p, ok := h.points[table]
+	if !ok {
+		return nil
+	}
+	payload := behemoth.M{}
+	if ser, ok := row.(behemoth.Serializable); ok {
+		m, err := ser.ToMap()
+		if err != nil {
+			return err
+		}
+		payload = m
+	}
+	hctx := h.hookContext(ctx, tx, p.beforeDelete, types.BeforeHookPhase)
+	hctx.Values[p.idValue] = row.PrimaryKeyField()
+	_, err := h.ac.Dispatcher.RunBefore(hctx, p.beforeDelete, payload)
+	return err
+}
+
+// AfterDelete fires the table's afterDelete point inside the transaction,
+// then sees to the sessions that were deleted with the row, which the store
+// can't: their cache entries and their hook point belong to the session
+// manager.
+//
+// The cache entries are removed twice. Before the commit, so that a process
+// that stops right after it leaves no cached session behind: a cached session
+// is served without a read of the database, until it expires. After the
+// commit again, because a request can put a session back in the cache between
+// the first removal and the commit. That second pass is SessionManager.Discard,
+// which also fires auth.session.afterRevoke for each session that was live.
+// The table's deleted point fires last.
+func (h dataHooks) AfterDelete(ctx context.Context, tx *store.Store, table string, deleted behemoth.Model, sessions []*models.Session) error {
+	p, ok := h.points[table]
+	if !ok {
+		return nil
+	}
+	hctx := h.hookContext(ctx, tx, p.afterDelete, types.AfterHookPhase)
+	hctx.Values[p.idValue] = deleted.PrimaryKeyField()
+	if err := h.ac.Dispatcher.RunAfterTx(hctx, p.afterDelete, deleted); err != nil {
+		return err
+	}
+
+	sm, values := h.ac.SessionManager, hctx.Values
+	if sm != nil && len(sessions) > 0 {
+		sm.Evict(ctx, sessions)
+		tx.AfterCommit(ctx, func(ctx context.Context) {
+			ctx = types.ContextWithHookValues(ctx, values)
+			if err := sm.Discard(ctx, sessions, types.SessionRevokedUserDeleted); err != nil && h.ac.Telemetry != nil {
+				telemetry.Named(h.ac.Telemetry.Logger, "hooks").Error(ctx, "sessions deleted with their user could not be reported",
+					telemetry.ErrorFields(err, behemoth.M{telemetry.FieldPoint: string(hooks.HookSessionAfterRevoke)}))
+			}
+		})
+	}
+	h.onCommit(ctx, tx, values, p.deleted, deleted)
 	return nil
 }
 

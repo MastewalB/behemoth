@@ -18,6 +18,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types/cryptotypes"
 	"github.com/MastewalB/behemoth/utils"
@@ -64,6 +65,22 @@ type Hooks interface {
 	// commits, with the stored row. Its error fails the update and rolls it
 	// back.
 	AfterUpdate(ctx context.Context, tx *Store, table string, updated behemoth.Model) error
+
+	// BeforeDelete runs before row is deleted from table and before any row
+	// that goes with it is. It may abort the delete by returning an error; it
+	// can't change what is deleted. What it deletes through tx (rows of other
+	// tables that reference row) goes in the same transaction.
+	//
+	// Unlike the create and update calls, the delete calls are made whether
+	// or not Fires reports true for the table: a delete always runs in a
+	// transaction, because it removes rows of several tables.
+	BeforeDelete(ctx context.Context, tx *Store, table string, row behemoth.Model) error
+	// AfterDelete runs once row and the rows deleted with it are gone, before
+	// the transaction commits. Its error fails the delete and rolls it back.
+	// sessions are the session rows that were deleted with a user, revoked
+	// ones included; the store can't reach the session cache or the session
+	// hook points, so the implementation is told which sessions ended.
+	AfterDelete(ctx context.Context, tx *Store, table string, deleted behemoth.Model, sessions []*models.Session) error
 
 	// There is no "committed" call. An implementation that wants to act once
 	// the write is durable queues a callback from AfterCreate or AfterUpdate
@@ -137,7 +154,11 @@ func (noHooks) AfterCreate(context.Context, *Store, string, behemoth.Model) erro
 func (noHooks) BeforeUpdate(_ context.Context, _ *Store, _ string, _ any, changes behemoth.M) (behemoth.M, error) {
 	return changes, nil
 }
-func (noHooks) AfterUpdate(context.Context, *Store, string, behemoth.Model) error { return nil }
+func (noHooks) AfterUpdate(context.Context, *Store, string, behemoth.Model) error  { return nil }
+func (noHooks) BeforeDelete(context.Context, *Store, string, behemoth.Model) error { return nil }
+func (noHooks) AfterDelete(context.Context, *Store, string, behemoth.Model, []*models.Session) error {
+	return nil
+}
 
 // DB returns the database adapter the Store writes through. On a Store bound
 // to a transaction (the tx Transaction hands to fn, or HookContext.Tx in a

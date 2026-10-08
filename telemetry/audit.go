@@ -33,6 +33,7 @@ const (
 const (
 	AuditUserCreated       = "user.created"
 	AuditUserUpdated       = "user.updated"
+	AuditUserDeleted       = "user.deleted"
 	AuditRateLimitExceeded = "ratelimit.exceeded"
 	AuditMigrationApplied  = "migration.applied"
 	AuditSecretRotated     = "crypto.secret.rotated"

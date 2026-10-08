@@ -44,6 +44,20 @@ type SessionManager interface {
 
 	RevokeAllForUser(ctx context.Context, userID any, reason string, except string) error
 
+	// Evict removes sessions from the session cache and does nothing else.
+	// It is for sessions whose rows are being deleted with their user
+	// (Store.DeleteUser), and is safe to repeat.
+	Evict(ctx context.Context, sessions []*models.Session)
+
+	// Discard is for sessions whose rows no longer exist: they were deleted
+	// with their user, and the delete has committed. It removes them from
+	// the session cache and fires auth.session.afterRevoke with reason for
+	// each one that was not revoked already, so a handler that reacts to a
+	// session ending sees these too. It writes nothing to the database, and
+	// auth.session.beforeRevoke does not fire: there is nothing left to
+	// refuse. An implementation without revocation does nothing.
+	Discard(ctx context.Context, sessions []*models.Session, reason string) error
+
 	ListForUser(ctx context.Context, userID any) ([]*models.Session, error)
 
 	// WriteToken puts rawToken wherever Transport dictates - Set-Cookie for
@@ -62,6 +76,10 @@ type SessionManager interface {
 	// stateless/self-verifying implementations.
 	SupportsRevocation() bool
 }
+
+// SessionRevokedUserDeleted is the revoke reason of a session that ended
+// because its user was deleted.
+const SessionRevokedUserDeleted = "user_deleted"
 
 // SessionMeta is caller-supplied context at creation time.
 type SessionMeta struct {

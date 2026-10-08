@@ -215,6 +215,8 @@ func TestCoreDeclaresTheHookPointsItFires(t *testing.T) {
 		hooks.HookUserBeforeCreate: types.BeforeHookPhase, hooks.HookUserAfterCreate: types.AfterHookPhase,
 		hooks.HookUserBeforeUpdate: types.BeforeHookPhase, hooks.HookUserAfterUpdate: types.AfterHookPhase,
 		hooks.HookUserCreated: types.AfterHookPhase, hooks.HookUserUpdated: types.AfterHookPhase,
+		hooks.HookUserBeforeDelete: types.BeforeHookPhase, hooks.HookUserAfterDelete: types.AfterHookPhase,
+		hooks.HookUserDeleted: types.AfterHookPhase,
 	}
 	for point, phase := range want {
 		def, ok := catalog.Lookup(point)

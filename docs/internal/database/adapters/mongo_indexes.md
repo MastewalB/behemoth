@@ -190,7 +190,7 @@ The SQL adapters do not implement the interface. For them the check is skipped a
 - **Field types are not checked.** A unique index compares BSON values: the string `"1"` and the number `1` are different values.
 - **Probed on MongoDB 6.0 only.** Cases 6 and 7 depend on MongoDB accepting two indexes on the same fields with different options. A version that refuses them returns code 85, which `EnsureIndexes` reports as a conflict naming the existing index. Nothing is dropped in either case.
 - **Concurrent calls were not probed.** Two instances calling `EnsureIndexes` at the same time ask for identical indexes, which MongoDB is expected to treat as one build.
-- **Foreign keys do nothing.** A cascade declared with `OnDelete` does not happen on MongoDB. `docs/ongoing.md` has an entry on what that means for `Store.DeleteUser`.
+- **Foreign keys do nothing.** A cascade declared with `OnDelete` does not happen on MongoDB. `Store.DeleteUser` does not depend on it: it deletes the user's sessions, accounts and tokens itself (see [`../../hooks/6. Data Hooks.md`](<../../hooks/6. Data Hooks.md>)). A plugin's own rows that reference a user are the plugin's to delete, from a handler on `data.user.beforeDelete`.
 
 ### Tests
 
@@ -370,4 +370,4 @@ This is the upgrade path for every application that runs today's code. The colle
 | `docs/api/mongodb.md` tells the user to call `EnsureIndexes` | it describes both ways |
 | the entry "MongoDB indexes are created but never dropped or changed" in `docs/ongoing.md` | removed |
 
-One thing the driver does not solve has its own entry in `docs/ongoing.md`: deleting a user does not cascade to sessions and accounts.
+The driver does not give MongoDB foreign keys. Deleting a user does not depend on them (`Store.DeleteUser` removes the dependent rows itself); a sign-in that races a delete is the case left open, and has its own entry in `docs/ongoing.md`.

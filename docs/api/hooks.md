@@ -363,6 +363,47 @@ reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) err
 - **For work that must not be lost, write an outbox row.** In `data.user.afterCreate`, insert a row describing the work into a table of your own through `hctx.Tx.DB()`. It commits with the user or not at all. A worker of yours reads the table, does the work and marks the row done. Make the work safe to repeat, because a worker that stops halfway does it again.
 - **Your own after-commit work.** Inside a data hook or a `Store.Transaction`, `tx.AfterCommit(ctx, fn)` queues `fn` the same way, with the same best-effort limit. `fn` runs before `Transaction` returns. If it panics, the panic is logged and the remaining callbacks still run; `Transaction` returns nil because the write is committed.
 
+### Deleting a user
+
+`ac.Store.DeleteUser(ctx, id)` removes the user together with everything that lets someone act as that user. It runs in one transaction, in this order:
+
+| Step | What happens | A handler can |
+| --- | --- | --- |
+| 1 | `data.user.beforeDelete` fires | refuse the delete by returning an error. Nothing has changed yet. |
+| 2 | the user's sessions are deleted, revoked ones included | |
+| 3 | the user's accounts are deleted | |
+| 4 | the tokens issued to the user's id are deleted | |
+| 5 | the user is deleted | |
+| 6 | `data.user.afterDelete` fires, and its audit event is written | fail the delete by returning an error. Everything is rolled back. |
+| 7 | the transaction commits | |
+| 8 | `auth.session.afterRevoke` fires for each session that was live, with reason `user_deleted` | react. Errors are logged. |
+| 9 | `data.user.deleted` fires | react. Errors are logged. |
+
+- **The result does not depend on foreign keys.** The store deletes the rows itself. It works the same on MongoDB, which has no foreign keys, and on SQLite, which ignores them unless the connection turns them on.
+- **Cached sessions are removed.** With a key-value storage configured, a session is served from the cache without a read of the database. The delete clears the user's entries, so the user's tokens stop working at once.
+- **Delete your own rows in `data.user.beforeDelete`.** A plugin with a table that references users removes its rows there, through `hctx.Tx`. They go in the same transaction, before the user row, so a foreign key of yours without a cascade does not block the delete.
+
+```go
+reg.OnBefore(hooks.HookUserBeforeDelete, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
+	userID := hctx.Values[hooks.HookValueUserID]
+	where := clause.Expression{Conditions: []clause.Condition{
+		{Field: "user_id", Operator: clause.OpEqual, Value: userID},
+	}}
+	return nil, hctx.Tx.DB().DeleteMany(hctx.Ctx, &Membership{}, where)
+}, nil)
+```
+
+- **`auth.session.beforeRevoke` does not fire.** A session can't outlive its user, so there is nothing for it to refuse. The point that can stop a delete is `data.user.beforeDelete`.
+- **The session a handler gets in step 8 is not in the database.** It is the deleted row, marked revoked with the time and the reason. Sessions that were already revoked are not reported again.
+- **Steps 8 and 9 are best effort**, like the other after-commit points.
+
+What it does not remove:
+
+- **Tokens kept in a key-value storage.** They can't be found by their subject, and expire on their own.
+- **Tokens issued to something other than the user's id**, an email address for example. The plugin that issues them deletes them in `data.user.beforeDelete`.
+- **Audit events.** They record what happened and keep the user's id.
+- **Sessions in which the user is the impersonator.**
+
 ### Other things to know
 
 - **A handler can run more than once on MongoDB.** The MongoDB driver retries a transaction on a transient error, and the hooks are inside it. Writes through `hctx.Tx` and `hctx.Tx.DB()` are rolled back between attempts. Anything else the handler does is repeated.
@@ -383,6 +424,9 @@ Data points exist for the `users` table.
 | `data.user.afterUpdate` | after | the stored row, read back after the update | `HookValueUserID`: the row's id |
 | `data.user.created` | after, once committed | the stored `*models.User` | |
 | `data.user.updated` | after, once committed | the stored row, read back after the update | `HookValueUserID`: the row's id |
+| `data.user.beforeDelete` | before | the user's row. Veto only: a change to it has no effect | `HookValueUserID`: the row's id |
+| `data.user.afterDelete` | after | the `*models.User` as it was before the delete | `HookValueUserID`: the row's id |
+| `data.user.deleted` | after, once committed | the same | `HookValueUserID`: the row's id |
 
 Rules for rewriting the payload:
 
@@ -405,7 +449,7 @@ A rate-limit rule can be attached to a before point with `HookRateLimitRule`. Th
 A point can be declared with an `AuditSpec`. The dispatcher then records one audit event each time the point is dispatched, after its handlers have run. The event type defaults to the point's name.
 
 - Tier 2 after points, failed points and the after-commit data points record best effort: the operation is over, and a failed audit write is logged.
-- The in-transaction after points (`data.user.afterCreate`, `data.user.afterUpdate`) write the event in the write's transaction. The event exists exactly when the row does. A failed audit write fails the write.
+- The in-transaction after points (`data.user.afterCreate`, `data.user.afterUpdate`, `data.user.afterDelete`) write the event in the write's transaction. The event exists exactly when the row does. A failed audit write fails the write.
 - Before points never record.
 
 Core audits the after and failed points of sign-up, sign-in, sign-out, sessions and tokens, and user creation and updates. [Telemetry](telemetry.md#audit) lists the events and explains how to read them.
@@ -484,6 +528,9 @@ Fired by the store. See [What each data point carries](#what-each-data-point-car
 | `data.user.afterUpdate` | after |
 | `data.user.created` | after, once committed |
 | `data.user.updated` | after, once committed |
+| `data.user.beforeDelete` | before |
+| `data.user.afterDelete` | after |
+| `data.user.deleted` | after, once committed |
 
 ### Flow points (Tier 2)
 
@@ -503,7 +550,7 @@ Core declares these, so a handler can be registered on any of them.
 | `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent. The last two come from the request being handled unless the caller of `SessionManager.Create` set them, and are empty when `CaptureIPAndAgent` is off or there is no request. A handler can rewrite the IP address and the user agent (`HookValueIPAddress`, `HookValueUserAgent`), to mask the address for example. The rewrite is stored only when `CaptureIPAndAgent` is on. The user id and state are not read back. |
 | `auth.session.afterCreate` | after | session manager | the created `*models.Session` |
 | `auth.session.beforeRevoke` | before | session manager | session id, reason. Veto only. |
-| `auth.session.afterRevoke` | after | session manager | the revoked `*models.Session` |
+| `auth.session.afterRevoke` | after | session manager | the revoked `*models.Session`. Also fires, without `beforeRevoke`, for each live session of a deleted user, with the reason `user_deleted`; see [Deleting a user](#deleting-a-user). |
 | `token.beforeIssue` | before | token manager | token kind and subject. Veto only. |
 | `token.afterIssue` | after | token manager | the issued token |
 | `token.consumed` | after | token manager | the consumed token |

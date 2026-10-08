@@ -50,8 +50,21 @@ import (
 )
 
 // coreSchema is what Prepare would freeze: core's tables, plus two plugin
-// contributions to users (plan stored under another physical name).
+// contributions to users (plan stored under another physical name). The
+// tables come without their foreign keys: the contract writes sessions and
+// accounts for users that don't exist.
 func coreSchema(t *testing.T) ([]schema.Table, behemoth.SchemaResolver) {
+	t.Helper()
+	tables, resolver := coreSchemaWithForeignKeys(t)
+	for i := range tables {
+		tables[i].ForeignKeys = nil
+	}
+	return tables, resolver
+}
+
+// coreSchemaWithForeignKeys is coreSchema as a migration creates it, with
+// the foreign keys of sessions and accounts to users.
+func coreSchemaWithForeignKeys(t *testing.T) ([]schema.Table, behemoth.SchemaResolver) {
 	t.Helper()
 	reg := schema.NewRegistry()
 	require.NoError(t, reg.Declare(&models.User{}, models.UserTableSchema()))
@@ -73,7 +86,6 @@ func coreSchema(t *testing.T) ([]schema.Table, behemoth.SchemaResolver) {
 	var tables []schema.Table
 	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable, models.AccountTable, models.RateLimitTable, models.AuditLogTable} {
 		t, _ := reg.Lookup(name)
-		t.ForeignKeys = nil // created without them: the contract doesn't depend on FK enforcement
 		tables = append(tables, t)
 	}
 	return tables, resolver
@@ -89,6 +101,11 @@ func createTables(t *testing.T, driver core.SchemaDriver, tables []schema.Table)
 			m.Up = append(m.Up, core.SchemaOperation{ID: "add_" + idx.Name, Kind: core.OpAddIndex, Table: table.Name, Index: &idx})
 		}
 		snapshot.Tables[table.Name] = table
+	}
+	for _, table := range tables { // after every table exists, as their own operations too
+		for _, fk := range table.ForeignKeys {
+			m.Up = append(m.Up, core.SchemaOperation{ID: "add_" + fk.Name, Kind: core.OpAddForeignKey, Table: table.Name, ForeignKey: &fk})
+		}
 	}
 	require.NoError(t, driver.ApplyMigration(context.Background(), core.MigrationRequest{
 		Migration:      m,
@@ -221,6 +238,76 @@ func TestStoreContract(t *testing.T) {
 			t.Run("Accounts", func(t *testing.T) { accountsContract(t, st, db) })
 			t.Run("RateLimits", func(t *testing.T) { rateLimitsContract(t, db, resolver) })
 			t.Run("AuditLog", func(t *testing.T) { auditLogContract(t, st) })
+		})
+	}
+}
+
+// TestDeleteUserRemovesSessionsAndAccounts checks that nothing of a deleted
+// user is left to sign in with: the user's sessions and accounts go with the
+// row, and another user's stay.
+//
+// The databases are created the way a migration creates them, with the
+// foreign keys of sessions and accounts to users (ON DELETE CASCADE). The
+// store deletes the rows itself and does not rely on the cascade, so the
+// result is the same where no foreign key is enforced: on MongoDB, which has
+// none, and on SQLite opened without _foreign_keys=on, where SQLite ignores
+// them. Both failed when the store deleted the user row only.
+func TestDeleteUserRemovesSessionsAndAccounts(t *testing.T) {
+	tables, resolver := coreSchemaWithForeignKeys(t)
+	backends := contractBackends()
+	open := map[string]func(t *testing.T) behemoth.Database{
+		"sqlite, foreign keys on": func(t *testing.T) behemoth.Database {
+			db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "delete-user.db")+"?_busy_timeout=10000&_foreign_keys=on")
+			require.NoError(t, err)
+			t.Cleanup(func() { db.Close() })
+			createTables(t, sqliteAdapter.NewSQLiteDriver(db, resolver), tables)
+			return sqliteAdapter.NewSQLiteAdapter(db, resolver)
+		},
+		// SQLite's default: foreign keys are declared and not enforced.
+		"sqlite, foreign keys off": func(t *testing.T) behemoth.Database { return backends["sql/sqlite"](t, tables, resolver) },
+		"postgres":                 func(t *testing.T) behemoth.Database { return backends["sql/postgres"](t, tables, resolver) },
+		"mysql":                    func(t *testing.T) behemoth.Database { return backends["sql/mysql"](t, tables, resolver) },
+		"sqlserver":                func(t *testing.T) behemoth.Database { return backends["sql/sqlserver"](t, tables, resolver) },
+		"mongo":                    func(t *testing.T) behemoth.Database { return backends["mongo"](t, tables, resolver) },
+	}
+	for name, openDB := range open {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := store.New(openDB(t), store.WithSchema(resolver), store.WithEncryptor(testCrypto(t).AtRest))
+			sm := transport.NewSessionManager(st, nil, testCrypto(t),
+				types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil, nil)
+
+			ada, grace := &models.User{Email: "ada@example.com"}, &models.User{Email: "grace@example.com"}
+			tokens := map[*models.User]string{}
+			sessions := map[*models.User]*models.Session{}
+			for _, u := range []*models.User{ada, grace} {
+				require.NoError(t, st.CreateUser(ctx, u))
+				sess, raw, err := sm.Create(ctx, u.ID, types.SessionMeta{State: types.SessionActive})
+				require.NoError(t, err)
+				sessions[u], tokens[u] = sess, raw
+				require.NoError(t, st.CreateAccount(ctx, &models.Account{
+					UserID: u.ID, ProviderID: models.ProviderCredential, AccountID: u.ID, PasswordHash: "hash",
+				}))
+			}
+
+			require.NoError(t, st.DeleteUser(ctx, ada.ID))
+
+			_, err := st.FindUserByID(ctx, ada.ID)
+			assert.True(t, behemotherr.IsNotFound(err), "the user: %v", err)
+			_, err = sm.Get(ctx, tokens[ada])
+			assert.Error(t, err, "a deleted user's session token still signs a request in")
+			_, err = st.FindSessionByID(ctx, sessions[ada].ID)
+			assert.True(t, behemotherr.IsNotFound(err), "the deleted user's session row is still there: %v", err)
+			_, err = st.FindAccount(ctx, models.ProviderCredential, ada.ID)
+			assert.True(t, behemotherr.IsNotFound(err), "the deleted user's account, with its password hash, is still there: %v", err)
+
+			// Another user loses nothing.
+			_, err = st.FindUserByID(ctx, grace.ID)
+			require.NoError(t, err)
+			_, err = sm.Get(ctx, tokens[grace])
+			assert.NoError(t, err, "another user's session")
+			_, err = st.FindAccount(ctx, models.ProviderCredential, grace.ID)
+			assert.NoError(t, err, "another user's account")
 		})
 	}
 }

@@ -10,10 +10,12 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/crypto"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
@@ -75,6 +77,11 @@ type recordingHooks struct {
 	updateRewrite behemoth.M
 	updateAbort   error
 	updatedAs     []behemoth.Model
+
+	// deletes records the BeforeDelete and AfterDelete calls, in order.
+	deletes     []string
+	deleteAbort error
+	afterDelete func(ctx context.Context, tx *store.Store) error
 
 	// silent makes Fires report false, as for a table without hook points.
 	silent bool
@@ -138,6 +145,22 @@ func (h *recordingHooks) AfterUpdate(ctx context.Context, tx *store.Store, table
 		}
 	}
 	h.reportCommit(ctx, tx, "updated", table, updated)
+	return nil
+}
+
+func (h *recordingHooks) BeforeDelete(_ context.Context, _ *store.Store, table string, row behemoth.Model) error {
+	h.deletes = append(h.deletes, fmt.Sprint("before ", table, " ", row.PrimaryKeyField()))
+	return h.deleteAbort
+}
+
+func (h *recordingHooks) AfterDelete(ctx context.Context, tx *store.Store, table string, deleted behemoth.Model, sessions []*models.Session) error {
+	h.deletes = append(h.deletes, fmt.Sprint("after ", table, " ", deleted.PrimaryKeyField(), " sessions=", len(sessions)))
+	if h.afterDelete != nil {
+		if err := h.afterDelete(ctx, tx); err != nil {
+			return err
+		}
+	}
+	h.reportCommit(ctx, tx, "deleted", table, deleted)
 	return nil
 }
 
@@ -478,9 +501,12 @@ func TestUpdateUser(t *testing.T) {
 	assert.Equal(t, "Ada", unchanged.Firstname, "a rejected update writes nothing")
 }
 
+// A delete also reads and clears sessions, accounts and tokens, so it needs
+// a database with core's tables.
 func TestDeleteUser(t *testing.T) {
 	ctx := context.Background()
-	s := store.New(usersDB(t))
+	tables, resolver := coreSchema(t)
+	s := store.New(contractBackends()["sql/sqlite"](t, tables, resolver), store.WithSchema(resolver))
 	u := &models.User{Email: "a@example.com"}
 	require.NoError(t, s.CreateUser(ctx, u))
 	require.NoError(t, s.DeleteUser(ctx, u.ID))
@@ -903,6 +929,189 @@ func TestAfterCommitCallbackPanicIsRecovered(t *testing.T) {
 	// Without a Telemetry there is no logger; the panic is still recovered.
 	quiet := store.New(usersDB(t))
 	assert.NotPanics(t, func() { quiet.AfterCommit(ctx, func(context.Context) { panic("quiet") }) })
+}
+
+// memoryKV is a KeyValueStorage in a map, enough to act as the session cache.
+type memoryKV struct {
+	mu      sync.Mutex
+	entries map[string]string
+}
+
+func (k *memoryKV) Get(_ context.Context, key string) (string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	v, ok := k.entries[key]
+	if !ok {
+		return "", errors.New("key not found")
+	}
+	return v, nil
+}
+
+func (k *memoryKV) Set(_ context.Context, key, value string, _ int) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.entries[key] = value
+	return nil
+}
+
+func (k *memoryKV) Delete(_ context.Context, key string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	delete(k.entries, key)
+	return nil
+}
+
+func (k *memoryKV) len() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return len(k.entries)
+}
+
+// The store reports a delete to its hooks around the rows it removes, in the
+// caller's transaction: a refusal or a failing after hook leaves every row,
+// and the committed notification waits for the commit.
+func TestDeleteUserCallsItsHooksInOneTransaction(t *testing.T) {
+	ctx := context.Background()
+	tables, resolver := coreSchema(t)
+	h := &recordingHooks{}
+	st := store.New(contractBackends()["sql/sqlite"](t, tables, resolver), store.WithSchema(resolver), store.WithHooks(h))
+
+	u := &models.User{Email: "ada@example.com"}
+	require.NoError(t, st.CreateUser(ctx, u))
+	require.NoError(t, st.CreateSession(ctx, &models.Session{UserID: u.ID, LookupHash: "lookup-1", State: models.SessionActive}))
+	require.NoError(t, st.CreateAccount(ctx, &models.Account{UserID: u.ID, ProviderID: models.ProviderCredential, AccountID: u.ID}))
+	require.NoError(t, st.CreateToken(ctx, &models.Token{Kind: "reset", Subject: u.ID, LookupHash: "token-1"}))
+	require.NoError(t, st.CreateToken(ctx, &models.Token{Kind: "reset", Subject: "someone-else", LookupHash: "token-2"}))
+	h.committed = nil
+	remaining := func() (users, sessions, accounts, tokens int64) {
+		all := func(m behemoth.Model, pk string) int64 {
+			n, err := st.DB().Count(ctx, m, clause.Expression{Conditions: []clause.Condition{{Field: pk, Operator: clause.OpNotEqual, Value: ""}}})
+			require.NoError(t, err)
+			return n
+		}
+		return all(&models.User{}, models.UserID), all(&models.Session{}, models.SessionID),
+			all(&models.Account{}, models.AccountID), all(&models.Token{}, models.TokenID)
+	}
+
+	h.deleteAbort = errors.New("has an open invoice")
+	require.ErrorIs(t, st.DeleteUser(ctx, u.ID), h.deleteAbort, "the before hook's error is returned as it is")
+	h.deleteAbort = nil
+	h.afterDelete = func(context.Context, *store.Store) error { return errors.New("after hook failed") }
+	require.Error(t, st.DeleteUser(ctx, u.ID))
+	users, sessions, accounts, tokens := remaining()
+	assert.Equal(t, []int64{1, 1, 1, 2}, []int64{users, sessions, accounts, tokens}, "a refused or failed delete removes nothing")
+	assert.Empty(t, h.committed)
+
+	h.afterDelete, h.deletes = nil, nil
+	require.NoError(t, st.DeleteUser(ctx, u.ID))
+	assert.Equal(t, []string{"before users " + u.ID, "after users " + u.ID + " sessions=1"}, h.deletes)
+	assert.Equal(t, []string{"deleted users " + u.ID}, h.committed)
+	users, sessions, accounts, tokens = remaining()
+	assert.Equal(t, []int64{0, 0, 0, 1}, []int64{users, sessions, accounts, tokens}, "another subject's token stays")
+
+	err := st.DeleteUser(ctx, u.ID)
+	assert.True(t, behemotherr.IsNotFound(err), "a user that does not exist: %v", err)
+}
+
+// Under Boot a deleted user's sessions end the way a revoked one does: their
+// cache entries are gone, auth.session.afterRevoke fires for each one that
+// was live, and the delete has its own points. With a cached session and a
+// cascading foreign key alone, the token would keep working from the cache.
+func TestDeleteUserUnderBoot(t *testing.T) {
+	ctx := context.Background()
+	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	require.NoError(t, err)
+	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "delete.db")+"?_busy_timeout=10000")
+	require.NoError(t, err)
+	t.Cleanup(func() { sqlDB.Close() })
+	createTables(t, sqliteAdapter.NewSQLiteDriver(sqlDB, app.Resolver), app.Schemas.All())
+
+	var seen []string
+	var veto error
+	before := func(name string) types.BeforeHookFunc {
+		return func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+			seen = append(seen, fmt.Sprint(name, " tx=", hctx.Tx != nil))
+			if name == "beforeDelete" {
+				assert.Equal(t, "ada@example.com", payload[models.UserEmail], "the payload is the user row")
+				assert.Equal(t, payload[models.UserID], hctx.Values[hooks.HookValueUserID])
+				return nil, veto
+			}
+			return nil, nil
+		}
+	}
+	after := func(name string) types.AfterHookFunc {
+		return func(hctx *types.HookContext, result any) error {
+			line := fmt.Sprint(name, " tx=", hctx.Tx != nil)
+			if sess, ok := result.(*models.Session); ok {
+				line += fmt.Sprint(" ", sess.State, " ", sess.RevokedReason, " at=", sess.RevokedAt != nil)
+			}
+			seen = append(seen, line)
+			return nil
+		}
+	}
+	kv := &memoryKV{entries: map[string]string{}}
+	tel, rec := telemetrytest.New()
+	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(sqlDB, app.Resolver), bmth.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
+		},
+		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: 5 * time.Minute},
+		KV:        kv,
+		Telemetry: tel,
+		Hooks: func(reg types.HookRegistry) error {
+			for point, name := range map[types.HookPoint]string{
+				hooks.HookUserBeforeDelete: "beforeDelete", hooks.HookSessionBeforeRevoke: "beforeRevoke",
+			} {
+				if err := reg.OnBefore(point, before(name), nil); err != nil {
+					return err
+				}
+			}
+			for point, name := range map[types.HookPoint]string{
+				hooks.HookUserAfterDelete: "afterDelete", hooks.HookUserDeleted: "deleted", hooks.HookSessionAfterRevoke: "afterRevoke",
+			} {
+				if err := reg.OnAfter(point, after(name), nil); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	u := &models.User{Email: "ada@example.com"}
+	require.NoError(t, ac.Store.CreateUser(ctx, u))
+	_, live, err := ac.SessionManager.Create(ctx, u.ID, types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	old, _, err := ac.SessionManager.Create(ctx, u.ID, types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	require.NoError(t, ac.SessionManager.Revoke(ctx, old.ID, "user_logout"))
+	_, err = ac.SessionManager.Validate(ctx, live)
+	require.NoError(t, err)
+	require.Equal(t, 1, kv.len(), "the live session is cached")
+
+	// A handler on data.user.beforeDelete refuses: nothing changes.
+	seen, veto = nil, behemotherr.NewInvalidInputError("billing", "user", "the user has an open invoice", nil)
+	require.ErrorIs(t, ac.Store.DeleteUser(ctx, u.ID), veto)
+	assert.Equal(t, []string{"beforeDelete tx=true"}, seen)
+	_, err = ac.SessionManager.Validate(ctx, live)
+	require.NoError(t, err, "the session of a user that was not deleted still works")
+
+	seen, veto = nil, nil
+	require.NoError(t, ac.Store.DeleteUser(ctx, u.ID))
+	assert.Equal(t, []string{
+		"beforeDelete tx=true",
+		"afterDelete tx=true",
+		"afterRevoke tx=false revoked user_deleted at=true",
+		"deleted tx=false",
+	}, seen, "one afterRevoke: the session revoked earlier was reported then, and beforeRevoke does not fire")
+	assert.Zero(t, kv.len(), "the cache entry is gone")
+	_, err = ac.SessionManager.Validate(ctx, live)
+	assert.True(t, behemotherr.IsNotFound(err), "the deleted user's token: %v", err)
+
+	deleted := rec.Audit.OfType(telemetry.AuditUserDeleted)
+	require.Len(t, deleted, 1)
+	assert.Equal(t, u.ID, deleted[0].SubjectID)
+	assert.Len(t, rec.Audit.OfType(string(hooks.HookSessionAfterRevoke)), 2, "the sign-out earlier, and the session that ended with the user")
 }
 
 // Under Boot the notifications are the data.user.created and

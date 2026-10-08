@@ -977,6 +977,10 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 		// fired once the write's transaction has committed
 		{Point: hooks.HookUserCreated, Owner: coreOwner, Phase: types.AfterHookPhase},
 		{Point: hooks.HookUserUpdated, Owner: coreOwner, Phase: types.AfterHookPhase},
+		// a delete: Store.DeleteUser, with the user's sessions, accounts and tokens
+		{Point: hooks.HookUserBeforeDelete, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookUserAfterDelete, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{Type: telemetry.AuditUserDeleted}}, // written in the delete's transaction
+		{Point: hooks.HookUserDeleted, Owner: coreOwner, Phase: types.AfterHookPhase},
 	}
 	for _, p := range points {
 		if err := ic.Hooks.Declare(p); err != nil {

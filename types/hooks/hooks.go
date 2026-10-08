@@ -9,6 +9,9 @@ const (
 	HookUserAfterUpdate           types.HookPoint = "data.user.afterUpdate"
 	HookUserCreated               types.HookPoint = "data.user.created" // after commit
 	HookUserUpdated               types.HookPoint = "data.user.updated" // after commit
+	HookUserBeforeDelete          types.HookPoint = "data.user.beforeDelete"
+	HookUserAfterDelete           types.HookPoint = "data.user.afterDelete"
+	HookUserDeleted               types.HookPoint = "data.user.deleted" // after commit
 	HookSignUpBefore              types.HookPoint = "auth.signUp.before"
 	HookSignUpAfter               types.HookPoint = "auth.signUp.after"
 	HookSignUpFailed              types.HookPoint = "auth.signUp.failed"

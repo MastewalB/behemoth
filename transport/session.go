@@ -407,6 +407,34 @@ func (sm *DefaultSessionManager) RevokeAllForUser(ctx context.Context, userID an
 	return nil
 }
 
+// Evict implements [types.SessionManager].
+func (sm *DefaultSessionManager) Evict(ctx context.Context, sessions []*models.Session) {
+	for _, m := range sessions {
+		sm.cacheDelete(ctx, m.LookupHash)
+	}
+}
+
+// Discard implements [types.SessionManager]. Each session that was live is
+// handed to the handlers as a revoked one, with the time and the reason,
+// although no row holds that state: the row is gone. sessions is not
+// modified.
+func (sm *DefaultSessionManager) Discard(ctx context.Context, sessions []*models.Session, reason string) error {
+	now := time.Now()
+	for _, m := range sessions {
+		sm.cacheDelete(ctx, m.LookupHash)
+		if m.State == models.SessionRevoked {
+			continue // its revoke was reported when it happened
+		}
+		ended := *m
+		ended.State, ended.RevokedAt, ended.RevokedReason = models.SessionRevoked, &now, reason
+		opCtx := types.BeginOperation(ctx)
+		if err := sm.disp.RunAfter(hookContext(opCtx, sm.auth, hooks.HookSessionAfterRevoke, types.AfterHookPhase), hooks.HookSessionAfterRevoke, &ended); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SupportsRevocation implements [types.SessionManager].
 func (sm *DefaultSessionManager) SupportsRevocation() bool { return true }
 

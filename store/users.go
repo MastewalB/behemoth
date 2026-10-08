@@ -55,8 +55,66 @@ func (s *Store) UpdateUser(ctx context.Context, id string, updates behemoth.M) (
 	return updated.(*models.User), nil
 }
 
+// DeleteUser deletes the user with id and everything that lets someone act
+// as that user: the user's sessions, accounts and database-backed tokens. It
+// returns a NotFound error when there is no such user.
+//
+// The deletes share one transaction, the caller's when s is bound to one,
+// and run children first, so they work whether or not the database enforces
+// the foreign keys to users:
+//
+//  1. BeforeDelete (data.user.beforeDelete), which may refuse the delete
+//  2. the user's sessions, revoked ones included
+//  3. the user's accounts
+//  4. the tokens whose subject is the user's id
+//  5. the user
+//  6. AfterDelete (data.user.afterDelete), whose error rolls all of it back
+//
+// The store does not rely on ON DELETE CASCADE: a cascade removes session
+// rows without telling anyone, so their cache entries would keep the tokens
+// valid and no hook would fire. AfterDelete is given the deleted sessions for
+// that reason; under Boot it clears their cache entries and, once the
+// transaction has committed, fires auth.session.afterRevoke for each one that
+// was live, then data.user.deleted.
+//
+// Not covered: a token in a key-value storage can't be found by its subject
+// and expires on its own, and a token issued to something other than the
+// user's id (an email address) is the issuing plugin's to delete, from a
+// handler on data.user.beforeDelete. Sessions in which the user is the
+// impersonator are left alone.
 func (s *Store) DeleteUser(ctx context.Context, id string) error {
-	return s.db.DeleteOne(ctx, &models.User{}, eq(models.UserID, id))
+	return s.Transaction(ctx, func(ctx context.Context, tx *Store) error {
+		ctx = tx.hooks.Begin(ctx, models.UserTable)
+		user, err := tx.findUser(ctx, eq(models.UserID, id))
+		if err != nil {
+			return err
+		}
+		if err := tx.hooks.BeforeDelete(ctx, tx, models.UserTable, user); err != nil {
+			return err // the hook's error is the abort; returned as-is
+		}
+
+		sessions, err := tx.ListSessionsForUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		for _, owned := range []struct {
+			model  behemoth.Model
+			column string
+		}{
+			{&models.Session{}, models.SessionUserID},
+			{&models.Account{}, models.AccountUserID},
+			{&models.Token{}, models.TokenSubject},
+		} {
+			if err := tx.db.DeleteMany(ctx, owned.model, eq(owned.column, id)); err != nil {
+				return err
+			}
+		}
+		if err := tx.db.DeleteOne(ctx, &models.User{}, eq(models.UserID, id)); err != nil {
+			return err
+		}
+		// The hook's error rolls the delete back; returned as-is.
+		return tx.hooks.AfterDelete(ctx, tx, models.UserTable, user, sessions)
+	})
 }
 
 func (s *Store) findUser(ctx context.Context, where clause.Expression) (*models.User, error) {

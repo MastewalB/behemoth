@@ -200,11 +200,11 @@ The audit log records actions on accounts: who signed up and signed in, which si
 
 | Event type | When | Outcome |
 | --- | --- | --- |
-| `user.created`, `user.updated` | a user row is inserted or updated, by any flow | success |
+| `user.created`, `user.updated`, `user.deleted` | a user row is inserted, updated or deleted, by any flow | success |
 | `auth.signUp.after`, `auth.signUp.failed` | a sign-up finished, or was refused | success, failure |
 | `auth.signIn.after`, `auth.signIn.failed` | a sign-in finished, or was refused | success, failure |
 | `auth.signOut.after` | a sign-out finished | success |
-| `auth.session.afterCreate`, `auth.session.afterRevoke` | a session was created or revoked | success |
+| `auth.session.afterCreate`, `auth.session.afterRevoke` | a session was created or revoked. A session that ended because its user was deleted is recorded as revoked. | success |
 | `token.afterIssue`, `token.consumed`, `token.failed` | a token was issued, used, or refused | success, failure |
 | `ratelimit.exceeded` | a request was stopped by a rate limit | denied |
 | `migration.applied` | a migration was applied | success |

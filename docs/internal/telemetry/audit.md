@@ -80,6 +80,7 @@ An event recorded for a hook point is named after the point unless its `AuditSpe
 | --- | --- | --- | --- |
 | `user.created` | `data.user.afterCreate` | success | in the insert's transaction |
 | `user.updated` | `data.user.afterUpdate` | success | in the update's transaction |
+| `user.deleted` | `data.user.afterDelete` | success | in the delete's transaction |
 | `auth.signUp.after` | sign-up | success | best effort |
 | `auth.signUp.failed` | sign-up | failure | best effort |
 | `auth.signIn.after` | sign-in | success | best effort |

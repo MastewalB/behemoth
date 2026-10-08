@@ -86,6 +86,6 @@ When an index can't be created, the others are still created, and one error repo
 
 ## Other differences
 
-- **Foreign keys are not enforced.** MongoDB has none, so a row that references a missing user is stored, and deleting a row does not delete the rows that reference it.
+- **Foreign keys are not enforced.** MongoDB has none, so a row that references a missing user is stored, and deleting a row does not delete the rows that reference it. `Store.DeleteUser` removes a user's sessions, accounts and tokens itself, on every database. Delete your own rows that reference a user in a handler on `data.user.beforeDelete`; see [Deleting a user](hooks.md#deleting-a-user).
 - **Hook handlers can run more than once.** The driver retries a transaction on a transient error. See [Hooks](hooks.md#other-things-to-know).
 - **Dates are stored in milliseconds** and read back in UTC.
