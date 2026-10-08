@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +19,8 @@ import (
 	"github.com/MastewalB/behemoth/models"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
@@ -861,6 +864,45 @@ func TestCommittedHooksWaitForTheOutermostTransaction(t *testing.T) {
 	ran := false
 	s.AfterCommit(ctx, func(context.Context) { ran = true })
 	assert.True(t, ran)
+}
+
+// A callback that panics after the commit does not undo the caller's view of
+// the write: Transaction returns nil, the callbacks queued behind it run, and
+// the panic is logged. The same holds for a callback run at once on a store
+// that is not bound to a transaction.
+func TestAfterCommitCallbackPanicIsRecovered(t *testing.T) {
+	ctx := context.Background()
+	tel, rec := telemetrytest.New()
+	s := store.New(usersDB(t), store.WithTelemetry(tel))
+
+	var ran []string
+	err := s.Transaction(ctx, func(ctx context.Context, tx *store.Store) error {
+		if err := tx.CreateUser(ctx, &models.User{Email: "ada@example.com"}); err != nil {
+			return err
+		}
+		tx.AfterCommit(ctx, func(context.Context) { ran = append(ran, "first") })
+		tx.AfterCommit(ctx, func(context.Context) { panic("boom") })
+		tx.AfterCommit(ctx, func(context.Context) { ran = append(ran, "third") })
+		return nil
+	})
+	require.NoError(t, err, "the write committed")
+	assert.Equal(t, []string{"first", "third"}, ran, "the callback behind the panic still runs")
+	_, err = s.FindUserByEmail(ctx, "ada@example.com")
+	require.NoError(t, err)
+
+	logged := rec.Logger.At(slog.LevelError)
+	require.Len(t, logged, 1)
+	assert.Equal(t, "after-commit callback panicked", logged[0].Message)
+	assert.Equal(t, "store", logged[0].Fields[telemetry.FieldComponent])
+	assert.Contains(t, logged[0].Fields[telemetry.FieldError], "boom")
+
+	rec.Logger.Reset()
+	assert.NotPanics(t, func() { s.AfterCommit(ctx, func(context.Context) { panic("unbound") }) })
+	assert.Len(t, rec.Logger.At(slog.LevelError), 1)
+
+	// Without a Telemetry there is no logger; the panic is still recovered.
+	quiet := store.New(usersDB(t))
+	assert.NotPanics(t, func() { quiet.AfterCommit(ctx, func(context.Context) { panic("quiet") }) })
 }
 
 // Under Boot the notifications are the data.user.created and

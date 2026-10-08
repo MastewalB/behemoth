@@ -13,9 +13,11 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types/cryptotypes"
 	"github.com/MastewalB/behemoth/utils"
@@ -168,7 +170,8 @@ func (s *Store) DB() behemoth.Database { return s.db }
 // Data hooks fired by writes inside fn run inside the transaction too; see
 // Hooks. Callbacks added with AfterCommit, among them the ones the data hooks
 // queue for their after-commit points, run after the transaction has
-// committed and before Transaction returns.
+// committed and before Transaction returns. A callback that panics is logged
+// and the next one runs: the write is committed, so Transaction returns nil.
 func (s *Store) Transaction(ctx context.Context, fn func(ctx context.Context, tx *Store) error) error {
 	if s.inTx {
 		return fn(ctx, s)
@@ -193,9 +196,30 @@ func (s *Store) Transaction(ctx context.Context, fn func(ctx context.Context, tx
 	// ctx, not the callback's context: on MongoDB that one carries a session
 	// that has ended.
 	for _, run := range committed.fns {
-		run(ctx)
+		s.runCommitted(ctx, run)
 	}
 	return nil
+}
+
+// runCommitted calls one after-commit callback and recovers its panic. The
+// write the callback belongs to is durable by then, so a panic must not reach
+// the caller of Transaction as if the write had failed, or keep the callbacks
+// queued behind it from running. It is logged at Error when the Store was
+// given a Telemetry.
+//
+// Callbacks run in the caller's goroutine. Running them elsewhere (an
+// executor supplied by the application) and a durable queue (an outbox) are
+// not built; docs/internal/models/models.md records both.
+func (s *Store) runCommitted(ctx context.Context, fn func(ctx context.Context)) {
+	defer func() {
+		r := recover()
+		if r == nil || s.tel == nil {
+			return
+		}
+		err := behemotherr.NewInternalError("Store.AfterCommit", fmt.Errorf("panic in an after-commit callback: %v", r))
+		telemetry.Named(s.tel.Logger, "store").Error(ctx, "after-commit callback panicked", telemetry.ErrorFields(err))
+	}()
+	fn(ctx)
 }
 
 // AfterCommit runs fn once the transaction s is bound to has committed. On a
@@ -210,13 +234,16 @@ func (s *Store) Transaction(ctx context.Context, fn func(ctx context.Context, tx
 // get the context Transaction was called with, not ctx, and the root Store
 // is what they should write through: the transaction is over.
 //
+// fn has no error to return, and a panic in it is recovered and logged in
+// both cases. It does not reach the caller or stop later callbacks.
+//
 // It is best effort. The queue is in memory, so a process that stops after
 // the commit and before fn has run never runs it. Work that must not be lost
 // needs a row written inside the transaction (an outbox) and a worker that
 // reads it.
 func (s *Store) AfterCommit(ctx context.Context, fn func(ctx context.Context)) {
 	if s.commit == nil {
-		fn(ctx)
+		s.runCommitted(ctx, fn)
 		return
 	}
 	s.commit.fns = append(s.commit.fns, fn)

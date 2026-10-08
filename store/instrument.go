@@ -25,6 +25,9 @@ import (
 //
 // A Telemetry with neither a metrics sink nor a tracer leaves the adapter
 // unwrapped.
+//
+// The Store also logs to tel's logger in the one place it swallows a
+// failure: an after-commit callback that panics (Store.AfterCommit).
 func WithTelemetry(tel *telemetry.Telemetry) Option { return func(s *Store) { s.tel = tel } }
 
 // instrumented returns db wrapped to report to tel, or db itself when tel

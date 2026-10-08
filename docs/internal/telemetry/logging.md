@@ -12,7 +12,7 @@ A function either returns an error or logs it. It does not do both, so one failu
 | an error a component swallows to keep going (a cache write, an after-hook handler) | that component, where it swallows it |
 | an error returned to a caller that is not a route (a CLI, a job, `Plugin.SignIn` called from code) | the caller; behemoth returns it and logs nothing |
 
-This is why the store logs nothing. Every store method returns its error, and nothing is swallowed there. The same holds for most of the token manager and the email/password flows.
+This is why the store logs almost nothing. Every store method returns its error. The one failure it swallows is a panic in an after-commit callback, which happens after the write is durable and has no caller to return to. The same holds for most of the token manager and the email/password flows.
 
 ## Components and their loggers
 
@@ -23,6 +23,7 @@ Each component takes a named logger once, at construction, so its lines carry a 
 | `Boot` | `boot` | `logBootSummary` | the boot summary, configuration warnings |
 | `Router` | `router` | `NewRouter`, from `AuthContext.Telemetry` | request failed (Error), request rejected (Debug) |
 | `DefaultDispatcher`, `dataHooks` | `hooks` | `NewDefaultDispatcher` | handler errors and panics, failed audit writes, undispatchable after-commit points |
+| `Store` | `store` | `runCommitted`, on use | after-commit callback panicked (Error) |
 | `DefaultRateLimiter` | `ratelimit` | `Boot` | store unavailable (Warn) |
 | `DefaultSessionManager` | `session` | `NewSessionManager` | cache write and invalidation failures (Warn) |
 | `DefaultTokenManager` | `token` | `log()`, on use | undecodable key-value entry (Warn) |

@@ -361,7 +361,7 @@ reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) err
 - **A handler can't fail or undo the write.** Its error and its panic are logged.
 - **Delivery is best effort.** The notifications are held in memory until the commit. If the process stops between the commit and the handler, the handler never runs for that row. Most uses (a welcome email, a counter, a cache entry) can accept that.
 - **For work that must not be lost, write an outbox row.** In `data.user.afterCreate`, insert a row describing the work into a table of your own through `hctx.Tx.DB()`. It commits with the user or not at all. A worker of yours reads the table, does the work and marks the row done. Make the work safe to repeat, because a worker that stops halfway does it again.
-- **Your own after-commit work.** Inside a data hook or a `Store.Transaction`, `tx.AfterCommit(ctx, fn)` queues `fn` the same way, with the same best-effort limit.
+- **Your own after-commit work.** Inside a data hook or a `Store.Transaction`, `tx.AfterCommit(ctx, fn)` queues `fn` the same way, with the same best-effort limit. `fn` runs before `Transaction` returns. If it panics, the panic is logged and the remaining callbacks still run; `Transaction` returns nil because the write is committed.
 
 ### Other things to know
 

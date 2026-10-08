@@ -1,11 +1,11 @@
 package emailpassword
 
 import (
-	"maps"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"unicode/utf8"

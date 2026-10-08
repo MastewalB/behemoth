@@ -337,7 +337,8 @@ Details that matter:
 - **A queue per attempt.** MongoDB may run the transaction callback more than once. Each attempt gets a fresh queue, and only the queue of the attempt that committed is run, so a retried write is reported once.
 - **The context.** Callbacks get the context of the `Store.Transaction` call. The callback's own context carries the MongoDB session, which has ended by then.
 - **`Store.AfterCommit(ctx, fn)` is public.** A handler or a flow can queue its own callback. On a store that is not bound to a transaction it runs `fn` at once.
-- **Callbacks run synchronously**, before `Transaction` returns, in the calling goroutine. A callback's panic is not recovered by the store; the dispatcher recovers handler panics.
+- **Callbacks run synchronously**, before `Transaction` returns, in the calling goroutine.
+- **A callback's panic is recovered.** `Store.runCommitted` wraps each callback. A panic is logged at Error under the `store` component (when the store has a `Telemetry`), the callbacks queued behind it still run, and `Transaction` returns nil because the write is committed. The same wrapper runs a callback called at once on an unbound store. Handler panics on the `created` and `updated` points never get this far: the dispatcher recovers them first.
 - **Adapter-level transactions are not seen.** Only `Store.Transaction` owns a queue. A transaction opened directly on the adapter around store calls does not delay the notifications of those calls.
 
 ### **What a rollback does not undo**
@@ -376,6 +377,17 @@ Details that matter:
 - *A transactional outbox in core.* The event is a row written in the same transaction, and a worker delivers it at least once. Nothing is lost on a crash. Core would own a table, a worker, retries and cleanup, and every handler would have to be idempotent.
 **Decision:** The in-memory queue, documented as best effort. It covers the common uses (emails, stats, cache updates). An application that needs guaranteed delivery writes its own outbox row from `data.user.afterCreate` through `HookContext.Tx`, which is atomic with the user row, and runs its own worker. The API docs describe that recipe.
 **Revisit if:** core features need guaranteed delivery themselves (for example an audit log that must not miss a write, or webhooks as a built-in feature). An outbox in core would then be justified.
+
+### After-commit callbacks stay in the caller's goroutine, and their panics are recovered
+**Context:** The commit queue runs in the goroutine that called `Transaction`, before it returns. Two things followed. A callback that panicked unwound into the caller after the commit, so a stored sign-up looked like a failure and the callbacks behind it never ran. A slow callback (an email sent inline from `data.user.created`) delays the response.
+**Options considered:**
+- *Recover each callback's panic in `Store.Transaction`.* About fifteen lines and no API change. It fixes the panic and leaves the latency.
+- *Run the queue in a goroutine.* Fixes the latency for every application. The store then needs a wait for shutdown, a bound on concurrent callbacks and a timeout, since the request's cancellation no longer applies. Handlers lose two things they can rely on today: `hctx.Request` may be read after the response is written, and `data.user.created` no longer runs before `auth.signUp.after`. The audit recorders that are not written in the transaction share the queue and would become asynchronous too.
+- *An executor supplied by the application.* `store.WithCommitRunner(func(run func()))`, passed through `BootConfig`, with the synchronous loop as the default. The application owns the pool, the bound and the shutdown, and core gains no background state. The stale request and the lost ordering apply to the applications that opt in.
+- *A transactional outbox in core.* The only option where queued work survives a crash. See the decision above for its cost.
+
+**Decision:** Recover the panic and stay synchronous. A handler with slow work can start its own goroutine or queue a job, which solves the latency where it occurs, while the hazards of an asynchronous queue would reach every handler. The executor option and the outbox are deferred, not rejected: [`../../ongoing.md`](../../ongoing.md) tracks both.
+**Revisit if:** an application needs every committed callback off the request path (the executor), or core needs delivery that survives a crash (the outbox).
 
 ### An undeclared hook point is a configuration error, not a panic
 **Context:** `checkPhase` panicked when a point was dispatched without being declared, or in the wrong phase. Core fired the `auth.*`, `auth.session.*` and `token.*` points without declaring them, so sign-in, session creation and token issue panicked under a real `Boot`. Every other setup mistake (a duplicate declaration, a handler on an unknown point, a reserved owner name) is returned as a `ConfigurationError`.
