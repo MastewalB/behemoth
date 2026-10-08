@@ -149,10 +149,18 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 		return nil, "", err
 	}
 
-	// A before-hook may have annotated ip/userAgent (e.g. a geo-lookup plugin)
-	// pull any such enrichment back out; unknown keys are simply absent, no error.
-	if v, ok := payload[hooks.HookValueUserAgent].(string); ok {
-		ua = v
+	// A before-hook may have rewritten the IP address or user agent (a
+	// plugin that masks the address, for example). Only these two keys are
+	// read back: the user and the state are the caller's decision. With
+	// CaptureIPAndAgent off the config wins and a handler's values are not
+	// stored either.
+	if sm.cfg.CaptureIPAndAgent {
+		if v, ok := payload[hooks.HookValueIPAddress].(string); ok {
+			ip = v
+		}
+		if v, ok := payload[hooks.HookValueUserAgent].(string); ok {
+			ua = v
+		}
 	}
 
 	m := &models.Session{
@@ -437,6 +445,8 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	}
 	ctx = types.BeginOperation(ctx) // beforeRevoke and afterRevoke share Values
 
+	// The returned payload is not read: a handler can stop the revoke, but
+	// it can't point it at another session or change the reason.
 	if _, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeRevoke, types.BeforeHookPhase), hooks.HookSessionBeforeRevoke,
 		behemoth.M{hooks.HookValueSessionID: m.ID, hooks.HookValueReason: reason}); err != nil {
 		return err
@@ -510,6 +520,7 @@ func (sm *DefaultSessionManager) cacheDelete(ctx context.Context, lookupHash str
 
 // hookContext builds the context the session and token managers dispatch
 // one hook point with, the way dataHooks.hookContext does for data points.
+//
 // The managers' points are Tier 2, so Tx stays nil. Values are the
 // operation's: each manager method that fires points calls
 // types.BeginOperation first, so its before and after points share one map,

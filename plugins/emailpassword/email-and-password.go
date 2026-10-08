@@ -461,6 +461,8 @@ func SignOut(hctx *types.HookContext, sessionID string) error {
 	hctx = types.AsOperation(hctx)
 	hctx.Values[hooks.HookValueSessionID] = sessionID // for the operation's later points and its audit event
 	ac := hctx.Auth
+	// The returned payload is not read: a handler can stop the sign-out, but
+	// it can't point it at another session.
 	if _, err := ac.Dispatcher.RunBefore(hctx, hooks.HookSignOutBefore, behemoth.M{"sessionID": sessionID}); err != nil {
 		return err
 	}

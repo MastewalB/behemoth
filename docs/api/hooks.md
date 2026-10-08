@@ -50,7 +50,9 @@ type FailedHookFunc func(hctx *HookContext, reason FailureReason) error
 
 A before handler receives the payload as a `behemoth.M` and returns the payload to continue with.
 
-- Return `(payload, nil)` to continue. Return the full payload even when you changed nothing. A nil map is not read as "no change".
+- Return `(payload, nil)` to continue with that payload.
+- Return `(nil, nil)` to continue without changing it. A handler that only validates can end this way. To continue with an empty payload, return an empty `behemoth.M`.
+- Whether a rewrite has an effect depends on the point. The [hook point reference](#hook-point-reference) lists what each before point reads back.
 - Return `(nil, err)` to stop the operation. No later handler runs and the operation does not happen. The caller receives your error unchanged, so return one of the `errors` package's types (a validation error, for example) to get a sensible HTTP status.
 - Each handler receives what the previous one returned.
 - A panic is caught, logged, and treated as an error that stops the operation.
@@ -489,23 +491,25 @@ Core declares these, so a handler can be registered on any of them.
 
 | Point | Phase | Fired by | Payload, result or reason |
 | --- | --- | --- | --- |
-| `auth.signUp.before` | before | email/password sign-up | the sign-up fields from the request, including `email` and the plaintext `password` |
+| `auth.signUp.before` | before | email/password sign-up | the sign-up fields from the request, including `email` and the plaintext `password`. The returned payload becomes the sign-up's input. |
 | `auth.signUp.after` | after | email/password sign-up | the created `*models.User` |
 | `auth.signUp.failed` | failed | email/password sign-up | codes `userExists`, `rejectedByHook` (a handler on `auth.signUp.before` or on a `data.user.*` create point rejected the sign-up) |
-| `auth.signIn.before` | before | email/password sign-in | `email`, `password` |
-| `auth.signIn.credentialsVerified` | before | sign-in, after the password check | `HookValueUserID`. A second-factor plugin stops the sign-in here. |
+| `auth.signIn.before` | before | email/password sign-in | `email`, `password`. The returned payload becomes the sign-in's input. |
+| `auth.signIn.credentialsVerified` | before | sign-in, after the password check | `HookValueUserID`. A second-factor plugin stops the sign-in here, or sets `requireStepUp` to `true` to make the session pending. No other key is read back. |
 | `auth.signIn.after` | after | email/password sign-in | the sign-in result |
 | `auth.signIn.failed` | failed | email/password sign-in | codes `userNotFound`, `noCredentialAccount`, `invalidCredentials`, `secondFactorRejected`, `rejectedByHook` |
-| `auth.signOut.before` | before | sign-out | `sessionID` |
+| `auth.signOut.before` | before | sign-out | `sessionID`. Veto only. |
 | `auth.signOut.after` | after | sign-out | nil |
-| `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent. The last two come from the request being handled unless the caller of `SessionManager.Create` set them, and are empty when `CaptureIPAndAgent` is off or there is no request. |
+| `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent. The last two come from the request being handled unless the caller of `SessionManager.Create` set them, and are empty when `CaptureIPAndAgent` is off or there is no request. A handler can rewrite the IP address and the user agent (`HookValueIPAddress`, `HookValueUserAgent`), to mask the address for example. The rewrite is stored only when `CaptureIPAndAgent` is on. The user id and state are not read back. |
 | `auth.session.afterCreate` | after | session manager | the created `*models.Session` |
-| `auth.session.beforeRevoke` | before | session manager | session id, reason |
+| `auth.session.beforeRevoke` | before | session manager | session id, reason. Veto only. |
 | `auth.session.afterRevoke` | after | session manager | the revoked `*models.Session` |
-| `token.beforeIssue` | before | token manager | token kind and subject |
+| `token.beforeIssue` | before | token manager | token kind and subject. Veto only. |
 | `token.afterIssue` | after | token manager | the issued token |
 | `token.consumed` | after | token manager | the consumed token |
 | `token.failed` | failed | token manager | the classified error code, with the error as `Cause` |
+
+"Veto only" means a handler can stop the operation by returning an error, and a change to the payload has no effect. These payloads name what the operation acts on (a session, a token's subject), which a handler is not allowed to swap.
 
 The session and token points are Tier 2 even though they sit next to a table write: the managers fire them outside any store transaction, `hctx.Tx` is nil, and an after handler's error is logged.
 

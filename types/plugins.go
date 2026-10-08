@@ -345,8 +345,9 @@ type PluginInitContext struct {
 // or (nil, err) to ABORT. There is no separate "abort" flag; a non-nil error IS
 // the abort signal. err must be one of the existing behemotherr domain error types
 // (ValidationError, DomainError, etc.) so it maps cleanly to an HTTP status later.
-// Handlers MUST return the full payload to proceed with, even if unchanged —
-// never rely on nil meaning "no change," since that's ambiguous with an empty M.
+// A nil payload with a nil error means "no change": the chain continues with
+// the payload the handler received, including what it changed in place. To
+// continue with an empty payload, return an empty M.
 type BeforeHookFunc func(hctx *HookContext, payload behemoth.M) (behemoth.M, error)
 
 // AfterHookFunc runs after the operation its point belongs to. result is the
@@ -401,7 +402,9 @@ type FailureReason struct {
 type Dispatcher interface {
 	// RunBefore executes the frozen before-hook chain for a given hook point.
 	// It passes the payload through the hooks in registration order, returning
-	// the mutated payload or aborting on the first non-nil error.
+	// the mutated payload or aborting on the first non-nil error. A handler
+	// that returns a nil payload leaves it unchanged, and the returned payload
+	// is never nil when the error is.
 	RunBefore(hctx *HookContext, point HookPoint, payload behemoth.M) (behemoth.M, error)
 
 	// RunAfter executes the frozen after-chain for a Tier 2 point, once the

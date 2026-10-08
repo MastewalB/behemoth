@@ -157,6 +157,8 @@ func (tm *DefaultTokenManager) issue(
 		MetadataJSON: meta,
 	}
 
+	// The returned payload is not read: a handler can stop the issue, but
+	// it can't change the token's kind or subject.
 	if _, err := tm.disp.RunBefore(hookContext(ctx, tm.auth, hooks.HookTokenBeforeIssue, types.BeforeHookPhase), hooks.HookTokenBeforeIssue, behemoth.M{
 		hooks.HookValueTokenKind:    string(kind),
 		hooks.HookValueTokenSubject: subjectString(subject),

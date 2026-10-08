@@ -333,6 +333,20 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 		assert.Empty(t, sess.IPAddress)
 		assert.Empty(t, sess.UserAgent)
 	})
+	t.Run("a before handler's rewrite is stored", func(t *testing.T) {
+		sess, err := createWithRewrite(t, capture, inRequest)
+		require.NoError(t, err)
+		assert.Equal(t, "203.0.113.0", sess.IPAddress)
+		assert.Equal(t, "masked", sess.UserAgent)
+		assert.Equal(t, "u1", sess.UserID, "the user is not read back")
+		assert.Equal(t, models.SessionActive, sess.State, "the state is not read back")
+	})
+	t.Run("capture off ignores a before handler's rewrite", func(t *testing.T) {
+		sess, err := createWithRewrite(t, types.SessionConfig{}, inRequest)
+		require.NoError(t, err)
+		assert.Empty(t, sess.IPAddress)
+		assert.Empty(t, sess.UserAgent)
+	})
 	t.Run("behind a trusted proxy", func(t *testing.T) {
 		ipCfg, err := types.NewClientConfig([]string{"203.0.113.0/24"}, "")
 		require.NoError(t, err)
@@ -343,6 +357,28 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "198.51.100.9", sess.IPAddress, "the client the proxy forwarded for")
 	})
+}
+
+// rewriteDispatcher is a passDispatcher whose before chain rewrites every key
+// of the auth.session.beforeCreate payload.
+type rewriteDispatcher struct{ passDispatcher }
+
+func (d *rewriteDispatcher) RunBefore(h *types.HookContext, point types.HookPoint, p behemoth.M) (behemoth.M, error) {
+	if point == hooks.HookSessionBeforeCreate {
+		p[hooks.HookValueIPAddress], p[hooks.HookValueUserAgent] = "203.0.113.0", "masked"
+		p[hooks.HookValueUserID], p[hooks.HookValueState] = "someone-else", string(types.SessionPending)
+	}
+	return p, nil
+}
+
+// createWithRewrite creates an active session for u1 under a rewriteDispatcher.
+func createWithRewrite(t *testing.T, cfg types.SessionConfig, ctx context.Context) (*models.Session, error) {
+	t.Helper()
+	cfg.ExpiresIn, cfg.PendingExpiresIn = time.Hour, time.Minute
+	sm := transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg,
+		&rewriteDispatcher{}, nil, managersAuth, nil)
+	sess, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	return sess, err
 }
 
 // The token manager's hooks get the same: issue, a consume, and a failed

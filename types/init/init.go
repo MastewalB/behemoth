@@ -1246,7 +1246,9 @@ func (d *DefaultDispatcher) safeInvokeAfter(op string, hctx *types.HookContext, 
 	return fn(hctx, result)
 }
 
-// RunBefore implements [Dispatcher].
+// RunBefore implements [Dispatcher]. A handler never receives a nil payload
+// and the caller never gets one back: a nil input starts the chain as an empty
+// map, and a handler that returns a nil map leaves the payload as it was.
 func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookPoint, payload behemoth.M) (behemoth.M, error) {
 	if _, err := d.checkPhase("Dispatcher.RunBefore", point, types.BeforeHookPhase); err != nil {
 		return nil, err
@@ -1262,8 +1264,10 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 		}
 	}
 
-	// Existing before-hook chain, unchanged.
 	mutated := payload
+	if mutated == nil {
+		mutated = behemoth.M{}
+	}
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.BeforeHookFunc)
 		if !ok {
@@ -1284,8 +1288,11 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 		if err != nil {
 			return nil, err // abort and propagate error (caller decides whether/how to Fail)
 		}
-		mutated = result
-
+		// A nil map means "no change", so a handler that only validates can
+		// return nil, nil. Changes it made to the map in place are kept.
+		if result != nil {
+			mutated = result
+		}
 	}
 	return mutated, nil
 }

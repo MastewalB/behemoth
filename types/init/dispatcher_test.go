@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -92,6 +93,75 @@ func TestRunAfterTxSucceedsAndTurnsPanicsIntoErrors(t *testing.T) {
 	err := d.RunAfterTx(hctx, point, nil)
 	if !behemotherr.Is(err, behemotherr.CategoryInternal) {
 		t.Errorf("a panicking handler returned %v, want an internal error", err)
+	}
+}
+
+// beforeDispatcher builds a dispatcher with one before-phase point and the
+// given handlers on it, in order.
+func beforeDispatcher(t *testing.T, handlers ...types.BeforeHookFunc) (*DefaultDispatcher, types.HookPoint) {
+	t.Helper()
+	const point types.HookPoint = "data.test.beforeCreate"
+	catalog := NewDefaultHookCatalog()
+	if err := catalog.Declare(types.HookPointDef{Point: point, Owner: "core", Phase: types.BeforeHookPhase}); err != nil {
+		t.Fatal(err)
+	}
+	chain := make([]registeredHandler, len(handlers))
+	for i, h := range handlers {
+		chain[i] = registeredHandler{plugin: "test", handler: h}
+	}
+	chains := map[types.HookPoint][]registeredHandler{point: chain}
+	return NewDefaultDispatcher(catalog, chains, nil, telemetry.New(nil, nil, nil)), point
+}
+
+// A before handler that returns a nil payload leaves the payload unchanged,
+// wherever it sits in the chain. The next handler and the caller get a map
+// they can write to, and a rewrite made before or after the nil is kept.
+func TestRunBeforeTreatsANilPayloadAsUnchanged(t *testing.T) {
+	validate := func(*types.HookContext, behemoth.M) (behemoth.M, error) { return nil, nil }
+	set := func(key string) types.BeforeHookFunc {
+		return func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+			p[key] = true // panics on a nil map
+			return p, nil
+		}
+	}
+	replace := func(*types.HookContext, behemoth.M) (behemoth.M, error) {
+		return behemoth.M{"replaced": true}, nil
+	}
+	inPlace := func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+		p["inPlace"] = true
+		return nil, nil
+	}
+	empty := func(*types.HookContext, behemoth.M) (behemoth.M, error) { return behemoth.M{}, nil }
+
+	tests := []struct {
+		name     string
+		handlers []types.BeforeHookFunc
+		input    behemoth.M
+		want     behemoth.M
+	}{
+		{"only handler", []types.BeforeHookFunc{validate}, behemoth.M{"email": "a@b.c"}, behemoth.M{"email": "a@b.c"}},
+		{"first handler", []types.BeforeHookFunc{validate, set("second")}, behemoth.M{"email": "a@b.c"}, behemoth.M{"email": "a@b.c", "second": true}},
+		{"middle handler", []types.BeforeHookFunc{set("first"), validate, set("third")}, behemoth.M{}, behemoth.M{"first": true, "third": true}},
+		{"last handler keeps an earlier replacement", []types.BeforeHookFunc{replace, validate}, behemoth.M{"email": "a@b.c"}, behemoth.M{"replaced": true}},
+		{"a change made in place is kept", []types.BeforeHookFunc{inPlace}, behemoth.M{}, behemoth.M{"inPlace": true}},
+		{"an empty map is a rewrite", []types.BeforeHookFunc{empty}, behemoth.M{"email": "a@b.c"}, behemoth.M{}},
+		{"nil input, no handlers", nil, nil, behemoth.M{}},
+		{"nil input reaches a handler as an empty map", []types.BeforeHookFunc{set("first")}, nil, behemoth.M{"first": true}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, point := beforeDispatcher(t, tc.handlers...)
+			got, err := d.RunBefore(&types.HookContext{Ctx: context.Background()}, point, tc.input)
+			if err != nil {
+				t.Fatalf("RunBefore = %v, want nil", err)
+			}
+			if got == nil {
+				t.Fatal("RunBefore returned a nil payload")
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("RunBefore payload = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
