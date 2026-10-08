@@ -44,13 +44,7 @@ func (l *FixedWindow) Allow(ctx context.Context, key string, limit types.Limit) 
 	if count <= limit.Max {
 		return true, 0, nil
 	}
-	retryAfter := resetAt.Sub(l.now())
-	if retryAfter < 0 {
-		retryAfter = 0
-	}
-	if retryAfter > limit.Window {
-		retryAfter = limit.Window
-	}
+	retryAfter := min(max(resetAt.Sub(l.now()), 0), limit.Window)
 	return false, retryAfter, nil
 }
 

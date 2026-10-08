@@ -238,6 +238,12 @@ type HookContext struct {
 	// point or on the operation's after or failed point, e.g. an invite id
 	// it resolved from the input.
 	//
+	// Some firing sites also publish what they were called with before
+	// their first dispatch (the normalized email of a sign-in, the user of
+	// a session create), under the HookValue keys of types/hooks. That is
+	// what a rate-limit rule's KeyFunc keys on, since it does not get the
+	// payload.
+	//
 	// An operation started inside another one (the user write inside a
 	// sign-up) begins with a copy of the outer operation's Values: its
 	// handlers read the outer notes, and what they write stays their own.

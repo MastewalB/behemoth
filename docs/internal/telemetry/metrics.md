@@ -112,7 +112,7 @@ The sign-in flow, the session manager and the token manager report nothing thems
 
 ### Rate limits
 
-`DefaultRateLimiter.evaluate` counts each rule it evaluates: `allowed`, `limited`, or `error` when the counter store could not be reached. What happens to the request on `error` is `RateLimitConfig.FailureMode`'s decision and is not part of the attribute.
+`DefaultRateLimiter.evaluate` counts each rule it evaluates: `allowed`, `limited`, or `error` when the counter store could not be reached. `CheckHookLimit` counts `skipped` for a hook rule whose `KeyFunc` said the rule does not apply to the call; `evaluate` does not run for it. What happens to the request on `error` is `RateLimitConfig.FailureMode`'s decision and is not part of the attribute.
 
 A rejection is still also an audit event; see the entry "Every rate-limit rejection writes an audit row" in `docs/ongoing.md`.
 

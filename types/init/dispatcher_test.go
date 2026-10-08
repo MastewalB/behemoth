@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -387,6 +388,57 @@ func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
 	}
 	if _, err := rl.limiterFor("r", "token_bucket", nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
 		t.Errorf("an algorithm with no limiter returned %v, want a configuration error", err)
+	}
+}
+
+// keyRecorder is a Limiter that allows every attempt and keeps the keys it
+// was asked about.
+type keyRecorder struct{ keys *[]string }
+
+func (l keyRecorder) Allow(_ context.Context, key string, _ types.Limit) (bool, time.Duration, error) {
+	*l.keys = append(*l.keys, key)
+	return true, 0, nil
+}
+
+// A hook rule whose KeyFunc returns false is skipped for the call: nothing
+// is counted for it, and the point's other rules are still checked. An empty
+// key returned with true is counted like any other.
+func TestHookRuleIsSkippedWhenItDoesNotApply(t *testing.T) {
+	const point = types.HookPoint("test.thing.before")
+	hookCatalog := NewDefaultHookCatalog()
+	if err := hookCatalog.Declare(types.HookPointDef{Point: point, Owner: "test", Phase: types.BeforeHookPhase}); err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	catalog := NewRateLimitCatalog(hookCatalog)
+	for name, keyFunc := range map[string]func(*types.HookContext) (string, bool){
+		"per.email": types.KeyByValues("email"),
+		"global":    func(*types.HookContext) (string, bool) { return "", true },
+	} {
+		if err := catalog.DeclareHookRateLimitRule(types.HookRateLimitRule{
+			Name: name, Point: point, KeyFunc: keyFunc, Limiter: keyRecorder{&keys}, Owner: "test",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tel, rec := telemetrytest.New()
+	rl := &DefaultRateLimiter{catalog: catalog, tel: tel}
+	ctx := context.Background()
+
+	for _, values := range []behemoth.M{{}, {"email": ""}, {"email": "ada@example.com"}} {
+		if err := rl.CheckHookLimit(ctx, point, &types.HookContext{Ctx: ctx, Values: values}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	slices.Sort(keys)
+	if want := []string{"global:", "global:", "global:", "per.email:ada@example.com"}; !slices.Equal(keys, want) {
+		t.Errorf("keys counted = %q, want %q", keys, want)
+	}
+	for rule, want := range map[string]int64{"per.email": 2, "global": 0} {
+		if n := rec.Metrics.Count(telemetry.MetricRateLimitChecks, behemoth.M{telemetry.AttrRule: rule, telemetry.AttrResult: "skipped"}); n != want {
+			t.Errorf("skipped checks of %q = %d, want %d", rule, n, want)
+		}
 	}
 }
 

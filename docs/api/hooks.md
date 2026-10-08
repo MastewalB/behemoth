@@ -155,7 +155,8 @@ A runnable version of this is in `examples/init`: the application registers the 
 
 Things to know:
 
-- Nobody outside the handlers sets `Values`. The caller of a flow passes input; a handler decides what to keep. This works the same for an HTTP request and for a flow called from a CLI or a job.
+- The caller of a flow does not set `Values`. It passes input; a handler decides what to keep. This works the same for an HTTP request and for a flow called from a CLI or a job.
+- Some operations start with entries of their own, such as the email of a sign-in. [What a rule can key on](#what-a-rule-can-key-on) lists them. Don't overwrite them.
 - Prefix your keys with your plugin's name. All handlers of an operation share the map, and nested operations inherit it.
 - A value that the operation itself should act on goes in the payload, not in `Values`. The code that fires the point never reads `Values` back.
 - `hctx.Request.Values` lasts for the whole HTTP request and exists only when there is one. Check `hctx.Request` for nil before using it.
@@ -444,20 +445,67 @@ A rate-limit rule can be attached to a before point with `HookRateLimitRule`. Th
 ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
 	Name:  "myplugin.profile.updates",
 	Point: hooks.HookUserBeforeUpdate,
-	KeyFunc: func(hctx *types.HookContext) string {
-		return fmt.Sprint(hctx.Values[hooks.HookValueUserID])
-	},
-	Limit: types.Limit{Max: 20, Window: time.Hour},
+	KeyFunc: types.KeyByValues(hooks.HookValueUserID),
+	Limit:   types.Limit{Max: 20, Window: time.Hour},
 	Owner: "myplugin",
 })
 ```
 
-- `KeyFunc` gets the `HookContext`, not the payload. It can key on `hctx.Values` and on the request, so a rule on `auth.signIn.before` can't key on the email being tried.
-
+- `KeyFunc` gets the `HookContext`, not the payload. It keys on the entries the operation publishes in `hctx.Values` (next section) and on the request.
+- `KeyFunc` returns the key and whether the rule applies to this call. When it returns `false` the rule is skipped: nothing is counted and the call is not limited by it.
+- `types.KeyByValues(keys...)` builds a `KeyFunc` from `Values` entries. It joins them with `|`, and returns `false` when one is missing or empty.
 - `Limit` allows `Max` attempts per key in each `Window`. The window opens with the first attempt, and the count starts again when it has passed (a fixed window, the only algorithm).
 - Every rule declared on the point is checked, and all must pass.
 - A rejected attempt returns a `rate_limited` error with a retry-after. No handler runs, and the caller can't tell it apart from a before handler stopping the operation.
 - Rules can only be attached to before points.
+- The attempt is counted before the operation runs, so one that succeeds counts like one that fails.
+
+A route rule limits an HTTP path. A hook rule limits the operation, whoever calls it: "5 invite tokens a minute per team" on `token.beforeIssue` holds for a route, a CLI command and a background job alike.
+
+### What a rule can key on
+
+These operations put what they were called with in `hctx.Values` before the first handler and the rate limit run:
+
+| Point | Entry | Value |
+| --- | --- | --- |
+| `auth.signUp.before` | `hooks.HookValueEmail` | the email being registered, trimmed and lowercased |
+| `auth.signIn.before` | `hooks.HookValueEmail` | the email being tried, trimmed and lowercased |
+| `auth.signOut.before` | `hooks.HookValueSessionID` | the session being ended |
+| `auth.session.beforeCreate` | `hooks.HookValueUserID` | the user the session is for, as a string |
+| `token.beforeIssue` | `hooks.HookValueTokenKind`, `hooks.HookValueTokenSubject` | the kind and the subject, as strings |
+| `data.user.beforeUpdate`, `data.user.beforeDelete` | `hooks.HookValueUserID` | the row's id |
+
+A limit of five sign-in attempts a minute per account:
+
+```go
+ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+	Name:    "myplugin.signin.email",
+	Point:   hooks.HookSignInBefore,
+	KeyFunc: types.KeyByValues(hooks.HookValueEmail),
+	Limit:   types.Limit{Max: 5, Window: time.Minute},
+})
+```
+
+A `KeyFunc` of your own says when the rule does not apply. This one counts per client address, and leaves calls from a CLI or a job alone:
+
+```go
+KeyFunc: func(hctx *types.HookContext) (string, bool) {
+	if hctx.Request == nil || hctx.Request.Request == nil {
+		return "", false // no HTTP request: nothing to count per
+	}
+	// The direct peer's address. Behind a proxy, pass your trusted-proxy
+	// configuration instead of an empty one.
+	return types.ClientIP(hctx.Request.Request, &types.ClientIPConfig{}), true
+},
+```
+
+- **The entry is the value the caller sent.** A before handler that rewrites the payload's email does not change it, so the attempt stays on the count of the email that was typed.
+- **An operation inside another one also sees the outer entries.** A session created by a sign-in has the sign-in's email next to its own user id. A session created by a direct call to `SessionManager.Create` has no email.
+- **The client address is only there for an HTTP request.** `hctx.Request` is nil for a call from a CLI or a job. Key on a published entry when the limit has to hold there too.
+- **An entry without a value is not published.** A sign-in without an email has no `HookValueEmail`, and a token without a subject has no `HookValueTokenSubject`. A rule built with `KeyByValues` does not apply to those calls.
+- **A key returned with `true` is counted as it is.** `return "", true` is one count shared by every caller, which is how to write a limit on the operation as a whole. Return `false` when there is nothing to count per.
+- **A skipped rule is counted in the metrics**, as `behemoth.ratelimit.checks` with `result="skipped"`. A rule that is skipped on every call is attached to a point that does not publish what it reads.
+- **A limit per account lets anyone use up an account's attempts** and keep its owner out for the window. The built-in sign-in limit is per client address for that reason. Weigh the two before keying on the email.
 
 ## Audit
 
@@ -566,7 +614,7 @@ Core declares these, so a handler can be registered on any of them.
 | `auth.session.afterCreate` | after | session manager | the created `*models.Session` |
 | `auth.session.beforeRevoke` | before | session manager | session id, reason. Veto only. |
 | `auth.session.afterRevoke` | after | session manager | the revoked `*models.Session`. Also fires, without `beforeRevoke`, for each live session of a deleted user, with the reason `user_deleted`; see [Deleting a user](#deleting-a-user). |
-| `token.beforeIssue` | before | token manager | token kind and subject. Veto only. |
+| `token.beforeIssue` | before | token manager | token kind and subject (`HookValueTokenKind`, `HookValueTokenSubject`). Veto only. |
 | `token.afterIssue` | after | token manager | the issued token |
 | `token.consumed` | after | token manager | the consumed token |
 | `token.failed` | failed | token manager | the classified error code, with the error as `Cause` |

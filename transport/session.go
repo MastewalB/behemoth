@@ -96,6 +96,11 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 	const op = "SessionManager.Create"
 	ctx = types.BeginOperation(ctx) // beforeCreate and afterCreate share Values
 
+	// The user is also published in Values, where a rate-limit rule on
+	// auth.session.beforeCreate keys on it: HookRateLimitRule.KeyFunc gets
+	// the HookContext and not the payload.
+	types.HookValuesFrom(ctx)[hooks.HookValueUserID] = fmt.Sprint(userID)
+
 	if meta.State != types.SessionActive && meta.State != types.SessionPending {
 		return nil, "", behemotherr.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
 	}

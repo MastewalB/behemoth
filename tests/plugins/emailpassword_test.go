@@ -472,9 +472,17 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, user.ID)
 
-	invite, write := behemoth.M{"invite.id": "inv-1"}, behemoth.M{"invite.id": "inv-1", "write.note": true}
+	// The flow publishes the email it was called with, for rate-limit rules.
+	email := behemoth.M{hooks.HookValueEmail: "ada@example.com"}
+	with := func(base behemoth.M, extra behemoth.M) behemoth.M {
+		m := maps.Clone(base)
+		maps.Copy(m, extra)
+		return m
+	}
+	invite := with(email, behemoth.M{"invite.id": "inv-1"})
+	write := with(invite, behemoth.M{"write.note": true})
 	assert.Equal(t, []seen{
-		{hooks.HookSignUpBefore, types.BeforeHookPhase, behemoth.M{}, false},
+		{hooks.HookSignUpBefore, types.BeforeHookPhase, email, false},
 		{hooks.HookUserBeforeCreate, types.BeforeHookPhase, invite, false},
 		{hooks.HookUserAfterCreate, types.AfterHookPhase, write, false},
 		{hooks.HookUserCreated, types.AfterHookPhase, write, false},
@@ -487,10 +495,13 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	assert.NotEmpty(t, result.RawToken)
 	assert.Empty(t, result.Session.IPAddress, "no request, no address")
 
-	signIn, session := behemoth.M{"signin.note": true}, behemoth.M{"signin.note": true, "session.note": true}
+	// The session create publishes its user the same way, in its own copy.
+	signIn := with(email, behemoth.M{"signin.note": true})
+	sessionBefore := with(signIn, behemoth.M{hooks.HookValueUserID: user.ID})
+	session := with(sessionBefore, behemoth.M{"session.note": true})
 	assert.Equal(t, []seen{
-		{hooks.HookSignInBefore, types.BeforeHookPhase, behemoth.M{}, false},
-		{hooks.HookSessionBeforeCreate, types.BeforeHookPhase, signIn, false},
+		{hooks.HookSignInBefore, types.BeforeHookPhase, email, false},
+		{hooks.HookSessionBeforeCreate, types.BeforeHookPhase, sessionBefore, false},
 		{hooks.HookSessionAfterCreate, types.AfterHookPhase, session, false},
 		{hooks.HookSignInAfter, types.AfterHookPhase, signIn, false},
 	}, log)
@@ -666,6 +677,133 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 	assert.Equal(t, "203.0.113.7", limited[0].IPAddress)
 	assert.Equal(t, bmth.RuleSignInRoute, limited[0].Metadata["rule"])
 	assert.Equal(t, bmth.RuleSignUpRoute, limited[1].Metadata["rule"])
+}
+
+// limitsPlugin declares a token kind and one hook rate-limit rule per firing
+// site that publishes a value to key on.
+type limitsPlugin struct{}
+
+const kindInvite types.TokenKind = "limits.invite"
+
+func (limitsPlugin) Meta() types.PluginMeta            { return types.PluginMeta{Name: "limits"} }
+func (limitsPlugin) Version() string                   { return "0.0.0" }
+func (limitsPlugin) Init(*types.AuthContext) error     { return nil }
+func (limitsPlugin) Routes() []types.Route             { return nil }
+func (limitsPlugin) Middlewares() []types.Middleware   { return nil }
+func (limitsPlugin) Register(types.HookRegistry) error { return nil }
+func (limitsPlugin) Declare(ic *types.PluginInitContext) error {
+	if err := ic.Tokens.Declare(types.TokenKindDef{Kind: kindInvite, DefaultTTL: time.Hour, Backend: types.TokenBackendDB}); err != nil {
+		return err
+	}
+	value := types.KeyByValues
+	for _, rule := range []types.HookRateLimitRule{
+		{Name: "limits.signup.email", Point: hooks.HookSignUpBefore, KeyFunc: value(hooks.HookValueEmail), Limit: types.Limit{Max: 1, Window: time.Minute}},
+		{Name: "limits.signin.email", Point: hooks.HookSignInBefore, KeyFunc: value(hooks.HookValueEmail), Limit: types.Limit{Max: 2, Window: time.Minute}},
+		{Name: "limits.session.user", Point: hooks.HookSessionBeforeCreate, KeyFunc: value(hooks.HookValueUserID), Limit: types.Limit{Max: 3, Window: time.Minute}},
+		{Name: "limits.token.subject", Point: hooks.HookTokenBeforeIssue, KeyFunc: value(hooks.HookValueTokenKind, hooks.HookValueTokenSubject), Limit: types.Limit{Max: 2, Window: time.Minute}},
+	} {
+		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// A hook rule keys on what the firing site published in Values: the email of
+// a sign-up and a sign-in, the user of a session create, the kind and subject
+// of a token issue. No call here has an HTTP request, so the limits hold for
+// a CLI or a job as they do for a route.
+func TestHookRateLimitRulesKeyOnPublishedValues(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-hook-limit.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(schema + `
+CREATE TABLE rate_limits (limit_key TEXT PRIMARY KEY, count BIGINT NOT NULL, expires_at TIMESTAMP NOT NULL);
+CREATE TABLE tokens (
+	id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT, lookup_hash TEXT NOT NULL, token_hash TEXT NOT NULL,
+	key_version INTEGER NOT NULL, metadata TEXT, expires_at TIMESTAMP, consumed_at TIMESTAMP, revoked_at TIMESTAMP,
+	created_at TIMESTAMP NOT NULL);`)
+	require.NoError(t, err)
+
+	tel, rec := telemetrytest.New()
+	p := emailpassword.New(emailpassword.Options{})
+	app, err := bmth.Prepare([]types.Plugin{p, limitsPlugin{}}, bmth.PrepareConfig{})
+	require.NoError(t, err)
+	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
+		},
+		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Telemetry: tel,
+		Hooks: func(reg types.HookRegistry) error {
+			// A handler's rewrite of the payload does not move the attempt
+			// to another count: the rule keys on the email the caller sent.
+			return reg.OnBefore(hooks.HookSignInBefore, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+				if payload["email"] == "alias@example.com" {
+					payload["email"] = "ada@example.com"
+				}
+				return payload, nil
+			}, nil)
+		},
+	})
+	require.NoError(t, err)
+	limited := func(err error) bool { return behemotherr.Is(err, behemotherr.CategoryRateLimited) }
+
+	// Sign-up: one per email, counted on the normalized form.
+	user, err := p.SignUp(ctx, behemoth.M{"email": "ada@example.com", "password": "correct horse"})
+	require.NoError(t, err)
+	_, err = p.SignUp(ctx, behemoth.M{"email": "  ADA@Example.com ", "password": "correct horse"})
+	assert.True(t, limited(err), "the same email in another spelling shares the count: %v", err)
+	_, err = p.SignUp(ctx, behemoth.M{"email": "grace@example.com", "password": "correct horse"})
+	require.NoError(t, err, "another email has its own count")
+
+	// Sign-in: two per email, whatever the password and the outcome.
+	signIn := func(email, password string) error {
+		_, err := p.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: email, Password: password})
+		return err
+	}
+	require.NoError(t, signIn("ada@example.com", "correct horse"))
+	err = signIn(" Ada@Example.com", "a wrong password")
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryUnauthorized), "the second attempt reaches the flow: %v", err)
+	assert.True(t, limited(signIn("ada@example.com", "correct horse")), "the third attempt on the email is refused")
+	require.NoError(t, signIn("grace@example.com", "correct horse"), "another email has its own count")
+	require.NoError(t, signIn("alias@example.com", "correct horse"), "counted under the email that was sent, signed in as the rewritten one")
+	for i := 1; i <= 3; i++ {
+		err = signIn(" ", "a wrong password")
+		assert.True(t, behemotherr.Is(err, behemotherr.CategoryUnauthorized), "attempt %d without an email is not counted by the rule per email: %v", i, err)
+	}
+
+	// Session create: three per user. Ada's two sign-ins above made two.
+	create := func(userID string) error {
+		_, _, err := ac.SessionManager.Create(ctx, userID, types.SessionMeta{State: types.SessionActive})
+		return err
+	}
+	require.NoError(t, create(user.ID))
+	assert.True(t, limited(create(user.ID)), "the fourth session of the user is refused")
+	require.NoError(t, create("another-user"))
+
+	// Token issue: two per kind and subject.
+	issue := func(subject string) error {
+		_, _, err := ac.TokenManager.Issue(ctx, kindInvite, subject, nil)
+		return err
+	}
+	require.NoError(t, issue("team-1"))
+	require.NoError(t, issue("team-1"))
+	assert.True(t, limited(issue("team-1")), "the third token for the subject is refused")
+	require.NoError(t, issue("team-2"))
+	for i := 1; i <= 3; i++ {
+		_, _, err = ac.TokenManager.Issue(ctx, kindInvite, nil, nil)
+		require.NoError(t, err, "token %d without a subject is not counted by the rule per subject", i)
+	}
+	assert.EqualValues(t, 3, rec.Metrics.Count(telemetry.MetricRateLimitChecks,
+		behemoth.M{telemetry.AttrRule: "limits.signin.email", telemetry.AttrResult: "skipped"}), "a skipped rule is counted as such")
+
+	var rules []any
+	for _, e := range rec.Audit.OfType(telemetry.AuditRateLimitExceeded) {
+		rules = append(rules, e.Metadata["rule"])
+	}
+	assert.Equal(t, []any{"limits.signup.email", "limits.signin.email", "limits.session.user", "limits.token.subject"}, rules)
 }
 
 // The email and password rules are the plugin's own options.

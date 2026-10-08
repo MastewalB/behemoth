@@ -401,7 +401,7 @@ Attribute values:
 | `outcome` | `success` or `failure` |
 | `reason` | on failure only: the failure's code, such as `invalidCredentials`, `userNotFound`, `session_expired` |
 | `cache` | `hit` or `miss` |
-| `result` | `allowed`, `limited`, or `error` when the rate-limit store could not be reached |
+| `result` | `allowed`, `limited`, `error` when the rate-limit store could not be reached, or `skipped` when a hook rule did not apply to the call |
 | `phase` | `before`, `after` or `failed` |
 | `plugin` | the owner of the hook handler: a plugin's name, or your application's |
 | `op` | `create`, `find_one`, `find_many`, `count`, `update`, `update_one`, `update_many`, `delete`, `delete_one`, `delete_many`, `delete_all`, `transaction` |
@@ -415,7 +415,7 @@ Attribute values:
 - **Database health:** alert on `behemoth.store.errors` with `error_category="database"`. `not_found` is counted too and is a normal answer: sign-up looks an address up and expects to find nothing.
 - **A slow hook handler:** `behemoth.hook.duration` by `plugin`. Handlers on data points run inside a database transaction, so a slow one also holds locks.
 - **Hook errors:** with `phase="before"` they are refusals, which is how a handler stops an operation. With `phase="after"` or `"failed"` a handler did not do its work.
-- **Rate limiting:** `behemoth.ratelimit.checks` with `result="limited"` by `rule`. `result="error"` means the counter store is down.
+- **Rate limiting:** `behemoth.ratelimit.checks` with `result="limited"` by `rule`. `result="error"` means the counter store is down. A hook rule that is `skipped` on every call reads a value its point does not publish.
 
 ### Measuring your own code
 

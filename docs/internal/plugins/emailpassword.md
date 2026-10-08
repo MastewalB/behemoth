@@ -25,6 +25,8 @@ Compare with a plugin such as the example `auditlog`: that one declares a table 
 
 The wrapped flows are reached through two exported methods, `Plugin.SignUp(ctx, input)` and `Plugin.SignIn(ctx, creds)`. Each builds the flow's `HookContext` (`Plugin.operation`): the `AuthContext` kept by `Init`, the request found on `ctx` or nil, and `Values` copied from the operation `ctx` belongs to, if any. The route handlers call these methods with `rctx.Ctx`, so a route, a CLI and another plugin all enter the flow the same way. Called before `Boot` has run `Init`, they return a configuration error.
 
+Before entering the wrapped flow, both put the email they were called with in `Values` under `hooks.HookValueEmail`, in its stored form (`publishEmail`, which uses `store.NormalizeEmail`). A rate-limit rule on `auth.signUp.before` or `auth.signIn.before` keys on it, since a rule's `KeyFunc` does not get the payload. A call without an email leaves no entry, and `publishEmail` removes one copied from an enclosing operation, so a rule per email does not apply to that call.
+
 ### Sign-in's input
 
 `Plugin.SignIn` takes an `EmailAndPasswordCredentials`: `Email`, `Password` and an `Extra` map. `signInBody` reads the two fields. `Extra` exists for handlers on `auth.signIn.before`.

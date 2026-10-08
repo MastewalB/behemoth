@@ -71,7 +71,7 @@ const (
 	AttrKind          = "kind"           // a token kind
 	AttrCache         = "cache"          // "hit" or "miss"
 	AttrRule          = "rule"           // a rate-limit rule's name
-	AttrResult        = "result"         // "allowed", "limited" or "error"
+	AttrResult        = "result"         // "allowed", "limited", "error" or "skipped"
 	AttrPoint         = "point"          // a hook point
 	AttrPhase         = "phase"          // a hook phase
 	AttrPlugin        = "plugin"         // the owner of a hook handler

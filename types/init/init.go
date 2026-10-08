@@ -886,7 +886,15 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.Ho
 
 	rules := rl.catalog.RulesForHook(point)
 	for _, rule := range rules {
-		key := rule.Name + ":" + rule.KeyFunc(hctx)
+		// A rule that has nothing to count this call per (no request for a
+		// rule per address, no email on the sign-in) is skipped, not counted
+		// under an empty key that every such caller would share.
+		ruleKey, ok := rule.KeyFunc(hctx)
+		if !ok {
+			rl.countCheck(ctx, rule.Name, "skipped")
+			continue
+		}
+		key := rule.Name + ":" + ruleKey
 		limiter, err := rl.limiterFor(rule.Name, rule.Algorithm, rule.Limiter)
 		if err != nil {
 			return err
@@ -969,9 +977,10 @@ func (rl *DefaultRateLimiter) evaluate(
 	return nil
 }
 
-// countCheck counts one evaluation of rule: "allowed", "limited", or
-// "error" when the counter store could not be reached (what happens to the
-// request then is RateLimitConfig.FailureMode's decision).
+// countCheck counts one evaluation of rule: "allowed", "limited", "error"
+// when the counter store could not be reached (what happens to the request
+// then is RateLimitConfig.FailureMode's decision), or "skipped" when a hook
+// rule's KeyFunc said the rule does not apply to the call.
 func (rl *DefaultRateLimiter) countCheck(ctx context.Context, rule, result string) {
 	if rl.tel.MetricsEnabled() {
 		rl.tel.Count(ctx, telemetry.MetricRateLimitChecks, behemoth.M{telemetry.AttrRule: rule, telemetry.AttrResult: result})

@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -75,9 +76,21 @@ type RouteRateLimitRule struct {
 }
 
 type HookRateLimitRule struct {
-	Name       string
-	Point      HookPoint                      // which hook point this rule evaluates against
-	KeyFunc    func(hctx *HookContext) string // e.g. by IP, by email, by userID+IP composite
+	Name  string
+	Point HookPoint // which hook point this rule evaluates against
+	// KeyFunc returns what the rule counts per, and whether the rule applies
+	// to this call. It gets the HookContext and not the payload: it keys on
+	// what the firing site published in hctx.Values before the dispatch (the
+	// email of a sign-in, the kind and subject of a token issue), and on
+	// hctx.Request, which is nil outside an HTTP request. docs/api/hooks.md
+	// lists the published values.
+	//
+	// When it returns false the rule is skipped for the call and nothing is
+	// counted: a rule per client address has nothing to count for a call
+	// from a CLI. A key returned with true is counted as it is, so "" is one
+	// count shared by every caller. KeyByValues builds a KeyFunc from
+	// Values entries.
+	KeyFunc    func(hctx *HookContext) (key string, ok bool)
 	Limit      Limit
 	Algorithm  RateLimitAlgorithm // which strategy this rule uses; empty means AlgorithmFixedWindow
 	Limiter    Limiter            // optional: the rule's own limiter, used instead of Algorithm's (see RouteRateLimitRule)
@@ -85,6 +98,30 @@ type HookRateLimitRule struct {
 	LockoutFor time.Duration // only relevant if Action == ActionLockout
 
 	Owner string // plugin name; same ownership discipline as HookPointDef/TokenKindDef
+}
+
+// KeyByValues returns a HookRateLimitRule.KeyFunc that keys on the entries
+// of HookContext.Values under keys, joined with "|" in the order given. The
+// rule does not apply to a call in which one of them is missing or empty.
+// An entry that is not a string is formatted with fmt.Sprint.
+func KeyByValues(keys ...string) func(hctx *HookContext) (string, bool) {
+	return func(hctx *HookContext) (string, bool) {
+		parts := make([]string, len(keys))
+		for i, k := range keys {
+			switch v := hctx.Values[k].(type) {
+			case nil:
+				return "", false
+			case string:
+				parts[i] = v
+			default:
+				parts[i] = fmt.Sprint(v)
+			}
+			if parts[i] == "" {
+				return "", false
+			}
+		}
+		return strings.Join(parts, "|"), true
+	}
 }
 
 type RateLimitCatalog interface {

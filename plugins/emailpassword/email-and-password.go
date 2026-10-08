@@ -486,6 +486,8 @@ func (p *Plugin) SignUp(ctx context.Context, input behemoth.M) (*models.User, er
 	if err != nil {
 		return nil, err
 	}
+	email, _ := input[credentialEmailKey].(string)
+	publishEmail(hctx, email)
 	return p.signUp(hctx, input)
 }
 
@@ -504,7 +506,24 @@ func (p *Plugin) SignIn(ctx context.Context, creds EmailAndPasswordCredentials) 
 	if err != nil {
 		return nil, err
 	}
+	publishEmail(hctx, creds.Email)
 	return p.signIn(hctx, creds)
+}
+
+// publishEmail puts the email a sign-up or sign-in was called with in the
+// operation's Values, under hooks.HookValueEmail and in its stored form
+// (store.NormalizeEmail). A rate-limit rule on the flow's before point keys
+// on it there: HookRateLimitRule.KeyFunc gets the HookContext and not the
+// payload. It is the email the caller sent, so a before handler that
+// rewrites the payload's email does not move the attempt to another count.
+// A call without an email leaves no entry, and removes the one inherited
+// from an enclosing operation, so a rule per email does not apply to it.
+func publishEmail(hctx *types.HookContext, email string) {
+	if email = store.NormalizeEmail(email); email == "" {
+		delete(hctx.Values, hooks.HookValueEmail)
+		return
+	}
+	hctx.Values[hooks.HookValueEmail] = email
 }
 
 // operation builds the HookContext one flow call runs with. Its Values start

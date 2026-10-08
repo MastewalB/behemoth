@@ -118,6 +118,18 @@ func (tm *DefaultTokenManager) issue(
 	const op = "TokenManager.Issue"
 	ctx = types.BeginOperation(ctx) // beforeIssue and afterIssue share Values
 
+	// The kind and subject are also published in Values, where a rate-limit
+	// rule on token.beforeIssue keys on them: HookRateLimitRule.KeyFunc gets
+	// the HookContext and not the payload. A token without a subject leaves
+	// no subject entry, so a rule per subject does not apply to it.
+	values := types.HookValuesFrom(ctx)
+	values[hooks.HookValueTokenKind] = string(kind)
+	if s := subjectString(subject); s != "" {
+		values[hooks.HookValueTokenSubject] = s
+	} else {
+		delete(values, hooks.HookValueTokenSubject)
+	}
+
 	def, ok := tm.catalog.Lookup(kind)
 	if !ok {
 		return nil, "", behemotherr.NewValidationError(op, "kind", fmt.Errorf("unknown token kind %q", kind))
