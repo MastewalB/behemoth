@@ -434,6 +434,7 @@ Checklist:
 Points to probe per database (expected, unverified):
 
 - **MongoDB / other document stores** — no DDL-level defaults or auto-increment, and no enforced lengths. The driver's `NormalizeColumn` clears `Default`, `AutoInc` and `Length` (whatever the database doesn't store), so those fields always compare equal; core needs no special case. Row consistency is the application's concern there (see *Constraints* for validation).
+  MongoDB has no driver yet. Its indexes are created by the adapter's `EnsureIndexes` and checked at `Boot`. [`../database/adapters/mongo_indexes.md`](../database/adapters/mongo_indexes.md) records what was probed about indexes on MongoDB 6.0 and, under *The future migration driver*, how each operation maps, what the introspector can and can't report, and what to reuse from the adapter.
 
 
 # **MySQL Driver**

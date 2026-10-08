@@ -212,6 +212,26 @@ type BootConfig struct {
 	HTTP types.FrameworkDriver
 }
 
+// IndexChecker is an optional interface of a Database on which a missing
+// index goes unnoticed. Boot calls CheckIndexes once with every declared
+// table, before anything is written, and fails when it returns an error.
+//
+// The MongoDB adapter implements it. MongoDB has no migration driver, so
+// nothing creates the indexes a schema declares unless the application calls
+// the adapter's EnsureIndexes, and without a unique index MongoDB stores the
+// duplicates it was declared to refuse. The SQL adapters don't implement it:
+// their indexes come with the tables their migration drivers create, and a
+// missing table fails the first query.
+//
+// It is declared here and not next to behemoth.TransactionChecker because it
+// names schema.Table, and the schema package imports behemoth.
+type IndexChecker interface {
+	// CheckIndexes returns an error when an index that enforces uniqueness
+	// is missing. A missing index that only speeds reads up is returned as
+	// a warning, one line per index, which Boot logs.
+	CheckIndexes(ctx context.Context, tables []schema.Table) (warnings []string, err error)
+}
+
 // Boot turns a PreparedApp into a running AuthContext. db must have been
 // built with app.Resolver, otherwise application queries and migrations
 // disagree on physical table and column names.
@@ -236,6 +256,17 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	kv := cfg.KV
 
 	tel := telemetry.OrDefault(cfg.Telemetry)
+	// Fail here instead of storing duplicates when the database has no way
+	// to refuse them: on MongoDB a missing unique index is silent.
+	if checker, ok := db.(IndexChecker); ok {
+		warnings, err := checker.CheckIndexes(ctx, app.Schemas.All())
+		if err != nil {
+			return nil, fmt.Errorf("database index check failed: %w", err)
+		}
+		for _, w := range warnings {
+			tel.Named("boot").Logger.Warn(ctx, "a declared index is missing; reads that use it scan the collection", behemoth.M{"index": w})
+		}
+	}
 	if !tel.AuditConfigured() {
 		// Auditing is on unless the application says otherwise: events go
 		// to the audit_log table. The recorder gets a store of its own,

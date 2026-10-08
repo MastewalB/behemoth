@@ -100,7 +100,7 @@ go run . signup -email ada@example.com -password 'correct horse'
 | ORM | Bun, GORM |
 | Key-value (sessions, rate limits) | Redis |
 
-Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server.
+Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoDB has no migrations: the adapter creates the declared indexes (`EnsureIndexes`), and `Boot` checks them.
 
 ## Documentation
 
@@ -110,6 +110,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server.
 | [Hooks](./docs/api/hooks.md) | Hook points, handlers, ordering and failure behavior |
 | [Telemetry](./docs/api/telemetry.md) | Loggers, audit, metrics, tracing and the OpenTelemetry adapter |
 | [Core tables](./docs/api/core-tables.md) | Writing Behemoth's tables from a plugin |
+| [MongoDB](./docs/api/mongodb.md) | What the server needs, and creating the indexes a schema declares |
 | [Internal docs](./docs/internal) | How the system works, for contributors |
 
 ## Roadmap

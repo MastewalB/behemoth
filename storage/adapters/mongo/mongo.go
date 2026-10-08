@@ -29,7 +29,11 @@ import (
 // FromMap. A nil Resolver maps every name to itself.
 //
 // There is no "missing table" condition: querying a collection that doesn't
-// exist simply returns no documents.
+// exist simply returns no documents. A missing index is silent in the same
+// way, and without a unique index MongoDB stores duplicates. No migration
+// driver exists for MongoDB, so the application creates the declared indexes
+// with EnsureIndexes before Boot, and Boot refuses to start without the
+// unique ones (CheckIndexes); see indexes.go.
 //
 // The adapter needs a replica set or a sharded cluster. Transaction uses
 // MongoDB transactions, which a standalone server does not have, and the
@@ -55,15 +59,19 @@ func NewMongoAdapter(client *mongo.Client, dbName string, resolver behemoth.Sche
 }
 
 // newRegistry returns the BSON registry the adapter decodes with. It is the
-// driver's default plus one rule: a BSON date read into an untyped value
-// becomes a time.Time, in UTC.
+// driver's default plus two rules for values read into an untyped value: a
+// BSON date becomes a time.Time, in UTC, and a 32-bit integer becomes an
+// int64.
 //
 // Reads decode a document into a map[string]any and hand it to the model's
 // FromMap, which asserts Go types. By default the driver puts its own types
 // into such a map, and a primitive.DateTime fails the time.Time assertion, so
-// every timestamp read back as zero. The rule applies wherever the driver
-// decodes, nested documents and arrays included, so no read path converts
-// values itself.
+// every timestamp read back as zero. Integers have the same problem: the
+// driver stores a Go int as a 32-bit integer when the value fits and reads
+// it back as int32, while models assert int64, the type the SQL adapters
+// hand them. A session's key version read back as zero that way. The rules
+// apply wherever the driver decodes, nested documents and arrays included,
+// so no read path converts values itself.
 //
 // Other BSON types still arrive as driver types: a nested document as
 // primitive.M (declared as a named type, so a "case map[string]any" does not
@@ -74,6 +82,7 @@ func NewMongoAdapter(client *mongo.Client, dbName string, resolver behemoth.Sche
 func newRegistry() *bsoncodec.Registry {
 	registry := bson.NewRegistry()
 	registry.RegisterTypeMapEntry(bson.TypeDateTime, reflect.TypeFor[time.Time]())
+	registry.RegisterTypeMapEntry(bson.TypeInt32, reflect.TypeFor[int64]())
 	return registry
 }
 

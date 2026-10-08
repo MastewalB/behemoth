@@ -366,7 +366,7 @@ reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) err
 ### Other things to know
 
 - **A handler can run more than once on MongoDB.** The MongoDB driver retries a transaction on a transient error, and the hooks are inside it. Writes through `hctx.Tx` and `hctx.Tx.DB()` are rolled back between attempts. Anything else the handler does is repeated.
-- **MongoDB needs a replica set.** A hooked write always opens a transaction, and a standalone MongoDB server has none. `Boot` returns a configuration error on a standalone server. A single-node replica set is enough: start `mongod` with `--replSet rs0` and run `rs.initiate()` once. A sharded cluster also works.
+- **MongoDB needs a replica set.** A hooked write always opens a transaction, and a standalone MongoDB server has none. `Boot` returns a configuration error on a standalone server. A single-node replica set is enough: start `mongod` with `--replSet rs0` and run `rs.initiate()` once. A sharded cluster also works. [MongoDB](mongodb.md) lists what else it needs.
 - **A slow handler holds the transaction open.** It keeps its locks for as long as it runs. On SQLite that blocks every other writer.
 - **To react to a committed row, use the after-commit points.** See [After-commit data points](#after-commit-data-points).
 - **`afterCreate` and `afterUpdate` write their audit event in the same transaction.** See [Audit](#audit).

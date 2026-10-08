@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	"github.com/MastewalB/behemoth/crypto"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/models"
@@ -24,6 +27,7 @@ import (
 	sqlserverAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
@@ -36,6 +40,7 @@ import (
 	"github.com/uptrace/bun/dialect/mysqldialect"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
+	"go.mongodb.org/mongo-driver/bson"
 	gormmysql "gorm.io/driver/mysql"
 	gormpostgres "gorm.io/driver/postgres"
 	gormsqlite "gorm.io/driver/sqlite"
@@ -187,6 +192,18 @@ func contractBackends() map[string]func(t *testing.T, tables []schema.Table, r b
 		"bun/postgres": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
 			return bunAdapter.NewBunAdapter(bun.NewDB(openPostgres(t, tables, r), pgdialect.New()), r)
 		},
+		// MongoDB has no migration driver. Its indexes come from the adapter.
+		"mongo": func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
+			if testing.Short() {
+				t.Skip("starts a MongoDB container")
+			}
+			ctx := context.Background()
+			client, cleanup := testutils.SetupMongoTestDB(ctx, t)
+			t.Cleanup(cleanup)
+			db := mongoAdapter.NewMongoAdapter(client, "contract", r)
+			require.NoError(t, db.EnsureIndexes(ctx, tables))
+			return db
+		},
 	}
 }
 
@@ -258,9 +275,58 @@ func TestGuardedUpdateInATransactionOnMySQL(t *testing.T) {
 	}
 }
 
-// TestStoreAuditLogMongo runs the audit log part of the contract on MongoDB.
-// The rest of the contract is not run there: MongoDB has no migration driver,
-// so nothing creates the unique indexes the other parts rely on.
+// Boot refuses a MongoDB database that lacks a declared unique index, starts
+// once EnsureIndexes has created them, and only warns about a plain index.
+func TestBootChecksMongoIndexes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a MongoDB container")
+	}
+	ctx := context.Background()
+	client, cleanup := testutils.SetupMongoTestDB(ctx, t)
+	t.Cleanup(cleanup)
+	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	require.NoError(t, err)
+	db := mongoAdapter.NewMongoAdapter(client, "boot", app.Resolver)
+	tel, rec := telemetrytest.New()
+	boot := func() error {
+		_, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+			Crypto: crypto.Config{
+				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("cd", 32)}, Current: 1},
+			},
+			Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: 5 * time.Minute},
+			Telemetry: tel,
+		})
+		return err
+	}
+
+	err = boot()
+	require.Error(t, err, "no index exists yet")
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.Contains(t, err.Error(), `"users" (email)`)
+	assert.Contains(t, err.Error(), "EnsureIndexes")
+
+	require.NoError(t, db.EnsureIndexes(ctx, app.Schemas.All()))
+	require.NoError(t, boot())
+	assert.Empty(t, rec.Logger.At(slog.LevelWarn))
+
+	// A plain index only speeds reads up: Boot starts and says so.
+	_, err = client.Database("boot").Collection(models.SessionTable).Indexes().DropOne(ctx, "idx_sessions_user_id")
+	require.NoError(t, err)
+	require.NoError(t, boot())
+	warned := rec.Logger.At(slog.LevelWarn)
+	require.Len(t, warned, 1)
+	assert.Contains(t, warned[0].Fields["index"], "idx_sessions_user_id")
+
+	// A unique index is not optional.
+	_, err = client.Database("boot").Collection(models.UserTable).Indexes().DropOne(ctx, "uq_users_email")
+	require.NoError(t, err)
+	require.Error(t, boot())
+}
+
+// TestStoreAuditLogMongo reads an audit event and a session back through the
+// MongoDB adapter after the audit log part of the contract, to check how a
+// date and an integer are decoded. TestStoreContract runs the contract
+// itself on MongoDB.
 func TestStoreAuditLogMongo(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts a MongoDB container")
@@ -287,6 +353,22 @@ func TestStoreAuditLogMongo(t *testing.T) {
 	createdAt := found.(*models.AuditLog).CreatedAt
 	assert.False(t, createdAt.IsZero())
 	assert.Equal(t, time.UTC, createdAt.Location())
+
+	// The driver stores a Go int as a 32-bit integer when it fits. The
+	// registry decodes it as an int64, which the model accepts; with the
+	// driver's default it is an int32 and the key version reads back as zero.
+	require.NoError(t, db.Create(ctx, &models.Session{ID: "s-int", UserID: "user-1", LookupHash: "lookup", KeyVersion: 3}))
+	var raw bson.Raw
+	raw, err = client.Database("contract").Collection(resolver.Resolve(models.SessionTable)).
+		FindOne(ctx, bson.M{resolver.ResolveColumn(models.SessionTable, models.SessionID): "s-int"}).Raw()
+	require.NoError(t, err)
+	assert.Equal(t, bson.TypeInt32, raw.Lookup(resolver.ResolveColumn(models.SessionTable, models.SessionKeyVersion)).Type,
+		"the premise: key_version is stored as a 32-bit integer")
+	found, err = db.FindOne(ctx, &models.Session{}, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.SessionID, Operator: clause.OpEqual, Value: "s-int"},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 3, found.(*models.Session).KeyVersion)
 }
 
 func usersContract(t *testing.T, st *store.Store) {
