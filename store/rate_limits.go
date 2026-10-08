@@ -17,15 +17,16 @@ import (
 const rateLimitAttempts = 32
 
 // IncrementRateLimit counts one attempt against key and returns the count in
-// the current window. The first attempt opens a window of ttl; once it has
-// passed, the next attempt opens a new one, starting again at 1.
+// the current window and when that window ends. The first attempt opens a
+// window of ttl; once it has passed, the next attempt opens a new one,
+// starting again at 1.
 //
 // It is atomic without a transaction or a database-specific upsert: each
 // write is guarded on the count that was read, and UpdateOne re-checks its
 // expression in the write itself (the behemoth.Database convention), so of
 // several concurrent calls reading the same count one writes and the others
 // read again. No two calls return the same count for one window.
-func (s *Store) IncrementRateLimit(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+func (s *Store) IncrementRateLimit(ctx context.Context, key string, ttl time.Duration) (int64, time.Time, error) {
 	byKey := clause.Condition{Field: models.RateLimitKey, Operator: clause.OpEqual, Value: key}
 	for range rateLimitAttempts {
 		now := s.now()
@@ -35,24 +36,28 @@ func (s *Store) IncrementRateLimit(ctx context.Context, key string, ttl time.Dur
 			if behemotherr.IsDuplicateKey(err) {
 				continue // another call created it first
 			}
-			return 1, err
+			if err != nil {
+				return 0, time.Time{}, err
+			}
+			return 1, now.Add(ttl), nil
 		}
 		if err != nil {
-			return 0, err
+			return 0, time.Time{}, err
 		}
 		current, ok := found.(*models.RateLimit)
 		if !ok {
-			return 0, fmt.Errorf("store: unexpected %T in rate_limits", found)
+			return 0, time.Time{}, fmt.Errorf("store: unexpected %T in rate_limits", found)
 		}
 
 		unchanged := clause.Condition{Field: models.RateLimitCount, Operator: clause.OpEqual, Value: current.Count}
-		next, guard, updates := current.Count+1, []clause.Condition{byKey, unchanged}, behemoth.M{}
+		next, guard, updates, resetAt := current.Count+1, []clause.Condition{byKey, unchanged}, behemoth.M{}, current.ExpiresAt
 		if !current.ExpiresAt.After(now) {
 			// The window has passed: start a new one, unless another call
 			// already did (its expires_at is in the future again).
 			next = 1
 			guard = append(guard, clause.Condition{Field: models.RateLimitExpiresAt, Operator: clause.OpLessEq, Value: now})
-			updates[models.RateLimitExpiresAt] = now.Add(ttl)
+			resetAt = now.Add(ttl)
+			updates[models.RateLimitExpiresAt] = resetAt
 		}
 		updates[models.RateLimitCount] = next
 
@@ -61,11 +66,11 @@ func (s *Store) IncrementRateLimit(ctx context.Context, key string, ttl time.Dur
 			continue // another call wrote first
 		}
 		if err != nil {
-			return 0, err
+			return 0, time.Time{}, err
 		}
-		return next, nil
+		return next, resetAt, nil
 	}
-	return 0, fmt.Errorf("store: rate limit %q still contended after %d attempts", key, rateLimitAttempts)
+	return 0, time.Time{}, fmt.Errorf("store: rate limit %q still contended after %d attempts", key, rateLimitAttempts)
 }
 
 // PurgeExpiredRateLimits deletes the counters whose window has passed. A

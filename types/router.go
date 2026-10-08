@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"path"
 	"strconv"
@@ -179,7 +180,9 @@ func (r *Router) wrapWithErrorMapping(route Route, next HandlerFunc) HandlerFunc
 				r.log.Debug(rctx.Ctx, "request rejected", fields)
 			}
 			if de, ok := errors.AsType[*behemotherr.DomainError](err); ok && de.RetryAfter > 0 {
-				rctx.Response.Headers.Set("Retry-After", strconv.Itoa(int(de.RetryAfter.Seconds())))
+				// Rounded up: a client that waits the truncated number of
+				// seconds would come back before the window has ended.
+				rctx.Response.Headers.Set("Retry-After", strconv.Itoa(int(math.Ceil(de.RetryAfter.Seconds()))))
 			}
 			return rctx.Response.JSON(status, body)
 		}

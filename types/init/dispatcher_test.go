@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	"errors"
+	"net/http"
 	"reflect"
 	"testing"
 	"time"
@@ -346,6 +347,46 @@ func TestDispatcherMetrics(t *testing.T) {
 	}
 	if n := m.Count(telemetry.MetricTokenIssued, behemoth.M{telemetry.AttrKind: "password_reset"}); n != 1 {
 		t.Errorf("tokens issued = %d, want 1 with its kind", n)
+	}
+}
+
+// A rule names its algorithm, or brings a Limiter of its own. The catalog
+// rejects a name nothing builds and a limit that can't be counted, and the
+// rate limiter resolves the name to the Limiter Boot built.
+func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
+	keyFunc := func(*http.Request, string) string { return "k" }
+	declare := func(rule types.RouteRateLimitRule) error {
+		rule.Method, rule.Path, rule.KeyFunc, rule.Owner = http.MethodPost, "/x", keyFunc, "test"
+		return NewRateLimitCatalog(NewDefaultHookCatalog()).DeclareRouteRateLimitRule(rule)
+	}
+	limit := types.Limit{Max: 5, Window: time.Minute}
+	for name, tc := range map[string]struct {
+		rule types.RouteRateLimitRule
+		ok   bool
+	}{
+		"the default algorithm":         {types.RouteRateLimitRule{Name: "a", Limit: limit}, true},
+		"fixed window by name":          {types.RouteRateLimitRule{Name: "b", Limit: limit, Algorithm: types.AlgorithmFixedWindow}, true},
+		"an unknown algorithm":          {types.RouteRateLimitRule{Name: "c", Limit: limit, Algorithm: "token_bucket"}, false},
+		"no limit":                      {types.RouteRateLimitRule{Name: "d"}, false},
+		"no window":                     {types.RouteRateLimitRule{Name: "e", Limit: types.Limit{Max: 5}}, false},
+		"its own limiter, any limit":    {types.RouteRateLimitRule{Name: "f", Limiter: fixedLimiter{allowed: true}}, true},
+		"disabled rules are not judged": {types.RouteRateLimitRule{Name: "g", Disabled: true}, true},
+	} {
+		if err := declare(tc.rule); (err == nil) != tc.ok {
+			t.Errorf("%s: Declare = %v, want ok=%v", name, err, tc.ok)
+		}
+	}
+
+	built, own := fixedLimiter{allowed: true}, fixedLimiter{allowed: false}
+	rl := &DefaultRateLimiter{limiters: map[types.RateLimitAlgorithm]types.Limiter{types.AlgorithmFixedWindow: built}}
+	if got, err := rl.limiterFor("r", "", nil); err != nil || got != types.Limiter(built) {
+		t.Errorf("an empty algorithm resolved to (%v, %v), want the fixed window", got, err)
+	}
+	if got, err := rl.limiterFor("r", types.AlgorithmFixedWindow, own); err != nil || got != types.Limiter(own) {
+		t.Errorf("a rule's own limiter resolved to (%v, %v), want its own", got, err)
+	}
+	if _, err := rl.limiterFor("r", "token_bucket", nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		t.Errorf("an algorithm with no limiter returned %v, want a configuration error", err)
 	}
 }
 

@@ -633,8 +633,9 @@ func rateLimitsContract(t *testing.T, db behemoth.Database, resolver behemoth.Sc
 	var wg sync.WaitGroup
 	for range calls {
 		wg.Go(func() {
-			n, err := st.IncrementRateLimit(ctx, "signin:1.2.3.4", time.Minute)
+			n, resetAt, err := st.IncrementRateLimit(ctx, "signin:1.2.3.4", time.Minute)
 			assert.NoError(t, err)
+			assert.True(t, resetAt.Equal(t0.Add(time.Minute)), "every attempt in a window gets the window's end: %v", resetAt)
 			counts <- n
 		})
 	}
@@ -647,19 +648,21 @@ func rateLimitsContract(t *testing.T, db behemoth.Database, resolver behemoth.Sc
 	assert.Len(t, seen, calls, "concurrent attempts each get their own count")
 	assert.True(t, seen[1] && seen[calls], "counts run 1..%d: %v", calls, seen)
 
-	other, err := st.IncrementRateLimit(ctx, "signin:5.6.7.8", time.Minute)
+	other, _, err := st.IncrementRateLimit(ctx, "signin:5.6.7.8", time.Minute)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, other, "keys count independently")
 
 	clock.Store(59)
-	n, err := st.IncrementRateLimit(ctx, "signin:1.2.3.4", time.Minute)
+	n, resetAt, err := st.IncrementRateLimit(ctx, "signin:1.2.3.4", time.Minute)
 	require.NoError(t, err)
 	assert.EqualValues(t, calls+1, n, "still inside the window")
+	assert.True(t, resetAt.Equal(t0.Add(time.Minute)), "the window's end does not move with later attempts: %v", resetAt)
 
 	clock.Store(61)
-	n, err = st.IncrementRateLimit(ctx, "signin:1.2.3.4", time.Minute)
+	n, resetAt, err = st.IncrementRateLimit(ctx, "signin:1.2.3.4", time.Minute)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, n, "a passed window starts again")
+	assert.True(t, resetAt.Equal(t0.Add(121*time.Second)), "and ends a window after the attempt that opened it: %v", resetAt)
 
 	clock.Store(100) // 1.2.3.4's new window runs to 121; 5.6.7.8's ended at 60
 	require.NoError(t, st.PurgeExpiredRateLimits(ctx))

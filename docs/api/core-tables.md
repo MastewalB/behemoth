@@ -74,7 +74,7 @@ Use `ac.TokenManager`.
 
 ## Rate limits
 
-`rate_limits` holds the rate limiter's counters. `Store.IncrementRateLimit` increments a counter atomically and starts a new window when the old one has passed. A direct write can lose increments under concurrency or leave a window that never resets.
+`rate_limits` holds the rate limiter's counters. `Store.IncrementRateLimit` increments a counter atomically, starts a new window when the old one has passed, and returns the count and the window's end. With Redis configured as the key-value storage the counters are kept there and this table stays empty. A direct write can lose increments under concurrency or leave a window that never resets.
 
 ## Audit log
 

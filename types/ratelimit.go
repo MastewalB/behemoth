@@ -7,9 +7,25 @@ import (
 	"time"
 )
 
-// Limiter is one rate-limiting strategy. Multiple concrete algorithms
-// implement it and a rule picks which one it wants based on the desired behavior
-// (bursty API traffic vs. strict auth-attempt counting)
+// RateLimitAlgorithm names the strategy a rule counts with. A rule holds the
+// name and not a Limiter because rules are declared at Prepare, before any
+// database or key-value connection exists: Boot builds the Limiter of each
+// algorithm once it has resolved where counters are kept.
+type RateLimitAlgorithm string
+
+// AlgorithmFixedWindow allows Limit.Max attempts per key in each window of
+// Limit.Window. A window opens with the first attempt and the count starts
+// again when it has passed. It is the default, and the only algorithm core
+// builds.
+//
+// A client can use up one window at its end and the next at its start, so up
+// to twice Max attempts can fall within one Window's length. A sliding
+// window or a token bucket would not allow that; neither is built. Each needs
+// more state per key than the one counter AtomicIncrementer keeps.
+const AlgorithmFixedWindow RateLimitAlgorithm = "fixed_window"
+
+// Limiter is one rate-limiting strategy: the implementation behind a
+// RateLimitAlgorithm, or a rule's own (the rules' Limiter field).
 type Limiter interface {
 	// Allow atomically checks-and-records one attempt against key.
 	// Returns allowed, and if not, a RetryAfter hint.
@@ -43,9 +59,14 @@ type RouteRateLimitRule struct {
 	Method string // exact verb, or "*" to match any method
 	Path   string // canonical pattern: literal segments, "*" (exactly one segment), "**" (trailing, zero or more, must be the last segment)
 
-	KeyFunc    func(r *http.Request, ip string) string
-	Limit      Limit
-	Algorithm  Limiter
+	KeyFunc func(r *http.Request, ip string) string
+	Limit   Limit
+	// Algorithm names the strategy. Empty means AlgorithmFixedWindow.
+	Algorithm RateLimitAlgorithm
+	// Limiter, if set, is used instead of the one Boot builds for Algorithm.
+	// It is for a strategy core does not have; it has to bring its own
+	// storage, since it exists before Boot.
+	Limiter    Limiter
 	Action     RateLimitAction
 	LockoutFor time.Duration
 
@@ -58,7 +79,8 @@ type HookRateLimitRule struct {
 	Point      HookPoint                      // which hook point this rule evaluates against
 	KeyFunc    func(hctx *HookContext) string // e.g. by IP, by email, by userID+IP composite
 	Limit      Limit
-	Algorithm  Limiter // which strategy this rule uses
+	Algorithm  RateLimitAlgorithm // which strategy this rule uses; empty means AlgorithmFixedWindow
+	Limiter    Limiter            // optional: the rule's own limiter, used instead of Algorithm's (see RouteRateLimitRule)
 	Action     RateLimitAction
 	LockoutFor time.Duration // only relevant if Action == ActionLockout
 
@@ -171,11 +193,19 @@ func BestRouteMatch(rules []RouteRateLimitRule, method, path string) (RouteRateL
 	return bestRule, found
 }
 
-// AtomicIncrementer is an optional capability a KeyValueStorage backend may
-// implement (Redis's INCR/EXPIRE natively support this). Rate limiting checks
-// for it via assertion.
+// AtomicIncrementer is a fixed-window counter: the storage behind
+// AlgorithmFixedWindow. It is an optional capability of a KeyValueStorage
+// (the Redis adapter has it), which Boot finds by type assertion; without
+// one, counters are kept in the rate_limits table.
 type AtomicIncrementer interface {
-	Increment(ctx context.Context, key string, ttl time.Duration) (count int64, err error)
+	// Increment counts one attempt against key, as one atomic step, and
+	// returns the count in the current window and when that window ends.
+	// The first attempt for a key opens a window of ttl; the first one
+	// after it has ended opens the next, starting again at 1.
+	//
+	// resetAt is what a refused caller is told to wait for. It is a time
+	// and not a duration so that it stays right however long the call took.
+	Increment(ctx context.Context, key string, ttl time.Duration) (count int64, resetAt time.Time, err error)
 }
 
 type RateLimiter interface {

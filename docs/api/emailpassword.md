@@ -65,7 +65,7 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 | `POST /sign-in/email` | the body is not valid JSON | `400` | `{"error": "request validation error", "code": "request_validation_error"}` |
 | `POST /sign-in/email` | unknown email, wrong password, or a user who has no password | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
 | `POST /sign-in/email`, `POST /sign-out` | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
-| any | too many requests | `429` with a `Retry-After` header | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
+| any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
 
 Sign-in gives the same answer for an unknown email and a wrong password, so the response does not show which addresses have an account.

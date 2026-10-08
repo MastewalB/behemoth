@@ -440,6 +440,21 @@ Rules for rewriting the payload:
 
 A rate-limit rule can be attached to a before point with `HookRateLimitRule`. The dispatcher checks it before the first handler runs.
 
+```go
+ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+	Name:  "myplugin.profile.updates",
+	Point: hooks.HookUserBeforeUpdate,
+	KeyFunc: func(hctx *types.HookContext) string {
+		return fmt.Sprint(hctx.Values[hooks.HookValueUserID])
+	},
+	Limit: types.Limit{Max: 20, Window: time.Hour},
+	Owner: "myplugin",
+})
+```
+
+- `KeyFunc` gets the `HookContext`, not the payload. It can key on `hctx.Values` and on the request, so a rule on `auth.signIn.before` can't key on the email being tried.
+
+- `Limit` allows `Max` attempts per key in each `Window`. The window opens with the first attempt, and the count starts again when it has passed (a fixed window, the only algorithm).
 - Every rule declared on the point is checked, and all must pass.
 - A rejected attempt returns a `rate_limited` error with a retry-after. No handler runs, and the caller can't tell it apart from a before handler stopping the operation.
 - Rules can only be attached to before points.

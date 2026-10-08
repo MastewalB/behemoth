@@ -314,7 +314,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err != nil {
 		return nil, err
 	}
-	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, store: counterStore, cfg: cfg.RateLimit, tel: tel.Named("ratelimit")}
+	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, limiters: newLimiters(counterStore), cfg: cfg.RateLimit, tel: tel.Named("ratelimit")}
 	dispatcher := NewDefaultDispatcher(app.Hooks, frozenChains, rateLimiter, tel)
 
 	ac := &types.AuthContext{
@@ -817,15 +817,60 @@ func lookup(plugins []types.Plugin, name string) types.Plugin {
 // when no KeyValueStorage provides one.
 type dbCounterStore struct{ store *store.Store }
 
-func (s *dbCounterStore) Increment(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+func (s *dbCounterStore) Increment(ctx context.Context, key string, ttl time.Duration) (int64, time.Time, error) {
 	return s.store.IncrementRateLimit(ctx, key, ttl)
 }
 
+// DefaultRateLimiter evaluates the declared rules. limiters holds the Limiter
+// Boot built for each algorithm, over the counter storage it resolved
+// (newLimiters); a rule's own Limiter takes its place.
 type DefaultRateLimiter struct {
-	catalog types.RateLimitCatalog
-	store   types.AtomicIncrementer
-	cfg     types.RateLimitConfig
-	tel     *telemetry.Telemetry
+	catalog  types.RateLimitCatalog
+	limiters map[types.RateLimitAlgorithm]types.Limiter
+	cfg      types.RateLimitConfig
+	tel      *telemetry.Telemetry
+}
+
+// knownAlgorithms are the algorithms a rule may name; newLimiters builds a
+// Limiter for each. The catalog rejects any other name at Prepare.
+var knownAlgorithms = map[types.RateLimitAlgorithm]bool{types.AlgorithmFixedWindow: true}
+
+// newLimiters builds the Limiter of every known algorithm over counter.
+func newLimiters(counter types.AtomicIncrementer) map[types.RateLimitAlgorithm]types.Limiter {
+	return map[types.RateLimitAlgorithm]types.Limiter{
+		types.AlgorithmFixedWindow: ratelimit.NewFixedWindow(counter),
+	}
+}
+
+// limiterFor returns the Limiter a rule is evaluated with: its own, or the
+// one built for its algorithm, where an empty name means the fixed window.
+func (rl *DefaultRateLimiter) limiterFor(rule string, algorithm types.RateLimitAlgorithm, own types.Limiter) (types.Limiter, error) {
+	if own != nil {
+		return own, nil
+	}
+	if algorithm == "" {
+		algorithm = types.AlgorithmFixedWindow
+	}
+	if l, ok := rl.limiters[algorithm]; ok {
+		return l, nil
+	}
+	return nil, behemotherr.NewConfigurationError("RateLimiter", fmt.Sprintf("rule %q names the algorithm %q, which has no limiter", rule, algorithm), nil)
+}
+
+// checkRateLimitRule is what the catalog requires of a rule's strategy: a
+// known algorithm with a limit that can be counted, or a Limiter of its own,
+// whose limit is its own business.
+func checkRateLimitRule(name string, algorithm types.RateLimitAlgorithm, own types.Limiter, limit types.Limit) error {
+	if own != nil {
+		return nil
+	}
+	if algorithm != "" && !knownAlgorithms[algorithm] {
+		return fmt.Errorf("ratelimit: rule %q names an unknown Algorithm %q", name, algorithm)
+	}
+	if limit.Max <= 0 || limit.Window <= 0 {
+		return fmt.Errorf("ratelimit: rule %q needs a Limit with a positive Max and Window", name)
+	}
+	return nil
 }
 
 func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.HookPoint, hctx *types.HookContext) error {
@@ -842,8 +887,11 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.Ho
 	rules := rl.catalog.RulesForHook(point)
 	for _, rule := range rules {
 		key := rule.Name + ":" + rule.KeyFunc(hctx)
-
-		if err := rl.evaluate(ctx, rule.Name, key, "", rule.Algorithm, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
+		limiter, err := rl.limiterFor(rule.Name, rule.Algorithm, rule.Limiter)
+		if err != nil {
+			return err
+		}
+		if err := rl.evaluate(ctx, rule.Name, key, "", limiter, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
 			return err
 		}
 	}
@@ -854,8 +902,11 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.Ho
 func (rl *DefaultRateLimiter) CheckRouteLimit(ctx context.Context, rule types.RouteRateLimitRule, r *http.Request, ipCfg *types.ClientIPConfig) error {
 	ip := types.ClientIP(r, ipCfg)
 	key := rule.Name + ":" + rule.KeyFunc(r, ip)
-
-	if err := rl.evaluate(ctx, rule.Name, key, ip, rule.Algorithm, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
+	limiter, err := rl.limiterFor(rule.Name, rule.Algorithm, rule.Limiter)
+	if err != nil {
+		return err
+	}
+	if err := rl.evaluate(ctx, rule.Name, key, ip, limiter, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
 		return err // *behemotherr.DomainError, CategoryRateLimited; ErrorMapper already maps this to 429 + Retry-After, no body parsing or session lookup ever ran
 	}
 
@@ -867,10 +918,10 @@ func (rl *DefaultRateLimiter) GetBestMatchforRoute(ctx context.Context, method, 
 	return types.BestRouteMatch(rules, method, path)
 }
 
-// evaluate is the shared core that touches the
-// AtomicIncrementer store and compares against Limit.Max. Both the
-// point-scoped path and route-scoped path call through here, so there is exactly one
-// increment/compare/lockout implementation in the whole pillar.
+// evaluate is the shared core: it asks the rule's limiter and turns a
+// refusal into an audit event and a rate-limited error. Both the
+// point-scoped path and route-scoped path call through here, so there is
+// exactly one place that handles a refusal, a lockout and a failing counter.
 func (rl *DefaultRateLimiter) evaluate(
 	ctx context.Context,
 	name, key string,
@@ -1012,22 +1063,48 @@ func CoreDeclareSchema(ic *types.PluginInitContext) error {
 	return nil
 }
 
+// RuleSignInRoute and RuleSignUpRoute are the names of core's rate-limit
+// rules on the email sign-in and sign-up routes. An application or plugin
+// that wants another limit on one of them declares a rule for the same method
+// and path with a more specific match, or the same one with Disabled set.
+const (
+	RuleSignInRoute = "core.signin.route"
+	RuleSignUpRoute = "core.signup.route"
+)
+
+// CoreDeclareRateLimitRules declares the limits core applies without being
+// asked: ten attempts a minute per client address on sign-in, and the same
+// on sign-up. The two count separately.
+//
+// The limits are per address and not per account. On sign-in that slows one
+// client guessing passwords and does not let anyone lock a user out by
+// failing on purpose. On sign-up it bounds how fast one client can create
+// accounts and make the server hash passwords.
+//
+// There is no password-reset route yet, and so no rule for one.
 func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
-	//Declare HookPointRateLimitRules
-	// Declare RouteRateLimitRules
+	byAddress := func(r *http.Request, ip string) string { return ip }
 	coreRules := []types.RouteRateLimitRule{
 		{
-			Name:      "core.signin.route",
+			Name:      RuleSignInRoute,
 			Method:    http.MethodPost,
 			Path:      "/sign-in/email",
-			KeyFunc:   func(r *http.Request, ip string) string { return ip },
+			KeyFunc:   byAddress,
 			Limit:     types.Limit{Max: 10, Window: time.Minute},
-			Algorithm: ratelimit.IdentityLimiter{}, // TODO: real algorithm; allows every request for now
+			Algorithm: types.AlgorithmFixedWindow,
 			Action:    types.ActionReject,
 			Owner:     "core",
-			Disabled:  true,
 		},
-		// analogous baseline declared for /sign-up/email, /forgot-password
+		{
+			Name:      RuleSignUpRoute,
+			Method:    http.MethodPost,
+			Path:      "/sign-up/email",
+			KeyFunc:   byAddress,
+			Limit:     types.Limit{Max: 10, Window: time.Minute},
+			Algorithm: types.AlgorithmFixedWindow,
+			Action:    types.ActionReject,
+			Owner:     "core",
+		},
 	}
 	for _, r := range coreRules {
 		if err := ic.RateLimits.DeclareRouteRateLimitRule(r); err != nil {
@@ -1037,13 +1114,16 @@ func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
 	return nil
 }
 
+// resolveRateLimitStore picks where counters are kept: the key-value storage
+// when it can count atomically (the Redis adapter), otherwise the
+// rate_limits table.
 func resolveRateLimitStore(kv behemoth.KeyValueStorage, st *store.Store) (types.AtomicIncrementer, error) {
 	if kv != nil {
 		if inc, ok := kv.(types.AtomicIncrementer); ok {
-			return inc, nil // Redis-backed path — atomic, fast
+			return inc, nil
 		}
 	}
-	return &dbCounterStore{store: st}, nil // KV absent, or lacks native INCR — DB-transactional fallback, still correct
+	return &dbCounterStore{store: st}, nil
 }
 
 type DefaultRateLimitCatalog struct {
@@ -1081,8 +1161,8 @@ func (c *DefaultRateLimitCatalog) DeclareHookRateLimitRule(rule types.HookRateLi
 	if c.names[rule.Name] {
 		return fmt.Errorf("ratelimit: rule %q already declared", rule.Name)
 	}
-	if rule.Algorithm == nil {
-		return fmt.Errorf("ratelimit: rule %q missing Algorithm", rule.Name)
+	if err := checkRateLimitRule(rule.Name, rule.Algorithm, rule.Limiter, rule.Limit); err != nil {
+		return err
 	}
 
 	// cross-validation: the point must already exist (declared by core, or by an earlier-in-dependency-order plugin, or by
@@ -1124,8 +1204,10 @@ func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule types.RouteRate
 	if c.names[rule.Name] {
 		return fmt.Errorf("ratelimitcatalog: rule name %q already declared", rule.Name)
 	}
-	if !rule.Disabled && rule.Algorithm == nil {
-		return fmt.Errorf("ratelimitcatalog: route rule %q missing Algorithm", rule.Name)
+	if !rule.Disabled {
+		if err := checkRateLimitRule(rule.Name, rule.Algorithm, rule.Limiter, rule.Limit); err != nil {
+			return err
+		}
 	}
 	if rule.Path == "" {
 		return fmt.Errorf("ratelimitcatalog: route rule %q missing Path", rule.Name)

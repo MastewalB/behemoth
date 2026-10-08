@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -585,6 +586,86 @@ func TestEmailAndPasswordCredentialsPayload(t *testing.T) {
 
 	err = back.FromMap(map[string]any{"email": "ada@example.com", "password": 5})
 	assert.True(t, behemotherr.IsValidationError(err), "got %v", err)
+}
+
+// Core limits sign-in, and sign-up, to ten attempts a minute per client
+// address. Through the router the eleventh is answered 429 with the time left
+// in the window, before the route runs. Another address is not affected, and
+// the two routes count separately.
+func TestSignInRouteIsRateLimited(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-limit.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(schema + `CREATE TABLE rate_limits (limit_key TEXT PRIMARY KEY, count BIGINT NOT NULL, expires_at TIMESTAMP NOT NULL);`)
+	require.NoError(t, err)
+
+	tel, rec := telemetrytest.New()
+	mounted := mountedRoutes{}
+	app, err := bmth.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, bmth.PrepareConfig{})
+	require.NoError(t, err)
+	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
+		},
+		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Telemetry: tel,
+		HTTP:      mounted,
+	})
+	require.NoError(t, err)
+
+	signIn := mounted["/api/auth/sign-in/email"]
+	require.NotNil(t, signIn.Handler)
+	attempt := func(remoteAddr string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, signIn.Path, strings.NewReader(`{"email":"nobody@example.com","password":"a wrong password"}`))
+		req.RemoteAddr = remoteAddr
+		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		require.NoError(t, signIn.Handler(rctx))
+		w := httptest.NewRecorder()
+		rctx.Response.Flush(w)
+		return w
+	}
+
+	for i := 1; i <= 10; i++ {
+		require.Equal(t, http.StatusUnauthorized, attempt("203.0.113.7:50000").Code, "attempt %d reaches the route", i)
+	}
+	w := attempt("203.0.113.7:50001")
+	require.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+	wait, err := strconv.Atoi(w.Header().Get("Retry-After"))
+	require.NoError(t, err, "Retry-After: %q", w.Header().Get("Retry-After"))
+	assert.Greater(t, wait, 0)
+	assert.LessOrEqual(t, wait, 60, "the time left in the window")
+
+	assert.Equal(t, http.StatusUnauthorized, attempt("198.51.100.9:50000").Code, "another address has its own count")
+
+	// The address that used up its sign-ins can still sign up: ten times.
+	signUp := mounted["/api/auth/sign-up/email"]
+	require.NotNil(t, signUp.Handler)
+	register := func(i int) *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{"email":"user%d@example.com","password":"correct horse"}`, i)
+		req := httptest.NewRequest(http.MethodPost, signUp.Path, strings.NewReader(body))
+		req.RemoteAddr = "203.0.113.7:50002"
+		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		require.NoError(t, signUp.Handler(rctx))
+		w := httptest.NewRecorder()
+		rctx.Response.Flush(w)
+		return w
+	}
+	for i := 1; i <= 10; i++ {
+		require.Equal(t, http.StatusCreated, register(i).Code, "sign-up %d reaches the route", i)
+	}
+	w = register(11)
+	require.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+	assert.NotEmpty(t, w.Header().Get("Retry-After"))
+	_, err = ac.Store.FindUserByEmail(ctx, "user11@example.com")
+	assert.True(t, behemotherr.IsNotFound(err), "the refused sign-up created nothing: %v", err)
+
+	assert.Empty(t, rec.Logger.At(slog.LevelWarn), "the counter was reachable")
+	limited := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
+	require.Len(t, limited, 2)
+	assert.Equal(t, "203.0.113.7", limited[0].IPAddress)
+	assert.Equal(t, bmth.RuleSignInRoute, limited[0].Metadata["rule"])
+	assert.Equal(t, bmth.RuleSignUpRoute, limited[1].Metadata["rule"])
 }
 
 // The email and password rules are the plugin's own options.
