@@ -537,6 +537,11 @@ func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, 
 // and .after around the revoke, as one operation: both points share
 // hctx.Values, and the session manager's revoke points start from a copy of
 // them.
+//
+// It writes nothing to a response. The session may be another client's, and
+// SignOut also runs where there is no request. A route that signs its own
+// caller out takes the token back afterwards (SessionManager.ClearToken), as
+// the plugin's sign-out route does.
 func SignOut(hctx *types.HookContext, sessionID string) error {
 	hctx = types.AsOperation(hctx)
 	hctx.Values[hooks.HookValueSessionID] = sessionID // for the operation's later points and its audit event
@@ -607,13 +612,19 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 // handleSignOut returns SignOut's error unchanged, like handleSignIn. A typed
 // error keeps its status (a hook handler's rejection, a session that no
 // longer exists). A failed revoke is a 500 from the router, which does not
-// send the error's text.
+// send the error's text. After a sign-out that went through, it takes the
+// session token back from the client.
 func (p *Plugin) handleSignOut(rctx *types.RequestContext) error {
 	sessionID, _ := rctx.Values["sessionID"].(string) // populated by session middleware upstream
 	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
 	if err := SignOut(hctx, sessionID); err != nil {
 		return err
 	}
+	// The session is the caller's own and it has ended, so the client gives
+	// its token up: with a cookie transport the response removes the cookie.
+	// A refused sign-out returned above and leaves the token in place, since
+	// its session is still live.
+	rctx.Auth.SessionManager.ClearToken(rctx)
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})
 }
 

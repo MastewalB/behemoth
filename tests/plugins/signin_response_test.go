@@ -157,9 +157,49 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 			session, err := ac.SessionManager.Validate(ctx, token)
 			require.NoError(t, err)
 			assert.Equal(t, signedIn.User.ID, session.UserID)
-			assert.Equal(t, http.StatusOK, callHeaders(t, ac, signOut, "", present).Code)
+			out := callHeaders(t, ac, signOut, "", present)
+			assert.Equal(t, http.StatusOK, out.Code)
+
+			// The sign-out takes the token back. A browser can't drop an
+			// HttpOnly cookie by itself, so the response replaces it with
+			// an expired one. A client of the other transports holds the
+			// token itself, and gets no cookie.
+			gone := (&http.Response{Header: out.Header()}).Cookies()
+			if tc.cookie == "" {
+				assert.Empty(t, gone, "no cookie to remove")
+			} else {
+				require.Len(t, gone, 1)
+				assert.Equal(t, tc.cookie, gone[0].Name)
+				assert.Empty(t, gone[0].Value)
+				assert.Negative(t, gone[0].MaxAge, "Max-Age=0 deletes the cookie")
+			}
+			assert.Empty(t, out.Header().Get(types.SessionTokenHeader), "a sign-out hands out no token")
 		})
 	}
+}
+
+// A sign-out that a hook handler refused has ended nothing. The response
+// leaves the cookie alone, because the client still needs it for a session
+// that is live.
+func TestRefusedSignOutKeepsTheCookie(t *testing.T) {
+	refuse := func(reg types.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignOutBefore, func(*types.HookContext, behemoth.M) (behemoth.M, error) {
+			return nil, behemotherr.NewInvalidInputError("test", "session", "not now", nil)
+		}, nil)
+	}
+	ac, mounted, err := bootPasswords(t, types.SessionConfig{}, refuse)
+	require.NoError(t, err)
+	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	cookies := (&http.Response{Header: w.Header()}).Cookies()
+	require.Len(t, cookies, 1)
+
+	out := callHeaders(t, ac, mounted["/api/auth/sign-out"], "", map[string]string{"Cookie": cookies[0].Name + "=" + cookies[0].Value})
+	assert.Equal(t, http.StatusBadRequest, out.Code, out.Body.String())
+	assert.Empty(t, out.Header().Values("Set-Cookie"), "the cookie is not removed")
+	_, err = ac.SessionManager.Validate(context.Background(), cookies[0].Value)
+	assert.NoError(t, err, "the session is still live")
 }
 
 // A sign-in that waits for a second factor answers with a status and no
@@ -201,6 +241,28 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 			assert.NotContains(t, body, "token", "under the header transport the body has no token")
 		}
 	}
+}
+
+// The sign-out route sits behind RequireSession, which extends the cookie of
+// a rolling session that is due. The sign-out then removes that cookie. The
+// response sets it once, and what it sets is the removal.
+func TestSignOutOfARollingSessionSetsTheCookieOnce(t *testing.T) {
+	ac, mounted, err := bootPasswords(t, types.SessionConfig{ExpiresIn: time.Hour, UpdateAge: 2 * time.Hour}, nil) // always due
+	require.NoError(t, err)
+	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	cookies := (&http.Response{Header: w.Header()}).Cookies()
+	require.Len(t, cookies, 1)
+
+	out := callHeaders(t, ac, mounted["/api/auth/sign-out"], "", map[string]string{"Cookie": cookies[0].Name + "=" + cookies[0].Value})
+	require.Equal(t, http.StatusOK, out.Code, out.Body.String())
+	gone := (&http.Response{Header: out.Header()}).Cookies()
+	require.Len(t, gone, 1, "one Set-Cookie for the session cookie: %q", out.Header().Values("Set-Cookie"))
+	assert.Empty(t, gone[0].Value)
+	assert.Negative(t, gone[0].MaxAge)
+	_, err = ac.SessionManager.Validate(context.Background(), cookies[0].Value)
+	assert.Error(t, err, "the session is revoked")
 }
 
 // A transport Boot does not know stops it, instead of leaving sign-in

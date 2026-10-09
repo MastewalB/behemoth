@@ -18,6 +18,13 @@ const (
 	// (types.RequireFreshSession). The client asks the user to sign in
 	// again and retries.
 	ErrorCodeSessionNotFresh = "session_not_fresh"
+	// ErrorCodeSessionMissing is the code of a request to a route that needs
+	// a session (types.RequireSession) and carries no session token.
+	ErrorCodeSessionMissing = "session_missing"
+	// ErrorCodeSessionInvalid is the code of a request to such a route whose
+	// token belongs to no session: it was never issued, or its session no
+	// longer exists.
+	ErrorCodeSessionInvalid = "session_invalid"
 )
 
 func NewSessionError(op, code string, original error) error {
@@ -46,6 +53,10 @@ func sessionPublicMessage(code string) string {
 		return "invalid session state"
 	case ErrorCodeSessionNotFresh:
 		return "recent sign-in required"
+	case ErrorCodeSessionMissing:
+		return "missing session token"
+	case ErrorCodeSessionInvalid:
+		return "invalid session"
 	default:
 		return "invalid session"
 	}

@@ -36,10 +36,15 @@ type SessionManager interface {
 	// handler that has actually verified a second factor.
 	Promote(ctx context.Context, sessionID string) (*models.Session, error)
 
-	// Touch applies the rolling-expiration throttle. Called by middleware
-	// after a successful Validate; implementations decide internally whether
-	// enough time has passed (per UpdateAge) to actually write.
-	Touch(ctx context.Context, sessionID string) error // rolling-expiration throttle, internal use
+	// Touch applies the rolling expiration: it extends a session in use
+	// once less than SessionConfig.UpdateAge is left of it. RequireSession
+	// calls it on every authenticated request, with the session Validate
+	// returned. Whether an extension is due is read off that session, so a
+	// request that is not due costs no read and no write. It returns the
+	// session with its new expiry when it extended it, and nil when it did
+	// not. The caller then extends the client's copy of the token
+	// (ExtendToken).
+	Touch(ctx context.Context, session *models.Session) (*models.Session, error)
 
 	Revoke(ctx context.Context, sessionID string, reason string) error
 
@@ -80,6 +85,33 @@ type SessionManager interface {
 	// JSON body. WriteSignIn does both steps, and is what a sign-in route
 	// calls; a route that calls WriteToken itself has to act on the result.
 	WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBody bool)
+
+	// ClearToken takes the token back from the client, for a route that has
+	// ended the caller's own session, such as sign-out. It is the
+	// counterpart of WriteToken. For TransportCookie and TransportBoth it
+	// sets the session cookie again, empty and already expired, so that the
+	// browser drops it: the cookie is HttpOnly, which a script can't remove.
+	// For TransportHeader and TransportBody it writes nothing, because the
+	// client holds the token itself and discards it.
+	//
+	// It only writes to the response. Ending the session is Revoke's job,
+	// and a route calls ClearToken after the revoke has succeeded.
+	ClearToken(rctx *RequestContext)
+
+	// ExtendToken keeps the client's copy of the token in step with a
+	// session that Touch extended. A browser drops a cookie at the date the
+	// cookie was set with, however long the session lasts on the server, so
+	// for TransportCookie and TransportBoth it sets the cookie again with
+	// session's new expiry. It does so only when the request carried
+	// rawToken in that cookie: under TransportBoth a request may present the
+	// token as a bearer token while its cookie holds another session's. For
+	// TransportHeader and TransportBody it writes nothing, because those
+	// clients keep the token without a date.
+	//
+	// It reports whether it wrote the cookie. The response then carries the
+	// session token, and the caller keeps it out of caches, as RequireSession
+	// does with Cache-Control: no-store.
+	ExtendToken(rctx *RequestContext, rawToken string, session *models.Session) (written bool)
 
 	// ExtractToken reads the token from a request per Transport: the
 	// session cookie, the Authorization header ("Bearer <token>"), or
@@ -164,21 +196,63 @@ func RequireFreshSession(sm SessionManager) Middleware {
 	}
 }
 
+// RequireSession lets a request through only with a valid active session.
+// It reads the token where the transport says (SessionManager.ExtractToken)
+// and puts the session in rctx.Values["session"] and its id in
+// rctx.Values["sessionID"].
+//
+// A request it refuses gets a typed session error, which the router answers
+// with 401 and the error's public message and code:
+//
+//	no token in the request                session_missing
+//	a token that belongs to no session     session_invalid
+//	a revoked or expired session           session_revoked, session_expired
+//	a session waiting for a second factor  session_pending
+//
+// It writes no response itself. Any other error of SessionManager.Validate
+// is a failure of the system, such as a database that is down, and is
+// returned unchanged: the router answers it with 500, logs it, and keeps its
+// text from the client. Answering it with 401 would tell a signed-in client
+// that its session is gone.
+//
+// It also applies the rolling expiration. When the session was due for an
+// extension (SessionManager.Touch), the handler sees the session with its
+// new expiry, and a client that sent the token in a cookie gets the cookie
+// again with the new date (SessionManager.ExtendToken). That response carries
+// the session token, so it is marked Cache-Control: no-store after the
+// handler has run, whatever the handler set. An extension that fails is not
+// an error of the request: the session is used as it was validated.
 func RequireSession(sm SessionManager) Middleware {
 	return func(next HandlerFunc) HandlerFunc {
 		return func(rctx *RequestContext) error {
+			const op = "RequireSession"
 			token, ok := sm.ExtractToken(rctx.Request)
 			if !ok {
-				return rctx.Response.Error(http.StatusUnauthorized, "missing session token")
+				return behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionMissing, nil)
 			}
 			session, err := sm.Validate(rctx.Ctx, token)
 			if err != nil {
-				return rctx.Response.Error(http.StatusUnauthorized, err.Error())
+				// To the lookup, a token that resolves to nothing is "not
+				// found", which the router answers with 404. To a route
+				// that needs a session it is a request without one.
+				if behemotherr.IsNotFound(err) {
+					return behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionInvalid, err)
+				}
+				return err
+			}
+			tokenWritten := false
+			if extended, err := sm.Touch(rctx.Ctx, session); err == nil && extended != nil {
+				session = extended
+				tokenWritten = sm.ExtendToken(rctx, token, session)
 			}
 			rctx.Values["session"] = session
 			rctx.Values["sessionID"] = session.ID
-			_ = sm.Touch(rctx.Ctx, session.ID) // rolling-expiration throttle, best-effort
-			return next(rctx)
+
+			err = next(rctx)
+			if tokenWritten {
+				rctx.Response.SetHeader("Cache-Control", "no-store")
+			}
+			return err
 		}
 	}
 }

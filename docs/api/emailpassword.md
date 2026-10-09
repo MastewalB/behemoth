@@ -56,7 +56,7 @@ The routes sit directly under the router's base path.
 | --- | --- | --- |
 | `POST /sign-up/email` | `email`, `password`, and optionally `username`, `firstname`, `lastname`, `image_url` | `201` with `{"user": {...}}`. Other fields in the body are ignored. |
 | `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
-| `POST /sign-out` | none; needs a valid session | `200`, and the session is revoked. |
+| `POST /sign-out` | none; needs a valid session | `200` with `{"status": "signed_out"}`, and the session is revoked. With a cookie transport the response also removes the cookie. |
 
 The user is keyed by column name (`id`, `email`, `email_verified`, `image_url`, ...). [Sessions](sessions.md) describes the transports, the response body and the user's JSON in full.
 
@@ -66,8 +66,10 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 
 | Route | When | Status | Body |
 | --- | --- | --- | --- |
-| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
-| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
+| `POST /sign-in/email` | the body is not valid JSON | `400` | `{"error": "request validation error", "code": "request_validation_error"}` |
+| `POST /sign-in/email` | unknown email, wrong password, or a user who has no password | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
+| `POST /sign-out` | the request has no session token | `401` | `{"error": "missing session token", "code": "session_missing"}` |
+| `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. See [Sessions](sessions.md#protecting-your-own-routes). |
 | `POST /sign-in/email`, `POST /sign-out` | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
 | any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
@@ -137,7 +139,7 @@ default:
 }
 ```
 
-`emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points.
+`emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points. It writes nothing to a response, so the session's cookie stays with its browser. A route of yours that calls it for the caller's own session removes the cookie afterwards with `ac.SessionManager.ClearToken(rctx)`; see [Sessions](sessions.md#writing-a-route-that-ends-the-session).
 
 ## Rejecting a sign-up from a hook
 

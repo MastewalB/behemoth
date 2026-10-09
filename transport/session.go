@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -329,23 +330,31 @@ func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) 
 	return promoted, nil
 }
 
-func (sm *DefaultSessionManager) Touch(ctx context.Context, sessionID string) error {
+// Touch implements [types.SessionManager]. It returns the session only when
+// it extended it, so the caller knows to extend the client's cookie too.
+//
+// It runs on every authenticated request, so the usual case has to cost
+// nothing: whether an extension is due is read off session, the copy the
+// caller validated, and a session that is not due is neither read nor
+// written. When that copy says an extension is due, the row decides. The
+// copy may come from the cache, and another request may have extended or
+// revoked the session since.
+func (sm *DefaultSessionManager) Touch(ctx context.Context, session *models.Session) (*models.Session, error) {
 	const op = "SessionManager.Touch"
 
-	m, err := sm.st.FindSessionByID(ctx, sessionID)
-	if err != nil {
-		return behemotherr.WrapOp(op, "session", err)
-	}
-	if m.State == models.SessionRevoked {
-		return nil // silently no-op; a revoked session being "used" isn't an error worth surfacing to request middleware
+	if session == nil || !sm.extensionDue(session) {
+		return nil, nil
 	}
 
-	// Throttle: only actually write if we've crossed (ExpiresAt - UpdateAge).
-	// Extending on every request would mean a write per authenticated
-	// request at scale.
-	threshold := m.ExpiresAt.Add(-sm.cfg.UpdateAge)
-	if time.Now().Before(threshold) {
-		return nil // not due yet
+	m, err := sm.st.FindSessionByID(ctx, session.ID)
+	if err != nil {
+		return nil, behemotherr.WrapOp(op, "session", err)
+	}
+	// A revoked session being "used" isn't an error worth surfacing to
+	// request middleware, and one another request has just extended needs
+	// nothing more.
+	if m.State == models.SessionRevoked || !sm.extensionDue(m) {
+		return nil, nil
 	}
 
 	now := time.Now()
@@ -353,15 +362,26 @@ func (sm *DefaultSessionManager) Touch(ctx context.Context, sessionID string) er
 	if m.State == models.SessionPending {
 		ttl = sm.cfg.PendingExpiresIn
 	}
-	touched, err := sm.st.UpdateSession(ctx, sessionID, behemoth.M{
+	touched, err := sm.st.UpdateSession(ctx, m.ID, behemoth.M{
 		models.SessionLastActiveAt: now,
 		models.SessionExpiresAt:    now.Add(ttl),
 	})
 	if err != nil {
-		return behemotherr.WrapOp(op, "session", err)
+		return nil, behemotherr.WrapOp(op, "session", err)
 	}
 	sm.cacheSet(ctx, touched)
-	return nil
+	return touched, nil
+}
+
+// extensionDue reports whether m is in the last UpdateAge of its life, which
+// is when the rolling expiration extends it. Extending on every request
+// would mean a write per authenticated request. With UpdateAge at zero the
+// rolling expiration is off, and no session is ever due.
+func (sm *DefaultSessionManager) extensionDue(m *models.Session) bool {
+	if sm.cfg.UpdateAge <= 0 {
+		return false
+	}
+	return !time.Now().Before(m.ExpiresAt.Add(-sm.cfg.UpdateAge))
 }
 
 // ListForUser implements [types.SessionManager].
@@ -451,14 +471,34 @@ func (sm *DefaultSessionManager) Discard(ctx context.Context, sessions []*models
 // SupportsRevocation implements [types.SessionManager].
 func (sm *DefaultSessionManager) SupportsRevocation() bool { return true }
 
+// sessionCookie is the cookie the session token travels in. WriteToken,
+// ExtendToken and ClearToken build it here, because a browser replaces a
+// cookie only with one of the same name and path.
+func (sm *DefaultSessionManager) sessionCookie(value string, expires time.Time) *http.Cookie {
+	return &http.Cookie{
+		Name: sm.cfg.CookieName, Value: value, Expires: expires,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/",
+	}
+}
+
+// setCookie queues the session cookie on the response, in place of one an
+// earlier step of the same request queued. One request can write it twice:
+// RequireSession extends the cookie, and the sign-out route behind it then
+// removes it. A response should not set a cookie twice (RFC 6265, section
+// 4.1.1), so the last write is the only one sent.
+func (sm *DefaultSessionManager) setCookie(rctx *types.RequestContext, cookie *http.Cookie) {
+	headers := rctx.Response.Headers
+	headers["Set-Cookie"] = slices.DeleteFunc(headers["Set-Cookie"], func(queued string) bool {
+		return strings.HasPrefix(queued, cookie.Name+"=")
+	})
+	rctx.Response.Cookie(cookie)
+}
+
 // WriteToken implements [types.SessionManager].
 func (sm *DefaultSessionManager) WriteToken(rctx *types.RequestContext, rawToken string, session *models.Session) (inBody bool) {
 	switch sm.cfg.Transport {
 	case types.TransportCookie, types.TransportBoth:
-		rctx.Response.Cookie(&http.Cookie{
-			Name: sm.cfg.CookieName, Value: rawToken, Expires: session.ExpiresAt,
-			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/",
-		})
+		sm.setCookie(rctx, sm.sessionCookie(rawToken, session.ExpiresAt))
 	}
 	switch sm.cfg.Transport {
 	case types.TransportHeader, types.TransportBoth:
@@ -467,6 +507,35 @@ func (sm *DefaultSessionManager) WriteToken(rctx *types.RequestContext, rawToken
 	// The body is the route's to write, so for TransportBody the caller is
 	// told to put the token there.
 	return sm.cfg.Transport == types.TransportBody
+}
+
+// ClearToken implements [types.SessionManager].
+func (sm *DefaultSessionManager) ClearToken(rctx *types.RequestContext) {
+	switch sm.cfg.Transport {
+	case types.TransportCookie, types.TransportBoth:
+		// An empty cookie that has already expired makes the browser drop
+		// the one it holds. Max-Age says so to current browsers, and the
+		// date to those that only read Expires.
+		expired := sm.sessionCookie("", time.Unix(0, 0))
+		expired.MaxAge = -1
+		sm.setCookie(rctx, expired)
+	}
+}
+
+// ExtendToken implements [types.SessionManager].
+func (sm *DefaultSessionManager) ExtendToken(rctx *types.RequestContext, rawToken string, session *models.Session) (written bool) {
+	switch sm.cfg.Transport {
+	case types.TransportCookie, types.TransportBoth:
+		// Only a client that sent the token in the cookie depends on the
+		// cookie's date. Under TransportBoth the token may have come as a
+		// bearer token, and the cookie, if there is one, may be another
+		// session's.
+		if sent, err := rctx.Request.Cookie(sm.cfg.CookieName); err == nil && sent.Value == rawToken {
+			sm.setCookie(rctx, sm.sessionCookie(rawToken, session.ExpiresAt))
+			return true
+		}
+	}
+	return false
 }
 
 // ExtractToken implements [types.SessionManager]. A client of

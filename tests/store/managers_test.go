@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
@@ -218,10 +220,186 @@ func TestSessionTouchExtendsExpiry(t *testing.T) {
 	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(10 * time.Millisecond)
-	require.NoError(t, sm.Touch(ctx, sess.ID))
+	extended, err := sm.Touch(ctx, sess)
+	require.NoError(t, err)
+	require.NotNil(t, extended, "Touch returns the session it extended")
 	got, err := sm.Get(ctx, raw)
 	require.NoError(t, err)
 	assert.True(t, got.ExpiresAt.After(sess.ExpiresAt), "expiry moved forward")
+	assert.True(t, extended.ExpiresAt.Equal(got.ExpiresAt), "and that is the expiry Touch reports")
+
+	// Not due: with UpdateAge at zero a session is never extended, and
+	// Touch says so by returning no session.
+	fixed, _ := newSessionManager(t, types.SessionConfig{})
+	sess, _, err = fixed.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	extended, err = fixed.Touch(ctx, sess)
+	require.NoError(t, err)
+	assert.Nil(t, extended)
+	extended, err = fixed.Touch(ctx, nil)
+	require.NoError(t, err)
+	assert.Nil(t, extended, "no session, nothing to extend")
+}
+
+// Touch runs on every authenticated request. It decides from the session it
+// is handed, and goes to the database only when that session is due. The row
+// then has the last word, because the copy may be older than the row.
+func TestSessionTouchDecidesFromTheSessionItIsGiven(t *testing.T) {
+	ctx := context.Background()
+	sm, _ := newSessionManager(t, types.SessionConfig{UpdateAge: 30 * time.Minute}) // due in the second half of the hour a session lasts
+
+	// Not due: the row is not looked for. A session that was never stored
+	// shows it, since reading it would fail.
+	unstored := &models.Session{ID: "not-in-the-database", State: models.SessionActive, ExpiresAt: time.Now().Add(time.Hour)}
+	extended, err := sm.Touch(ctx, unstored)
+	require.NoError(t, err, "a session that is not due costs no read")
+	assert.Nil(t, extended)
+
+	// Due by the copy, not by the row: another request has extended the
+	// session already. Nothing is written.
+	fresh, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	stale := *fresh
+	stale.ExpiresAt = time.Now().Add(time.Minute)
+	extended, err = sm.Touch(ctx, &stale)
+	require.NoError(t, err)
+	assert.Nil(t, extended, "the row is not due")
+	stored, err := sm.Get(ctx, raw)
+	require.NoError(t, err)
+	assert.True(t, stored.ExpiresAt.Equal(fresh.ExpiresAt), "the expiry is where it was")
+
+	// Due by the copy, and the row has been revoked since.
+	require.NoError(t, sm.Revoke(ctx, fresh.ID, "test"))
+	extended, err = sm.Touch(ctx, &stale)
+	require.NoError(t, err)
+	assert.Nil(t, extended, "a revoked session is not extended")
+
+	// Due by the copy and by the row is TestSessionTouchExtendsExpiry.
+}
+
+// RequireSession refuses a request with a typed session error and writes no
+// response of its own, so the router answers every refusal the same way: 401
+// with a public message and a code. A failure of the system is not a
+// refusal. It passes through as it is, and the router answers it with 500
+// and keeps its text from the client.
+func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "refusals.db")+"?_busy_timeout=10000")
+	require.NoError(t, err)
+	t.Cleanup(func() { sqlDB.Close() })
+	_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
+	require.NoError(t, err)
+	sm := transport.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t),
+		types.SessionConfig{Transport: types.TransportHeader, ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		&passDispatcher{}, nil, managersAuth, nil)
+
+	reached := 0
+	handler := types.RequireSession(sm)(func(*types.RequestContext) error {
+		reached++
+		return nil
+	})
+	// request returns what the router would answer with: the status and
+	// body its error mapper gives the middleware's error.
+	request := func(token string) (rctx *types.RequestContext, status int, body behemoth.M, err error) {
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rctx = &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		if err = handler(rctx); err != nil {
+			status, body = (&behemotherr.DefaultErrorMapper{}).Map(err)
+		}
+		return rctx, status, body, err
+	}
+
+	_, liveToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	revoked, revokedToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	require.NoError(t, sm.Revoke(ctx, revoked.ID, "test"))
+	_, pendingToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionPending})
+	require.NoError(t, err)
+
+	for name, tc := range map[string]struct{ token, code, message string }{
+		"no token":                    {"", behemotherr.ErrorCodeSessionMissing, "missing session token"},
+		"a token of no session":       {"never-issued", behemotherr.ErrorCodeSessionInvalid, "invalid session"},
+		"a revoked session":           {revokedToken, behemotherr.ErrorCodeSessionRevoked, "session has been revoked"},
+		"waiting for a second factor": {pendingToken, behemotherr.ErrorCodeSessionPending, "additional verification required"},
+	} {
+		rctx, status, body, err := request(tc.token)
+		require.Error(t, err, name)
+		assert.True(t, behemotherr.Is(err, behemotherr.CategorySession), "%s: a session error: %v", name, err)
+		assert.Equal(t, http.StatusUnauthorized, status, name)
+		assert.Equal(t, behemoth.M{"error": tc.message, "code": tc.code}, body, name)
+		assert.Equal(t, http.StatusOK, rctx.Response.Code, "%s: the middleware wrote no response of its own", name)
+		assert.Empty(t, rctx.Response.Headers, name)
+	}
+	assert.Zero(t, reached, "no refused request reached the handler")
+
+	_, _, _, err = request(liveToken)
+	require.NoError(t, err)
+	assert.Equal(t, 1, reached)
+
+	// The database fails. The session may be perfectly good, so this is not
+	// a 401: a client would take that for the end of its session.
+	require.NoError(t, sqlDB.Close())
+	_, status, body, err := request(liveToken)
+	require.Error(t, err)
+	assert.False(t, behemotherr.Is(err, behemotherr.CategorySession), "not a refusal: %v", err)
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryDatabase), "the store's error, unchanged: %v", err)
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, behemoth.M{"error": "an internal error occurred", "code": "database_error"}, body, "the error's own text stays on the server")
+	assert.Equal(t, 1, reached, "the request did not reach the handler")
+}
+
+// RequireSession runs on every authenticated request, so what it costs
+// matters. With a session cache, a request whose session is not due for an
+// extension is served without a statement to the database. Without a cache
+// it costs the one read that validates the token.
+func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		cfg    types.SessionConfig
+		cached bool
+		want   int // statements one request runs
+	}{
+		"cache, rolling off":         {types.SessionConfig{}, true, 0},
+		"cache, rolling on, not due": {types.SessionConfig{UpdateAge: 30 * time.Minute}, true, 0},
+		"no cache, rolling off":      {types.SessionConfig{}, false, 1},
+		"no cache, not due":          {types.SessionConfig{UpdateAge: 30 * time.Minute}, false, 1},
+	} {
+		// The adapter logs each statement at debug, which is how they are
+		// counted.
+		_, rec := telemetrytest.New()
+		sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "cost.db")+"?_busy_timeout=10000")
+		require.NoError(t, err, name)
+		t.Cleanup(func() { sqlDB.Close() })
+		_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
+		require.NoError(t, err, name)
+		var kv behemoth.KeyValueStorage
+		if tc.cached {
+			kv = &memoryKV{entries: map[string]string{}}
+		}
+		tc.cfg.ExpiresIn = time.Hour
+		sm := transport.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil).WithLogger(rec.Logger)),
+			kv, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
+		_, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+		require.NoError(t, err, name)
+		require.NotEmpty(t, rec.Logger.At(slog.LevelDebug), "%s: creating the session ran statements, so they are being counted", name)
+
+		reached := false
+		handler := types.RequireSession(sm)(func(*types.RequestContext) error {
+			reached = true
+			return nil
+		})
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.AddCookie(&http.Cookie{Name: "session_token", Value: raw})
+		rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rec.Logger.Reset()
+		require.NoError(t, handler(rctx), name)
+		require.True(t, reached, name)
+		assert.Len(t, rec.Logger.At(slog.LevelDebug), tc.want, "%s: statements run by one authenticated request", name)
+	}
 }
 
 func TestSessionRevokeAllAndEviction(t *testing.T) {
@@ -593,9 +771,8 @@ func TestSessionFreshness(t *testing.T) {
 	_, err = request("Bearer " + raw)
 	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionNotFresh), "%v", err)
 	assert.True(t, behemotherr.Is(err, behemotherr.CategorySession), "a session error, answered with 401: %v", err)
-	rctx, err := request("")
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusUnauthorized, rctx.Response.Code, "without a session it answers as RequireSession does")
+	_, err = request("")
+	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionMissing), "without a session it answers as RequireSession does: %v", err)
 	assert.Equal(t, 1, reached, "neither request reached the handler")
 
 	promoted, err := sm.Promote(ctx, pending.ID)
@@ -669,6 +846,29 @@ func TestSessionTokenTransports(t *testing.T) {
 		assert.Equal(t, wantHeader, rctx.Response.Headers.Get(types.SessionTokenHeader), "%s: %s", name, types.SessionTokenHeader)
 		assert.Empty(t, rctx.Values, "%s: nothing is parked in the request's values", name)
 
+		// ClearToken takes back what WriteToken handed over. A browser
+		// replaces a cookie only with one of the same name and path, so the
+		// cookie it sets is the one above, emptied and expired. A transport
+		// without a cookie has nothing to take back.
+		cleared := &types.RequestContext{Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		sm.ClearToken(cleared)
+		if tc.cookie == "" {
+			assert.Empty(t, cleared.Response.Headers, "%s: ClearToken writes nothing", name)
+		} else {
+			written := (&http.Response{Header: rctx.Response.Headers}).Cookies()
+			gone := (&http.Response{Header: cleared.Response.Headers}).Cookies()
+			require.Len(t, written, 1, name)
+			require.Len(t, gone, 1, name)
+			assert.Equal(t, written[0].Name, gone[0].Name, "%s: the same cookie", name)
+			assert.Equal(t, written[0].Path, gone[0].Path, "%s: the same path", name)
+			assert.Empty(t, gone[0].Value, "%s: no token in it", name)
+			assert.Negative(t, gone[0].MaxAge, "%s: Max-Age=0, which deletes it", name)
+			assert.True(t, gone[0].Expires.Before(time.Now()), "%s: and an Expires in the past", name)
+			assert.True(t, gone[0].HttpOnly && gone[0].Secure, "%s: with the attributes of the cookie it replaces", name)
+			assert.Equal(t, written[0].SameSite, gone[0].SameSite, name)
+			assert.Empty(t, cleared.Response.Headers.Get(types.SessionTokenHeader), "%s: no token header", name)
+		}
+
 		cookieName := tc.cfg.CookieName
 		if cookieName == "" {
 			cookieName = "session_token"
@@ -690,6 +890,97 @@ func TestSessionTokenTransports(t *testing.T) {
 		_, ok = sm.ExtractToken(httptest.NewRequest(http.MethodGet, "/x", nil))
 		assert.False(t, ok, "%s: a request without a token", name)
 	}
+}
+
+// RequireSession applies the rolling expiration, and the cookie has to
+// follow it: a browser drops a cookie at the date it was set with, however
+// long the session lasts on the server.
+func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
+	ctx := context.Background()
+	const ownCacheControl = "private, max-age=60"
+	// request sends one request through RequireSession to a handler that
+	// sets a Cache-Control of its own. It returns the response and the
+	// session the handler saw.
+	request := func(sm types.SessionManager, cookie, bearer string) (*types.RequestContext, *models.Session) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: cookie})
+		}
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		var seen *models.Session
+		handler := types.RequireSession(sm)(func(rctx *types.RequestContext) error {
+			seen, _ = rctx.Values["session"].(*models.Session)
+			rctx.Response.SetHeader("Cache-Control", ownCacheControl)
+			return rctx.Response.JSON(http.StatusOK, behemoth.M{})
+		})
+		rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		require.NoError(t, handler(rctx))
+		require.NotNil(t, seen, "the request reached the handler")
+		return rctx, seen
+	}
+	cookies := func(rctx *types.RequestContext) []*http.Cookie {
+		return (&http.Response{Header: rctx.Response.Headers}).Cookies()
+	}
+	alwaysDue := 2 * time.Hour // above the hour a session of newSessionManager lasts
+
+	// A session that is due: the cookie comes back with the new date.
+	rolling, _ := newSessionManager(t, types.SessionConfig{UpdateAge: alwaysDue})
+	created, raw, err := rolling.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	time.Sleep(10 * time.Millisecond)
+	rctx, seen := request(rolling, raw, "")
+	assert.True(t, seen.ExpiresAt.After(created.ExpiresAt), "the handler sees the session with its new expiry")
+	set := cookies(rctx)
+	require.Len(t, set, 1)
+	assert.Equal(t, "session_token", set[0].Name)
+	assert.Equal(t, raw, set[0].Value, "the same token")
+	assert.True(t, seen.ExpiresAt.UTC().Truncate(time.Second).Equal(set[0].Expires), "the cookie expires with the extended session: %s", set[0].Expires)
+	assert.Equal(t, "/", set[0].Path)
+	assert.True(t, set[0].HttpOnly && set[0].Secure, "the attributes of the cookie it replaces")
+	assert.Equal(t, "no-store", rctx.Response.Headers.Get("Cache-Control"), "the response carries the token, so it is not cached, whatever the handler set")
+
+	// A session that is not due: nothing is written, and the handler's
+	// Cache-Control stands.
+	fixed, _ := newSessionManager(t, types.SessionConfig{})
+	created, raw, err = fixed.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	rctx, seen = request(fixed, raw, "")
+	assert.True(t, seen.ExpiresAt.Equal(created.ExpiresAt))
+	assert.Empty(t, cookies(rctx))
+	assert.Equal(t, ownCacheControl, rctx.Response.Headers.Get("Cache-Control"))
+
+	// The header transport: the session is extended, and its client keeps
+	// the token without a date, so the response hands out nothing.
+	byHeader, _ := newSessionManager(t, types.SessionConfig{Transport: types.TransportHeader, UpdateAge: alwaysDue})
+	created, raw, err = byHeader.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	time.Sleep(10 * time.Millisecond)
+	rctx, seen = request(byHeader, "", raw)
+	assert.True(t, seen.ExpiresAt.After(created.ExpiresAt))
+	assert.Empty(t, cookies(rctx))
+	assert.Empty(t, rctx.Response.Headers.Get(types.SessionTokenHeader))
+	assert.Equal(t, ownCacheControl, rctx.Response.Headers.Get("Cache-Control"))
+
+	// Both transports: the cookie is extended for the client that sent the
+	// token in it. A bearer token is read first, and the cookie next to it
+	// may be another session's, which must not be overwritten.
+	both, _ := newSessionManager(t, types.SessionConfig{Transport: types.TransportBoth, UpdateAge: alwaysDue})
+	_, asBearer, err := both.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	_, inCookie, err := both.Create(ctx, "u2", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	rctx, seen = request(both, inCookie, asBearer)
+	assert.Equal(t, "u1", seen.UserID, "the bearer token's session")
+	assert.Empty(t, cookies(rctx), "the cookie is another session's")
+	assert.Equal(t, ownCacheControl, rctx.Response.Headers.Get("Cache-Control"))
+	rctx, seen = request(both, inCookie, "")
+	assert.Equal(t, "u2", seen.UserID)
+	set = cookies(rctx)
+	require.Len(t, set, 1)
+	assert.Equal(t, inCookie, set[0].Value)
 }
 
 // Under a real Boot the session manager dispatches through the default

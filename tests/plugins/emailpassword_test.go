@@ -310,8 +310,15 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 		}
 		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
 		rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
-		require.NoError(t, signOut(rctx))
 		rec := httptest.NewRecorder()
+		if err := signOut(rctx); err != nil {
+			// The session check returns its refusal for the router to
+			// answer; this is its error mapping, with the default mapper.
+			status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+			rec.Code = status
+			require.NoError(t, json.NewEncoder(rec.Body).Encode(body))
+			return rec
+		}
 		rctx.Response.Flush(rec)
 		return rec
 	}
@@ -950,6 +957,76 @@ func TestEmailPasswordLogging(t *testing.T) {
 	w = viaRouter(`{"email":"ada@example.com","password":"correct horse"}`)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.NotContains(t, w.Body.String(), "closed", "the response carries none of the error's text")
+	failed := rec.Logger.At(slog.LevelError)
+	require.Len(t, failed, 1)
+	assert.Equal(t, "request failed", failed[0].Message)
+	assert.Equal(t, "router", failed[0].Fields[telemetry.FieldComponent])
+	assert.Equal(t, "database", failed[0].Fields[telemetry.FieldErrorCategory])
+	assert.Equal(t, http.StatusInternalServerError, failed[0].Fields[telemetry.FieldStatus])
+}
+
+// What a route behind the session check answers, through the router. A
+// request without a usable session is refused: 401 with a public message and
+// a code, and nothing is logged as an error. A database that fails while the
+// session is looked up is the server's failure: 500 without the error's
+// text, logged once. It used to be a 401 that carried the text.
+func TestSessionCheckThroughTheRouter(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-session-check.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(schema)
+	require.NoError(t, err)
+
+	tel, rec := telemetrytest.New()
+	mounted := mountedRoutes{}
+	app, err := bmth.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, bmth.PrepareConfig{})
+	require.NoError(t, err)
+	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+		Crypto: crypto.Config{
+			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
+		},
+		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Telemetry: tel,
+		HTTP:      mounted,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, http.StatusCreated,
+		call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`).Code)
+	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	token := w.Header().Get(types.SessionTokenHeader)
+	require.NotEmpty(t, token)
+
+	signOut := mounted["/api/auth/sign-out"]
+	viaRouter := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, signOut.Path, nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		require.NoError(t, signOut.Handler(rctx), "the router maps the middleware's error to a response")
+		w := httptest.NewRecorder()
+		rctx.Response.Flush(w)
+		return w
+	}
+
+	w = viaRouter("")
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.JSONEq(t, `{"error":"missing session token","code":"session_missing"}`, w.Body.String())
+	w = viaRouter("never-issued")
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "a token of no session is a request without a session, not a 404")
+	assert.JSONEq(t, `{"error":"invalid session","code":"session_invalid"}`, w.Body.String())
+	assert.Empty(t, rec.Logger.At(slog.LevelError), "a refusal is not a failure")
+
+	// The database goes away. The token is still good.
+	require.NoError(t, db.Close())
+	w = viaRouter(token)
+	assert.Equal(t, http.StatusInternalServerError, w.Code, "not a 401: the client's session has not ended")
+	assert.JSONEq(t, `{"error":"an internal error occurred","code":"database_error"}`, w.Body.String())
+	assert.NotContains(t, w.Body.String(), "closed", "the response carries none of the error's text")
+	assert.NotContains(t, w.Body.String(), "SessionManager")
 	failed := rec.Logger.At(slog.LevelError)
 	require.Len(t, failed, 1)
 	assert.Equal(t, "request failed", failed[0].Message)

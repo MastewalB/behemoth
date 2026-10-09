@@ -42,6 +42,10 @@ type SessionConfig struct {
 	// its sign-in. It has no other default on purpose: a value that is not
 	// smaller than ExpiresIn extends the session, with a write, on every
 	// request.
+	//
+	// "In use" means a request through RequireSession, which is where the
+	// extension happens. With a cookie transport that response sets the
+	// cookie again, so that it expires with the extended session.
 	UpdateAge time.Duration
 	// FreshAge is how long after a sign-in a session counts as fresh
 	// (SessionManager.IsFresh). Default DefaultFreshAge, 15 minutes.
