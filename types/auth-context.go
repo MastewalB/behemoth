@@ -23,6 +23,12 @@ type AuthContext struct {
 	TokenManager   TokenManager
 	Dispatcher     Dispatcher
 	RateLimiter    RateLimiter
+	// Origins answers whether an origin is one of RouterConfig.TrustedOrigins.
+	// A plugin that takes a redirect URL from a request checks it with
+	// TrustedRedirect(Origins, url) before it stores or returns it. Never
+	// nil on an AuthContext Boot returns; with no origins configured it
+	// trusts none, and only paths on the application's own site pass.
+	Origins OriginValidator
 	// Telemetry is never nil on an AuthContext Boot returns, and neither are
 	// its fields. Plugins take their logger from here, usually through
 	// telemetry.Named.

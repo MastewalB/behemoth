@@ -17,8 +17,13 @@ import (
 )
 
 type RouterConfig struct {
-	BasePath       string      // default "/api/auth"
-	ErrorMapper    ErrorMapper // default DefaultErrorMapper{}
+	BasePath    string      // default "/api/auth"
+	ErrorMapper ErrorMapper // default DefaultErrorMapper{}
+	// TrustedOrigins are the origins a browser may be redirected to, such as
+	// "https://app.example.com": a scheme, a host and an optional port,
+	// matched exactly. Boot builds AuthContext.Origins from them and fails
+	// on an entry that is not an origin. Empty = no origin is trusted, and
+	// a redirect may only be a path on the application's own site.
 	TrustedOrigins []string
 
 	// TrustedProxies are the CIDR blocks (load balancers, reverse proxies)

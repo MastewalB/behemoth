@@ -317,6 +317,10 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, limiters: newLimiters(counterStore), cfg: cfg.RateLimit, tel: tel.Named("ratelimit")}
 	dispatcher := NewDefaultDispatcher(app.Hooks, frozenChains, rateLimiter, tel)
 
+	origins, err := types.NewTrustedOrigins(cfg.Router.TrustedOrigins)
+	if err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", "RouterConfig.TrustedOrigins", err)
+	}
 	ac := &types.AuthContext{
 		DB:          db,
 		KV:          kv,
@@ -324,6 +328,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		RateLimiter: rateLimiter,
 		Crypto:      cryptoSuite,
 		Telemetry:   tel,
+		Origins:     origins,
 	}
 	if err := checkDataHookPoints(app.Hooks, coreDataHookPoints); err != nil {
 		return nil, err
