@@ -202,6 +202,11 @@ type BootConfig struct {
 	Session   types.SessionConfig
 	Token     types.TokenConfig
 
+	// Mail gives behemoth the application's mail sender, which plugins
+	// that send messages need (magic link, email verification). Zero value
+	// = no sender; such a plugin then fails Boot.
+	Mail types.MailConfig
+
 	// Router configures behemoth's routes: base path, error mapping and
 	// client-IP resolution. Zero value = documented defaults.
 	Router types.RouterConfig
@@ -329,6 +334,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		Crypto:      cryptoSuite,
 		Telemetry:   tel,
 		Origins:     origins,
+		Mailer:      NewMailer(cfg.Mail, tel),
 	}
 	if err := checkDataHookPoints(app.Hooks, coreDataHookPoints); err != nil {
 		return nil, err
