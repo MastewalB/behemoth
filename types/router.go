@@ -332,18 +332,24 @@ func (r *Router) Build(driver FrameworkDriver, globalMiddleware ...Middleware) e
 }
 
 // FrameworkDriver is the only seam between behemoth's plugin system and a
-// concrete HTTP framework. Each framework (gin, echo, chi, ...) ships its own
-// thin implementation, built around the application's own framework
-// instance. The core never imports gin or echo directly.
+// concrete HTTP framework. Each framework (gin, echo, chi, fiber, ...) ships
+// its own thin implementation, built around the application's own framework
+// instance. The core never imports gin or echo directly. The driver for the
+// standard library's http.ServeMux needs no such import, so it is the one
+// adapter in this module (plugins/adapters/nethttp).
 //
 // Mount tells the framework to mount the given Routes.
 // How it does that is entirely up to the adapter:
-//   - gin  - router.Handle(route.Method, route.Path, ginHandler)
-//   - echo - e.Add(route.Method, route.Path, echoHandler)
-//   - chi  - r.Method(route.Method, route.Path, httpHandler)
+//   - gin      - router.Handle(route.Method, route.Path, ginHandler)
+//   - echo     - e.Add(route.Method, route.Path, echoHandler)
+//   - chi      - r.Method(route.Method, route.Path, httpHandler)
+//   - net/http - mux.HandleFunc(route.Method+" "+route.Path, httpHandler)
+//   - fiber    - app.Add([]string{route.Method}, route.Path, fiberHandler)
 //
 // Inside every adapter's handler, the pattern is always the same:
-//  1. Build a *RequestContext from the framework's native request.
+//  1. Build a *RequestContext from the framework's native request. A
+//     framework that is not built on net/http (fiber) has to build the
+//     *http.Request too.
 //  2. Call route.Handler(rc). Routes arrive fully wrapped: Auth is set and
 //     errors are already mapped to responses, so a returned error means the
 //     response itself could not be written.

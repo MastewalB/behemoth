@@ -10,7 +10,7 @@ The project is under active development, and the API may still change.
 - **Migrations.** Behemoth builds a migration from the tables your plugins and your own schema declare, and writes it to a folder for you to review.
 - **Hooks.** Run your code before or after a user is written, or around a whole flow such as sign-up. A handler can change data, stop an operation or react afterwards.
 - **Sessions and tokens.** Sessions are stored in your database or a key-value store, and delivered as a cookie or a header.
-- **Router adapters.** Mount the routes on Gin, Echo or chi.
+- **Router adapters.** Mount the routes on `net/http`, Gin, Echo, chi or Fiber.
 - **Telemetry.** Logs, audit events, metrics and traces, with an OpenTelemetry adapter.
 - **Rate limiting** and **Argon2id password hashing** out of the box.
 
@@ -26,6 +26,8 @@ Database and router adapters are separate modules, so you only download what you
 go get github.com/MastewalB/behemoth/storage/adapters/postgres
 go get github.com/MastewalB/behemoth/plugins/adapters/gin
 ```
+
+The adapter for the standard library's `http.ServeMux` has no dependency of its own, so it comes with Behemoth: import `github.com/MastewalB/behemoth/plugins/adapters/nethttp`.
 
 ## Quick start
 
@@ -112,6 +114,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | [Magic link](./docs/api/magiclink.md) | Sign-in by emailed link: setup, sending the link, routes, redirects and rate limits |
 | [Email verification](./docs/api/emailverification.md) | Confirming a user's address: when a link is sent, routes, requiring a verified email, and changing an address safely |
 | [Mail](./docs/api/mail.md) | The mail sender plugins use, and waiting or background sends |
+| [Router adapters](./docs/api/routers.md) | Mounting the routes on `net/http`, Gin, Echo, chi or Fiber, and what is specific to each |
 | [Sessions](./docs/api/sessions.md) | Session settings, how the token travels (cookie, header, body), the sign-in response, protecting your own routes |
 | [Hooks](./docs/api/hooks.md) | Hook points, handlers, ordering and failure behavior |
 | [Telemetry](./docs/api/telemetry.md) | Loggers, audit, metrics, tracing and the OpenTelemetry adapter |

@@ -7,11 +7,12 @@ The code lives in:
 - `types/router.go` — `Router`, `RouterConfig`, `FrameworkDriver`, the wrapping pipeline
 - `types/plugins.go` — `Plugin`, `Route`, `Middleware`, `RequestContext`, `ResponseRecorder`
 - `types/init/init.go` — `Boot`, which drives everything below
-- `plugins/adapters/{gin,echo,chi}` — one `FrameworkDriver` per framework, each in its own module
+- `plugins/adapters/{gin,echo,chi,fiber}` — one `FrameworkDriver` per framework, each in its own module
+- `plugins/adapters/nethttp` — the `FrameworkDriver` for the standard library's `*http.ServeMux`, a package of the root module
 
 ### **Ownership boundary**
 
-`[Convention, important]` Behemoth never owns the HTTP server. The application creates its framework instance (`*gin.Engine`, `*echo.Echo`, `chi.Router`), registers its own routes on it, and hands it to `Boot` wrapped in an adapter:
+`[Convention, important]` Behemoth never owns the HTTP server. The application creates its framework instance (`*gin.Engine`, `*echo.Echo`, `chi.Router`, `*http.ServeMux`, `*fiber.App`), registers its own routes on it, and hands it to `Boot` wrapped in an adapter:
 
 ```go
 engine := gin.New()
@@ -54,7 +55,7 @@ type Middleware func(next HandlerFunc) HandlerFunc
 ```
 
 - A route's full path is `path.Join(RouterConfig.BasePath, PluginMeta.MountPath, Route.Path)`. `BasePath` defaults to `/api/auth`; `MountPath` defaults to empty, mounting the plugin flat under `BasePath`. E.g. `BasePath "/api/auth"`, `MountPath "/audit"`, `Path "/status"` → `GET /api/auth/audit/status`.
-- **Path parameters** use `{name}` (`/users/{id}`), read in the handler with `rctx.Param("id")`. Adapters translate to their framework's syntax where it differs (gin and echo use `:id`; chi uses `{id}` natively).
+- **Path parameters** use `{name}` (`/users/{id}`), read in the handler with `rctx.Param("id")`. Adapters translate to their framework's syntax where it differs (gin, echo and fiber use `:id`; chi and `http.ServeMux` use `{id}` natively).
 - `Route.Middlewares` apply to that route only. `Plugin.Middlewares()` apply to **every** behemoth route — see Global Middleware below.
 - `[Convention]` `Boot` calls every plugin's `Init` **before** it calls `Routes()` or `Middlewares()`, so a plugin may build handlers from state it sets up in `Init` (services, `WithLifecycle`-wrapped flows).
 - `[Implementation Detail]` `Boot` visits plugins in **dependency order** (`ResolvePluginOrder`) for both `Mount` and middleware collection. Route order within the table has no routing significance — frameworks match by pattern — but it fixes which plugin is reported as the second claimant of a conflict, and it fixes global middleware order.
@@ -127,10 +128,43 @@ Behemoth's routes share the framework instance with the application's, so a behe
 | gin | panics at registration | recovers the panic into an error |
 | echo v5 | `AddRoute` returns an error (unless `AllowOverwritingRoute`) | uses `AddRoute`, returns the error |
 | chi | **silently replaces** the existing handler | walks the existing routes first (`chi.Walk`, which lists a route registered for all methods once per method) and rejects an exact method + pattern match; also recovers chi's panics for invalid patterns |
+| `http.ServeMux` | panics at registration, for a pattern it cannot parse and for one that conflicts with a registered pattern. A pattern without a method is **silently accepted** next to a route with one, and loses that method to it | recovers the panic into an error; before registering, asks the mux which pattern would answer the route (`ServeMux.Handler`) and rejects an application pattern without a method, unless it is a subtree |
+| fiber | **silently keeps both**, and the route registered first answers, so behemoth's would never run | lists the existing routes first (`App.GetRoutes(true)`, which leaves out `Use` middleware) and rejects a match on method and path; also recovers fiber's panics for invalid routes |
 
-`[Convention]` The chi pre-check matches patterns exactly, so the same caveat as Level 1 applies: a differently spelled but equivalent pattern is not caught there.
+`[Convention]` The chi and fiber pre-checks compare patterns as text, so the same caveat as Level 1 applies: a differently spelled but equivalent pattern (`/users/{id}` against `/users/{user_id}`) is not caught there. The fiber check does follow the app's matching rules: it ignores case unless `Config.CaseSensitive` is set and a trailing slash unless `Config.StrictRouting` is set, because fiber would send `/API/Auth/Session/` and `/api/auth/session` to the same route. `http.ServeMux` compares what two patterns match and not how they are spelled, so it catches the renamed parameter too.
+
+`[Convention]` The pre-checks of chi, fiber and `http.ServeMux` see the routes that exist when `Boot` runs. A route the application registers afterwards is not checked: on chi it replaces behemoth's route, on fiber behemoth's route keeps answering and the application's is never reached, and on the mux a pattern without a method gets every method but behemoth's.
 
 `[Convention]` A rejected mount must never disturb the application's existing route — in chi's case the check runs **before** registering, precisely because registering would already have replaced it.
+
+### A pattern without a method is a conflict on `http.ServeMux`
+**Context:** A mux pattern may leave the method out, and then it answers every method. To the mux, `/api/auth/session` and behemoth's `POST /api/auth/session` do not conflict: it gives a request to the most specific pattern, so behemoth's route takes `POST` and the application's handler keeps the other methods. Nothing reports that the handler lost `POST`. The chi and fiber adapters fail `Boot` in the same situation (a route registered for all methods on the same path). Code written for the mux before Go 1.22 has no other way to register a route than without a method, and much code still does so, which makes this the mux's usual spelling of "the same route".
+**Options considered:**
+- Leave it to the mux. The precedence is documented behaviour of `ServeMux` and needs no code. A collision passes silently, on this router only.
+- Probe before mounting, and reject an application pattern without a method that would answer the route. The mux cannot list its patterns, so this is the only way to look. It refuses a setup the standard library accepts, and it has the limits listed below.
+- The same check behind an option (`nethttp.New(mux, nethttp.Strict())`). The default would stay silent, and the people who hit the collision are the ones who do not know to ask for the check.
+
+**Decision:** probe, always. `Boot` failing on a collision is what every other adapter does, and the developer who meant it has a way out: a pattern that names its methods is never rejected by this check.
+**Revisit if:** applications turn out to rely on a pattern without a method as the fallback for the methods behemoth does not use on a path.
+
+`[Implementation Detail]` How the probe works (`ServeMuxDriver.methodlessPattern`): `ServeMux.Handler(req)` returns the pattern the mux would give a request to. Before registering a route, the driver asks about a request that route would match: the route's method, and its path with `x` in place of each `{param}`. The answer is the single best match, which is the pattern the route would take its method from. It is judged by how it is written:
+
+| The mux answers | Example, for `POST /api/auth/session` | Verdict |
+|---|---|---|
+| nothing (`""`) | no pattern, or only patterns for other methods | mount |
+| a pattern with a method | `POST /api/auth/{action}` | mount: the mux compares the two itself, and panics if they conflict |
+| a pattern without a method that ends in `/` or `...}` | `/`, `/api/`, `/api/auth/{rest...}` | mount: a subtree is the application's catch-all |
+| a pattern without a method that ends in `{$}`, when the route's path has no trailing slash | `/api/auth/session/{$}` | mount: that pattern answers another path, and came back because the mux would redirect to it |
+| any other pattern without a method | `/api/auth/session`, `/api/auth/{action}`, `/api/{section}/session` | reject |
+
+Behemoth's own patterns always have a method (the driver refuses a route without one), so a route never trips over an earlier route of the same `Mount`.
+
+`[Convention, important]` The probe has limits, and the mux reports none of these cases. `docs/api/routers.md` carries them as a warning to the developer:
+
+- **Patterns registered after `Boot`** are not seen (see the convention above).
+- **Patterns with a host** (`auth.example.com/api/auth/session`) are not seen, because the made-up request has no host. The mux prefers a pattern with a host, so on that host the application's handler answers every method and behemoth's route is not reached. `TestPatternWithAHostIsNotSeen` pins this.
+- **A second mux is not seen.** When behemoth mounts on a mux of its own that the application registers under `/api/auth/` on its main mux, the probe looks at behemoth's mux. A more specific pattern on the main mux takes its requests before they reach behemoth's.
+- **A pattern without a method that reaches the route through a wildcard is rejected too** (`/api/auth/{action}`). It is not the same route, but it would lose the method the same way, and the probe does not compare paths segment by segment.
 
 ---
 
@@ -212,19 +246,77 @@ type FrameworkDriver interface {
 
 The only seam between behemoth and an HTTP framework. Each adapter, for every route:
 
-1. Translates the path syntax if needed (`{id}` → `:id` for gin and echo).
+1. Translates the path syntax if needed (`{id}` → `:id` for gin, echo and fiber).
 2. Registers a native handler on the application's instance that builds a `RequestContext` from the native request (`Ctx`, `Request`, `Params`, a fresh `ResponseRecorder`, empty `Values`), calls the route's handler, and then flushes the recorder to the native writer — or writes `500` if the handler returned an error.
 3. Returns an error, never panics, when the framework rejects the route (Level 2 above).
 
-| | gin | echo | chi |
-|---|---|---|---|
-| Constructor | `New(gin.IRoutes)` — engine or `*RouterGroup` | `New(*echo.Echo)` | `New(chi.Router)` — mux, `Group` or `Route` |
-| Path params | `{id}` → `:id` | `{id}` → `:id` | unchanged |
-| Params from | `c.Params` | `c.PathValues()` | `chi.RouteContext(r.Context()).URLParams` |
+| | gin | echo | chi | `net/http` | fiber |
+|---|---|---|---|---|---|
+| Package | `plugins/adapters/gin` | `plugins/adapters/echo` | `plugins/adapters/chi` | `plugins/adapters/nethttp` | `plugins/adapters/fiber` |
+| Module | its own | its own | its own | the root module | its own |
+| Constructor | `New(gin.IRoutes)` — engine or `*RouterGroup` | `New(*echo.Echo)` | `New(chi.Router)` — mux, `Group` or `Route` | `New(*http.ServeMux)` | `New(*fiber.App)` |
+| Path params | `{id}` → `:id` | `{id}` → `:id` | unchanged | unchanged | `{id}` → `:id` |
+| Params from | `c.Params` | `c.PathValues()` | `chi.RouteContext(r.Context()).URLParams` | `r.PathValue(name)` | `c.Params(name)` for each of `c.Route().Params` |
+| `*http.Request` | the framework's | the framework's | the framework's | the mux's | built by the driver |
 
-Passing a group (gin `RouterGroup`, chi `Group`/`Route`) puts behemoth's routes behind that group's prefix and the group's own middleware — the developer's way to wrap behemoth's routes in application middleware, without behemoth installing anything.
+Passing a group (gin `RouterGroup`, chi `Group`/`Route`) puts behemoth's routes behind that group's prefix and the group's own middleware — the developer's way to wrap behemoth's routes in application middleware, without behemoth installing anything. The two routers without a group to pass have their own way to the same result:
+
+- **`http.ServeMux`:** give behemoth a mux of its own and register it, wrapped, on the application's: `mux.Handle("/api/auth/", logRequests(authMux))`. Behemoth's patterns carry the full path, so the inner mux needs no `http.StripPrefix`.
+- **fiber:** register the middleware on the path before `Boot`: `app.Use("/api/auth", mw)`. Fiber runs handlers in the order they were registered, so one registered after `Boot` does not run for behemoth's routes.
 
 `[Convention]` Adapters stay thin: no error mapping, no auth, no middleware composition. Everything above the native handler is done once in the router, so a new adapter only needs the three steps above.
+
+### **The `net/http` driver**
+
+`plugins/adapters/nethttp` registers each route as the pattern `METHOD /path` on a `*http.ServeMux`, the method-and-wildcard syntax the mux has had since Go 1.22. It differs from the other adapters in these ways:
+
+- **Parameter names are read at mount.** A request gives a parameter's value by name (`r.PathValue("id")`) and has no list of them. The driver takes the names out of the route's path once, in `paramNames`, and the handler looks each one up.
+- **A trailing slash gets `{$}`.** The mux treats a pattern ending in `/` as a prefix: `GET /` matches every `GET` request no other pattern claims. A behemoth route is one path on every other framework, so `toMuxPattern` turns `/` into `/{$}`, which matches that path only. `Router.Mount` joins paths with `path.Join`, which removes a trailing slash, so this concerns a route at `/` and absolute routes.
+- **A route without a method is refused.** A mux pattern without a method matches every method. gin, chi and fiber reject an empty method on their own; here the driver returns the error.
+- **The application's patterns without a method are checked.** The mux accepts one next to a behemoth route on the same path and quietly splits the methods between them. The driver looks for it before registering each route. See *A pattern without a method is a conflict on `http.ServeMux`* under Level 2.
+
+`[Implementation Detail]` The mux sends a `HEAD` request to a `GET` pattern. The route's handler runs and the server drops the body. Metrics and rate limits count the request under the `GET` route. Fiber does the same by registering a `HEAD` route for each `GET` route when it starts, unless `Config.DisableHeadAutoRegister` is set.
+
+### The `net/http` driver is part of the root module
+**Context:** Each framework adapter is a module of its own, so that an application downloads gin only if it uses gin. The driver for `http.ServeMux` imports the standard library and behemoth, nothing else.
+**Options considered:**
+- A module of its own, like the others. Every adapter is then installed the same way. It costs a `go.mod` with a `replace` to maintain and a second `go get` for the application, to isolate a dependency that does not exist.
+- A package of the root module. An application that uses the standard library's router adds no module, and the root `go.mod` does not change. `go test ./...` at the root runs its tests, which the other adapters' tests need a step of their own for.
+
+**Decision:** a package of the root module, at `plugins/adapters/nethttp` next to the other adapters.
+**Revisit if:** the driver needs a dependency outside the standard library.
+
+### **The fiber driver**
+
+`plugins/adapters/fiber` targets fiber v3. Fiber is built on fasthttp and not on `net/http`, so the driver does more than the others: it builds the request, picks the context and writes the response itself.
+
+**The request.** `RequestContext.Request` is a `*http.Request`, and fiber has none, so `newRequest` builds one for every request: method, URL, protocol, headers, body, `Host`, `RemoteAddr`, `RequestURI` and `TLS`. It follows what a `net/http` server does where the two differ: the `Host` header is in `Request.Host` only, and a header sent twice (`X-Forwarded-For` through two proxies) keeps both values in order. `RemoteAddr` is the peer's address, so `RouterConfig.TrustedProxies` works as on the other frameworks; fiber's own `TrustProxy` setting is not read. A request URI that `net/url` refuses, such as one with a broken percent escape, gets a `400`: fiber routes it, but no `*http.Request` can describe it.
+
+**The context.** `RequestContext.Ctx` and the request's context are `c.Context()`: what the application's middleware set with `c.SetContext` (a tracing middleware's span, a deadline), or `context.Background()`. Fiber has no context that ends when the client disconnects, so on fiber a request's work is not cancelled when the client goes away. The `fiber.Ctx` itself also implements `context.Context` but is pooled and reused, so the driver never hands it out.
+
+**The response.** `ResponseRecorder` exposes its body only through `Flush(http.ResponseWriter)`. The driver passes it a `responseWriter` that puts the headers, the status and the body on fiber's response. Headers are added with fasthttp's `Add`, which keeps several `Set-Cookie` lines apart.
+
+**Path parameters.** Fiber hands out a parameter as it was sent (`a%20b`) unless `Config.UnescapePath` is set; the `net/http` routers hand out the decoded value (`a b`). The driver decodes when the app does not, so `rctx.Param` returns the same value on every framework.
+
+### The fiber driver builds its own request and copies every string
+**Context:** Fiber reuses a request's memory for the next request on the connection, and the strings it hands out point into that memory (fiber's docs: "returned value is only valid within the handler"). Behemoth holds on to what it reads for longer. `Mailer.SendAsync` keeps the request's context for a send that runs after the response, and that context carries the `RequestContext` and the request ID read from the `X-Request-ID` header. The same ID is an attribute of the request's span, which a tracer exports later. A hook handler of the application may keep the `RequestContext` it was given. A string that changes after the handler returned would corrupt these silently.
+**Options considered:**
+- Fiber's `adaptor` package (`adaptor.ConvertRequest`, or `adaptor.HTTPHandler` around a `net/http` handler). The least code. Its request shares fiber's memory: with it, the test `TestRequestStaysValidAfterTheHandler` saw the first request's path, query, user agent and `X-Forwarded-For` turn into the second request's. `HTTPHandler` also gives the handler no `fiber.Ctx`, so no path parameters and no `c.Context()`.
+- Require `fiber.Config{Immutable: true}`, and refuse to mount without it. The setting makes fiber's own getters return copies, at a cost on every route of the application. The adaptor's conversion does not honour it, so the driver would still build the request itself, from those getters.
+- Build the request in the driver and copy each string. More code in the adapter, and one allocation per header on behemoth's routes only.
+
+**Decision:** build and copy. The body is the exception: it is read while the handler runs, as with `net/http`, so a reader over fiber's buffer is enough.
+**Revisit if:** fiber's adaptor gains a conversion that copies.
+
+### The fiber driver takes the app, not a router
+**Context:** The gin and chi drivers take an interface that an engine and a group both satisfy. Fiber's equivalent is `fiber.Router`. The driver has to list the existing routes, because fiber does not reject a duplicate (Level 2), and only `*fiber.App` can list them (`GetRoutes`). A `fiber.Router` exposes neither the routes nor its prefix.
+**Options considered:**
+- `New(fiber.Router)`, without a conflict check. A behemoth route that repeats one of the application's would then never run, and nothing would say so.
+- `New(fiber.Router)`, checking only when the router is the app. The behaviour would depend on which type the application passed.
+- `New(*fiber.App)`. The check always runs. Mounting behind a group is not possible; `app.Use(prefix, mw)` covers the middleware a group would add, and `RouterConfig.BasePath` covers the prefix.
+
+**Decision:** `New(*fiber.App)`.
+**Revisit if:** fiber lets a `Router` list its routes or report its prefix.
 
 ---
 
@@ -267,7 +359,7 @@ Implementation outline:
 
 1. **A bridge per adapter** — `Middleware(ac *types.AuthContext, mw types.Middleware)` returning the framework's native middleware (`gin.HandlerFunc`, `echo.MiddlewareFunc`, `func(http.Handler) http.Handler` for chi). It builds a `RequestContext` with `Auth` set, runs `mw` with a `next` that continues the native chain, and stores the `RequestContext` on the native context (`c.Set`, `c.Set`, `context.WithValue`). If `mw` returns without calling `next`, the bridge flushes the middleware's `Response` and aborts the native chain; if it returns an error, the bridge maps it with the same `ErrorMapper` the router uses, so an application route rejected by a behemoth middleware answers exactly like a behemoth route would.
 2. **Typed accessors per adapter** — `CurrentUser(c)`, `Session(c)`, … read what the middleware stored, so application handlers never handle `RequestContext` or untyped `Values`.
-3. **A `net/http` form in core** — `func(http.Handler) http.Handler` built on the same bridge logic, covering chi and the standard library's `ServeMux` without a framework-specific adapter; framework adapters can wrap it where their native type differs.
+3. **A `net/http` form in core** — `func(http.Handler) http.Handler` built on the same bridge logic, covering chi and the standard library's `ServeMux` without a framework-specific adapter; framework adapters can wrap it where their native type differs. `plugins/adapters/nethttp`, which is already in the root module, is the place for it.
 4. **Shared `RequestContext` with behemoth's own routes is not required.** The bridge serves application routes; behemoth's routes keep building their context in the adapter's route handler. Anything both need (session lookup) lives in the plugin's service, called from both.
 
 `[Convention]` Plugins provide the middleware; only the developer decides where it runs.
