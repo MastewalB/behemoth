@@ -69,7 +69,7 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 | `POST /sign-in/email` | the body is not valid JSON | `400` | `{"error": "request validation error", "code": "request_validation_error"}` |
 | `POST /sign-in/email` | unknown email, wrong password, or a user who has no password | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
 | `POST /sign-out` | the request has no session token | `401` | `{"error": "missing session token", "code": "session_missing"}` |
-| `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. See [Sessions](sessions.md#protecting-your-own-routes). |
+| `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. With a cookie transport the response also removes the cookie. See [Sessions](sessions.md#protecting-your-own-routes). |
 | `POST /sign-in/email`, `POST /sign-out` | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
 | any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |

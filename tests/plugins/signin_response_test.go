@@ -153,6 +153,9 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 			}
 			if tc.cookie != "" && tc.header {
 				assert.Equal(t, fromCookie, fromHeader, "the cookie and the header carry one token")
+				// A browser under both transports sends the cookie by
+				// itself, next to the bearer token.
+				present["Cookie"] = tc.cookie + "=" + token
 			}
 			session, err := ac.SessionManager.Validate(ctx, token)
 			require.NoError(t, err)
@@ -176,6 +179,41 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 			assert.Empty(t, out.Header().Get(types.SessionTokenHeader), "a sign-out hands out no token")
 		})
 	}
+}
+
+// A session that ended in another request, here with all of its user's
+// sessions, leaves its cookie in the browser. The next request to a route
+// behind the session check is refused, and the refusal removes the cookie.
+func TestASessionEndedElsewhereLosesItsCookie(t *testing.T) {
+	ctx := context.Background()
+	ac, mounted, err := bootPasswords(t, types.SessionConfig{}, nil)
+	require.NoError(t, err)
+	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	cookies := (&http.Response{Header: w.Header()}).Cookies()
+	require.Len(t, cookies, 1)
+	cookie := map[string]string{"Cookie": cookies[0].Name + "=" + cookies[0].Value}
+
+	user, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
+	require.NoError(t, err)
+	require.NoError(t, ac.SessionManager.RevokeAllForUser(ctx, user.ID, "signed_out_everywhere", ""))
+
+	out := callHeaders(t, ac, mounted["/api/auth/sign-out"], "", cookie)
+	assert.Equal(t, http.StatusUnauthorized, out.Code)
+	assert.JSONEq(t, `{"error":"session has been revoked","code":"session_revoked"}`, out.Body.String())
+	gone := (&http.Response{Header: out.Header()}).Cookies()
+	require.Len(t, gone, 1, "the refusal removes the cookie: %q", out.Header().Values("Set-Cookie"))
+	assert.Equal(t, cookies[0].Name, gone[0].Name)
+	assert.Empty(t, gone[0].Value)
+	assert.Negative(t, gone[0].MaxAge)
+
+	// The browser has dropped it, so the next request is one without a
+	// session.
+	out = call(t, ac, mounted["/api/auth/sign-out"], "")
+	assert.Equal(t, http.StatusUnauthorized, out.Code)
+	assert.JSONEq(t, `{"error":"missing session token","code":"session_missing"}`, out.Body.String())
+	assert.Empty(t, out.Header().Values("Set-Cookie"))
 }
 
 // A sign-out that a hook handler refused has ended nothing. The response

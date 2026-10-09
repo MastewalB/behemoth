@@ -509,10 +509,26 @@ func (sm *DefaultSessionManager) WriteToken(rctx *types.RequestContext, rawToken
 	return sm.cfg.Transport == types.TransportBody
 }
 
+// cookieCarries reports whether r sent rawToken in the session cookie. It
+// is how ExtendToken and ClearToken know that the cookie on the client is
+// the one they are about. Under TransportBoth a request may present its
+// token as a bearer token, and its cookie, if it has one, may be another
+// session's.
+func (sm *DefaultSessionManager) cookieCarries(r *http.Request, rawToken string) bool {
+	sent, err := r.Cookie(sm.cfg.CookieName)
+	return err == nil && sent.Value == rawToken
+}
+
 // ClearToken implements [types.SessionManager].
 func (sm *DefaultSessionManager) ClearToken(rctx *types.RequestContext) {
 	switch sm.cfg.Transport {
 	case types.TransportCookie, types.TransportBoth:
+		// The cookie is removed for the request that presented its token
+		// in it. Another cookie is left alone: its session is still live.
+		token, ok := sm.ExtractToken(rctx.Request)
+		if !ok || !sm.cookieCarries(rctx.Request, token) {
+			return
+		}
 		// An empty cookie that has already expired makes the browser drop
 		// the one it holds. Max-Age says so to current browsers, and the
 		// date to those that only read Expires.
@@ -527,10 +543,8 @@ func (sm *DefaultSessionManager) ExtendToken(rctx *types.RequestContext, rawToke
 	switch sm.cfg.Transport {
 	case types.TransportCookie, types.TransportBoth:
 		// Only a client that sent the token in the cookie depends on the
-		// cookie's date. Under TransportBoth the token may have come as a
-		// bearer token, and the cookie, if there is one, may be another
-		// session's.
-		if sent, err := rctx.Request.Cookie(sm.cfg.CookieName); err == nil && sent.Value == rawToken {
+		// cookie's date.
+		if sm.cookieCarries(rctx.Request, rawToken) {
 			sm.setCookie(rctx, sm.sessionCookie(rawToken, session.ExpiresAt))
 			return true
 		}

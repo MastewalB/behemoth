@@ -352,6 +352,101 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 	assert.Equal(t, 1, reached, "the request did not reach the handler")
 }
 
+// A session can end in another request: it is revoked from another device,
+// it expires, or it is deleted with its user. The browser still holds the
+// cookie, and can't drop an HttpOnly cookie itself. The session check takes
+// it back with the refusal. A cookie that may still be needed stays.
+func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "gone.db")+"?_busy_timeout=10000")
+	require.NoError(t, err)
+	t.Cleanup(func() { sqlDB.Close() })
+	_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
+	require.NoError(t, err)
+	// Every manager shares the database, so one can create what another
+	// is asked about.
+	manager := func(cfg types.SessionConfig) types.SessionManager {
+		if cfg.ExpiresIn == 0 {
+			cfg.ExpiresIn = time.Hour
+		}
+		cfg.PendingExpiresIn = time.Minute
+		return transport.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t), cfg, &passDispatcher{}, nil, managersAuth, nil)
+	}
+	// request sends cookie and bearer through the middleware mw builds, and
+	// returns the response and the middleware's error.
+	request := func(sm types.SessionManager, mw func(types.SessionManager) types.Middleware, cookie, bearer string) (*types.RequestContext, error) {
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: "session_token", Value: cookie})
+		}
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		return rctx, mw(sm)(func(*types.RequestContext) error { return nil })(rctx)
+	}
+	// removed reports whether the response removes the session cookie.
+	removed := func(rctx *types.RequestContext) bool {
+		set := (&http.Response{Header: rctx.Response.Headers}).Cookies()
+		return len(set) == 1 && set[0].Name == "session_token" && set[0].Value == "" && set[0].MaxAge < 0
+	}
+
+	sm := manager(types.SessionConfig{})
+	revoked, revokedToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	require.NoError(t, sm.Revoke(ctx, revoked.ID, "revoked_elsewhere"))
+	_, expiredToken, err := manager(types.SessionConfig{ExpiresIn: 20 * time.Millisecond}).Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	time.Sleep(40 * time.Millisecond)
+	_, pendingToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionPending})
+	require.NoError(t, err)
+	_, liveToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+
+	// Gone for good: the cookie goes with the refusal.
+	for name, tc := range map[string]struct{ token, code string }{
+		"revoked":      {revokedToken, behemotherr.ErrorCodeSessionRevoked},
+		"expired":      {expiredToken, behemotherr.ErrorCodeSessionExpired},
+		"never issued": {"never-issued", behemotherr.ErrorCodeSessionInvalid},
+	} {
+		rctx, err := request(sm, types.RequireSession, tc.token, "")
+		assert.True(t, behemotherr.IsCode(err, tc.code), "%s: %v", name, err)
+		assert.True(t, removed(rctx), "%s: the cookie is removed: %q", name, rctx.Response.Headers.Values("Set-Cookie"))
+	}
+
+	// Not gone: the client still needs its cookie, or has none.
+	rctx, err := request(sm, types.RequireSession, pendingToken, "")
+	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionPending), "%v", err)
+	assert.Empty(t, rctx.Response.Headers, "a session that waits for its second factor keeps its cookie")
+
+	rctx, err = request(sm, types.RequireSession, "", "")
+	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionMissing), "%v", err)
+	assert.Empty(t, rctx.Response.Headers, "no cookie came, none is removed")
+
+	neverFresh := manager(types.SessionConfig{FreshAge: time.Nanosecond})
+	rctx, err = request(neverFresh, types.RequireFreshSession, liveToken, "")
+	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionNotFresh), "%v", err)
+	assert.Empty(t, rctx.Response.Headers, "a session that is only too old for this route is still live")
+
+	// Both transports: the bearer token is read first. A dead one says
+	// nothing about the cookie next to it, which is another session's.
+	both := manager(types.SessionConfig{Transport: types.TransportBoth})
+	rctx, err = request(both, types.RequireSession, liveToken, revokedToken)
+	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked), "%v", err)
+	assert.Empty(t, rctx.Response.Headers, "the live session's cookie stays")
+	rctx, err = request(both, types.RequireSession, revokedToken, "")
+	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked), "%v", err)
+	assert.True(t, removed(rctx), "the dead session's own cookie goes")
+
+	// The database fails: nothing is known about the session, so nothing
+	// is taken from the client.
+	require.NoError(t, sqlDB.Close())
+	rctx, err = request(sm, types.RequireSession, liveToken, "")
+	require.Error(t, err)
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryDatabase), "%v", err)
+	assert.Empty(t, rctx.Response.Headers, "a failed lookup removes no cookie")
+}
+
 // RequireSession runs on every authenticated request, so what it costs
 // matters. With a session cache, a request whose session is not due for an
 // extension is served without a statement to the database. Without a cache
@@ -846,29 +941,6 @@ func TestSessionTokenTransports(t *testing.T) {
 		assert.Equal(t, wantHeader, rctx.Response.Headers.Get(types.SessionTokenHeader), "%s: %s", name, types.SessionTokenHeader)
 		assert.Empty(t, rctx.Values, "%s: nothing is parked in the request's values", name)
 
-		// ClearToken takes back what WriteToken handed over. A browser
-		// replaces a cookie only with one of the same name and path, so the
-		// cookie it sets is the one above, emptied and expired. A transport
-		// without a cookie has nothing to take back.
-		cleared := &types.RequestContext{Response: types.NewResponseRecorder(), Values: behemoth.M{}}
-		sm.ClearToken(cleared)
-		if tc.cookie == "" {
-			assert.Empty(t, cleared.Response.Headers, "%s: ClearToken writes nothing", name)
-		} else {
-			written := (&http.Response{Header: rctx.Response.Headers}).Cookies()
-			gone := (&http.Response{Header: cleared.Response.Headers}).Cookies()
-			require.Len(t, written, 1, name)
-			require.Len(t, gone, 1, name)
-			assert.Equal(t, written[0].Name, gone[0].Name, "%s: the same cookie", name)
-			assert.Equal(t, written[0].Path, gone[0].Path, "%s: the same path", name)
-			assert.Empty(t, gone[0].Value, "%s: no token in it", name)
-			assert.Negative(t, gone[0].MaxAge, "%s: Max-Age=0, which deletes it", name)
-			assert.True(t, gone[0].Expires.Before(time.Now()), "%s: and an Expires in the past", name)
-			assert.True(t, gone[0].HttpOnly && gone[0].Secure, "%s: with the attributes of the cookie it replaces", name)
-			assert.Equal(t, written[0].SameSite, gone[0].SameSite, name)
-			assert.Empty(t, cleared.Response.Headers.Get(types.SessionTokenHeader), "%s: no token header", name)
-		}
-
 		cookieName := tc.cfg.CookieName
 		if cookieName == "" {
 			cookieName = "session_token"
@@ -889,6 +961,44 @@ func TestSessionTokenTransports(t *testing.T) {
 		}
 		_, ok = sm.ExtractToken(httptest.NewRequest(http.MethodGet, "/x", nil))
 		assert.False(t, ok, "%s: a request without a token", name)
+
+		// ClearToken takes back what WriteToken handed over, from the
+		// request that presented it. A browser replaces a cookie only with
+		// one of the same name and path, so the cookie it sets is the one
+		// above, emptied and expired. A transport without a cookie has
+		// nothing to take back.
+		clear := func(req *http.Request) *types.RequestContext {
+			cleared := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+			sm.ClearToken(cleared)
+			return cleared
+		}
+		cleared := clear(withCookie)
+		if tc.cookie == "" {
+			assert.Empty(t, cleared.Response.Headers, "%s: ClearToken writes nothing", name)
+		} else {
+			written := (&http.Response{Header: rctx.Response.Headers}).Cookies()
+			gone := (&http.Response{Header: cleared.Response.Headers}).Cookies()
+			require.Len(t, written, 1, name)
+			require.Len(t, gone, 1, name)
+			assert.Equal(t, written[0].Name, gone[0].Name, "%s: the same cookie", name)
+			assert.Equal(t, written[0].Path, gone[0].Path, "%s: the same path", name)
+			assert.Empty(t, gone[0].Value, "%s: no token in it", name)
+			assert.Negative(t, gone[0].MaxAge, "%s: Max-Age=0, which deletes it", name)
+			assert.True(t, gone[0].Expires.Before(time.Now()), "%s: and an Expires in the past", name)
+			assert.True(t, gone[0].HttpOnly && gone[0].Secure, "%s: with the attributes of the cookie it replaces", name)
+			assert.Equal(t, written[0].SameSite, gone[0].SameSite, name)
+			assert.Empty(t, cleared.Response.Headers.Get(types.SessionTokenHeader), "%s: no token header", name)
+		}
+		// A request that did not present its token in the cookie keeps
+		// whatever cookie it has: under TransportBoth the token may come as
+		// a bearer token next to the cookie of another session.
+		assert.Empty(t, clear(withBearer).Response.Headers, "%s: no cookie in the request, none to remove", name)
+		otherCookie := httptest.NewRequest(http.MethodGet, "/x", nil)
+		otherCookie.Header.Set("Authorization", "Bearer "+raw)
+		otherCookie.AddCookie(&http.Cookie{Name: cookieName, Value: "another-sessions-token"})
+		if tc.readBearer {
+			assert.Empty(t, clear(otherCookie).Response.Headers, "%s: the cookie is another session's", name)
+		}
 	}
 }
 

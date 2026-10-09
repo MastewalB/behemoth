@@ -145,7 +145,7 @@ curl -i localhost:8080/api/auth/me --cookie 'session_token=r8_x6fau4053kWPOukmnu
 | --- | --- | --- |
 | `types.TransportCookie` | replaces the cookie with an empty one that has expired, so the browser drops it | nothing |
 | `types.TransportHeader`, `types.TransportBody` | has nothing to remove | discards the token it kept |
-| `types.TransportBoth` | removes the cookie | discards the token if it kept one from the header |
+| `types.TransportBoth` | removes the cookie, if the request carried its token in the cookie | discards the token if it kept one from the header |
 
 ```bash
 curl -i -X POST localhost:8080/api/auth/sign-out --cookie 'session_token=r8_x6fau4053kWPOukmnuUFxoY8iz...'
@@ -154,9 +154,9 @@ curl -i -X POST localhost:8080/api/auth/sign-out --cookie 'session_token=r8_x6fa
 # {"status":"signed_out"}
 ```
 
-The cookie is removed only when the sign-out went through. If a hook handler refuses it, or the request has no valid session, the cookie stays.
+The cookie is removed when the sign-out went through. If a hook handler refuses the sign-out, the session is still live and the cookie stays.
 
-A session can also end without a sign-out from that browser: it was revoked from another device, or ended with all the user's sessions. The cookie then stays until it expires or the next sign-in replaces it. A request that carries it gets `401`, like a request without one.
+A session can also end without a sign-out from that browser: it was revoked from another device, ended with all the user's sessions, or expired. The browser still holds the cookie. The next request it sends to a route behind `types.RequireSession` is refused with `401`, and that response removes the cookie. See [Protecting your own routes](#protecting-your-own-routes).
 
 ## Protecting your own routes
 
@@ -169,15 +169,17 @@ A session can also end without a sign-out from that browser: it was revoked from
 
 A request it refuses does not reach your handler. The response is JSON with a message and a code your client can act on:
 
-| The request | Status | Body |
-| --- | --- | --- |
-| has no session token | `401` | `{"error": "missing session token", "code": "session_missing"}` |
-| has a token that belongs to no session | `401` | `{"error": "invalid session", "code": "session_invalid"}` |
-| has the token of a revoked session | `401` | `{"error": "session has been revoked", "code": "session_revoked"}` |
-| has the token of an expired session | `401` | `{"error": "session expired", "code": "session_expired"}` |
-| has the token of a session that waits for a second factor | `401` | `{"error": "additional verification required", "code": "session_pending"}` |
+| The request | Status | Body | The session cookie |
+| --- | --- | --- | --- |
+| has no session token | `401` | `{"error": "missing session token", "code": "session_missing"}` | there is none |
+| has a token that belongs to no session | `401` | `{"error": "invalid session", "code": "session_invalid"}` | removed |
+| has the token of a revoked session | `401` | `{"error": "session has been revoked", "code": "session_revoked"}` | removed |
+| has the token of an expired session | `401` | `{"error": "session expired", "code": "session_expired"}` | removed |
+| has the token of a session that waits for a second factor | `401` | `{"error": "additional verification required", "code": "session_pending"}` | kept: the client needs it to present the second factor |
 
-A `401` always means the client has no usable session. If Behemoth could not check the session, because the database is down for example, the answer is `500` with a generic message, and the error is logged. A client should not sign its user out on a `500`.
+A session that is invalid, revoked or expired will not come back, so with a cookie transport the refusal also removes the cookie. A browser can't delete it itself, and would send the dead token with every request until the cookie expired. With `types.TransportBoth` this applies when the token came in the cookie; a request that sent a bearer token keeps its cookie. Clients of the header and body transports hold the token themselves and discard it when they get one of these codes.
+
+A `401` always means the client has no usable session. If Behemoth could not check the session, because the database is down for example, the answer is `500` with a generic message, and the error is logged. No cookie is removed, and a client should not sign its user out on a `500`.
 
 The middleware returns these as typed errors and the router writes the response, so your `RouterConfig.ErrorMapper` shapes them like any other error.
 
@@ -210,7 +212,7 @@ A flow called from code, such as `emailpassword.Plugin.SignIn`, returns the raw 
 
 ## Writing a route that ends the session
 
-A route that ends its caller's own session takes the token back afterwards with `ClearToken`, the counterpart of `WriteToken`. It removes the cookie for the cookie transports and does nothing for the others.
+A route that ends its caller's own session takes the token back afterwards with `ClearToken`, the counterpart of `WriteToken`. With a cookie transport it removes the cookie the request presented its token in, and it does nothing for the other transports.
 
 ```go
 func signOutEverywhere(rctx *types.RequestContext) error {

@@ -86,13 +86,17 @@ type SessionManager interface {
 	// calls; a route that calls WriteToken itself has to act on the result.
 	WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBody bool)
 
-	// ClearToken takes the token back from the client, for a route that has
-	// ended the caller's own session, such as sign-out. It is the
-	// counterpart of WriteToken. For TransportCookie and TransportBoth it
-	// sets the session cookie again, empty and already expired, so that the
-	// browser drops it: the cookie is HttpOnly, which a script can't remove.
-	// For TransportHeader and TransportBody it writes nothing, because the
-	// client holds the token itself and discards it.
+	// ClearToken takes the token back from the client once the session the
+	// request presented has ended: a route calls it after it ended its
+	// caller's own session, such as sign-out, and RequireSession calls it
+	// when it finds the session gone. It is the counterpart of WriteToken.
+	// For TransportCookie and TransportBoth it sets the session cookie
+	// again, empty and already expired, so that the browser drops it: the
+	// cookie is HttpOnly, which a script can't remove. It does so for the
+	// request that presented its token in that cookie. Under TransportBoth
+	// a request that came with a bearer token keeps its cookie, which may
+	// be another session's. For TransportHeader and TransportBody it writes
+	// nothing, because the client holds the token itself and discards it.
 	//
 	// It only writes to the response. Ending the session is Revoke's job,
 	// and a route calls ClearToken after the revoke has succeeded.
@@ -209,6 +213,11 @@ func RequireFreshSession(sm SessionManager) Middleware {
 //	a revoked or expired session           session_revoked, session_expired
 //	a session waiting for a second factor  session_pending
 //
+// A session that is invalid, revoked or expired will not come back, so the
+// refusal also takes its token back from the client
+// (SessionManager.ClearToken): a browser can't drop the session cookie
+// itself, and would send it with every request until it expires.
+//
 // It writes no response itself. Any other error of SessionManager.Validate
 // is a failure of the system, such as a database that is down, and is
 // returned unchanged: the router answers it with 500, logs it, and keeps its
@@ -236,7 +245,10 @@ func RequireSession(sm SessionManager) Middleware {
 				// found", which the router answers with 404. To a route
 				// that needs a session it is a request without one.
 				if behemotherr.IsNotFound(err) {
-					return behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionInvalid, err)
+					err = behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionInvalid, err)
+				}
+				if sessionIsGone(err) {
+					sm.ClearToken(rctx)
 				}
 				return err
 			}
@@ -255,4 +267,14 @@ func RequireSession(sm SessionManager) Middleware {
 			return err
 		}
 	}
+}
+
+// sessionIsGone reports whether err says that a session has ended for good:
+// its token belongs to no session, or the session is revoked or expired. A
+// session that waits for a second factor is still live. Any other error says
+// that the lookup failed, not what became of the session.
+func sessionIsGone(err error) bool {
+	return behemotherr.IsCode(err, behemotherr.ErrorCodeSessionInvalid) ||
+		behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked) ||
+		behemotherr.IsCode(err, behemotherr.ErrorCodeSessionExpired)
 }
