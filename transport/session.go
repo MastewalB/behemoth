@@ -412,6 +412,18 @@ func (sm *DefaultSessionManager) RevokeAllForUser(ctx context.Context, userID an
 	return nil
 }
 
+// IsFresh implements [types.SessionManager].
+func (sm *DefaultSessionManager) IsFresh(session *models.Session) bool {
+	if session == nil || session.State != models.SessionActive || session.FreshAt.IsZero() {
+		return false
+	}
+	age := sm.cfg.FreshAge
+	if age <= 0 {
+		age = types.DefaultFreshAge
+	}
+	return time.Since(session.FreshAt) <= age
+}
+
 // Evict implements [types.SessionManager].
 func (sm *DefaultSessionManager) Evict(ctx context.Context, sessions []*models.Session) {
 	for _, m := range sessions {

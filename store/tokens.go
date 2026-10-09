@@ -87,6 +87,30 @@ func (s *Store) RevokeTokensForSubject(ctx context.Context, kind models.TokenKin
 	}, Logic: clause.OpAnd}, behemoth.M{models.TokenRevokedAt: s.now()})
 }
 
+// ListTokensForSubject lists the tokens of kind issued to subject that are
+// neither revoked nor consumed, oldest first. Expired ones are included: the
+// token manager decides what expired means.
+func (s *Store) ListTokensForSubject(ctx context.Context, kind models.TokenKind, subject string) ([]*models.Token, error) {
+	found, err := s.db.FindMany(ctx, &models.Token{}, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.TokenKindColumn, Operator: clause.OpEqual, Value: string(kind)},
+		{Field: models.TokenSubject, Operator: clause.OpEqual, Value: subject},
+		{Field: models.TokenRevokedAt, Operator: clause.OpIsNull},
+		{Field: models.TokenConsumedAt, Operator: clause.OpIsNull},
+	}, Logic: clause.OpAnd}, &behemoth.QueryOptions{OrderBy: behemoth.Order{Field: models.TokenCreatedAt, Direction: behemoth.Asc}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.Token, len(found))
+	for i, f := range found {
+		tok, ok := f.(*models.Token)
+		if !ok {
+			return nil, fmt.Errorf("store: unexpected %T in tokens", f)
+		}
+		out[i] = tok
+	}
+	return out, nil
+}
+
 func (s *Store) findToken(ctx context.Context, where clause.Expression) (*models.Token, error) {
 	found, err := s.db.FindOne(ctx, &models.Token{}, where)
 	if err != nil {

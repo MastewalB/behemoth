@@ -15,6 +15,8 @@ This document explains how `plugins/emailpassword` fits into `Prepare` and `Boot
 
 `SignIn` returns a `*types.SignInResult`, the type every sign-in plugin hands to `auth.signIn.after`. `emailpassword.SignInResult` is an alias kept for callers. `Method` is `"emailpassword"`.
 
+The plugin knows nothing about email verification. A user it signs up is created with `EmailVerified` false, and the email verification plugin, if installed, sends the link from its handler on `data.user.created`; see [`emailverification.md`](emailverification.md).
+
 Compare with a plugin such as the example `auditlog`: that one declares a table in `Declare` and has a mount path. This one adds behaviour on top of core tables and declares nothing.
 
 ## The flows

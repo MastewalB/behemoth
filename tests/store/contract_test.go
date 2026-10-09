@@ -555,6 +555,25 @@ func tokensContract(t *testing.T, st *store.Store) {
 	}
 	wg.Wait()
 	assert.Equal(t, 1, wins, "a single-use token is consumed exactly once")
+
+	// ListForSubject returns what a subject can still use: the filters on
+	// the consumed and revoked columns have to hold on every backend.
+	keep, _, err := tm.Issue(ctx, kindReset, "u-list", behemoth.M{"n": 1})
+	require.NoError(t, err)
+	_, usedRaw, err := tm.Issue(ctx, kindReset, "u-list", nil)
+	require.NoError(t, err)
+	gone, _, err := tm.Issue(ctx, kindReset, "u-list", nil)
+	require.NoError(t, err)
+	_, _, err = tm.Issue(ctx, kindReset, "u-other", nil)
+	require.NoError(t, err)
+	_, err = tm.Consume(ctx, kindReset, usedRaw)
+	require.NoError(t, err)
+	require.NoError(t, tm.Revoke(ctx, gone.ID))
+	listed, err := tm.ListForSubject(ctx, kindReset, "u-list")
+	require.NoError(t, err)
+	require.Len(t, listed, 1, "the consumed and the revoked token are left out, and so is another subject's")
+	assert.Equal(t, keep.ID, listed[0].ID)
+	assert.EqualValues(t, 1, listed[0].MetadataJSON["n"], "with its metadata")
 }
 
 func accountsContract(t *testing.T, st *store.Store, db behemoth.Database) {

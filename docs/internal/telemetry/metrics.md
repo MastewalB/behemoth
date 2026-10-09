@@ -116,6 +116,10 @@ The sign-in flow, the session manager and the token manager report nothing thems
 
 A rejection is still also an audit event; see the entry "Every rate-limit rejection writes an audit row" in `docs/ongoing.md`.
 
+### Mail
+
+`DefaultMailer` counts `behemoth.mail.sent` by `kind` and `result`: `sent` or `error` where the application's sender returns, for a send the caller waited for and for a background one, and `dropped` when `SendAsync` found the queue full. See [`../mail/mailer.md`](../mail/mailer.md).
+
 ### Hook handlers
 
 `observeHandler` runs after every handler call in all four dispatcher methods. It records the duration, and one `behemoth.hook.errors` when the handler returned an error or panicked.

@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -500,6 +501,114 @@ func TestTokenRevoke(t *testing.T) {
 	}
 	_, err = tm.Verify(ctx, kindAPI, other)
 	assert.NoError(t, err, "another subject's token is untouched")
+}
+
+// ListForSubject returns what a subject can still use of one kind, oldest
+// first: a consumed, a revoked and an expired token are left out, and so are
+// another subject's and another kind's.
+func TestTokenListForSubject(t *testing.T) {
+	ctx := context.Background()
+	catalog := bmth.NewDefaultTokenCatalog()
+	const kindShort types.TokenKind = "short_lived"
+	for _, def := range []types.TokenKindDef{
+		{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"},
+		{Kind: kindShort, SingleUse: true, DefaultTTL: time.Millisecond, Backend: types.TokenBackendDB, Owner: "core"},
+		{Kind: "in_kv", SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendKV, Owner: "core"},
+	} {
+		require.NoError(t, catalog.Declare(def))
+	}
+	tm := transport.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, managersAuth)
+
+	issue := func(kind types.TokenKind, subject string) (*types.Token, string) {
+		tok, raw, err := tm.Issue(ctx, kind, subject, behemoth.M{"n": subject})
+		require.NoError(t, err)
+		time.Sleep(2 * time.Millisecond) // distinct creation times
+		return tok, raw
+	}
+	first, _ := issue(kindReset, "u1")
+	_, usedRaw := issue(kindReset, "u1")
+	revoked, _ := issue(kindReset, "u1")
+	last, _ := issue(kindReset, "u1")
+	issue(kindReset, "u2")
+	issue(kindShort, "u1") // expired by the time it is listed
+	_, err := tm.Consume(ctx, kindReset, usedRaw)
+	require.NoError(t, err)
+	require.NoError(t, tm.Revoke(ctx, revoked.ID))
+
+	listed, err := tm.ListForSubject(ctx, kindReset, "u1")
+	require.NoError(t, err)
+	require.Len(t, listed, 2)
+	assert.Equal(t, []string{first.ID, last.ID}, []string{listed[0].ID, listed[1].ID}, "oldest first")
+	assert.Equal(t, behemoth.M{"n": "u1"}, listed[0].MetadataJSON, "the record, with its metadata")
+
+	expired, err := tm.ListForSubject(ctx, kindShort, "u1")
+	require.NoError(t, err)
+	assert.Empty(t, expired)
+	none, err := tm.ListForSubject(ctx, kindReset, "nobody")
+	require.NoError(t, err)
+	assert.Empty(t, none)
+
+	_, err = tm.ListForSubject(ctx, "in_kv", "u1")
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "a kind in the key-value storage can't be listed: %v", err)
+	_, err = tm.ListForSubject(ctx, "undeclared", "u1")
+	assert.Error(t, err)
+}
+
+// A session is fresh for FreshAge after it was created or promoted.
+// RequireFreshSession lets a fresh one through and refuses one that is
+// still valid but older.
+func TestSessionFreshness(t *testing.T) {
+	ctx := context.Background()
+	sm, _ := newSessionManager(t, types.SessionConfig{FreshAge: 150 * time.Millisecond, Transport: types.TransportHeader})
+	active, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	pending, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionPending})
+	require.NoError(t, err)
+	assert.True(t, sm.IsFresh(active), "just created")
+	assert.False(t, sm.IsFresh(pending), "a pending session has not finished signing in")
+	assert.False(t, sm.IsFresh(nil))
+
+	reached := 0
+	handler := types.RequireFreshSession(sm)(func(rctx *types.RequestContext) error {
+		reached++
+		assert.NotNil(t, rctx.Values["session"], "it does what RequireSession does first")
+		return nil
+	})
+	request := func(header string) (*types.RequestContext, error) {
+		req := httptest.NewRequest(http.MethodPost, "/x", nil)
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		return rctx, handler(rctx)
+	}
+	_, err = request("Bearer " + raw)
+	require.NoError(t, err)
+	require.Equal(t, 1, reached)
+
+	time.Sleep(250 * time.Millisecond)
+	stale, err := sm.Validate(ctx, raw)
+	require.NoError(t, err, "the session is still valid")
+	assert.False(t, sm.IsFresh(stale))
+	_, err = request("Bearer " + raw)
+	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionNotFresh), "%v", err)
+	assert.True(t, behemotherr.Is(err, behemotherr.CategorySession), "a session error, answered with 401: %v", err)
+	rctx, err := request("")
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusUnauthorized, rctx.Response.Code, "without a session it answers as RequireSession does")
+	assert.Equal(t, 1, reached, "neither request reached the handler")
+
+	promoted, err := sm.Promote(ctx, pending.ID)
+	require.NoError(t, err)
+	assert.True(t, sm.IsFresh(promoted), "passing the second factor is a credential check")
+
+	// Left at zero, FreshAge is 15 minutes.
+	byDefault, _ := newSessionManager(t, types.SessionConfig{})
+	session, _, err := byDefault.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	assert.True(t, byDefault.IsFresh(session))
+	session.FreshAt = time.Now().Add(-types.DefaultFreshAge - time.Second)
+	assert.False(t, byDefault.IsFresh(session))
 }
 
 // Under a real Boot the session manager dispatches through the default

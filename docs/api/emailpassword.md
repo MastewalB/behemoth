@@ -18,6 +18,8 @@ ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{ /* ... */ })
 
 The plugin's name is `emailpassword` (`emailpassword.PluginName`). Use it in `PluginMeta.Dependencies` to build on the plugin, and in `HookOptions.Before`/`After` to order a handler around it.
 
+A user who signs up starts with `EmailVerified` false. To confirm addresses, add the [email verification](emailverification.md) plugin: it sends the link without any change here, and can refuse sign-ins until the address is confirmed.
+
 ## Options
 
 The zero value works. Every field is optional.

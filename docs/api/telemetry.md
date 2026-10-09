@@ -389,6 +389,7 @@ Durations are in seconds. Attribute values come from fixed sets (a route pattern
 | `behemoth.store.duration` | histogram | `op`, `entity` | each database operation Behemoth makes |
 | `behemoth.store.errors` | counter | `op`, `entity`, `error_category` | database operations that returned an error |
 | `behemoth.audit.record_failures` | counter | `type` | audit events that could not be stored |
+| `behemoth.mail.sent` | counter | `kind`, `result` | messages handed to your mail sender; see [Mail](mail.md) |
 
 The names and attribute keys are constants in the `telemetry` package (`telemetry.MetricSignIn`, `telemetry.AttrOutcome`).
 
@@ -401,7 +402,7 @@ Attribute values:
 | `outcome` | `success` or `failure` |
 | `reason` | on failure only: the failure's code, such as `invalidCredentials`, `userNotFound`, `session_expired` |
 | `cache` | `hit` or `miss` |
-| `result` | `allowed`, `limited`, `error` when the rate-limit store could not be reached, or `skipped` when a hook rule did not apply to the call |
+| `result` | rate limits: `allowed`, `limited`, `error` when the rate-limit store could not be reached, or `skipped` when a hook rule did not apply to the call. Mail: `sent`, `error`, or `dropped` when the background queue was full |
 | `phase` | `before`, `after` or `failed` |
 | `plugin` | the owner of the hook handler: a plugin's name, or your application's |
 | `op` | `create`, `find_one`, `find_many`, `count`, `update`, `update_one`, `update_many`, `delete`, `delete_one`, `delete_many`, `delete_all`, `transaction` |

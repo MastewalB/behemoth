@@ -2,14 +2,14 @@
 
 The `magiclink` plugin signs a user in with a link sent to their email address. There is no password. The user asks for a link, opens it, and your page hands the link's token back to Behemoth, which creates the session.
 
-The plugin does not send email. You give it a function that does.
+The plugin does not send email. It hands the link to the mail sender you give Behemoth at `Boot`.
 
 ## How it works
 
 | Step | Who | What happens |
 | --- | --- | --- |
 | 1 | client | posts an email to `POST /sign-in/magic-link` |
-| 2 | plugin | finds the user, issues a single-use token, and calls your `SendLink` with the link |
+| 2 | plugin | finds the user, issues a single-use token, and hands the link to your mail sender |
 | 3 | you | send the message |
 | 4 | user | opens the link, which is a page of your application: `https://app.example.com/auth/magic?token=...` |
 | 5 | your page | posts the token to `POST /magic-link/verify` |
@@ -26,15 +26,17 @@ import "github.com/MastewalB/behemoth/plugins/magiclink"
 
 plugin := magiclink.New(magiclink.Options{
 	LinkURL: "https://app.example.com/auth/magic",
-	SendLink: func(ctx context.Context, link magiclink.Link) error {
-		return mailQueue.Enqueue(ctx, link.Email, "Your sign-in link", link.URL)
-	},
 })
 
 app, err := bmth.Prepare([]types.Plugin{plugin}, bmth.PrepareConfig{})
 // ...
 ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
 	Router: types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+	Mail: types.MailConfig{
+		Sender: types.MailSenderFunc(func(ctx context.Context, msg types.MailMessage) error {
+			return mailQueue.Enqueue(ctx, msg.To, "Your sign-in link", msg.URL)
+		}),
+	},
 	// ...
 })
 ```
@@ -45,38 +47,22 @@ The plugin's name is `magiclink` (`magiclink.PluginName`). It works next to the 
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `SendLink` | required | Delivers a link. See [Sending the link](#sending-the-link). |
+| `SendInBackground` | false | Whether the request returns without waiting for the mail sender. See [Sending the link](#sending-the-link). |
 | `LinkURL` | required | The page of your application the link points to. Absolute, `http` or `https`. The plugin adds the token as the `token` query parameter and keeps any query the URL already has. |
 | `TTL` | 15 minutes | How long a link works. `TokenConfig.TTLOverrides[types.TokenKindMagicLink]` takes precedence. |
 | `RequestLimit` | 5 per 15 minutes | Link requests allowed per email. See [Rate limits](#rate-limits). |
 
-A missing `SendLink`, a `LinkURL` that is not an absolute URL, and a negative `TTL` are configuration errors from `Boot`.
+A missing mail sender (`BootConfig.Mail.Sender`), a `LinkURL` that is not an absolute URL, and a negative `TTL` are configuration errors from `Boot`.
 
 ## Sending the link
 
-`SendLink` receives a `magiclink.Link`:
+The link is handed to your mail sender as a `types.MailMessage` with `Kind` set to `types.MailMagicLink`. [Mail](mail.md) describes the message and the sender.
 
-| Field | Content |
-| --- | --- |
-| `Email` | the address to send to, trimmed and lowercased |
-| `URL` | the link to put in the message: `LinkURL` with the token |
-| `Token` | the raw token, if you build the URL yourself. It is a credential: don't log it. |
-| `ExpiresAt` | when the link stops working |
-| `User` | the `*models.User` the link signs in |
-| `Metadata` | whatever the request carried under `metadata` |
+`Metadata` on the message is whatever the request carried under `metadata`. The plugin passes it through without reading or storing it. Use it for what your message needs: a locale, a template name, the name of the device that asked.
 
-`Metadata` is yours. The plugin passes it through without reading or storing it. Use it for what your message needs: a locale, a template name, the name of the device that asked.
-
-```go
-SendLink: func(ctx context.Context, link magiclink.Link) error {
-	locale, _ := link.Metadata["locale"].(string)
-	return mailQueue.Enqueue(ctx, link.Email, templates.SignIn(locale), link.URL)
-},
-```
-
-- **From the route, `Metadata` is what the client sent.** Treat it like any other request input: check a value before you use it in a template or a query. A handler on `auth.magicLink.beforeRequest` can set or remove entries before `SendLink` sees them.
-- **Return quickly.** `SendLink` runs during the request and only for an email that has an account. A slow send makes that request slower than one for an unknown email, which shows which addresses are registered. Hand the message to a queue.
-- **A returned error revokes the link.** The route still answers `200` (see below) and the error is logged at Error under the `magiclink` component.
+- **From the route, `Metadata` is what the client sent.** Treat it like any other request input. A handler on `auth.magicLink.beforeRequest` can set or remove entries before the sender sees them.
+- **By default the request waits for your sender.** A returned error revokes the link; the route still answers `200` (see below) and the error is logged at Error under the `magiclink` component. The sender is only called for an email that has an account, so a slow one makes that request slower than one for an unknown email, which shows which addresses are registered.
+- **With `SendInBackground` the request does not wait.** It returns once the message is queued. A send that fails later is logged by the mailer, and the link stays valid until it expires. Choose this when your sender talks to a mail provider directly.
 
 ## Routes
 

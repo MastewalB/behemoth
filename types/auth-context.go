@@ -29,6 +29,12 @@ type AuthContext struct {
 	// nil on an AuthContext Boot returns; with no origins configured it
 	// trusts none, and only paths on the application's own site pass.
 	Origins OriginValidator
+	// Mailer sends the messages plugins produce (a sign-in link, an email
+	// verification) through the application's MailSender. Never nil on an
+	// AuthContext Boot returns; Mailer.Configured says whether a sender was
+	// given. The application calls Mailer.Close at shutdown to let
+	// background sends finish.
+	Mailer Mailer
 	// Telemetry is never nil on an AuthContext Boot returns, and neither are
 	// its fields. Plugins take their logger from here, usually through
 	// telemetry.Named.

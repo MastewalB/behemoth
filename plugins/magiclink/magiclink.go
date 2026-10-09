@@ -2,7 +2,7 @@
 // a link by email and signs in by following it, without a password.
 //
 // It has two flows. RequestLink issues a single-use token for the user and
-// hands the link to the application's SendLink callback. Verify consumes the
+// hands the link to the application's mail sender (AuthContext.Mailer). Verify consumes the
 // token and creates a session. Tokens come from the token manager, sessions
 // from the session manager, and the sign-in itself fires core's auth.signIn.*
 // points, so a handler written for the email/password plugin's sign-ins sees
@@ -46,8 +46,8 @@ const (
 	// "redirectURL" and "metadata". A handler may rewrite them or stop the
 	// request.
 	HookRequestBefore types.HookPoint = "auth.magicLink.beforeRequest"
-	// HookRequestAfter runs once the link has been handed to SendLink, with
-	// a *LinkResult.
+	// HookRequestAfter runs once the link has been handed to the mail
+	// sender, with a *LinkResult.
 	HookRequestAfter types.HookPoint = "auth.magicLink.afterRequest"
 	// HookRequestFailed fires for a request that sent no link: codes
 	// "userNotFound", "issueFailed", "sendFailed" and "rejectedByHook".
@@ -87,26 +87,6 @@ const ErrorCodeInvalidLink = "invalid_magic_link"
 // response does not tell which addresses have an account.
 var ErrNoAccount = errors.New("magiclink: no account with this email")
 
-// Link is what SendLink receives: everything needed to write the message.
-type Link struct {
-	// Email is the address to send to, normalized.
-	Email string
-	// URL is Options.LinkURL with the token added as the "token" query
-	// parameter. It is the link to put in the message.
-	URL string
-	// Token is the raw token, for an application that builds its own URL.
-	// It is a credential: do not log it.
-	Token string
-	// ExpiresAt is when the link stops working.
-	ExpiresAt time.Time
-	// User is the account the link signs in.
-	User *models.User
-	// Metadata is LinkRequest.Metadata as the before handlers left it. The
-	// plugin does not read or store it. From the route it is whatever the
-	// client sent under "metadata", so treat it as untrusted input.
-	Metadata behemoth.M
-}
-
 // LinkRequest is the input of RequestLink.
 //
 // It implements [behemoth.Serializable], which is how WithLifecycle turns it
@@ -118,8 +98,9 @@ type LinkRequest struct {
 	// sign-in. Optional. It has to be a path on the application's own site
 	// or a URL on one of RouterConfig.TrustedOrigins. Verify returns it.
 	RedirectURL string
-	// Metadata is passed to SendLink as it is: a locale, a template name, a
-	// device label. Optional.
+	// Metadata is passed to the mail sender as it is, in
+	// MailMessage.Metadata: a locale, a template name, a device label.
+	// Optional. The plugin does not read or store it.
 	Metadata behemoth.M
 }
 
@@ -215,17 +196,22 @@ func (v *verifyInput) ToMap() (map[string]any, error) {
 
 func (v *verifyInput) FromMap(map[string]any) error { return nil }
 
-// Options configures the plugin. SendLink and LinkURL are required.
+// Options configures the plugin. LinkURL is required, and so is a mail
+// sender in BootConfig.Mail: the plugin sends nothing itself. The link goes
+// out as a types.MailMessage of kind types.MailMagicLink.
 type Options struct {
-	// SendLink delivers a link to its address: by email, through whatever
-	// service the application uses. Required. The plugin sends nothing
-	// itself.
+	// SendInBackground chooses how the link is handed to the mail sender.
 	//
-	// It is called during the request, only for an email that has an
-	// account. Hand the message to a queue and return: a slow send makes a
-	// request for a known email slower than one for an unknown email, and a
-	// returned error revokes the link.
-	SendLink func(ctx context.Context, link Link) error
+	// false (the default): the request waits for the sender
+	// (Mailer.Send). A failed send revokes the link and fires
+	// auth.magicLink.requestFailed. The sender is only called for an email
+	// that has an account, so a slow one makes that request slower than a
+	// request for an unknown email.
+	//
+	// true: the request returns once the message is queued
+	// (Mailer.SendAsync). A failed send is logged by the mailer and the
+	// link stays valid until it expires; the user asks for another.
+	SendInBackground bool
 
 	// LinkURL is the page of the application the link points to, such as
 	// "https://app.example.com/auth/magic". Required, absolute, http or
@@ -343,8 +329,8 @@ func (p *Plugin) Middlewares() []types.Middleware {
 // AuthContext and wraps the two flows with their hook points.
 func (p *Plugin) Init(ac *types.AuthContext) error {
 	const op = "magiclink.Init"
-	if p.opts.SendLink == nil {
-		return behemotherr.NewConfigurationError(op, "Options.SendLink is required: the plugin does not send email itself", nil)
+	if ac.Mailer == nil || !ac.Mailer.Configured() {
+		return behemotherr.NewConfigurationError(op, "no mail sender is configured; set BootConfig.Mail.Sender: the plugin does not send email itself", nil)
 	}
 	if p.opts.TTL < 0 {
 		return behemotherr.NewConfigurationError(op, fmt.Sprintf("Options.TTL is negative: %s", p.opts.TTL), nil)
@@ -374,7 +360,7 @@ func (p *Plugin) Routes() []types.Route {
 }
 
 // afterLookupError marks a failure of a link request that happened after
-// the user was found: the token could not be issued, or SendLink failed. It
+// the user was found: the token could not be issued, or the send failed. It
 // can only happen for an email that has an account, so the route hides it
 // like ErrNoAccount. A caller from code gets it, and the error it wraps.
 type afterLookupError struct{ err error }
@@ -462,9 +448,15 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 	query.Set(keyToken, rawToken)
 	link.RawQuery = query.Encode()
 
-	err = p.opts.SendLink(hctx.Ctx, Link{
-		Email: email, URL: link.String(), Token: rawToken, ExpiresAt: token.ExpiresAt, User: user, Metadata: req.Metadata,
-	})
+	msg := types.MailMessage{
+		Kind: types.MailMagicLink, To: email, URL: link.String(), Token: rawToken,
+		ExpiresAt: token.ExpiresAt, User: user, Metadata: req.Metadata,
+	}
+	if p.opts.SendInBackground {
+		err = ac.Mailer.SendAsync(hctx.Ctx, msg) // an error here means it was not queued
+	} else {
+		err = ac.Mailer.Send(hctx.Ctx, msg)
+	}
 	if err != nil {
 		// A link nobody received should not stay valid.
 		if revokeErr := ac.TokenManager.Revoke(hctx.Ctx, token.ID); revokeErr != nil {

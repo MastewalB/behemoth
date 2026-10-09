@@ -58,8 +58,9 @@ func (p *Plugin) Version() string {
 //     auth.signOut.* points, which core declares before any plugin's Declare
 //     runs (CoreDeclareHookPoints);
 //   - tables: the password hash lives on the core accounts table;
-//   - token kinds: none yet. Password reset and email verification are not
-//     built, and will declare their kinds here;
+//   - token kinds: none. Email verification is a plugin of its own
+//     (plugins/emailverification), which sends a link to a user this plugin
+//     signs up. Password reset is not built;
 //   - rate limits: core declares the baseline rule for /sign-in/email.
 func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	return nil

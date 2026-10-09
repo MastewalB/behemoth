@@ -3,7 +3,9 @@ package types
 import (
 	"context"
 	"net/http"
+	"time"
 
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
 )
 
@@ -43,6 +45,15 @@ type SessionManager interface {
 	Revoke(ctx context.Context, sessionID string, reason string) error
 
 	RevokeAllForUser(ctx context.Context, userID any, reason string, except string) error
+
+	// IsFresh reports whether session's credentials were checked recently:
+	// it is active, and its last sign-in or second factor (FreshAt) is no
+	// older than SessionConfig.FreshAge. A route that changes something
+	// sensitive, such as the account's email, asks for a fresh session so
+	// that a stolen long-lived session is not enough (RequireFreshSession).
+	// Nothing refreshes a session in place yet: signing in again is how a
+	// user gets a fresh one.
+	IsFresh(session *models.Session) bool
 
 	// Evict removes sessions from the session cache and does nothing else.
 	// It is for sessions whose rows are being deleted with their user
@@ -101,6 +112,27 @@ const (
 	TransportHeader TokenTransport = "header" // Authorization: Bearer <token>
 	TransportBoth   TokenTransport = "both"   // accept either; useful during a migration
 )
+
+// DefaultFreshAge is how long a session counts as fresh when
+// SessionConfig.FreshAge is zero.
+const DefaultFreshAge = 15 * time.Minute
+
+// RequireFreshSession is RequireSession plus a check that the session is
+// fresh (SessionManager.IsFresh). A session that is valid but too old gets a
+// typed session error with behemotherr.ErrorCodeSessionNotFresh, which the
+// router answers with 401: the client asks the user to sign in again and
+// retries. Use it on its own; it does what RequireSession does first.
+func RequireFreshSession(sm SessionManager) Middleware {
+	return func(next HandlerFunc) HandlerFunc {
+		return RequireSession(sm)(func(rctx *RequestContext) error {
+			session, _ := rctx.Values["session"].(*models.Session)
+			if session == nil || !sm.IsFresh(session) {
+				return behemotherr.NewSessionError("RequireFreshSession", behemotherr.ErrorCodeSessionNotFresh, nil)
+			}
+			return next(rctx)
+		})
+	}
+}
 
 func RequireSession(sm SessionManager) Middleware {
 	return func(next HandlerFunc) HandlerFunc {

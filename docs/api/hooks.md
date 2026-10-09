@@ -472,6 +472,8 @@ These operations put what they were called with in `hctx.Values` before the firs
 | `auth.signUp.before` | `hooks.HookValueEmail` | the email being registered, trimmed and lowercased |
 | `auth.signIn.before` | `hooks.HookValueEmail` | the email being tried, trimmed and lowercased. For a magic link, the email the link was sent to; absent when the token is not valid |
 | `auth.magicLink.beforeRequest` | `hooks.HookValueEmail` | the email a link is requested for, trimmed and lowercased |
+| `auth.emailVerification.beforeSend`, `.beforeVerify` | `hooks.HookValueEmail` | the address being verified, trimmed and lowercased; absent at verify when the token is not valid |
+| `auth.emailChange.beforeRequest`, `.beforeConfirm`, `.beforeRevert` | `hooks.HookValueUserID` | the user whose address changes; absent at confirm and revert when the token is not valid |
 | `auth.signOut.before` | `hooks.HookValueSessionID` | the session being ended |
 | `auth.session.beforeCreate` | `hooks.HookValueUserID` | the user the session is for, as a string |
 | `token.beforeIssue` | `hooks.HookValueTokenKind`, `hooks.HookValueTokenSubject` | the kind and the subject, as strings |
@@ -625,4 +627,4 @@ Core declares these, so a handler can be registered on any of them.
 
 The session and token points are Tier 2 even though they sit next to a table write: the managers fire them outside any store transaction, `hctx.Tx` is nil, and an after handler's error is logged.
 
-The `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points are fired by the email/password plugin (`plugins/emailpassword`), so they only fire when that plugin is passed to `Prepare`. The magic link plugin (`plugins/magiclink`) fires the `auth.signIn.*` points too, when a link is verified, with a different `auth.signIn.before` payload: `method` and `email`, and no password. It also declares three points of its own around a link request; see [Magic link](magiclink.md#hooks).
+The `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points are fired by the email/password plugin (`plugins/emailpassword`), so they only fire when that plugin is passed to `Prepare`. The magic link plugin (`plugins/magiclink`) fires the `auth.signIn.*` points too, when a link is verified, with a different `auth.signIn.before` payload: `method` and `email`, and no password. It also declares three points of its own around a link request; see [Magic link](magiclink.md#hooks). The email verification plugin declares six, around sending and verifying a link, and nine more for its email change flow; see [Email verification](emailverification.md#hooks).

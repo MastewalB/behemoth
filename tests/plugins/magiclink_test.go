@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,20 +36,31 @@ CREATE TABLE tokens (
 	key_version INTEGER NOT NULL, metadata TEXT, expires_at TIMESTAMP, consumed_at TIMESTAMP, revoked_at TIMESTAMP,
 	created_at TIMESTAMP NOT NULL);`
 
-// outbox is a SendLink that keeps what it was asked to send, and fails when
-// told to.
+// outbox is a MailSender that keeps what it was asked to send, and fails
+// when told to. The lock is for background sends.
 type outbox struct {
-	links []magiclink.Link
+	mu    sync.Mutex
+	links []types.MailMessage
 	err   error
 }
 
-func (o *outbox) send(_ context.Context, link magiclink.Link) error {
-	o.links = append(o.links, link)
+func (o *outbox) Send(_ context.Context, msg types.MailMessage) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.links = append(o.links, msg)
 	return o.err
 }
 
-func (o *outbox) last(t *testing.T) magiclink.Link {
+func (o *outbox) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.links)
+}
+
+func (o *outbox) last(t *testing.T) types.MailMessage {
 	t.Helper()
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	require.NotEmpty(t, o.links, "no link was sent")
 	return o.links[len(o.links)-1]
 }
@@ -73,9 +85,6 @@ func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg types.H
 	require.NoError(t, err)
 
 	app := &magicLinkApp{outbox: &outbox{}, mounted: mountedRoutes{}}
-	if opts.SendLink == nil {
-		opts.SendLink = app.outbox.send
-	}
 	if opts.LinkURL == "" {
 		opts.LinkURL = "https://app.example.com/auth/magic?from=email"
 	}
@@ -91,11 +100,13 @@ func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg types.H
 		},
 		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
 		Router:    types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+		Mail:      types.MailConfig{Sender: app.outbox},
 		Telemetry: tel,
 		HTTP:      app.mounted,
 		Hooks:     hookFn,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { app.ac.Mailer.Close(context.Background()) })
 
 	user := &models.User{Email: "ada@example.com"}
 	require.NoError(t, app.ac.Store.CreateUser(ctx, user))
@@ -137,15 +148,16 @@ func TestMagicLinkRequestAndVerify(t *testing.T) {
 		_, err = p.RequestLink(ctx, magiclink.LinkRequest{Email: "ada@example.com", RedirectURL: redirect})
 		assert.True(t, behemotherr.IsValidationError(err), "redirect %q: %v", redirect, err)
 	}
-	require.Empty(t, app.outbox.links, "none of these sent a link")
+	require.Zero(t, app.outbox.count(), "none of these sent a link")
 
 	sent, err := p.RequestLink(ctx, magiclink.LinkRequest{
 		Email: "  Ada@Example.com ", RedirectURL: "https://app.example.com/welcome", Metadata: behemoth.M{"locale": "fr"},
 	})
 	require.NoError(t, err)
 	first := app.outbox.last(t)
-	assert.Equal(t, "ada@example.com", first.Email, "normalized")
-	assert.Equal(t, behemoth.M{"locale": "fr"}, first.Metadata, "passed to the callback as given")
+	assert.Equal(t, types.MailMagicLink, first.Kind)
+	assert.Equal(t, "ada@example.com", first.To, "normalized")
+	assert.Equal(t, behemoth.M{"locale": "fr"}, first.Metadata, "passed to the sender as given")
 	assert.Equal(t, user.ID, first.User.ID)
 	assert.WithinDuration(t, time.Now().Add(magiclink.DefaultTTL), first.ExpiresAt, time.Minute)
 	assert.Equal(t, &magiclink.LinkResult{UserID: user.ID, Email: "ada@example.com", TokenID: sent.TokenID, ExpiresAt: first.ExpiresAt}, sent)
@@ -217,7 +229,7 @@ func TestMagicLinkRoutes(t *testing.T) {
 	unknown := call(t, app.ac, request, `{"email":"nobody@example.com"}`)
 	assert.Equal(t, known.Code, unknown.Code)
 	assert.Equal(t, known.Body.String(), unknown.Body.String(), "the response does not tell which emails have an account")
-	assert.Len(t, app.outbox.links, 1)
+	assert.Equal(t, 1, app.outbox.count())
 
 	app.outbox.err = errors.New("smtp down")
 	failed := call(t, app.ac, request, `{"email":"ada@example.com"}`)
@@ -274,7 +286,7 @@ func TestMagicLinkRequestsAreLimitedPerEmail(t *testing.T) {
 		assert.False(t, limited(strings.ToUpper(email)), "%s: the second request, in another spelling", email)
 		assert.True(t, limited(email), "%s: the third request is refused", email)
 	}
-	assert.Len(t, app.outbox.links, 2, "only the known email was sent links")
+	assert.Equal(t, 2, app.outbox.count(), "only the known email was sent links")
 
 	events := app.rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
 	require.Len(t, events, 2)
@@ -294,7 +306,7 @@ func TestMagicLinkVerifyRefusalsAndSecondFactor(t *testing.T) {
 		}, nil)
 	})
 	p := app.plugin
-	link := func() magiclink.Link {
+	link := func() types.MailMessage {
 		_, err := p.RequestLink(ctx, magiclink.LinkRequest{Email: "ada@example.com"})
 		require.NoError(t, err)
 		return app.outbox.last(t)
@@ -326,14 +338,17 @@ func TestMagicLinkVerifyRefusalsAndSecondFactor(t *testing.T) {
 	assert.True(t, invalidLink(err), "a deleted user's link: %v", err)
 }
 
-// SendLink and LinkURL are required, and a missing one stops Boot.
+// LinkURL and a mail sender are required, and a missing one stops Boot.
 func TestMagicLinkOptions(t *testing.T) {
-	send := func(context.Context, magiclink.Link) error { return nil }
-	for name, opts := range map[string]magiclink.Options{
-		"no sender":           {LinkURL: "https://app.example.com/auth/magic"},
-		"no link URL":         {SendLink: send},
-		"a relative link URL": {SendLink: send, LinkURL: "/auth/magic"},
-		"a negative TTL":      {SendLink: send, LinkURL: "https://app.example.com/auth/magic", TTL: -time.Minute},
+	sender := types.MailSenderFunc(func(context.Context, types.MailMessage) error { return nil })
+	for name, tc := range map[string]struct {
+		opts   magiclink.Options
+		sender types.MailSender
+	}{
+		"no sender":           {magiclink.Options{LinkURL: "https://app.example.com/auth/magic"}, nil},
+		"no link URL":         {magiclink.Options{}, sender},
+		"a relative link URL": {magiclink.Options{LinkURL: "/auth/magic"}, sender},
+		"a negative TTL":      {magiclink.Options{LinkURL: "https://app.example.com/auth/magic", TTL: -time.Minute}, sender},
 	} {
 		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "magiclink-opts.db"))
 		require.NoError(t, err)
@@ -341,7 +356,7 @@ func TestMagicLinkOptions(t *testing.T) {
 		_, err = db.Exec(magicLinkSchema)
 		require.NoError(t, err)
 
-		p := magiclink.New(opts)
+		p := magiclink.New(tc.opts)
 		_, err = p.RequestLink(context.Background(), magiclink.LinkRequest{Email: "ada@example.com"})
 		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
 
@@ -351,8 +366,30 @@ func TestMagicLinkOptions(t *testing.T) {
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 			},
+			Mail: types.MailConfig{Sender: tc.sender},
 		})
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "magiclink", name)
 	}
+}
+
+// With SendInBackground the request does not wait for the sender: it
+// returns while the sender is still blocked, and a failed send leaves the
+// link valid.
+func TestMagicLinkSendsInBackground(t *testing.T) {
+	ctx := context.Background()
+	app, user := bootMagicLink(t, magiclink.Options{SendInBackground: true}, nil)
+	app.outbox.err = errors.New("smtp down")
+
+	app.outbox.mu.Lock() // the sender blocks until the request has returned
+	_, err := app.plugin.RequestLink(ctx, magiclink.LinkRequest{Email: "ada@example.com"})
+	app.outbox.mu.Unlock()
+	require.NoError(t, err, "the request did not wait for the sender, and does not see its error")
+
+	require.Eventually(t, func() bool { return app.outbox.count() == 1 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return len(app.rec.Logger.At(slog.LevelError)) == 1 }, 5*time.Second, time.Millisecond,
+		"the mailer logs the failed send")
+	result, err := app.plugin.Verify(ctx, app.outbox.last(t).Token)
+	require.NoError(t, err, "the link was not revoked: nobody was waiting for the send")
+	assert.Equal(t, user.ID, result.User.ID)
 }

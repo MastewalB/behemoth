@@ -396,4 +396,28 @@ func (tm *DefaultTokenManager) RevokeAllForSubject(ctx context.Context, kind typ
 	return nil
 }
 
+// ListForSubject implements [types.TokenManager].
+func (tm *DefaultTokenManager) ListForSubject(ctx context.Context, kind types.TokenKind, subject any) ([]*types.Token, error) {
+	const op = "TokenManager.ListForSubject"
+
+	def, ok := tm.catalog.Lookup(kind)
+	if !ok {
+		return nil, behemotherr.NewValidationError(op, "kind", fmt.Errorf("unknown token kind %q", kind))
+	}
+	if def.Backend == types.TokenBackendKV {
+		return nil, behemotherr.NewConfigurationError(op, fmt.Sprintf("kind %q is KV-backed; listing by subject is not supported", kind), nil)
+	}
+	found, err := tm.st.ListTokensForSubject(ctx, kind, subjectString(subject))
+	if err != nil {
+		return nil, behemotherr.WrapOp(op, "token", err)
+	}
+	usable := found[:0]
+	for _, tok := range found {
+		if checkConsumable(tok) == nil {
+			usable = append(usable, tok)
+		}
+	}
+	return usable, nil
+}
+
 var _ types.TokenManager = (*DefaultTokenManager)(nil)

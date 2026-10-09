@@ -18,7 +18,7 @@ type SessionConfig struct {
 	ExpiresIn          time.Duration // default 7d
 	PendingExpiresIn   time.Duration
 	UpdateAge          time.Duration            // default 1d; throttle window for rolling expiration
-	FreshAge           time.Duration            // default 15m; step-up re-auth window
+	FreshAge           time.Duration            // default DefaultFreshAge (15m): how long after a sign-in a session counts as fresh (SessionManager.IsFresh)
 	MaxConcurrent      int                      // default 0 (unlimited)
 	EvictOldestOnLimit bool                     // false = reject new session creation once MaxConcurrent is reached
 	SecondaryStorage   behemoth.KeyValueStorage // nil = DB-only, no cache layer

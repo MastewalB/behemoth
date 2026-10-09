@@ -42,14 +42,15 @@ The token kind is database-backed on purpose. `RevokeAllForSubject` is not suppo
 | 4 | `TokenManager.RevokeAllForSubject(magic_link, user.ID)` | `Fail` with `issueFailed` |
 | 5 | `TokenManager.Issue(magic_link, user.ID, {email, redirectURL})` | `Fail` with `issueFailed` |
 | 6 | build the URL: `LinkURL` plus `token=<raw>` | |
-| 7 | `Options.SendLink(ctx, Link{...})` | revoke the token, `Fail` with `sendFailed` |
+| 7 | `ac.Mailer.Send(ctx, MailMessage{Kind: MailMagicLink, ...})`, or `SendAsync` with `Options.SendInBackground` | revoke the token, `Fail` with `sendFailed` |
 | 8 | return a `*LinkResult`; `WithLifecycle` fires `auth.magicLink.afterRequest` | |
 
 Steps 1 and 2 come before the lookup, so a validation error does not depend on whether the email has an account.
 
 - **The token's subject is the user's id.** The email the link was sent to is in the token's metadata. See the design decision below.
-- **`Metadata` is not stored.** It goes from the request to `SendLink` and nowhere else. Only the email and the redirect URL are kept with the token.
-- **The raw token exists in three places:** the `Link` handed to `SendLink`, its `URL`, and the token manager's return value. `LinkResult`, which the after handlers and the audit event see, has the token's id and not the token.
+- **`Metadata` is not stored.** It goes from the request to the mail sender and nowhere else. Only the email and the redirect URL are kept with the token.
+- **With `SendInBackground`, step 7 only fails when the message could not be queued.** A send that fails later is logged by the mailer; the link is not revoked and no failed point fires. See [`../mail/mailer.md`](../mail/mailer.md).
+- **The raw token exists in three places:** the `MailMessage` handed to the mailer, its `URL`, and the token manager's return value. `LinkResult`, which the after handlers and the audit event see, has the token's id and not the token.
 
 ### What the route hides
 
@@ -59,13 +60,13 @@ The route has to answer the same for an email with an account and one without. T
 | --- | --- |
 | no user (step 3) | by definition |
 | the token could not be issued (steps 4 and 5) | a veto or a rate limit on `token.beforeIssue` is only reached for a known user |
-| `SendLink` returned an error (step 7) | it is only called for a known user |
+| the send failed (step 7) | the sender is only called for a known user |
 
 `requestBody` returns `ErrNoAccount` for the first and wraps the other two in `afterLookupError`. `handleRequest` turns all three into the `200` it gives a sent link, and logs the wrapped error at Error, since nothing else reports it. `RequestLink` returns them to a caller from code, which is not a stranger asking about an address.
 
 Everything else is reported, because it does not depend on the account: a validation error, a rejection by a handler on `auth.magicLink.beforeRequest`, the plugin's own rate limits (they count unknown emails too), and a failure of the lookup itself.
 
-The response time still differs: a known email pays for a token write and for `SendLink`. `docs/ongoing.md` has the entry.
+The response time still differs: a known email pays for the token writes, and without `SendInBackground` for the mail sender. `docs/ongoing.md` has the entry.
 
 ## Verifying a link
 
@@ -116,13 +117,17 @@ Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with
 **Decision:** Core's points, which is what they were declared in core for. `SignInResult` moved from `emailpassword` to `types` so that `auth.signIn.after` hands every handler one type, and it gained `Method`. The request for a link is not a sign-in and has the plugin's own points.
 **Revisit if:** the differing `auth.signIn.before` payloads cause handler bugs. A `method` key on the email/password payload would let a handler tell them apart there too; today it is set only by this plugin.
 
-### `SendLink` is a callback with pass-through metadata
-**Context:** The plugin has to get a message to the user, and Behemoth has no mailer.
+### The link is sent through the shared mailer
+**Context:** The plugin first took a `SendLink` callback in its options. Email verification then needed to send too.
+**Decision:** The callback was replaced by `AuthContext.Mailer`, which every plugin uses; [`../mail/mailer.md`](../mail/mailer.md) has the options that were weighed. The request's `Metadata` map is handed to the sender untouched, in `MailMessage.Metadata`, so an application can pass what its message needs (a locale, a template) without the plugin growing a field for each. It is client input when it comes from the route, and the API doc says so.
+
+### Waiting for the sender is the default
+**Context:** The mailer offers `Send`, which waits, and `SendAsync`, which does not.
 **Options considered:**
-- *A mailer interface in core with SMTP and provider adapters.* Works out of the box. It is a large surface that every application replaces with its own provider and templates.
-- *A callback in the plugin's options.* The application sends however it already does. The plugin can't retry or queue.
-**Decision:** The callback. The request carries a `Metadata` map that is handed to it untouched, so an application can pass what its message needs (a locale, a template) without the plugin growing a field for each. It is client input when it comes from the route, and the API doc says so.
-**Revisit if:** a second plugin needs to send email (password reset, email verification). A shared sender on the `AuthContext` would then be worth its surface.
+- *Always wait.* A failed send revokes the link and is audited. A sender that calls a provider directly holds the request, and widens the timing gap between known and unknown emails.
+- *Never wait.* Fast and even. A link that was never sent stays valid until it expires, and the failure is only in the log.
+- *An option.* Both are reasonable, and which is better depends on the application's sender.
+**Decision:** `Options.SendInBackground`, off by default. With a sender that enqueues, waiting costs nothing and keeps the revoke.
 
 ## Trusted origins
 

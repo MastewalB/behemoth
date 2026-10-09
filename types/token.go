@@ -63,4 +63,12 @@ type TokenManager interface {
 
 	Revoke(ctx context.Context, tokenID string) error
 	RevokeAllForSubject(ctx context.Context, kind TokenKind, subject any) error
+
+	// ListForSubject returns the tokens of kind issued to subject that can
+	// still be used: not revoked, not consumed, not expired. Oldest first.
+	// They are records: a raw token can't be recovered from one. A plugin
+	// uses it to see what is pending for a user, or to revoke some of a
+	// subject's tokens and not all. Like RevokeAllForSubject it is not
+	// supported for a kind kept in the key-value storage.
+	ListForSubject(ctx context.Context, kind TokenKind, subject any) ([]*Token, error)
 }

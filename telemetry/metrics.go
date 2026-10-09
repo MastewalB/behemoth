@@ -59,6 +59,8 @@ const (
 	MetricStoreErrors   = "behemoth.store.errors"   // counter: database operations that returned an error
 
 	MetricAuditRecordFailures = "behemoth.audit.record_failures" // counter: audit events that could not be stored
+
+	MetricMailSent = "behemoth.mail.sent" // counter: messages handed to the mail sender, by kind and result
 )
 
 // Attribute keys of the metrics above.
@@ -68,10 +70,10 @@ const (
 	AttrStatus        = "status"         // HTTP status code
 	AttrOutcome       = "outcome"        // "success" or "failure"
 	AttrReason        = "reason"         // a failure's code, e.g. "invalidCredentials"
-	AttrKind          = "kind"           // a token kind
+	AttrKind          = "kind"           // a token kind, or a mail kind
 	AttrCache         = "cache"          // "hit" or "miss"
 	AttrRule          = "rule"           // a rate-limit rule's name
-	AttrResult        = "result"         // "allowed", "limited", "error" or "skipped"
+	AttrResult        = "result"         // rate limits: "allowed", "limited", "error" or "skipped"; mail: "sent", "error" or "dropped"
 	AttrPoint         = "point"          // a hook point
 	AttrPhase         = "phase"          // a hook phase
 	AttrPlugin        = "plugin"         // the owner of a hook handler
