@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -103,6 +104,60 @@ func (f Field[T]) check(m behemoth.Extensible) error {
 		return fmt.Errorf("schema.Field %s.%s used on a %s model", f.Table, f.Name, m.SchemaName())
 	}
 	return nil
+}
+
+// Normalize returns raw, a value a driver returned for col, as the Go type
+// col declares: a bool for a boolean SQLite returned as 0 or 1, a string for
+// text a driver returned as []byte, a time.Time for a timestamp stored as
+// text, the document itself for a JSON column. A value it can't convert is
+// returned as it is, and nil stays nil.
+//
+// It is for encoding a row for a client (types.PublicView), where the value
+// has to look the same on every database. Typed access to one column goes
+// through Field.
+func Normalize(col Column, raw any) any {
+	if raw == nil {
+		return nil
+	}
+	switch col.Type {
+	case ColTypeBoolean:
+		if v, err := convert[bool](raw); err == nil {
+			return v
+		}
+	case ColTypeString, ColTypeText, ColTypeUuid:
+		if v, err := convert[string](raw); err == nil {
+			return v
+		}
+	case ColTypeInteger, ColTypeBigInt:
+		if v, err := convert[int64](raw); err == nil {
+			return v
+		}
+	case ColTypeReal:
+		if v, err := convert[float64](raw); err == nil {
+			return v
+		}
+	case ColTypeDateTime, ColTypeTimestamp:
+		if v, err := convert[time.Time](raw); err == nil {
+			return v
+		}
+	case ColTypeJson:
+		switch v := raw.(type) {
+		case []byte:
+			if json.Valid(v) {
+				return json.RawMessage(v)
+			}
+		case string:
+			if json.Valid([]byte(v)) {
+				return json.RawMessage(v)
+			}
+		}
+	case ColTypeBlob, ColTypeBytes:
+		return raw // bytes are the value
+	}
+	if b, ok := raw.([]byte); ok {
+		return string(b) // text a driver returned as bytes, such as a numeric
+	}
+	return raw
 }
 
 var timeType = reflect.TypeOf(time.Time{})

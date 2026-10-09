@@ -32,17 +32,22 @@ var userColumns = columnSet(UserID, UserEmail, UserUsername, UserFirstname, User
 
 // User is who signs in. How they sign in — a password, an OAuth provider —
 // is an Account; the user row holds no credential.
+//
+// As JSON a user is keyed by its column names, the names a request uses for
+// the same fields: "email_verified", "image_url". Columns a plugin added are
+// under "extra", all of them, so a route does not encode a user directly: it
+// answers with types.PublicView, which has the public columns only.
 type User struct {
 	Extension
-	ID            string    `db:"id"`
-	Email         string    `db:"email"`
-	Username      string    `db:"username"`
-	Firstname     string    `db:"firstname"`
-	Lastname      string    `db:"lastname"`
-	EmailVerified bool      `db:"email_verified"`
-	ImageUrl      string    `db:"image_url"`
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
+	ID            string    `db:"id" json:"id"`
+	Email         string    `db:"email" json:"email"`
+	Username      string    `db:"username" json:"username"`
+	Firstname     string    `db:"firstname" json:"firstname"`
+	Lastname      string    `db:"lastname" json:"lastname"`
+	EmailVerified bool      `db:"email_verified" json:"email_verified"`
+	ImageUrl      string    `db:"image_url" json:"image_url"`
+	CreatedAt     time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
 }
 
 func (u *User) GetID() string        { return u.ID }

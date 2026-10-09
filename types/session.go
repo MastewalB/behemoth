@@ -3,7 +3,6 @@ package types
 import (
 	"context"
 	"net/http"
-	"time"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
@@ -71,15 +70,21 @@ type SessionManager interface {
 
 	ListForUser(ctx context.Context, userID any) ([]*models.Session, error)
 
-	// WriteToken puts rawToken wherever Transport dictates - Set-Cookie for
-	// TransportCookie, and/or staging it in rctx.Values for TransportHeader
-	// (a header-transport client gets the token back in the JSON body; there's
-	// nothing to "write" server-side for a bearer token, since the client owns
-	// re-attaching it on subsequent requests).
-	WriteToken(rctx *RequestContext, rawToken string, session *models.Session)
+	// WriteToken hands a new session's token to the client the way
+	// SessionConfig.Transport says: a Set-Cookie header for
+	// TransportCookie, the SessionTokenHeader response header for
+	// TransportHeader, both for TransportBoth.
+	//
+	// For TransportBody it writes nothing, because the body is the route's
+	// to write. It returns true then, and the route puts the token in its
+	// JSON body. WriteSignIn does both steps, and is what a sign-in route
+	// calls; a route that calls WriteToken itself has to act on the result.
+	WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBody bool)
 
-	// ExtractToken reads the token per Transport - checks the Authorization
-	// header, the cookie, or both, depending on config.
+	// ExtractToken reads the token from a request per Transport: the
+	// session cookie, the Authorization header ("Bearer <token>"), or
+	// either. The header is where a client of TransportHeader and of
+	// TransportBody sends it.
 	ExtractToken(r *http.Request) (string, bool)
 
 	// SupportsRevocation lets callers (admin UI, HTTP layer) know whether
@@ -105,17 +110,42 @@ type SessionMeta struct {
 	State     SessionState // Active or Pending: set by the caller (SignIn passes Active or Pending depending on whether 2FA is required)
 }
 
+// TokenTransport is where the session token travels, in both directions:
+// how a sign-in hands it to the client, and where the client's later
+// requests carry it.
+//
+//	transport  the sign-in response has it in      a request carries it in
+//	cookie     a Set-Cookie header                 the cookie
+//	header     the Set-Auth-Token header           Authorization: Bearer <token>
+//	body       the JSON body, under "token"        Authorization: Bearer <token>
+//	both       the cookie and Set-Auth-Token       either
 type TokenTransport string
 
 const (
+	// TransportCookie keeps the token in an HttpOnly cookie, which the
+	// browser stores and sends by itself and scripts can't read. The
+	// default.
 	TransportCookie TokenTransport = "cookie"
-	TransportHeader TokenTransport = "header" // Authorization: Bearer <token>
-	TransportBoth   TokenTransport = "both"   // accept either; useful during a migration
+	// TransportHeader returns the token in the SessionTokenHeader response
+	// header. The client keeps it and sends it as a bearer token. A browser
+	// script on another origin can read the header only if the application
+	// exposes it (Access-Control-Expose-Headers).
+	TransportHeader TokenTransport = "header"
+	// TransportBody returns the token in the JSON body of the sign-in
+	// response, under SignInTokenKey. It differs from TransportHeader in
+	// that one respect: the client sends it back the same way, as a bearer
+	// token. Nothing is ever read from a request's body.
+	TransportBody TokenTransport = "body"
+	// TransportBoth is the cookie and the header together: a sign-in sets
+	// both, and a request may carry either. It is for an application with
+	// browser and non-browser clients, or one moving between the two.
+	TransportBoth TokenTransport = "both"
 )
 
-// DefaultFreshAge is how long a session counts as fresh when
-// SessionConfig.FreshAge is zero.
-const DefaultFreshAge = 15 * time.Minute
+// SessionTokenHeader is the response header a sign-in returns the session
+// token in under TransportHeader and TransportBoth. It mirrors Set-Cookie:
+// the server sets a credential, and the client stores it.
+const SessionTokenHeader = "Set-Auth-Token"
 
 // RequireFreshSession is RequireSession plus a check that the session is
 // fresh (SessionManager.IsFresh). A session that is valid but too old gets a

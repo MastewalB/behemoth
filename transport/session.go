@@ -56,7 +56,7 @@ func NewSessionManager(
 		st:     st,
 		kv:     kv,
 		crypto: crypto,
-		cfg:    cfg,
+		cfg:    cfg.WithDefaults(), // a zero field means its default, here and nowhere else
 		disp:   disp,
 		tel:    telemetry.OrDefault(tel).Named("session"),
 		auth:   auth,
@@ -417,11 +417,7 @@ func (sm *DefaultSessionManager) IsFresh(session *models.Session) bool {
 	if session == nil || session.State != models.SessionActive || session.FreshAt.IsZero() {
 		return false
 	}
-	age := sm.cfg.FreshAge
-	if age <= 0 {
-		age = types.DefaultFreshAge
-	}
-	return time.Since(session.FreshAt) <= age
+	return time.Since(session.FreshAt) <= sm.cfg.FreshAge
 }
 
 // Evict implements [types.SessionManager].
@@ -455,26 +451,37 @@ func (sm *DefaultSessionManager) Discard(ctx context.Context, sessions []*models
 // SupportsRevocation implements [types.SessionManager].
 func (sm *DefaultSessionManager) SupportsRevocation() bool { return true }
 
-func (sm *DefaultSessionManager) WriteToken(rctx *types.RequestContext, rawToken string, session *models.Session) {
-	if sm.cfg.Transport == types.TransportCookie || sm.cfg.Transport == types.TransportBoth {
+// WriteToken implements [types.SessionManager].
+func (sm *DefaultSessionManager) WriteToken(rctx *types.RequestContext, rawToken string, session *models.Session) (inBody bool) {
+	switch sm.cfg.Transport {
+	case types.TransportCookie, types.TransportBoth:
 		rctx.Response.Cookie(&http.Cookie{
-			Name: "session_token", Value: rawToken, Expires: session.ExpiresAt,
+			Name: sm.cfg.CookieName, Value: rawToken, Expires: session.ExpiresAt,
 			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/",
 		})
 	}
-	if sm.cfg.Transport == types.TransportHeader || sm.cfg.Transport == types.TransportBoth {
-		rctx.Values["token"] = rawToken // included in the JSON response body
+	switch sm.cfg.Transport {
+	case types.TransportHeader, types.TransportBoth:
+		rctx.Response.SetHeader(types.SessionTokenHeader, rawToken)
 	}
+	// The body is the route's to write, so for TransportBody the caller is
+	// told to put the token there.
+	return sm.cfg.Transport == types.TransportBody
 }
 
+// ExtractToken implements [types.SessionManager]. A client of
+// TransportHeader and of TransportBody sends the token the same way, as a
+// bearer token; the two differ only in how the sign-in delivered it.
 func (sm *DefaultSessionManager) ExtractToken(r *http.Request) (string, bool) {
-	if sm.cfg.Transport == types.TransportHeader || sm.cfg.Transport == types.TransportBoth {
-		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-			return strings.TrimPrefix(auth, "Bearer "), true
+	switch sm.cfg.Transport {
+	case types.TransportHeader, types.TransportBody, types.TransportBoth:
+		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && token != "" {
+			return token, true
 		}
 	}
-	if sm.cfg.Transport == types.TransportCookie || sm.cfg.Transport == types.TransportBoth {
-		if c, err := r.Cookie("session_token"); err == nil {
+	switch sm.cfg.Transport {
+	case types.TransportCookie, types.TransportBoth:
+		if c, err := r.Cookie(sm.cfg.CookieName); err == nil && c.Value != "" {
 			return c.Value, true
 		}
 	}

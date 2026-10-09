@@ -266,6 +266,12 @@ func TestMagicLinkRoutes(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.Equal(t, user.ID, body.User.ID)
 	assert.Equal(t, "/dashboard", body.RedirectURL)
+	// The route answers like every sign-in: the session token travels by
+	// the configured transport, here the response header.
+	session, err := app.ac.SessionManager.Validate(context.Background(), w.Header().Get(types.SessionTokenHeader))
+	require.NoError(t, err, "the %s header carries the session token", types.SessionTokenHeader)
+	assert.Equal(t, user.ID, session.UserID)
+	assert.NotContains(t, w.Body.String(), `"token"`, "and the body does not")
 
 	w = call(t, app.ac, verify, `{"token":"`+link.Token+`"}`)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)

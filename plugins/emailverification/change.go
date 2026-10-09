@@ -741,7 +741,11 @@ func (p *Plugin) handleChangeConfirm(rctx *types.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{"user": result.User, keyRedirectURL: result.RedirectURL})
+	user, err := rctx.Auth.Public.Of(result.User) // the public columns, not the model
+	if err != nil {
+		return err
+	}
+	return rctx.Response.JSON(http.StatusOK, behemoth.M{types.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
 }
 
 // handleChangeRevert answers without the user: the caller holds a link from

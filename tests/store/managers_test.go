@@ -611,6 +611,87 @@ func TestSessionFreshness(t *testing.T) {
 	assert.False(t, byDefault.IsFresh(session))
 }
 
+// A session manager built with a zero SessionConfig works: sessions last
+// the documented default, and the token travels in the default cookie.
+func TestSessionManagerWithAZeroConfig(t *testing.T) {
+	ctx := context.Background()
+	sm := transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), types.SessionConfig{}, &passDispatcher{}, nil, managersAuth, nil)
+
+	active, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now().Add(types.DefaultSessionExpiresIn), active.ExpiresAt, time.Minute)
+	pending, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionPending})
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now().Add(types.DefaultSessionPendingExpiresIn), pending.ExpiresAt, time.Minute)
+	_, err = sm.Validate(ctx, raw)
+	require.NoError(t, err, "the session did not expire the moment it was created")
+
+	rctx := &types.RequestContext{Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+	assert.False(t, sm.WriteToken(rctx, raw, active))
+	assert.Contains(t, rctx.Response.Headers.Get("Set-Cookie"), "session_token="+raw, "the default transport is the cookie")
+}
+
+// Each transport hands the token over in its own place, and reads it back
+// from where its client sends it.
+func TestSessionTokenTransports(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		cfg        types.SessionConfig
+		cookie     string // the cookie's name when one is set, "" when none is
+		header     bool   // the token is in Set-Auth-Token
+		inBody     bool   // the route is told to put it in the body
+		readCookie bool   // a request's cookie is accepted
+		readBearer bool   // a request's Authorization header is accepted
+	}{
+		"cookie":        {types.SessionConfig{Transport: types.TransportCookie}, "session_token", false, false, true, false},
+		"cookie, named": {types.SessionConfig{Transport: types.TransportCookie, CookieName: "sid"}, "sid", false, false, true, false},
+		"header":        {types.SessionConfig{Transport: types.TransportHeader}, "", true, false, false, true},
+		"body":          {types.SessionConfig{Transport: types.TransportBody}, "", false, true, false, true},
+		"both":          {types.SessionConfig{Transport: types.TransportBoth, CookieName: "sid"}, "sid", true, false, true, true},
+	} {
+		sm, _ := newSessionManager(t, tc.cfg)
+		session, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+		require.NoError(t, err, name)
+
+		rctx := &types.RequestContext{Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		assert.Equal(t, tc.inBody, sm.WriteToken(rctx, raw, session), "%s: in the body", name)
+		setCookie := rctx.Response.Headers.Get("Set-Cookie")
+		if tc.cookie == "" {
+			assert.Empty(t, setCookie, "%s: no cookie", name)
+		} else {
+			assert.True(t, strings.HasPrefix(setCookie, tc.cookie+"="+raw+";"), "%s: Set-Cookie = %q", name, setCookie)
+			assert.Contains(t, setCookie, "HttpOnly", name)
+		}
+		wantHeader := ""
+		if tc.header {
+			wantHeader = raw
+		}
+		assert.Equal(t, wantHeader, rctx.Response.Headers.Get(types.SessionTokenHeader), "%s: %s", name, types.SessionTokenHeader)
+		assert.Empty(t, rctx.Values, "%s: nothing is parked in the request's values", name)
+
+		cookieName := tc.cfg.CookieName
+		if cookieName == "" {
+			cookieName = "session_token"
+		}
+		withCookie := httptest.NewRequest(http.MethodGet, "/x", nil)
+		withCookie.AddCookie(&http.Cookie{Name: cookieName, Value: raw})
+		got, ok := sm.ExtractToken(withCookie)
+		assert.Equal(t, tc.readCookie, ok, "%s: reads the cookie", name)
+		if tc.readCookie {
+			assert.Equal(t, raw, got, name)
+		}
+		withBearer := httptest.NewRequest(http.MethodGet, "/x", nil)
+		withBearer.Header.Set("Authorization", "Bearer "+raw)
+		got, ok = sm.ExtractToken(withBearer)
+		assert.Equal(t, tc.readBearer, ok, "%s: reads the Authorization header", name)
+		if tc.readBearer {
+			assert.Equal(t, raw, got, name)
+		}
+		_, ok = sm.ExtractToken(httptest.NewRequest(http.MethodGet, "/x", nil))
+		assert.False(t, ok, "%s: a request without a token", name)
+	}
+}
+
 // Under a real Boot the session manager dispatches through the default
 // dispatcher, which rejects undeclared points. Create and Revoke each fire a
 // before and an after point, and core declares all four.

@@ -9,19 +9,27 @@ import "github.com/MastewalB/behemoth/types/schema"
 // Ids are bounded strings rather than a database UUID type, so every driver
 // stores and returns them as the string the models hold.
 
+// UserTableSchema declares users. Its own columns are all public: they are
+// what a route answers with when it returns a user (types.PublicView). A
+// column another declarer contributes is private unless that declarer marks
+// it Public.
+//
+// The other core tables mark nothing public. No route returns a session, a
+// token or an account today; a route that will should mark the columns it
+// means to return.
 func UserTableSchema() schema.Table {
 	return schema.Table{
 		Name: UserTable,
 		Columns: []schema.Column{
-			{Name: UserID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true},
-			{Name: UserEmail, Type: schema.ColTypeString, Length: 255, Unique: true},
-			{Name: UserUsername, Type: schema.ColTypeString, Length: 255, Nullable: true},
-			{Name: UserFirstname, Type: schema.ColTypeString, Length: 255, Nullable: true},
-			{Name: UserLastname, Type: schema.ColTypeString, Length: 255, Nullable: true},
-			{Name: UserEmailVerified, Type: schema.ColTypeBoolean, Default: false},
-			{Name: UserImageURL, Type: schema.ColTypeText, Nullable: true},
-			{Name: UserCreatedAt, Type: schema.ColTypeTimestamp},
-			{Name: UserUpdatedAt, Type: schema.ColTypeTimestamp},
+			{Name: UserID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true, Public: true},
+			{Name: UserEmail, Type: schema.ColTypeString, Length: 255, Unique: true, Public: true},
+			{Name: UserUsername, Type: schema.ColTypeString, Length: 255, Nullable: true, Public: true},
+			{Name: UserFirstname, Type: schema.ColTypeString, Length: 255, Nullable: true, Public: true},
+			{Name: UserLastname, Type: schema.ColTypeString, Length: 255, Nullable: true, Public: true},
+			{Name: UserEmailVerified, Type: schema.ColTypeBoolean, Default: false, Public: true},
+			{Name: UserImageURL, Type: schema.ColTypeText, Nullable: true, Public: true},
+			{Name: UserCreatedAt, Type: schema.ColTypeTimestamp, Public: true},
+			{Name: UserUpdatedAt, Type: schema.ColTypeTimestamp, Public: true},
 		},
 	}
 }

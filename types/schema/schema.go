@@ -47,6 +47,17 @@ type Column struct {
 	Default any
 	AutoInc bool
 
+	// Public says the column may be sent to a client: a route that returns
+	// the row includes it (types.PublicView). The default is private, for a
+	// table's own columns and for columns contributed to it alike, so a
+	// column reaches a client only because its declarer said so.
+	//
+	// It is about responses only. Hook handlers, the store and the plugin
+	// that owns the column see every column. It is not a property of the
+	// database either, so it is left out of schema snapshots and migration
+	// files, and changing it plans no migration.
+	Public bool `json:"-"`
+
 	// optional per-db overrides
 	Overrides map[string]ColumnOverride
 }

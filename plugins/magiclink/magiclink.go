@@ -668,11 +668,9 @@ func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
 		return err
 	}
 
-	rctx.Auth.SessionManager.WriteToken(rctx, result.RawToken, result.Session) // honors SessionConfig.Transport
-	if result.Session.State == models.SessionPending {
-		return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "requires_second_factor", keyRedirectURL: result.RedirectURL})
-	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{"user": result.User, keyRedirectURL: result.RedirectURL})
+	// The body every sign-in route answers with, plus the redirect, and
+	// the session token by whichever transport SessionConfig.Transport names.
+	return types.WriteSignIn(rctx, result.SignInResult, behemoth.M{keyRedirectURL: result.RedirectURL})
 }
 
 var _ types.Plugin = (*Plugin)(nil)

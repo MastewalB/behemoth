@@ -84,6 +84,8 @@ The response time still differs: a known email pays for the token writes, and wi
 | 6 | `SessionManager.Create` | the error is returned |
 | 7 | return a `*types.SignInResult` with `Method: "magiclink"` | |
 
+The route hands the result to `types.WriteSignIn` with the redirect URL as an extra field, so its response and the delivery of the session token are the ones of every sign-in route ([`../sessions/token_transport.md`](../sessions/token_transport.md)).
+
 Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with the code `invalid_magic_link`. The audit event of `auth.signIn.failed` has the real code.
 
 - **The token is consumed in step 1 and stays consumed.** A refusal in step 5 or a session limit in step 6 does not give the link back. Consuming last would let a link be tried again and again against a second factor.

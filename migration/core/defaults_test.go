@@ -138,3 +138,15 @@ func TestSnapshotDiffMatchesNumericDefaultsAfterJSON(t *testing.T) {
 		}
 	}
 }
+
+// Whether a column may be sent to a client is not part of its shape in the
+// database: a column that differs only in Public is the same column to the
+// differ, so marking one plans no migration.
+func TestPublicIsNotAColumnDifference(t *testing.T) {
+	private := schema.Column{Name: "plan", Type: schema.ColTypeString, Length: 32, Nullable: true}
+	public := private
+	public.Public = true
+	if !columnsEqual(private, public) {
+		t.Error("a column and its public twin compare as different")
+	}
+}

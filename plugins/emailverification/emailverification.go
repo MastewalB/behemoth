@@ -856,7 +856,11 @@ func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{"user": result.User, keyRedirectURL: result.RedirectURL})
+	user, err := rctx.Auth.Public.Of(result.User) // the public columns, not the model
+	if err != nil {
+		return err
+	}
+	return rctx.Response.JSON(http.StatusOK, behemoth.M{types.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
 }
 
 var _ types.Plugin = (*Plugin)(nil)

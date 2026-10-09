@@ -36,6 +36,51 @@ Nothing enforces this. The adapter accepts any declared model, and a write to a 
 | The transaction around the write and its hooks | the store | Your write is a single statement. Wrap it yourself if it belongs with other writes. |
 | Email normalization (trim, lowercase) | the store | A user stored as `Ada@Example.com` is not found by `FindUserByEmail`, and can sign up a second time as `ada@example.com`. `store.NormalizeEmail` is exported if you need the same form. |
 
+### What a client sees of a user
+
+Every route that returns a user answers with the user's **public columns** and nothing else. Core's own nine columns are public. A column you add to `users` is private until you say otherwise, where you declare it:
+
+```go
+var Plan = schema.Field[string]{Table: models.UserTable, Name: "plan"}
+var RiskNote = schema.Field[string]{Table: models.UserTable, Name: "risk_note"}
+
+func (p *Plugin) Declare(ic *types.PluginInitContext) error {
+	// Clients may see the plan.
+	if err := ic.Schemas.ExtendColumn(Plan.Contribution(schema.Column{Type: schema.ColTypeString, Length: 32, Public: true})); err != nil {
+		return err
+	}
+	// Nothing to mark: a column is private by default.
+	return ic.Schemas.ExtendColumn(RiskNote.Contribution(schema.Column{Type: schema.ColTypeText, Nullable: true}))
+}
+```
+
+A sign-in then answers:
+
+```json
+{"user": {"id": "2ff9...", "email": "ada@example.com", "email_verified": true, "plan": "pro"}}
+```
+
+- **Private is the default**, so a column reaches a client only because its plugin said so. Forgetting the flag hides a column; it never exposes one.
+- **The flag is about responses only.** Your plugin, every hook handler and the store see all the columns. Read yours with the field: `note, ok, err := RiskNote.Get(user)`.
+- **A public column sits next to core's**, under its column name. There is no nesting.
+- **Values have their declared type.** A boolean column is `true` or `false` in the JSON on every database, although SQLite stores it as `1` or `0`.
+- **It is not a database property.** Marking a column plans no migration.
+- **It is the same for every viewer.** A column that one client may see and another may not is not something the flag expresses.
+
+In a route of your own, answer with the view and not with the model:
+
+```go
+view, err := rctx.Auth.Public.Of(user)
+if err != nil {
+	return err
+}
+return rctx.Response.JSON(http.StatusOK, behemoth.M{"user": view})
+```
+
+Don't pass a `*models.User` to `Response.JSON`. Encoded directly, a user carries every contributed column under `"extra"`, the private ones included. That encoding exists for Behemoth's own storage.
+
+The other core tables declare no public column. `Public.Of` on a session, an account or a token returns an empty map.
+
 ## Accounts
 
 | Step | Done by | If you skip it |

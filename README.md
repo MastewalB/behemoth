@@ -76,6 +76,8 @@ curl -X POST localhost:8080/api/auth/sign-in/email \
   -d '{"email":"ada@example.com","password":"correct horse battery"}'
 ```
 
+The sign-in response carries the session token where `Transport` says: here in the `Set-Auth-Token` header, which the client sends back as `Authorization: Bearer <token>`. The default is a cookie.
+
 Without a router, call the same flows from code with `plugin.SignUp` and `plugin.SignIn`.
 
 ## Examples
@@ -110,6 +112,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | [Magic link](./docs/api/magiclink.md) | Sign-in by emailed link: setup, sending the link, routes, redirects and rate limits |
 | [Email verification](./docs/api/emailverification.md) | Confirming a user's address: when a link is sent, routes, requiring a verified email, and changing an address safely |
 | [Mail](./docs/api/mail.md) | The mail sender plugins use, and waiting or background sends |
+| [Sessions](./docs/api/sessions.md) | Session settings, how the token travels (cookie, header, body), the sign-in response, protecting your own routes |
 | [Hooks](./docs/api/hooks.md) | Hook points, handlers, ordering and failure behavior |
 | [Telemetry](./docs/api/telemetry.md) | Loggers, audit, metrics, tracing and the OpenTelemetry adapter |
 | [Core tables](./docs/api/core-tables.md) | Writing Behemoth's tables from a plugin |

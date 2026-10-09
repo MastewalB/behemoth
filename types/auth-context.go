@@ -29,6 +29,12 @@ type AuthContext struct {
 	// nil on an AuthContext Boot returns; with no origins configured it
 	// trusts none, and only paths on the application's own site pass.
 	Origins OriginValidator
+	// Public builds what a client is sent of a row: the columns its table
+	// declares Public, and no others. A route that returns a user answers
+	// with Public.Of(user) and not with the model, which as JSON carries
+	// every column a plugin contributed to users. Never nil on an
+	// AuthContext Boot returns.
+	Public PublicView
 	// Mailer sends the messages plugins produce (a sign-in link, an email
 	// verification) through the application's MailSender. Never nil on an
 	// AuthContext Boot returns; Mailer.Configured says whether a sender was

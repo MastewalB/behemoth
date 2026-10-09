@@ -166,7 +166,7 @@ Your mail sender gets two more kinds of message. Both carry the two addresses in
 
 This is what stops someone who got hold of a long-lived session, from a shared computer for example, from moving the account to their own address. Nothing refreshes a session in place yet, so signing in again is the only way to get a fresh one.
 
-You can put the same check on a route of your own:
+You can put the same check on a route of your own ([Sessions](sessions.md#fresh-sessions) has more):
 
 ```go
 {Method: http.MethodPost, Path: "/account/delete", Handler: deleteAccount,

@@ -71,7 +71,7 @@ The routes sit directly under the router's base path.
 | Route | Body | Result |
 | --- | --- | --- |
 | `POST /sign-in/magic-link` | `email`, and optionally `redirectURL` and `metadata` (an object) | `200` with `{"status": "ok"}` |
-| `POST /magic-link/verify` | `token` | `200` with `{"user": ..., "redirectURL": "..."}`, and the session token written the way `SessionConfig.Transport` says. `{"status": "requires_second_factor", "redirectURL": "..."}` when a second factor is pending. |
+| `POST /magic-link/verify` | `token` | `200` with `{"user": {...}, "redirectURL": "..."}`, or `{"status": "requires_second_factor", "redirectURL": "..."}` when a second factor is pending. It is the body every sign-in answers with, plus the redirect, and the session token arrives by the configured transport; see [Sessions](sessions.md#the-sign-in-response). |
 
 **The request route answers the same whether or not the email has an account.** An unknown email, a link that could not be issued and a failed send are all a `200` with the same body, so the response does not show which addresses are registered. The plugin does not create accounts: an unknown email gets no link.
 
@@ -127,7 +127,7 @@ signIn, err := plugin.Verify(ctx, rawToken)
 ```
 
 - `RequestLink` reports what the route hides. It returns `magiclink.ErrNoAccount` for an unknown email (check with `errors.Is`), and the error of a failed issue or send.
-- `Verify` returns the raw session token. Delivering it is up to you; the route uses `SessionManager.WriteToken`.
+- `Verify` returns the raw session token and delivers nothing. From a route of your own, hand `signIn.SignInResult` to `types.WriteSignIn`, which is what the plugin's route does.
 - Pass the context of the request being handled when there is one, so sessions record the client's address and handlers get the request.
 - Called before `Boot`, both return a configuration error.
 

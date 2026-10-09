@@ -568,7 +568,13 @@ func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 		}
 		return rctx.Response.Error(http.StatusBadRequest, err.Error())
 	}
-	return rctx.Response.JSON(http.StatusCreated, user)
+	// The user's public columns, under the key a sign-in answers with. A
+	// sign-up creates no session, so there is no token to deliver.
+	view, err := rctx.Auth.Public.Of(user)
+	if err != nil {
+		return err
+	}
+	return rctx.Response.JSON(http.StatusCreated, behemoth.M{types.SignInUserKey: view})
 }
 
 // handleSignIn returns the flow's error unchanged, and the router maps and
@@ -593,11 +599,9 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 		return err
 	}
 
-	rctx.Auth.SessionManager.WriteToken(rctx, result.RawToken, result.Session) // honors SessionConfig.Transport
-	if result.Session.State == models.SessionPending {
-		return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "requires_second_factor"})
-	}
-	return rctx.Response.JSON(http.StatusOK, result.User)
+	// The body every sign-in route answers with, and the session token by
+	// whichever transport SessionConfig.Transport names.
+	return types.WriteSignIn(rctx, result, nil)
 }
 
 // handleSignOut returns SignOut's error unchanged, like handleSignIn. A typed

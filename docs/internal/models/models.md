@@ -54,6 +54,35 @@ A plugin or the application may add a column to a core table (`Registry.ExtendCo
 
 `User`, `Account`, `Session` and `Token` embed `Extension`. `RateLimit` does not: it is an internal counter, and a column contributed to it would be ignored.
 
+### **What a client sees: public columns**
+
+A model has two serializations, and neither is what a route should send:
+
+| Serialization | Shape | Used for |
+| --- | --- | --- |
+| `ToMap()` | flat, every column, contributed ones merged in | writing rows, hook payloads |
+| `encoding/json` | the struct's fields, with every contributed column under `"extra"` (the tag on `Extension.Extra`) | the session cache, key-value tokens |
+
+Both carry every column. A route answers with a third form, `AuthContext.Public.Of(model)`, which is `ToMap()` reduced to the columns the table declares public:
+
+1. `schema.Column` has a `Public` flag. It is false unless the declarer sets it, for a table's own columns and for a contribution alike.
+2. `models.UserTableSchema` marks the nine user columns. No other core table marks any.
+3. `Boot` builds `types.NewPublicView(app.Schemas.All())`: for each merged table, the public columns by name.
+4. `Of(m)` calls `m.ToMap()`, keeps the public columns of `m.SchemaName()`, and passes each value through `schema.Normalize`.
+
+`schema.Normalize(col, raw)` returns a value as the type its column declares. Contributed columns reach the model as the driver returned them (`schema.Field` exists for the same reason), so without it a public boolean would be `1` in a response from SQLite and `true` from PostgreSQL. A value it can't convert is passed through.
+
+| Model | `Of` returns |
+| --- | --- |
+| a user | the nine core columns, plus the contributed columns marked `Public` |
+| a session, an account, a token | an empty map: their tables declare nothing public |
+| a model whose table was not declared | a configuration error |
+
+The routes that return a user (`WriteSignIn`, sign-up, the two verify routes, the email change confirm) all go through it.
+
+- **`Public` has the tag `json:"-"`.** Schema snapshots and migration files are JSON of `schema.Table`, and the differ's `columnsEqual` compares named fields. The flag appears in neither, so marking a column plans nothing and does not change a stored snapshot.
+- **The model's own JSON is unchanged.** `Extension.Extra` still serializes every contributed column. The session cache depends on that: a cached session has to come back with all its columns.
+
 ### **Declaration**
 
 `CoreDeclareSchema` declares the five tables under owner `"core"` during `Prepare`, before any plugin declares. `rate_limits` is declared whether or not a key-value store is configured, because `Prepare` runs without a live connection and cannot know. With a key-value store that counts natively, the table exists and stays empty.
@@ -397,6 +426,16 @@ Details that matter:
 - *Return a `ConfigurationError` from all four methods.* The mistake reaches the caller as an error on every path. `RunAfter` and `Fail` gain an error return that every caller has to check, and a flow can fail after its work is done (the session row exists, the after point is undeclared).
 **Decision:** The third option. `RunAfter` and `Fail` return only this error; handler errors are still logged. Core now declares every point it fires (`CoreDeclareHookPoints`), with the session points split into `beforeCreate`/`afterCreate` and `beforeRevoke`/`afterRevoke` because a point has one phase.
 **Revisit if:** the set of dispatched points can be known at boot (for example flows registering the points they fire). The check could then move to `Boot` entirely and `RunAfter` and `Fail` could drop the return value.
+
+### A client sees public columns, and a column is private unless declared public
+**Context:** The routes encoded `models.User` directly, and its `Extension` serialized every contributed column under `"extra"`. A plugin that added a column no client should see (a risk note, a billing id) had it returned by sign-up, sign-in and the verify routes.
+**Options considered:**
+- *Filter in `Extension`'s JSON.* No route changes. The session cache and key-value tokens use the same encoding, so a cached session would lose its private columns, and a model can't see the schema while it is being marshalled.
+- *Return core columns only; plugins add fields to responses themselves.* Nothing to leak. Every plugin with a public column would need a way into every response that carries a user.
+- *A flag on the column and a view built at the response.* The plugin decides where it already declares the column. Routes have to answer with the view and not with the model.
+- *Public unless marked private.* Less to write. A forgotten flag leaks.
+**Decision:** The flag, with private as the default, and `PublicView` on the `AuthContext`. The view is flat, like `ToMap`, so a response names a column the way a request does and the `extra` nesting is gone from responses.
+**Revisit if:** a column has to be visible to some viewers and not others (an admin listing). `PublicView` is an interface so that a per-request decision can wrap the schema's; nothing does yet.
 
 ### Core tables through the store is a convention, not an enforced rule
 **Context:** `Store.DB()` and `AuthContext.DB` give plugins the raw adapter. A write to `users`, `accounts`, `sessions` or `tokens` through it skips everything the store and the managers add. The most serious case is an OAuth token stored in plaintext, which nothing reports at write time.

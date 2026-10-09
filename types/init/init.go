@@ -335,6 +335,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		Telemetry:   tel,
 		Origins:     origins,
 		Mailer:      NewMailer(cfg.Mail, tel),
+		Public:      types.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
 	}
 	if err := checkDataHookPoints(app.Hooks, coreDataHookPoints); err != nil {
 		return nil, err
@@ -351,6 +352,9 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		return nil, err
 	}
 	dispatcher.ipCfg = ipCfg // audit events record the same client address
+	if err := cfg.Session.Validate(); err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+	}
 	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
 
 	// Init before routing, so Routes() and Middlewares() may rely on

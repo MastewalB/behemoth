@@ -54,9 +54,11 @@ The routes sit directly under the router's base path.
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `POST /sign-up/email` | `email`, `password`, and optionally `username`, `firstname`, `lastname`, `image_url` | `201` with the user. Other fields in the body are ignored. |
-| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with the user, and the session token written the way `SessionConfig.Transport` says. `{"status": "requires_second_factor"}` when a plugin asked for a second step. |
+| `POST /sign-up/email` | `email`, `password`, and optionally `username`, `firstname`, `lastname`, `image_url` | `201` with `{"user": {...}}`. Other fields in the body are ignored. |
+| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
 | `POST /sign-out` | none; needs a valid session | `200`, and the session is revoked. |
+
+The user is keyed by column name (`id`, `email`, `email_verified`, `image_url`, ...). [Sessions](sessions.md) describes the transports, the response body and the user's JSON in full.
 
 ### Error responses
 
@@ -64,8 +66,8 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 
 | Route | When | Status | Body |
 | --- | --- | --- | --- |
-| `POST /sign-in/email` | the body is not valid JSON | `400` | `{"error": "request validation error", "code": "request_validation_error"}` |
-| `POST /sign-in/email` | unknown email, wrong password, or a user who has no password | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
+| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
+| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
 | `POST /sign-in/email`, `POST /sign-out` | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
 | any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
@@ -119,7 +121,7 @@ reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behem
 - `Extra` is not stored, and a key in it named `email` or `password` is ignored: the struct's fields are used.
 - Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `hctx.Request` is nil and the session has neither.
 - `SignIn` returns a `*emailpassword.SignInResult`, which is `types.SignInResult`: the user, the session, the raw token, and `Method` (`"emailpassword"`). Handlers on `auth.signIn.after` receive the same value.
-- `SignIn` returns the raw session token. Delivering it (a cookie, a header) is up to you; the route uses `SessionManager.WriteToken`.
+- `SignIn` returns the raw session token and delivers nothing. From a route of your own, hand the result to `types.WriteSignIn`, which is what the plugin's route does; see [Writing a sign-in route](sessions.md#writing-a-sign-in-route).
 - Called before `Boot`, both return a configuration error.
 - `SignIn` returns a typed error for a refused credential, so you can tell it from a failure:
 

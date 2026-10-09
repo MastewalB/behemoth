@@ -13,6 +13,8 @@ This document explains how `plugins/emailpassword` fits into `Prepare` and `Boot
 | `Init` | checks `Options`, wraps the flows with `types.WithLifecycle` | runs in `Boot`, after the dispatcher exists |
 | `Routes` | sign-up, sign-in, sign-out | reads the session manager, so it must run after `Init`; `Boot` guarantees that order |
 
+The sign-in route answers through `types.WriteSignIn`, which writes the body every sign-in route shares and delivers the session token by the configured transport; see [`../sessions/token_transport.md`](../sessions/token_transport.md). The sign-up route answers `{"user": ...}` itself: it has no session.
+
 `SignIn` returns a `*types.SignInResult`, the type every sign-in plugin hands to `auth.signIn.after`. `emailpassword.SignInResult` is an alias kept for callers. `Method` is `"emailpassword"`.
 
 The plugin knows nothing about email verification. A user it signs up is created with `EmailVerified` false, and the email verification plugin, if installed, sends the link from its handler on `data.user.created`; see [`emailverification.md`](emailverification.md).
