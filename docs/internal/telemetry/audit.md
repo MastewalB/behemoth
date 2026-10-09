@@ -106,7 +106,7 @@ A point declared with `Audit: &types.AuditSpec{}` records one event per dispatch
 **Subject**, first match:
 
 1. `FailureReason.SubjectType` and `SubjectID`, for a failed point. The sign-in flow sets them once it has found the user, so a wrong password is recorded as an attempt on that account.
-2. The result (`auditSubject`): a `*models.Session` is its own subject; a result implementing `types.AuditSubject` says what it is about (`emailpassword.SignInResult` names its user); any other `behemoth.Model` is its table and primary key.
+2. The result (`auditSubject`): a `*models.Session` is its own subject; a result implementing `types.AuditSubject` says what it is about (`types.SignInResult` and `magiclink.LinkResult` name their user); any other `behemoth.Model` is its table and primary key.
 3. `HookContext.Values[HookValueUserID]`, the user the operation concerns.
 
 **Actor**, first match:

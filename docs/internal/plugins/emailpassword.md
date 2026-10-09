@@ -13,6 +13,8 @@ This document explains how `plugins/emailpassword` fits into `Prepare` and `Boot
 | `Init` | checks `Options`, wraps the flows with `types.WithLifecycle` | runs in `Boot`, after the dispatcher exists |
 | `Routes` | sign-up, sign-in, sign-out | reads the session manager, so it must run after `Init`; `Boot` guarantees that order |
 
+`SignIn` returns a `*types.SignInResult`, the type every sign-in plugin hands to `auth.signIn.after`. `emailpassword.SignInResult` is an alias kept for callers. `Method` is `"emailpassword"`.
+
 Compare with a plugin such as the example `auditlog`: that one declares a table in `Declare` and has a mount path. This one adds behaviour on top of core tables and declares nothing.
 
 ## The flows

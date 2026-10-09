@@ -470,7 +470,8 @@ These operations put what they were called with in `hctx.Values` before the firs
 | Point | Entry | Value |
 | --- | --- | --- |
 | `auth.signUp.before` | `hooks.HookValueEmail` | the email being registered, trimmed and lowercased |
-| `auth.signIn.before` | `hooks.HookValueEmail` | the email being tried, trimmed and lowercased |
+| `auth.signIn.before` | `hooks.HookValueEmail` | the email being tried, trimmed and lowercased. For a magic link, the email the link was sent to; absent when the token is not valid |
+| `auth.magicLink.beforeRequest` | `hooks.HookValueEmail` | the email a link is requested for, trimmed and lowercased |
 | `auth.signOut.before` | `hooks.HookValueSessionID` | the session being ended |
 | `auth.session.beforeCreate` | `hooks.HookValueUserID` | the user the session is for, as a string |
 | `token.beforeIssue` | `hooks.HookValueTokenKind`, `hooks.HookValueTokenSubject` | the kind and the subject, as strings |
@@ -607,7 +608,7 @@ Core declares these, so a handler can be registered on any of them.
 | `auth.signUp.failed` | failed | email/password sign-up | codes `userExists`, `rejectedByHook` (a handler on `auth.signUp.before` or on a `data.user.*` create point rejected the sign-up) |
 | `auth.signIn.before` | before | email/password sign-in | `email`, the plaintext `password`, and any other field of the request (the keys of `EmailAndPasswordCredentials.Extra` for a call from code). The returned payload becomes the sign-in's input. An `email` or `password` that is not a string is a validation error. |
 | `auth.signIn.credentialsVerified` | before | sign-in, after the password check | `HookValueUserID`. A second-factor plugin stops the sign-in here, or sets `requireStepUp` to `true` to make the session pending. No other key is read back. |
-| `auth.signIn.after` | after | email/password sign-in | the sign-in result |
+| `auth.signIn.after` | after | email/password sign-in, magic link verify | a `*types.SignInResult`: the user, the session, the raw session token, and `Method`, the name of the plugin that signed the user in (`"emailpassword"`, `"magiclink"`) |
 | `auth.signIn.failed` | failed | email/password sign-in | codes `userNotFound`, `noCredentialAccount`, `invalidCredentials`, `secondFactorRejected`, `rejectedByHook` |
 | `auth.signOut.before` | before | sign-out | `sessionID`. Veto only. |
 | `auth.signOut.after` | after | sign-out | nil |
@@ -624,4 +625,4 @@ Core declares these, so a handler can be registered on any of them.
 
 The session and token points are Tier 2 even though they sit next to a table write: the managers fire them outside any store transaction, `hctx.Tx` is nil, and an after handler's error is logged.
 
-The `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points are fired by the email/password plugin (`plugins/emailpassword`), so they only fire when that plugin is passed to `Prepare`.
+The `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points are fired by the email/password plugin (`plugins/emailpassword`), so they only fire when that plugin is passed to `Prepare`. The magic link plugin (`plugins/magiclink`) fires the `auth.signIn.*` points too, when a link is verified, with a different `auth.signIn.before` payload: `method` and `email`, and no password. It also declares three points of its own around a link request; see [Magic link](magiclink.md#hooks).

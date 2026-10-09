@@ -6,7 +6,7 @@ The project is under active development, and the API may still change.
 
 ## Features
 
-- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in and sign-out.
+- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in and sign-out. `magiclink` signs a user in with a link sent by email.
 - **Migrations.** Behemoth builds a migration from the tables your plugins and your own schema declare, and writes it to a folder for you to review.
 - **Hooks.** Run your code before or after a user is written, or around a whole flow such as sign-up. A handler can change data, stop an operation or react afterwards.
 - **Sessions and tokens.** Sessions are stored in your database or a key-value store, and delivered as a cookie or a header.
@@ -107,6 +107,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | Page | Covers |
 | --- | --- |
 | [Email and password](./docs/api/emailpassword.md) | The plugin's options, routes and hook points |
+| [Magic link](./docs/api/magiclink.md) | Sign-in by emailed link: setup, sending the link, routes, redirects and rate limits |
 | [Hooks](./docs/api/hooks.md) | Hook points, handlers, ordering and failure behavior |
 | [Telemetry](./docs/api/telemetry.md) | Loggers, audit, metrics, tracing and the OpenTelemetry adapter |
 | [Core tables](./docs/api/core-tables.md) | Writing Behemoth's tables from a plugin |

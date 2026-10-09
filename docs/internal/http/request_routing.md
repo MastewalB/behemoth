@@ -87,6 +87,8 @@ type RequestContext struct {
 
 # **Route Table Construction — `Boot`**
 
+One field of `RouterConfig` is read before the router exists: `Boot` builds `AuthContext.Origins` from `TrustedOrigins` when it builds the `AuthContext`, so that a plugin's `Init` and flows can check redirect URLs against it. See [`../plugins/magiclink.md`](../plugins/magiclink.md#trusted-origins).
+
 After the AuthContext is fully built and every plugin's `Init` has run, `Boot`:
 
 1. Creates the router: `types.NewRouter(cfg.Router, ac)`. The `AuthContext` is captured here, once.

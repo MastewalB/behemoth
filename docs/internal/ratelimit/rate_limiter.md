@@ -98,7 +98,8 @@ The payload is not passed to `KeyFunc`. The firing site publishes what a rule ma
 | Point | Entry in `Values` | Published by |
 | --- | --- | --- |
 | `auth.signUp.before` | `HookValueEmail`: the email, normalized | `Plugin.SignUp` (`publishEmail`) |
-| `auth.signIn.before` | `HookValueEmail`: the email, normalized | `Plugin.SignIn` (`publishEmail`) |
+| `auth.signIn.before` | `HookValueEmail`: the email, normalized | `Plugin.SignIn` (`publishEmail`); `magiclink.Plugin.Verify`, when the token names one |
+| `auth.magicLink.beforeRequest` | `HookValueEmail`: the email, normalized | `magiclink.Plugin.RequestLink` |
 | `auth.session.beforeCreate` | `HookValueUserID`: the user's id as a string | `DefaultSessionManager.create` |
 | `token.beforeIssue` | `HookValueTokenKind`, `HookValueTokenSubject` | `DefaultTokenManager.issue` |
 | `auth.signOut.before` | `HookValueSessionID` | `SignOut` (it predates this, for the audit event) |

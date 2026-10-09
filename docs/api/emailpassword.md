@@ -116,6 +116,7 @@ reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behem
 - `SignUp` stores `email`, `password` and the profile fields listed above. Other keys in the input are not stored, but handlers on `auth.signUp.before` see them, which is how a plugin accepts a field of its own (an invite code, for example).
 - `Extra` is not stored, and a key in it named `email` or `password` is ignored: the struct's fields are used.
 - Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `hctx.Request` is nil and the session has neither.
+- `SignIn` returns a `*emailpassword.SignInResult`, which is `types.SignInResult`: the user, the session, the raw token, and `Method` (`"emailpassword"`). Handlers on `auth.signIn.after` receive the same value.
 - `SignIn` returns the raw session token. Delivering it (a cookie, a header) is up to you; the route uses `SessionManager.WriteToken`.
 - Called before `Boot`, both return a configuration error.
 - `SignIn` returns a typed error for a refused credential, so you can tell it from a failure:

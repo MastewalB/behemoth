@@ -453,22 +453,13 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 		return nil, err
 	}
 
-	return &SignInResult{User: user, Session: session, RawToken: rawToken}, nil
+	return &SignInResult{User: user, Session: session, RawToken: rawToken, Method: PluginName}, nil
 }
 
-type SignInResult struct {
-	User     *models.User
-	Session  *models.Session
-	RawToken string
-}
-
-// AuditSubject implements [types.AuditSubject]: a sign-in is about its user.
-func (r *SignInResult) AuditSubject() (subjectType, subjectID string) {
-	if r == nil || r.User == nil {
-		return "", ""
-	}
-	return models.UserTable, r.User.ID
-}
+// SignInResult is types.SignInResult, the result every sign-in plugin
+// returns and hands to auth.signIn.after. The name is kept here for callers
+// of SignIn.
+type SignInResult = types.SignInResult
 
 // SignUp creates a user with an email and a password, and the user's
 // credential account. input holds the sign-up fields under their column
