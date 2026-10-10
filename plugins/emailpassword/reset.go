@@ -490,7 +490,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 	// the user the link. The answer is the same for any token, so it tells
 	// nothing about one.
 	if err := p.validatePassword(in.password); err != nil {
-		return nil, behemotherr.NewInvalidInputError(op, credentialPasswordKey, "invalid password", err)
+		return nil, errInvalidPassword(op, err)
 	}
 
 	// Every check that can refuse the reset runs on the token as

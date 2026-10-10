@@ -118,9 +118,8 @@ The two flows have the shape of the magic link plugin's request and verify; see 
 - `[Not built]` Password change for a signed-in user. It needs a way to re-check the current password; see *Nothing refreshes a session in place* in `docs/ongoing.md`.
 - `[Limit]` A reset consumes its token just before it writes the password, outside the write's transaction. If that write fails, the link is spent and the user asks for another. `docs/ongoing.md` has what consuming inside the transaction would need.
 - `[Not built]` Rehash on sign-in. `PasswordHasher.NeedsRehash` exists but sign-in does not call it.
-- Sign-up returns a typed error (`behemotherr.DomainError`) to the router, which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejectedByHook` for it (`isRejection`). Sign-up's own untyped rejections are a `400`.
-- Sign-in and sign-out return every error to the router unchanged (`handleSignIn`, `handleSignOut`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
-- `Options.ValidateEmail` and `ValidatePassword` errors are replaced by `invalid email` and `invalid password` in the response, so a custom message does not reach the client.
+- Sign-up, sign-in and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejectedByHook` for it (`isRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
+- `Options.ValidateEmail` and `ValidatePassword` errors are replaced by `invalid email` and `invalid password` in the response, so a custom message does not reach the client. The function's error is the typed error's cause, for logs.
 
 ### The email and password rules belong to the plugin
 **Context:** Sign-up read `AuthContext.Validator` and `AuthContext.PasswordOptions`. `Boot` set neither and `BootConfig` had no field for them, so a booted application panicked on the first sign-up. Only this plugin read them.
@@ -161,7 +160,24 @@ The three refusals share one code and one message on purpose: a different answer
 
 Two changes a client can observe: a wrong password is a `401` where it was a `400`, and an untyped error from a handler on a sign-in point is a `500` where it was a `400`. The second matches what the hook docs ask for, a typed error from a handler that rejects.
 
-`[Limit]` Sign-up still has untyped refusals (`invalid email`, `user already exists`), answered with `400` by `handleSignUp` itself. Giving them types would let that handler end in `return err` as well.
+### Sign-up's refusals are typed too
+**Context:** After the change above, sign-up still returned untyped errors for an invalid email, an invalid password and a taken email, and `handleSignUp` wrote every untyped error itself as `400 {"error": "<text>"}`. A client could tell the three apart only by their English text. The same branch caught failures: the `user create failed` that replaced an untyped transaction error, and an untyped error from the password hasher, whose text went to the client. Both were a `400` and were not logged, because the handler had written the response and returned nil.
+**Options considered:**
+- *Keep the `400`s and add a `code` field in the handler.* No status changes. The handler still decides what is a rejection by the absence of a type, so a failure stays a `400`.
+- *Typed errors with exported codes, and `return err` in the handler.* The same rule as sign-in: every error out of `SignUp` is a typed rejection or a failure of the system.
+**Decision:** The second. `errInvalidEmail` and `errInvalidPassword` are validation errors (`email_invalid_input`, `password_invalid_input`), and `errEmailTaken` is a conflict (`email_taken`). The codes are the ones the reset flow and the email change flow already use for the same conditions. An untyped transaction error is returned as it is and no longer replaced: the router never sends an untyped error's text.
+
+| Error from the flow | Status | Code |
+| --- | --- | --- |
+| `errInvalidEmail` | `400` | `email_invalid_input` |
+| `errInvalidPassword` | `400` | `password_invalid_input` |
+| `errEmailTaken` | `409` | `email_taken` |
+| a body that is not JSON | `400` | `request_validation_error` |
+| an untyped error (the hasher, the transaction, a handler's `errors.New`) | `500` | none |
+
+Three changes a client can observe: the three rejections carry a `code`, a taken email is a `409` where it was a `400`, and a failure is a `500` where it was a `400`.
+
+`[Limit]` Two sign-ups racing for one email both pass the lookup, and the loser fails on the unique constraint. That is the store's duplicate key error, also a `409`, but with the store's code and not `email_taken`, and `auth.signUp.failed` does not fire for it.
 
 ### Password reset is part of this plugin and off by default
 **Context:** The docs expected reset to be a plugin of its own that depends on this one. A reset sets a password, and the password rules (`validatePassword`) and the traced hash (`hashPassword`) are private to this package.

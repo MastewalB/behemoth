@@ -47,7 +47,7 @@ plugin := emailpassword.New(emailpassword.Options{
 - The rules apply where a password is set: at sign-up and at a password reset. Sign-in does not apply them, so raising `MinPasswordLength` later does not lock out users whose password is shorter.
 - A minimum above the maximum, or a negative limit, is a configuration error from `Boot`.
 - Passwords are hashed with the hasher configured in `BootConfig.Crypto`. The plugin has no hashing option of its own.
-- The sign-up response says `invalid email` or `invalid password`. The text of the error your function returns is not sent to the client.
+- The sign-up response says `invalid email` or `invalid password`, with the code `email_invalid_input` or `password_invalid_input`. The text of the error your function returns is not sent to the client.
 
 ## Routes
 
@@ -67,17 +67,22 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 
 | Route | When | Status | Body |
 | --- | --- | --- | --- |
-| `POST /sign-in/email` | the body is not valid JSON | `400` | `{"error": "request validation error", "code": "request_validation_error"}` |
+| `POST /sign-up/email`, `POST /sign-in/email` | the body is not valid JSON | `400` | `{"error": "request validation error", "code": "request_validation_error"}` |
+| `POST /sign-up/email` | `email` is missing, not a string, or refused by `ValidateEmail` | `400` | `{"error": "invalid email", "code": "email_invalid_input"}` |
+| `POST /sign-up/email` | `password` is missing or fails the password rules | `400` | `{"error": "invalid password", "code": "password_invalid_input"}` |
+| `POST /sign-up/email` | the email already has an account | `409` | `{"error": "an account with this email already exists", "code": "email_taken"}` |
 | `POST /sign-in/email` | unknown email, wrong password, or a user who has no password | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
 | `POST /sign-out` | the request has no session token | `401` | `{"error": "missing session token", "code": "session_missing"}` |
 | `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. With a cookie transport the response also removes the cookie. See [Sessions](sessions.md#protecting-your-own-routes). |
-| `POST /sign-in/email`, `POST /sign-out` | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
+| any | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
 | any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
 
-Sign-in gives the same answer for an unknown email and a wrong password, so the response does not show which addresses have an account.
+Sign-in gives the same answer for an unknown email and a wrong password, so the response does not show which addresses have an account. Sign-up does show it: a `409` says the address is registered.
 
-A handler on a sign-in or sign-out hook point that rejects a request should return one of the `errors` package's types. An untyped error (`errors.New`) is treated as a failure of the system: the client gets a `500` and the error is logged.
+The codes are exported: `emailpassword.ErrorCodeInvalidEmail`, `ErrorCodeInvalidPassword`, `ErrorCodeEmailTaken` and `ErrorCodeInvalidCredentials`. Branch on the code and not on the message.
+
+A handler on one of the plugin's hook points that rejects a request should return one of the `errors` package's types. An untyped error (`errors.New`) is treated as a failure of the system: the client gets a `500` and the error is logged.
 
 ## Hook points
 
@@ -126,6 +131,7 @@ reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behem
 - `SignIn` returns a `*emailpassword.SignInResult`, which is `types.SignInResult`: the user, the session, the raw token, and `Method` (`"emailpassword"`). Handlers on `auth.signIn.after` receive the same value.
 - `SignIn` returns the raw session token and delivers nothing. From a route of your own, hand the result to `types.WriteSignIn`, which is what the plugin's route does; see [Writing a sign-in route](sessions.md#writing-a-sign-in-route).
 - Called before `Boot`, both return a configuration error.
+- `SignUp` returns typed errors for its own rejections too: check `behemotherr.IsCode(err, emailpassword.ErrorCodeEmailTaken)`, `ErrorCodeInvalidEmail` or `ErrorCodeInvalidPassword`.
 - `SignIn` returns a typed error for a refused credential, so you can tell it from a failure:
 
 ```go
@@ -155,7 +161,7 @@ reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behem
 }, nil)
 ```
 
-The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejectedByHook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but the client gets `user create failed` and no failed point fires.
+The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejectedByHook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but it counts as a failure of the system: the client gets a `500`, the error is logged, and no failed point fires.
 
 With `SessionConfig.CaptureIPAndAgent` on, the session created at sign-in records the client's IP address and user agent. The address is resolved with `RouterConfig.TrustedProxies` and `ClientIPHeader`, so behind a load balancer it is the client's and not the proxy's.
 

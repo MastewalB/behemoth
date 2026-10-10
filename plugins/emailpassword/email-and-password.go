@@ -292,23 +292,61 @@ func (c *EmailAndPasswordCredentials) FromMap(data map[string]any) error {
 	return nil
 }
 
+// Codes of the errors sign-up returns for its own rejections. A client
+// tells them apart by the code, not by the message.
+const (
+	// ErrorCodeInvalidEmail is the code of the validation error (400) for
+	// an email that is missing, not a string, or refused by
+	// Options.ValidateEmail.
+	ErrorCodeInvalidEmail = "email_invalid_input"
+	// ErrorCodeInvalidPassword is the code of the validation error (400)
+	// for a password the plugin's rules refuse, at sign-up and at a
+	// password reset.
+	ErrorCodeInvalidPassword = "password_invalid_input"
+	// ErrorCodeEmailTaken is the code of the conflict error (409) for a
+	// sign-up with an email that already has an account.
+	ErrorCodeEmailTaken = "email_taken"
+)
+
+// errInvalidEmail and errInvalidPassword are sign-up's validation errors.
+// cause is the error of the check that refused, kept for logs: its text is
+// not sent to the client, since Options.ValidateEmail and ValidatePassword
+// are the application's and may say more than a stranger should read.
+func errInvalidEmail(cause error) error {
+	return behemotherr.NewInvalidInputError("emailpassword.SignUp", credentialEmailKey, "invalid email", cause)
+}
+
+func errInvalidPassword(op string, cause error) error {
+	return behemotherr.NewInvalidInputError(op, credentialPasswordKey, "invalid password", cause)
+}
+
+// errEmailTaken is sign-up's typed conflict (409) for an email that already
+// has an account.
+func errEmailTaken() error {
+	const op, message = "emailpassword.SignUp", "an account with this email already exists"
+	return &behemotherr.DomainError{
+		Category: behemotherr.CategoryConflict, Op: op, Code: ErrorCodeEmailTaken,
+		PublicMessage: message, InternalMessage: op + ": " + message,
+	}
+}
+
 func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, error) {
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
 
-	emailStr, ok := userData["email"].(string)
+	emailStr, ok := userData[credentialEmailKey].(string)
 	if !ok {
-		return nil, errors.New("invalid email")
+		return nil, errInvalidEmail(nil)
 	}
 	email := strings.ToLower(strings.TrimSpace(emailStr))
 
 	if err := p.opts.ValidateEmail(email); err != nil {
-		return nil, errors.New("invalid email")
+		return nil, errInvalidEmail(err)
 	}
 
-	password, _ := userData["password"].(string)
+	password, _ := userData[credentialPasswordKey].(string)
 	if err := p.validatePassword(password); err != nil {
-		return nil, errors.New("invalid password")
+		return nil, errInvalidPassword("emailpassword.SignUp", err)
 	}
 
 	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
@@ -317,7 +355,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
 			return nil, err
 		}
-		return nil, errors.New("user already exists")
+		return nil, errEmailTaken()
 	}
 	if !behemotherr.IsNotFound(err) {
 		return nil, err // infra error (DB down): not "no such user"
@@ -359,13 +397,11 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 		})
 	})
 	if err != nil {
-		// A typed error is returned as it is, so the caller keeps its
-		// category and public message: a data hook's veto on
-		// data.user.beforeCreate or afterCreate, or a classified store
-		// error. An untyped one may carry driver detail and is replaced.
-		if _, typed := errors.AsType[*behemotherr.DomainError](err); !typed {
-			return nil, errors.New("user create failed")
-		}
+		// The error is returned as it is. A typed one keeps its category
+		// and public message: a data hook's veto on data.user.beforeCreate
+		// or afterCreate, or a classified store error. An untyped one is a
+		// failure of the system: the router answers 500 without its text
+		// and logs it.
 		if isRejection(err) {
 			if failErr := dispatcher.Fail(hctx, hooks.HookSignUpFailed,
 				types.FailureReason{Code: "rejectedByHook", Cause: err, Metadata: behemoth.M{hooks.HookValueEmail: email}}); failErr != nil {
@@ -601,21 +637,21 @@ func SignOut(hctx *types.HookContext, sessionID string) error {
 	return ac.Dispatcher.RunAfter(hctx, hooks.HookSignOutAfter, nil)
 }
 
+// handleSignUp returns the flow's error unchanged, like handleSignIn, and
+// the router maps and logs it (RouterConfig.ErrorMapper). The flow's own
+// rejections are typed: a validation error (400) for the email or the
+// password, a conflict (409) for an email that is taken. A hook handler's
+// typed rejection keeps its own status. Anything else is a failure of the
+// system: the router answers 500 without the error's text and logs it.
 func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return rctx.Response.Error(http.StatusBadRequest, "invalid request body")
+		return behemotherr.NewValidationError("emailpassword.SignUp", "request", err)
 	}
 
 	user, err := p.SignUp(rctx.Ctx, body)
 	if err != nil {
-		// A typed error carries its own status and public message, and the
-		// router maps it (RouterConfig.ErrorMapper). The flow's own untyped
-		// rejections ("invalid email", "user already exists") are a 400.
-		if _, typed := errors.AsType[*behemotherr.DomainError](err); typed {
-			return err
-		}
-		return rctx.Response.Error(http.StatusBadRequest, err.Error())
+		return err
 	}
 	// The user's public columns, under the key a sign-in answers with. A
 	// sign-up creates no session, so there is no token to deliver.

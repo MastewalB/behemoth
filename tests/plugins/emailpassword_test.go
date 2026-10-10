@@ -154,7 +154,26 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 	assert.Empty(t, stored.Extras(), "a client can't write arbitrary columns (mass assignment)")
 
 	w = call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"another one"}`)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "an existing email can't sign up again")
+	assert.Equal(t, http.StatusConflict, w.Code, "an existing email can't sign up again")
+	assert.JSONEq(t, `{"error":"an account with this email already exists","code":"email_taken"}`, w.Body.String())
+
+	// Sign-up's own rejections are typed: a client reads the code.
+	for body, code := range map[string]string{
+		`{`:                            "request_validation_error",
+		`{"password":"correct horse"}`: emailpassword.ErrorCodeInvalidEmail,
+		`{"email":42,"password":"correct horse"}`:             emailpassword.ErrorCodeInvalidEmail,
+		`{"email":"not an email","password":"correct horse"}`: emailpassword.ErrorCodeInvalidEmail,
+		`{"email":"grace@example.com"}`:                       emailpassword.ErrorCodeInvalidPassword,
+		`{"email":"grace@example.com","password":"short"}`:    emailpassword.ErrorCodeInvalidPassword,
+	} {
+		w = call(t, ac, routes["/sign-up/email"], body)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "sign-up body %s", body)
+		var answer struct{ Code string }
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &answer), "sign-up body %s", body)
+		assert.Equal(t, code, answer.Code, "sign-up body %s", body)
+	}
+	_, err = ac.Store.FindUserByEmail(ctx, "grace@example.com")
+	assert.True(t, behemotherr.IsNotFound(err), "none of them created a user: %v", err)
 
 	w = call(t, ac, routes["/sign-in/email"], `{"email":"ADA@example.com","password":"correct horse"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -352,8 +371,12 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 		},
 		Hooks: func(reg types.HookRegistry) error {
 			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
-				if email, _ := row[models.UserEmail].(string); strings.HasSuffix(email, "@blocked.example") {
+				email, _ := row[models.UserEmail].(string)
+				if strings.HasSuffix(email, "@blocked.example") {
 					return nil, veto
+				}
+				if strings.HasSuffix(email, "@broken.example") {
+					return nil, errors.New("pq: connection reset by peer")
 				}
 				return row, nil
 			}, nil); err != nil {
@@ -389,7 +412,14 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	_, err = ac.Store.FindUserByEmail(ctx, "eve@blocked.example")
 	assert.True(t, behemotherr.IsNotFound(err), "nothing was written: %v", err)
 
-	w := call(t, ac, signUp, `{"email":"ada@example.com","password":"correct horse"}`)
+	// An untyped error is a failure of the system and not a rejection: a
+	// 500 without the error's text, and no failed point.
+	w := call(t, ac, signUp, `{"email":"eve@broken.example","password":"correct horse"}`)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.NotContains(t, w.Body.String(), "connection reset")
+	assert.Len(t, failures, 1)
+
+	w = call(t, ac, signUp, `{"email":"ada@example.com","password":"correct horse"}`)
 	assert.Equal(t, http.StatusCreated, w.Code, "other sign-ups are unaffected")
 	assert.Len(t, failures, 1)
 }
