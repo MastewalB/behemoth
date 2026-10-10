@@ -6,7 +6,7 @@ The project is under active development, and the API may still change.
 
 ## Features
 
-- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in and sign-out. `magiclink` signs a user in with a link sent by email, and `emailverification` confirms a user's address.
+- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in, sign-out and password reset. `magiclink` signs a user in with a link sent by email, and `emailverification` confirms a user's address.
 - **Migrations.** Behemoth builds a migration from the tables your plugins and your own schema declare, and writes it to a folder for you to review. `behemoth generate` does it from your application's directory.
 - **Hooks.** Run your code before or after a user is written, or around a whole flow such as sign-up. A handler can change data, stop an operation or react afterwards.
 - **Sessions and tokens.** Sessions are stored in your database or a key-value store, and delivered as a cookie or a header.
@@ -139,7 +139,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 
 Not built yet:
 
-- Password reset, password change and email verification
+- Password change for a signed-in user
 - OAuth 2.0 providers (the `providers/` package predates the plugin system and is likely to move)
 
 ## Benchmarks

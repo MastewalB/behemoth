@@ -1,6 +1,6 @@
 # Email and password
 
-The `emailpassword` plugin adds sign-up, sign-in and sign-out with an email address and a password.
+The `emailpassword` plugin adds sign-up, sign-in and sign-out with an email address and a password. It can also reset a forgotten password by a link sent to the user's address; see [Password reset](#password-reset).
 
 ## Setup
 
@@ -26,10 +26,11 @@ The zero value works. Every field is optional.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `MinPasswordLength` | 8 | Shortest password accepted at sign-up, in characters. |
-| `MaxPasswordLength` | 128 | Longest password accepted at sign-up, in characters. |
+| `MinPasswordLength` | 8 | Shortest password accepted at sign-up and at a password reset, in characters. |
+| `MaxPasswordLength` | 128 | Longest password accepted at sign-up and at a password reset, in characters. |
 | `ValidatePassword` | none | An extra check on a new password, run after the length check. Return an error to reject it. |
 | `ValidateEmail` | `utils.IsValidEmail` | The check on the email at sign-up. It receives the address trimmed and lowercased. |
+| `Reset` | off | Password reset. Setting `Reset.LinkURL` turns it on; see [Password reset](#password-reset). |
 
 ```go
 plugin := emailpassword.New(emailpassword.Options{
@@ -43,7 +44,7 @@ plugin := emailpassword.New(emailpassword.Options{
 })
 ```
 
-- The rules apply at sign-up only. Raising `MinPasswordLength` later does not lock out users whose password is shorter; they still sign in.
+- The rules apply where a password is set: at sign-up and at a password reset. Sign-in does not apply them, so raising `MinPasswordLength` later does not lock out users whose password is shorter.
 - A minimum above the maximum, or a negative limit, is a configuration error from `Boot`.
 - Passwords are hashed with the hasher configured in `BootConfig.Crypto`. The plugin has no hashing option of its own.
 - The sign-up response says `invalid email` or `invalid password`. The text of the error your function returns is not sent to the client.
@@ -160,6 +161,129 @@ With `SessionConfig.CaptureIPAndAgent` on, the session created at sign-in record
 
 The plugin fires the `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points. See [hooks.md](hooks.md#flow-points-tier-2) for their payloads and failure codes.
 
+## Password reset
+
+A user who forgot their password asks for a link by email and sets a new password with it. Reset is off until you set `Options.Reset.LinkURL`.
+
+The plugin does not send email. It hands the link to the mail sender you give Behemoth at `Boot`; see [Mail](mail.md).
+
+| Step | Who | What happens |
+| --- | --- | --- |
+| 1 | client | posts an email to `POST /password-reset/request` |
+| 2 | plugin | finds the user, issues a single-use token, and hands the link to your mail sender |
+| 3 | you | send the message |
+| 4 | user | opens the link, which is a page of your application: `https://app.example.com/auth/reset?token=...` |
+| 5 | your page | asks for the new password and posts it with the token to `POST /password-reset/confirm` |
+| 6 | plugin | consumes the token, sets the password and ends the user's sessions |
+
+### Setup
+
+```go
+plugin := emailpassword.New(emailpassword.Options{
+	Reset: emailpassword.ResetOptions{
+		LinkURL: "https://app.example.com/auth/reset",
+	},
+})
+
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+	Mail: types.MailConfig{
+		Sender: types.MailSenderFunc(func(ctx context.Context, msg types.MailMessage) error {
+			return mailQueue.Enqueue(ctx, msg.To, subjectFor(msg.Kind), msg.URL)
+		}),
+	},
+	// ...
+})
+```
+
+Reset uses the core `tokens` table and, for its limit per email, the `rate_limits` table or Redis.
+
+Your sender gets two kinds of message, both as a `types.MailMessage`:
+
+| `Kind` | When | Content |
+| --- | --- | --- |
+| `types.MailPasswordReset` | a link was requested | `URL`, `Token` and `ExpiresAt` of the link |
+| `types.MailPasswordChanged` | a reset went through | no link. It tells the owner their password was changed, in case it was not them. |
+
+| `ResetOptions` field | Default | Meaning |
+| --- | --- | --- |
+| `LinkURL` | empty: reset is off | The page of your application the link points to. Absolute, `http` or `https`. The plugin adds the token as the `token` query parameter and keeps any query the URL already has. |
+| `TTL` | 1 hour | How long a link works. `TokenConfig.TTLOverrides[types.TokenKindPasswordReset]` takes precedence. |
+| `RequestLimit` | 5 per 15 minutes | Reset requests allowed per email. |
+| `WaitForSend` | false | false: the request returns once the message is queued, and a failed send is logged. true: the request waits for your sender, and a failed send revokes the link. |
+| `LeaveEmailUnverified` | false | Set it to stop a completed reset from marking the email as verified. |
+
+With reset on, a missing mail sender, a `LinkURL` that is not an absolute URL and a negative `TTL` are configuration errors from `Boot`.
+
+`examples/init` runs reset end to end: a sender that prints the link (`mail.go`) and the page the link opens (`pages.go`).
+
+### Routes
+
+| Route | Body | Result |
+| --- | --- | --- |
+| `POST /password-reset/request` | `email`, and optionally `metadata` (an object passed to your sender in `MailMessage.Metadata`) | `200` with `{"status": "ok"}`, whether or not the email has an account |
+| `POST /password-reset/confirm` | `token`, `password` | `200` with `{"status": "password_reset"}`. No session token: the user signs in with the new password. |
+
+| Route | When | Status | Code |
+| --- | --- | --- | --- |
+| request | the body is not valid JSON, or `email` is not an address | `400` | `request_validation_error`, `email_invalid_input` |
+| request | too many requests for this email or from this client address | `429` | `rate_limited` |
+| confirm | `token` or `password` is missing | `400` | `token_invalid_input`, `password_invalid_input` |
+| confirm | the password fails the plugin's rules | `400` | `password_invalid_input`. The link stays usable. |
+| confirm | the link is unknown, expired, already used, or replaced by a newer one | `401` | `invalid_reset_token` |
+
+The request route gives one answer for an unknown email, a known one and a send that failed, so the response does not show which addresses have an account. Confirm gives one answer for every link it refuses.
+
+### What a reset does
+
+- **It sets the password under the same rules as sign-up.** `MinPasswordLength`, `MaxPasswordLength` and `ValidatePassword` apply. The password is checked before the token, so a refused password does not cost the user the link.
+- **The link works once.** It is used up at the moment the password is written. If that write fails (a database error, a data hook's veto), the link is spent and the user asks for a new one.
+- **A new link replaces the old one.** A user has one live reset link.
+- **It ends every session of the user.** They are revoked with the reason `password_reset` (`emailpassword.SessionRevokedPasswordReset`).
+- **It does not sign the user in.** The user signs in with the new password, so a second factor still applies.
+- **It gives a password to a user who had none.** A user created by a magic link or a provider can ask for a reset link, and using it creates their credential account.
+- **It marks the email as verified.** The link was sent to the address, so using it shows the user controls it. Set `LeaveEmailUnverified` if verified should only mean "went through your own verification".
+- **It is tied to the address it was sent to.** If the user's email changes before the link is used, the link is refused.
+- **It tells the user.** A `types.MailPasswordChanged` message goes to the account's address in the background. If it can't be queued or sent, that is logged and the reset still stands.
+- **Asking for a link changes nothing.** The old password and the sessions keep working until the link is used.
+
+### Calling the flows from code
+
+```go
+sent, err := plugin.RequestPasswordReset(ctx, emailpassword.ResetRequest{Email: "ada@example.com"})
+// sent.UserID, sent.TokenID, sent.ExpiresAt
+
+user, err := plugin.ResetPassword(ctx, rawToken, newPassword)
+```
+
+- Unlike the route, `RequestPasswordReset` reports an unknown email (`emailpassword.ErrNoAccount`) and a failed send.
+- `ResetPassword` returns a typed error with the code `emailpassword.ErrorCodeInvalidResetToken` for a link it refuses, and a validation error for a refused password.
+- With reset off, both return a configuration error.
+
+### Hooks
+
+The plugin declares six points when reset is on.
+
+| Point | Phase | Payload or result |
+| --- | --- | --- |
+| `auth.passwordReset.beforeRequest` (`emailpassword.HookResetRequestBefore`) | before | `email` and `metadata`. A handler may rewrite them or stop the request. |
+| `auth.passwordReset.afterRequest` (`emailpassword.HookResetRequestAfter`) | after | a `*emailpassword.ResetRequestResult`: user id, email, token id, expiry. Not the token. |
+| `auth.passwordReset.requestFailed` (`emailpassword.HookResetRequestFailed`) | failed | codes `userNotFound`, `issueFailed`, `sendFailed`, `rejectedByHook` |
+| `auth.passwordReset.before` (`emailpassword.HookResetBefore`) | before | `password`, and `email` when the token is valid. A handler can stop the reset; what it writes to the payload is not used. |
+| `auth.passwordReset.after` (`emailpassword.HookResetAfter`) | after | the `*models.User` |
+| `auth.passwordReset.failed` (`emailpassword.HookResetFailed`) | failed | codes `invalidToken`, `userNotFound`, `emailChanged`, `rejectedByHook` |
+
+The after and failed points are audited under their point names. Issuing and consuming the token also fire the token manager's points with the kind `password_reset`, and each ended session fires the session revoke points.
+
+### Rate limits
+
+| Rule | Limits | Default |
+| --- | --- | --- |
+| `emailpassword.RuleResetRequestRoute` | requests to `POST /password-reset/request` per client address | 10 a minute |
+| `emailpassword.RuleResetConfirmRoute` | requests to `POST /password-reset/confirm` per client address | 10 a minute |
+| `emailpassword.RuleResetRequestEmail` | reset requests per email | `Reset.RequestLimit`, 5 per 15 minutes |
+
+The rule per email is attached to `auth.passwordReset.beforeRequest`, so it also holds for `RequestPasswordReset` called from code. It counts requests for unknown emails too, so a `429` does not show whether the address has an account.
+
 ## Not built yet
 
-Password reset, password change and email verification. A plugin that adds one of them should depend on `emailpassword` so that the password rules stay in one place.
+Password change for a signed-in user. A plugin that adds it should depend on `emailpassword` so that the password rules stay in one place.

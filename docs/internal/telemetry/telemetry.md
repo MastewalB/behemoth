@@ -90,15 +90,15 @@ New call sites take their names from the constants or add one there. An attribut
 POST /api/auth/sign-up/email                                  (otelgin)
 └─ behemoth.request                    route=/api/auth/sign-up/email status=201
    ├─ behemoth.hook.chain              auth.signUp.before
-   │  ├─ behemoth.hook.handler         plugin=auditlog
+   │  ├─ behemoth.hook.handler         plugin=activity
    │  └─ behemoth.hook.handler         plugin=app
    ├─ behemoth.store.find_one          users          error_code=users_not_found, not failed
    ├─ behemoth.password.hash
    ├─ behemoth.store.transaction
    │  ├─ behemoth.store.create         users
    │  ├─ behemoth.hook.chain           data.user.afterCreate
-   │  │  ├─ behemoth.hook.handler      plugin=auditlog
-   │  │  │  └─ behemoth.store.create   audit_events   the plugin's own table, through hctx.Tx.DB()
+   │  │  ├─ behemoth.hook.handler      plugin=activity
+   │  │  │  └─ behemoth.store.create   activity_events   the plugin's own table, through hctx.Tx.DB()
    │  │  ├─ behemoth.hook.handler      plugin=app
    │  │  │  └─ behemoth.store.create   todos
    │  │  └─ behemoth.store.create      audit_log      user.created, in the transaction
@@ -106,7 +106,7 @@ POST /api/auth/sign-up/email                                  (otelgin)
    ├─ behemoth.hook.chain              data.user.created
    │  └─ behemoth.hook.handler         plugin=app
    └─ behemoth.hook.chain              auth.signUp.after
-      ├─ behemoth.hook.handler         plugin=auditlog
+      ├─ behemoth.hook.handler         plugin=activity
       ├─ behemoth.hook.handler         plugin=app
       └─ behemoth.store.create         audit_log      auth.signUp.after, best effort
 ```

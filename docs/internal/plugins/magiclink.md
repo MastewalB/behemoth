@@ -42,14 +42,14 @@ The token kind is database-backed on purpose. `RevokeAllForSubject` is not suppo
 | 4 | `TokenManager.RevokeAllForSubject(magic_link, user.ID)` | `Fail` with `issueFailed` |
 | 5 | `TokenManager.Issue(magic_link, user.ID, {email, redirectURL})` | `Fail` with `issueFailed` |
 | 6 | build the URL: `LinkURL` plus `token=<raw>` | |
-| 7 | `ac.Mailer.Send(ctx, MailMessage{Kind: MailMagicLink, ...})`, or `SendAsync` with `Options.SendInBackground` | revoke the token, `Fail` with `sendFailed` |
+| 7 | `ac.Mailer.SendAsync(ctx, MailMessage{Kind: MailMagicLink, ...})`, or `Send` with `Options.WaitForSend` | revoke the token, `Fail` with `sendFailed` |
 | 8 | return a `*LinkResult`; `WithLifecycle` fires `auth.magicLink.afterRequest` | |
 
 Steps 1 and 2 come before the lookup, so a validation error does not depend on whether the email has an account.
 
 - **The token's subject is the user's id.** The email the link was sent to is in the token's metadata. See the design decision below.
 - **`Metadata` is not stored.** It goes from the request to the mail sender and nowhere else. Only the email and the redirect URL are kept with the token.
-- **With `SendInBackground`, step 7 only fails when the message could not be queued.** A send that fails later is logged by the mailer; the link is not revoked and no failed point fires. See [`../mail/mailer.md`](../mail/mailer.md).
+- **By default, step 7 only fails when the message could not be queued.** A send that fails later is logged by the mailer; the link is not revoked and no failed point fires. See [`../mail/mailer.md`](../mail/mailer.md).
 - **The raw token exists in three places:** the `MailMessage` handed to the mailer, its `URL`, and the token manager's return value. `LinkResult`, which the after handlers and the audit event see, has the token's id and not the token.
 
 ### What the route hides
@@ -66,7 +66,7 @@ The route has to answer the same for an email with an account and one without. T
 
 Everything else is reported, because it does not depend on the account: a validation error, a rejection by a handler on `auth.magicLink.beforeRequest`, the plugin's own rate limits (they count unknown emails too), and a failure of the lookup itself.
 
-The response time still differs: a known email pays for the token writes, and without `SendInBackground` for the mail sender. `docs/ongoing.md` has the entry.
+The response time still differs: a known email pays for the token writes, and with `WaitForSend` for the mail sender. `docs/ongoing.md` has the entry.
 
 ## Verifying a link
 
@@ -79,7 +79,7 @@ The response time still differs: a known email pays for the token writes, and wi
 | 1 | `TokenManager.Consume(magic_link, token)` | `Fail` with `invalidMagicLink` |
 | 2 | `Store.FindUserByID(token.Subject)` | `Fail` with `userNotFound` |
 | 3 | compare the email in the token's metadata with the user's | `Fail` with `emailChanged` |
-| 4 | set `email_verified` if it is not set (`Store.UpdateUser`) | the error is returned |
+| 4 | set `email_verified` if it is not set (`Store.UpdateUser`), unless `Options.LeaveEmailUnverified` | the error is returned |
 | 5 | `RunBefore(auth.signIn.credentialsVerified)`; `requireStepUp` makes the session pending | `Fail` with `secondFactorRejected` |
 | 6 | `SessionManager.Create` | the error is returned |
 | 7 | return a `*types.SignInResult` with `Method: "magiclink"` | |
@@ -123,13 +123,13 @@ Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with
 **Context:** The plugin first took a `SendLink` callback in its options. Email verification then needed to send too.
 **Decision:** The callback was replaced by `AuthContext.Mailer`, which every plugin uses; [`../mail/mailer.md`](../mail/mailer.md) has the options that were weighed. The request's `Metadata` map is handed to the sender untouched, in `MailMessage.Metadata`, so an application can pass what its message needs (a locale, a template) without the plugin growing a field for each. It is client input when it comes from the route, and the API doc says so.
 
-### Waiting for the sender is the default
-**Context:** The mailer offers `Send`, which waits, and `SendAsync`, which does not.
+### The link is sent in the background by default
+**Context:** The mailer offers `Send`, which waits, and `SendAsync`, which does not. The plugin first waited by default (`SendInBackground`, off). Password reset then chose the background default, and the two plugins had options named in opposite directions.
 **Options considered:**
 - *Always wait.* A failed send revokes the link and is audited. A sender that calls a provider directly holds the request, and widens the timing gap between known and unknown emails.
 - *Never wait.* Fast and even. A link that was never sent stays valid until it expires, and the failure is only in the log.
 - *An option.* Both are reasonable, and which is better depends on the application's sender.
-**Decision:** `Options.SendInBackground`, off by default. With a sender that enqueues, waiting costs nothing and keeps the revoke.
+**Decision:** `Options.WaitForSend`, off by default, the same name and default as `emailpassword.ResetOptions.WaitForSend`. Not waiting keeps the sender out of the response time whatever the sender does. A link that was never sent is harmless: nobody holds it, and it ends at its expiry or at the user's next request. With a sender that only enqueues, `WaitForSend` costs nothing and keeps the revoke.
 
 ## Trusted origins
 
@@ -173,5 +173,6 @@ A plugin checks a redirect URL when it receives it, before storing it. The magic
 | `TestMagicLinkRoutes` | same | the request route's identical answers for a known email, an unknown one and a failed send; validation statuses; the verify route's body and its `401` |
 | `TestMagicLinkRequestsAreLimitedPerEmail` | same | the rule per email, from code, for known and unknown emails |
 | `TestMagicLinkVerifyRefusalsAndSecondFactor` | same | a pending session, a changed email, a deleted user |
+| `TestMagicLinkLeavesEmailUnverified` | same | `LeaveEmailUnverified`: the link signs in and the flag stays as it was |
 | `TestMagicLinkOptions` | same | the configuration errors, and a flow called before `Boot` |
 | `TestTrustedOrigins` | `types/origins_test.go` | origin parsing and matching, and every row of the redirect table above |

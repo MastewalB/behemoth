@@ -18,15 +18,15 @@ defer ac.Mailer.Close(context.Background())
 
 `Sender` is a `types.MailSender`, an interface with one method, `Send(ctx, msg) error`. `types.MailSenderFunc` turns a function into one. Return an error when the message was not delivered or handed off.
 
-A plugin that needs a sender (`magiclink`, `emailverification`) makes `Boot` fail with a configuration error when none is set. Without such a plugin, `Mail` can stay empty.
+A plugin that needs a sender (`magiclink`, `emailverification`, `emailpassword` with password reset on) makes `Boot` fail with a configuration error when none is set. Without such a plugin, `Mail` can stay empty.
 
 ## The message
 
 | Field | Content |
 | --- | --- |
-| `Kind` | what the message is for: `types.MailMagicLink`, `types.MailEmailVerification`, `types.MailEmailChange`, `types.MailEmailChangeNotice`. Pick the subject and template by it. |
+| `Kind` | what the message is for: `types.MailMagicLink`, `types.MailEmailVerification`, `types.MailEmailChange`, `types.MailEmailChangeNotice`, `types.MailPasswordReset`, `types.MailPasswordChanged`. Pick the subject and template by it. |
 | `To` | the address, trimmed and lowercased |
-| `URL` | the link to put in the message, with the token in it |
+| `URL` | the link to put in the message, with the token in it. Empty for `types.MailPasswordChanged`, a notice without a link, as are `Token` and `ExpiresAt`. |
 | `Token` | the raw token, if you build the URL yourself. It is a credential: don't log it. |
 | `ExpiresAt` | when the link stops working |
 | `User` | the `*models.User` the message is about |
@@ -56,7 +56,7 @@ A plugin hands a message to your sender in one of two ways, and each plugin pick
 | --- | --- | --- |
 | The request returns | after your sender does | once the message is queued |
 | A failed send | is returned to the plugin, which can act on it | is logged at Error under the `mail` component and counted; nobody is told |
-| Used by | `magiclink`, by default: a failed send revokes the link. The notice of an email change: without it the change does not start | `emailverification`, for its links; `magiclink` with `SendInBackground` |
+| Used by | A magic link or a password reset link with `WaitForSend`: a failed send revokes the link. The notice of an email change: without it the change does not start | `emailverification`, for its links; a magic link and a password reset link, by default; the notice that a password was reset |
 
 Email verification sends in the background because nothing is lost when a send fails: the user asks for another link, and asking twice does no harm. A sign-up should not wait for a mail provider.
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
+	"github.com/MastewalB/behemoth/plugins/magiclink"
 	"github.com/MastewalB/behemoth/types"
 	bmth "github.com/MastewalB/behemoth/types/init"
 	_ "github.com/lib/pq"
@@ -18,9 +19,19 @@ import (
 // plugins returns the plugin list for Prepare. The email/password plugin is
 // returned a second time by its own type, because the signup command calls
 // its SignUp and SignIn methods directly.
+//
+// Two of them mail a link, and each is told which page of the application
+// its link opens (pages.go). The messages go to the sender in BootConfig.Mail
+// (mail.go).
 func plugins() ([]types.Plugin, *emailpassword.Plugin) {
-	ep := emailpassword.New(emailpassword.Options{})
-	return []types.Plugin{ep, &AuditLogPlugin{}}, ep
+	ep := emailpassword.New(emailpassword.Options{
+		// Setting the link URL is what turns password reset on.
+		Reset: emailpassword.ResetOptions{LinkURL: appURL() + pathResetPage},
+	})
+	// Sign-in by a mailed link, next to sign-in by password. A user created
+	// by either plugin can use both.
+	ml := magiclink.New(magiclink.Options{LinkURL: appURL() + pathMagicPage})
+	return []types.Plugin{ep, ml, &ActivityPlugin{}}, ep
 }
 
 func prepareConfig() bmth.PrepareConfig {

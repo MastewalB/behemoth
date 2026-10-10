@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/MastewalB/behemoth"
@@ -31,14 +33,23 @@ const pluginVersion = "0.1.0"
 // Plugin is the email and password authentication plugin. It adds the
 // sign-up, sign-in and sign-out routes. Users, credential accounts and
 // sessions are core tables, written through the store and the session
-// manager, and the auth.* hook points it fires are declared by core, so the
-// plugin contributes routes only.
+// manager, and the auth.signUp.*, auth.signIn.* and auth.signOut.* points it
+// fires are declared by core.
+//
+// With Options.Reset.LinkURL set it also adds password reset (reset.go): two
+// more routes, the password_reset token kind, the auth.passwordReset.*
+// points and their rate-limit rules.
 type Plugin struct {
 	opts        Options
 	authContext *types.AuthContext
 	log         telemetry.Logger
 	signUp      func(hctx *types.HookContext, in behemoth.M) (*models.User, error)
 	signIn      func(hctx *types.HookContext, in EmailAndPasswordCredentials) (*SignInResult, error)
+
+	// Set by Init when reset is enabled, nil otherwise.
+	resetURL     *url.URL
+	resetRequest func(hctx *types.HookContext, in ResetRequest) (*ResetRequestResult, error)
+	reset        func(hctx *types.HookContext, in resetInput) (*models.User, error)
 }
 
 // Meta implements [types.Plugin]. The plugin depends on no other plugin and
@@ -53,16 +64,24 @@ func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
-// Declare implements [types.Plugin]. The plugin declares nothing:
+// Declare implements [types.Plugin]. Without password reset the plugin
+// declares nothing:
 //   - hook points: it fires core's auth.signUp.*, auth.signIn.* and
 //     auth.signOut.* points, which core declares before any plugin's Declare
 //     runs (CoreDeclareHookPoints);
 //   - tables: the password hash lives on the core accounts table;
 //   - token kinds: none. Email verification is a plugin of its own
 //     (plugins/emailverification), which sends a link to a user this plugin
-//     signs up. Password reset is not built;
+//     signs up;
 //   - rate limits: core declares the baseline rule for /sign-in/email.
+//
+// With password reset enabled it declares the reset's token kind, points and
+// rate-limit rules (declareReset). Password change for a signed-in user is
+// not built.
 func (p *Plugin) Declare(ic *types.PluginInitContext) error {
+	if p.opts.Reset.enabled() {
+		return p.declareReset(ic)
+	}
 	return nil
 }
 
@@ -89,25 +108,30 @@ const (
 // Options configures the plugin. The zero value is usable.
 //
 // The email and password rules live here and not on types.AuthContext: this
-// plugin is the only place a password enters the system. A plugin that also
-// sets passwords (password reset, an admin screen) should depend on this one
-// and go through it, so the rules have one owner.
+// plugin is the only place a password enters the system, at sign-up and at a
+// password reset. A plugin that also sets passwords (an admin screen) should
+// depend on this one and go through it, so the rules have one owner.
 type Options struct {
 	// MinPasswordLength and MaxPasswordLength bound a new password's length
-	// at sign-up, counted in characters. Zero means the default (8 and 128).
-	// The upper bound also caps the work the password hasher does for one
-	// request. Sign-in does not apply them: a password accepted under an
-	// older policy still signs in.
+	// at sign-up and at a password reset, counted in characters. Zero means
+	// the default (8 and 128). The upper bound also caps the work the
+	// password hasher does for one request. Sign-in does not apply them: a
+	// password accepted under an older policy still signs in.
 	MinPasswordLength int
 	MaxPasswordLength int
 
-	// ValidatePassword is an optional extra check at sign-up, run after the
-	// length check, for example a breached-password lookup. nil = none.
+	// ValidatePassword is an optional extra check on a new password, run
+	// after the length check, for example a breached-password lookup.
+	// nil = none.
 	ValidatePassword func(password string) error
 
 	// ValidateEmail checks the normalized (trimmed, lowercased) email at
 	// sign-up. nil = utils.IsValidEmail, a check of the address's shape.
 	ValidateEmail func(email string) error
+
+	// Reset configures password reset. It is off until Reset.LinkURL is
+	// set, and then needs a mail sender in BootConfig.Mail.
+	Reset ResetOptions
 }
 
 // New returns the plugin configured with opts. Limits left at zero take
@@ -128,12 +152,19 @@ func New(opts Options) *Plugin {
 			return nil
 		}
 	}
+	if opts.Reset.TTL == 0 {
+		opts.Reset.TTL = DefaultResetTTL
+	}
+	if opts.Reset.RequestLimit == (types.Limit{}) {
+		opts.Reset.RequestLimit = types.Limit{Max: 5, Window: 15 * time.Minute}
+	}
 	return &Plugin{opts: opts}
 }
 
 // Init implements [types.Plugin]. It checks the options, keeps the
-// AuthContext and wraps the sign-up and sign-in flows with their hook points.
-// Passwords are hashed with the AuthContext's Crypto.Passwords.
+// AuthContext and wraps the sign-up and sign-in flows with their hook points,
+// and the reset flows when reset is enabled (initReset). Passwords are hashed
+// with the AuthContext's Crypto.Passwords.
 func (p *Plugin) Init(ac *types.AuthContext) error {
 	if p.opts.MinPasswordLength < 1 || p.opts.MaxPasswordLength < p.opts.MinPasswordLength {
 		return behemotherr.NewConfigurationError("emailpassword.Init",
@@ -149,10 +180,14 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	}
 	p.signUp = types.WithLifecycle(ac.Dispatcher, hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed, p.signUpBody)
 	p.signIn = types.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.signInBody)
+	if p.opts.Reset.enabled() {
+		return p.initReset(ac)
+	}
 	return nil
 }
 
-// validatePassword applies the plugin's rules to a new password.
+// validatePassword applies the plugin's rules to a new password, at sign-up
+// and at a password reset.
 func (p *Plugin) validatePassword(password string) error {
 	n := utf8.RuneCountInString(password)
 	if n < p.opts.MinPasswordLength || n > p.opts.MaxPasswordLength {
@@ -164,8 +199,10 @@ func (p *Plugin) validatePassword(password string) error {
 	return nil
 }
 
+// Routes implements [types.Plugin]. The two reset routes are added only when
+// reset is enabled.
 func (p *Plugin) Routes() []types.Route {
-	return []types.Route{
+	routes := []types.Route{
 		{Method: http.MethodPost, Path: "/sign-up/email", Handler: p.handleSignUp},
 		{Method: http.MethodPost, Path: "/sign-in/email", Handler: p.handleSignIn},
 		{Method: http.MethodPost, Path: "/sign-out", Handler: p.handleSignOut,
@@ -174,6 +211,13 @@ func (p *Plugin) Routes() []types.Route {
 			},
 		},
 	}
+	if p.opts.Reset.enabled() {
+		routes = append(routes,
+			types.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
+			types.Route{Method: http.MethodPost, Path: PathResetConfirm, Handler: p.handleResetConfirm},
+		)
+	}
+	return routes
 }
 
 // EmailAndPasswordCredentials is sign-in's input. Email and Password are all

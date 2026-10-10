@@ -11,7 +11,7 @@
 //
 // DATABASE_URL defaults to postgres://postgres:postgres@localhost:5432/behemoth?sslmode=disable
 //
-// The example also shows hooks at work. The audit plugin (plugin.go) and the
+// The example also shows hooks at work. The activity plugin (plugin.go) and the
 // application (hooks.go) register handlers on the email/password flows and
 // on the user write, and every handler logs a line (demo.go). With the
 // server running, a sign-up through the route produces the same lines as the
@@ -23,7 +23,33 @@
 //	  -d '{"email":"ada@example.com","password":"correct horse"}'
 //
 // An unknown inviteCode is rejected by the application's hook with a 400 and
-// its own message; a wrong password records a rejection in audit_events.
+// its own message; a wrong password records a rejection in activity_events.
+//
+// # Mailed links
+//
+// Two flows mail a link: sign-in by magic link (plugins/magiclink) and
+// password reset (part of plugins/emailpassword). Behemoth sends no mail
+// itself. It hands each message to the application's sender (mail.go), which
+// here prints it, so the link shows up in the server's output:
+//
+//	curl -X POST localhost:8080/api/auth/sign-in/magic-link -d '{"email":"ada@example.com"}'
+//	curl -X POST localhost:8080/api/auth/password-reset/request -d '{"email":"ada@example.com"}'
+//
+// Both answer 200 whether or not the address has an account, and only a
+// known address is sent a link. Open the printed link in a browser. It is a
+// page of the application (pages.go), which posts the token to behemoth:
+// the magic link page signs the user in, and the reset page asks for a new
+// password first. The same step with curl, with the token from the link:
+//
+//	curl -i -X POST localhost:8080/api/auth/magic-link/verify -d '{"token":"..."}'
+//	curl -X POST localhost:8080/api/auth/password-reset/confirm \
+//	  -d '{"token":"...","password":"a brand new staple"}'
+//
+// A link works once, and asking again replaces the earlier one. After a
+// reset the old password and every session of the user stop working, and
+// the sender is handed a "your password was changed" notice.
+//
+// APP_URL is the address the links point to (default http://localhost:8080).
 //
 // # Telemetry
 //

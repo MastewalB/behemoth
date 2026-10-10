@@ -49,8 +49,9 @@ func serve(ctx context.Context) error {
 		engine.Use(otelgin.Middleware("behemoth-example", otelgin.WithTracerProvider(obs.tracerProvider)))
 	}
 	engine.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "my app") })
+	mountPages(engine) // the pages the mailed links open
 
-	_, _, sqlDB, err := boot(ctx, ginadapter.New(engine), obs.tel)
+	ac, _, sqlDB, err := boot(ctx, ginadapter.New(engine), obs.tel)
 	if err != nil {
 		return err
 	}
@@ -75,6 +76,9 @@ func serve(ctx context.Context) error {
 	defer cancel()
 	log.Print("shutting down")
 	err = server.Shutdown(shutdownCtx)
+	// Links are mailed in the background. Close waits for the messages
+	// still queued, so a link requested just before the stop is not lost.
+	err = errors.Join(err, ac.Mailer.Close(shutdownCtx))
 	return errors.Join(err, obs.shutdown(shutdownCtx)) // flush traces and metrics last
 }
 
@@ -110,6 +114,9 @@ func boot(ctx context.Context, driver types.FrameworkDriver, tel *telemetry.Tele
 		Crypto:    cryptoCfg,
 		HTTP:      driver,
 		Telemetry: tel,
+		// The one mail sender every plugin goes through (mail.go). The magic
+		// link plugin and password reset fail Boot without one.
+		Mail: types.MailConfig{Sender: types.MailSenderFunc(printMail)},
 		// The application's hook handlers (hooks.go). The plugins registered
 		// theirs in Register.
 		Hooks: appHooks,
@@ -121,7 +128,8 @@ func boot(ctx context.Context, driver types.FrameworkDriver, tel *telemetry.Tele
 		},
 		// KV, RateLimit, Token and Router left at their defaults: no KV
 		// store (sessions and rate limits use the DB), routes under
-		// /api/auth.
+		// /api/auth. A magic link request that names a redirect to another
+		// origin would need that origin in Router.TrustedOrigins.
 	})
 	if err != nil {
 		sqlDB.Close()

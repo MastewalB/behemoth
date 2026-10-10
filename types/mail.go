@@ -22,6 +22,13 @@ const (
 	// two addresses in Data (plugins/emailverification).
 	MailEmailChange       MailKind = "email_change"
 	MailEmailChangeNotice MailKind = "email_change_notice"
+	// MailPasswordReset carries the link that lets a user set a new
+	// password (plugins/emailpassword).
+	MailPasswordReset MailKind = "password_reset"
+	// MailPasswordChanged tells a user that their password was reset. It
+	// has no link: URL, Token and ExpiresAt are empty
+	// (plugins/emailpassword).
+	MailPasswordChanged MailKind = "password_changed"
 )
 
 // MailMessage is one message a plugin wants delivered: everything the

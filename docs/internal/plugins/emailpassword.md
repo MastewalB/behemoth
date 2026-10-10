@@ -1,17 +1,17 @@
 # Email and password plugin
 
-This document explains how `plugins/emailpassword` fits into `Prepare` and `Boot`, and where its email and password rules live.
+This document explains how `plugins/emailpassword` fits into `Prepare` and `Boot`, where its email and password rules live, and how its optional password reset works.
 
 ## What the plugin contributes
 
 | `types.Plugin` method | Result | Why |
 | --- | --- | --- |
 | `Meta` | name `emailpassword`, no dependencies, no mount path | routes sit directly under the base path (`/sign-in/email`) |
-| `Declare` | nothing | core declares the `auth.*` hook points (`CoreDeclareHookPoints`) and owns `users`, `accounts` and `sessions` |
+| `Declare` | nothing, or with reset on: the `password_reset` token kind, six `auth.passwordReset.*` points and three rate-limit rules | core declares the sign-up, sign-in and sign-out points (`CoreDeclareHookPoints`) and owns `users`, `accounts` and `sessions` |
 | `Register` | nothing | the plugin fires points; it does not handle any |
 | `Middlewares` | nothing | the session check is on the sign-out route only (`types.RequireSession`) |
-| `Init` | checks `Options`, wraps the flows with `types.WithLifecycle` | runs in `Boot`, after the dispatcher exists |
-| `Routes` | sign-up, sign-in, sign-out | reads the session manager, so it must run after `Init`; `Boot` guarantees that order |
+| `Init` | checks `Options`, wraps the flows with `types.WithLifecycle`; with reset on, also requires a mail sender | runs in `Boot`, after the dispatcher exists |
+| `Routes` | sign-up, sign-in, sign-out, and the two reset routes when reset is on | reads the session manager, so it must run after `Init`; `Boot` guarantees that order |
 
 The sign-in route answers through `types.WriteSignIn`, which writes the body every sign-in route shares and delivers the session token by the configured transport; see [`../sessions/token_transport.md`](../sessions/token_transport.md). The sign-up route answers `{"user": ...}` itself: it has no session.
 
@@ -19,7 +19,7 @@ The sign-in route answers through `types.WriteSignIn`, which writes the body eve
 
 The plugin knows nothing about email verification. A user it signs up is created with `EmailVerified` false, and the email verification plugin, if installed, sends the link from its handler on `data.user.created`; see [`emailverification.md`](emailverification.md).
 
-Compare with a plugin such as the example `auditlog`: that one declares a table in `Declare` and has a mount path. This one adds behaviour on top of core tables and declares nothing.
+Compare with a plugin such as the example `activity` (`examples/init/plugin.go`): that one declares a table in `Declare` and has a mount path. This one adds behaviour on top of core tables, and declares nothing unless reset is on.
 
 ## The flows
 
@@ -55,9 +55,68 @@ Rules that follow from the two methods:
 
 `SignOut` is an exported function that takes a `HookContext` and only uses the `AuthContext` on it, so other plugins can call it. It turns the context into one operation with `types.AsOperation`.
 
+## Password reset
+
+Reset lives in `reset.go` and is off until `Options.Reset.LinkURL` is set. `Declare`, `Init` and `Routes` each branch on `ResetOptions.enabled()` and call `declareReset`, `initReset` or add the two routes. With reset off the exported flows return a configuration error (`resetOperation`).
+
+The two flows have the shape of the magic link plugin's request and verify; see [`magiclink.md`](magiclink.md). The request side is the same code path with another token kind and mail kind. The second half differs: a magic link ends in a session, a reset ends in a new password and no session.
+
+### Requesting a link
+
+`Plugin.RequestPasswordReset` publishes the email (`publishEmail`) and runs `resetRequestBody`, wrapped with `auth.passwordReset.beforeRequest`, `.afterRequest` and `.requestFailed`:
+
+| Step | What | On failure |
+| --- | --- | --- |
+| 1 | normalize the email and check its shape (`utils.IsValidEmail`) | a validation error |
+| 2 | `Store.FindUserByEmail` | `Fail` with `userNotFound`, `ErrNoAccount` |
+| 3 | `TokenManager.RevokeAllForSubject(password_reset, user.ID)` | `Fail` with `issueFailed` |
+| 4 | `TokenManager.Issue`, subject the user's id, the email in the metadata | `Fail` with `issueFailed` |
+| 5 | `Mailer.SendAsync`, or `Send` with `WaitForSend` | the token is revoked, `Fail` with `sendFailed` |
+
+- **Step 1 does not use `Options.ValidateEmail`.** That option is the policy for new accounts. An account created under an older policy can still reset its password.
+- **The user needs no credential account.** A user created by a magic link gets a link too.
+- **The route hides everything after the lookup.** `handleResetRequest` answers `200` for `ErrNoAccount` and for a `resetAfterLookupError`, and logs the second at Error. The response time still differs by the token writes; `docs/ongoing.md` has the entry.
+
+### Using a link
+
+`Plugin.ResetPassword` first reads the token without consuming it (`TokenManager.Verify`). The email in it goes in the before payload and in `Values`, and the token itself is handed to the flow in `resetInput.verified`. It then runs `resetBody`, wrapped with `auth.passwordReset.before`, `.after` and `.failed`:
+
+| Step | What | On failure |
+| --- | --- | --- |
+| 1 | `validatePassword`, the rules sign-up uses | a validation error; the token is untouched |
+| 2 | the token `Verify` read is usable | `Fail` with `invalidToken` |
+| 3 | `Store.FindUserByID(token.Subject)` | `Fail` with `userNotFound` |
+| 4 | compare the email in the token's metadata with the user's | `Fail` with `emailChanged` |
+| 5 | `hashPassword` | the error is returned |
+| 6 | `TokenManager.Consume(password_reset, token)` | `Fail` with `invalidToken`: another reset used the link since step 2 |
+| 7 | in one `Store.Transaction`: update the credential account's hash, or create the account; set `email_verified` unless it is set or `LeaveEmailUnverified` | a typed veto of a data hook fires `Fail` with `rejectedByHook` |
+| 8 | `SessionManager.RevokeAllForUser(user.ID, "password_reset", "")` | the error is returned; the password is already changed |
+| 9 | `Mailer.SendAsync` a `MailPasswordChanged` notice to the user's address | logged at Warn; the reset stands |
+| 10 | return the `*models.User` | |
+
+- **Steps 2, 3, 4 and 6 answer with `errInvalidResetToken`,** one typed unauthorized error with the code `invalid_reset_token`. The audit event of `auth.passwordReset.failed` has the real code.
+- **The password is checked before the token.** Its answer is the same for any token, so it tells nothing about one, and a typo does not cost the user the link.
+- **The token is consumed as late as it can be.** Steps 2 to 5 use the token as `Verify` read it and change nothing, so a refusal or a failed hash there leaves the link usable. Only the write of step 7 comes after the consume. This differs from the magic link plugin, which consumes first: there the steps after it are the sign-in itself.
+- **`Consume` is still the at-most-once step.** Two resets racing with one link both pass steps 2 to 5, and one loses at step 6.
+- **Only a token that checked out is hashed for.** An invalid token stops at step 2, so the route can't be used to make the server hash.
+- **The before payload is veto-only.** `resetInput.FromMap` reads nothing back. A handler sees `password` and `email` and can refuse; it can't swap the password or the token.
+
+### Tests
+
+| Test | File | Covers |
+| --- | --- | --- |
+| `TestPasswordResetRequestAndConfirm` | `tests/plugins/passwordreset_test.go` | both flows from code: unknown email, validation, what the sender receives, a new link replacing the old, a refused password keeping the link, the old password and sessions ending, the notice, a link working once, email verified, the points' payloads and audit events |
+| `TestPasswordResetRoutes` | same | the request route's identical answers, validation statuses, the confirm route's body and its `401`, no session token |
+| `TestPasswordResetRequestsAreLimitedPerEmail` | same | the rule per email, for a known and an unknown address |
+| `TestPasswordResetRefusals` | same | a changed email, a deleted user |
+| `TestPasswordResetWithoutAPasswordAndLeavingEmailUnverified` | same | a first password for a user without one, `LeaveEmailUnverified` |
+| `TestPasswordResetOptions` | same | off by default with no routes and no sender needed; the configuration errors |
+| `TestPasswordResetSendsInBackground` | same | the default send does not hold the request, and a failed send leaves the link valid |
+
 ## Limits to know
 
-- `[Not built]` Password reset, password change and email verification. They would declare their token kinds in `Declare`.
+- `[Not built]` Password change for a signed-in user. It needs a way to re-check the current password; see *Nothing refreshes a session in place* in `docs/ongoing.md`.
+- `[Limit]` A reset consumes its token just before it writes the password, outside the write's transaction. If that write fails, the link is spent and the user asks for another. `docs/ongoing.md` has what consuming inside the transaction would need.
 - `[Not built]` Rehash on sign-in. `PasswordHasher.NeedsRehash` exists but sign-in does not call it.
 - Sign-up returns a typed error (`behemotherr.DomainError`) to the router, which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejectedByHook` for it (`isRejection`). Sign-up's own untyped rejections are a `400`.
 - Sign-in and sign-out return every error to the router unchanged (`handleSignIn`, `handleSignOut`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
@@ -103,3 +162,52 @@ The three refusals share one code and one message on purpose: a different answer
 Two changes a client can observe: a wrong password is a `401` where it was a `400`, and an untyped error from a handler on a sign-in point is a `500` where it was a `400`. The second matches what the hook docs ask for, a typed error from a handler that rejects.
 
 `[Limit]` Sign-up still has untyped refusals (`invalid email`, `user already exists`), answered with `400` by `handleSignUp` itself. Giving them types would let that handler end in `return err` as well.
+
+### Password reset is part of this plugin and off by default
+**Context:** The docs expected reset to be a plugin of its own that depends on this one. A reset sets a password, and the password rules (`validatePassword`) and the traced hash (`hashPassword`) are private to this package.
+**Options considered:**
+- *A `passwordreset` plugin that depends on `emailpassword`.* An application without reset carries none of it. This plugin would have to export a `SetPassword` for it, and an application wires two plugins for what users see as one feature.
+- *Part of this plugin, always on.* Nothing to wire. Every application with passwords would then need a mail sender and the `tokens` table, and `emailpassword.New(Options{})` would stop working without them.
+- *Part of this plugin, on when `Options.Reset.LinkURL` is set.* The rules stay private, and an application that does not set the URL sees no change.
+**Decision:** The third. The link URL is required for reset anyway, so it doubles as the switch and no separate `Enabled` field can disagree with it.
+**Revisit if:** another plugin needs to set passwords (an admin screen). An exported `SetPassword` would then be justified, and reset could move out onto it.
+
+### A reset ends the user's sessions and does not start one
+**Context:** After the password is set, the flow could hand back a session, as a magic link does.
+**Options considered:**
+- *Sign the user in.* One step fewer for the user. The reset link becomes a sign-in credential with a one hour life, and the flow would have to fire the `auth.signIn.*` points to keep a second factor in the path.
+- *Set the password, end every session, create none.* The user signs in with the new password through the normal flow, second factor included.
+**Decision:** The second. Ending the sessions is the point of a reset after a compromise, and `RevokeAllForUser` takes no exception here because the caller has no session.
+**Revisit if:** applications ask for the shorter path. It would be an option that runs the sign-in flow after the reset.
+
+### A reset gives a password to a user who has none
+**Context:** A user created by a magic link or a provider has no credential account. A reset request for their email has to do something.
+**Options considered:**
+- *Send nothing.* Reset stays strictly "replace a password". The request has to look the account up before deciding, and the user gets no explanation since the route answers the same either way.
+- *Send the link and create the credential account at the reset.* The link proves control of the address, which is what sign-up by password asks for too.
+**Decision:** The second. The account is created in the transaction that would otherwise update it.
+**Revisit if:** an application wants accounts that can never have a password. A handler on `auth.passwordReset.beforeRequest` can refuse them today.
+
+### Following a link marks the email verified, with an opt-out
+**Context:** A reset link and a magic link are both sent to the account's address, so using one shows the user controls it. Both flows set `email_verified` for that reason. An application may want the flag to mean only "went through our verification flow", for example when it records consent there.
+**Options considered:**
+- *Always mark.* No option. The application can't keep the flag for its own flow.
+- *Never mark.* With `RequireVerified`, a user who reset their password by email would still be told to verify that same address.
+- *Mark by default, with `LeaveEmailUnverified` on both plugins.* The zero value keeps the earlier behaviour.
+**Decision:** The third, as `ResetOptions.LeaveEmailUnverified` and `magiclink.Options.LeaveEmailUnverified`. The field is phrased as the opt-out so that the zero value is the default.
+
+### The reset link is sent in the background by default
+**Context:** The request route answers the same for a known and an unknown email. A sender the request waits for is only called for a known one, so its latency shows which is which.
+**Options considered:**
+- *`Send`, as the magic link plugin defaults to.* A failed send is seen and the link revoked.
+- *`SendAsync`.* The sender is out of the response time. A failed send is logged by the mailer and the link stays valid until it expires.
+**Decision:** `SendAsync` by default, with `ResetOptions.WaitForSend` for an application whose sender only enqueues. The magic link plugin has the same option and default.
+
+### A completed reset sends a notice
+**Context:** A reset link reaches whoever reads the account's mailbox. If that is not the owner (a shared or compromised mailbox), the owner should learn that the password changed. The email change flow sends a notice for the same reason.
+**Options considered:**
+- *Leave it to a handler on `auth.passwordReset.after`.* No new mail kind. Every application has to write the same handler, and most would not.
+- *Send a `MailPasswordChanged` message with `Send`.* A failure is seen. The password is already set, so there is nothing to undo, and the reset would wait for the sender.
+- *Send it with `SendAsync`.* The reset does not wait or fail for it. A lost notice is only in the log.
+**Decision:** The third. The message has no link and no token. There is no option to turn it off: an application that does not want it returns nil for the kind in its sender.
+**Revisit if:** the notice should carry a way to act, such as a link that locks the account.

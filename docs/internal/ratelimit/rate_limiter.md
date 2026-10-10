@@ -100,6 +100,7 @@ The payload is not passed to `KeyFunc`. The firing site publishes what a rule ma
 | `auth.signUp.before` | `HookValueEmail`: the email, normalized | `Plugin.SignUp` (`publishEmail`) |
 | `auth.signIn.before` | `HookValueEmail`: the email, normalized | `Plugin.SignIn` (`publishEmail`); `magiclink.Plugin.Verify`, when the token names one |
 | `auth.magicLink.beforeRequest` | `HookValueEmail`: the email, normalized | `magiclink.Plugin.RequestLink` |
+| `auth.passwordReset.beforeRequest`, `.before` | `HookValueEmail`: the email, normalized | `emailpassword.Plugin.RequestPasswordReset`; `ResetPassword`, when the token names one |
 | `auth.emailVerification.beforeSend`, `.beforeVerify` | `HookValueEmail`: the email, normalized | `emailverification.Plugin` (`sendVerification`, `Verify`) |
 | `auth.emailChange.beforeRequest`, `.beforeConfirm`, `.beforeRevert` | `HookValueUserID`: the user whose address changes | `emailverification.Plugin` (`RequestChange`, `readChangeToken`) |
 | `auth.session.beforeCreate` | `HookValueUserID`: the user's id as a string | `DefaultSessionManager.create` |
@@ -272,7 +273,7 @@ return {count, ttl}
 
 - **There is no lockout.** `ActionLockout` and `LockoutFor` exist on the rule types, and a rule that uses the action fails at `Prepare`. A refused key is let in again when its window ends.
 - **A burst across the window boundary.** A client can make `Max` attempts at the end of one window and `Max` at the start of the next.
-- **Sign-up's limit equals sign-in's.** Sign-ups are rarer than sign-ins, so a lower number would fit; 10 a minute was chosen to match. There is no password-reset route yet, and so no rule for one.
+- **Sign-up's limit equals sign-in's.** Sign-ups are rarer than sign-ins, so a lower number would fit; 10 a minute was chosen to match. The password reset routes have rules of their own, declared by the email/password plugin when reset is on.
 - **A deployment without the `rate_limits` table and without Redis is not limited.** The counter fails, and with the default `FailOpen` the request goes through with a Warn line under the `ratelimit` component. `behemoth.ratelimit.checks{result="error"}` counts it.
 - **A hook rule keys on what its point publishes.** `HookRateLimitRule.KeyFunc` receives the `HookContext` and not the payload. Four firing sites publish values for it in `hctx.Values`; see *What a hook rule can key on*. On any other point a rule has the request and whatever an enclosing operation published.
 - **A skipped hook rule does not limit the call.** That is the point of skipping, and it means a rule attached to a point that never publishes what it reads limits nothing. `result="skipped"` in `behemoth.ratelimit.checks` shows it.

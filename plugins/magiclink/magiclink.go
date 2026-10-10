@@ -200,18 +200,18 @@ func (v *verifyInput) FromMap(map[string]any) error { return nil }
 // sender in BootConfig.Mail: the plugin sends nothing itself. The link goes
 // out as a types.MailMessage of kind types.MailMagicLink.
 type Options struct {
-	// SendInBackground chooses how the link is handed to the mail sender.
+	// WaitForSend chooses how the link is handed to the mail sender.
 	//
-	// false (the default): the request waits for the sender
-	// (Mailer.Send). A failed send revokes the link and fires
-	// auth.magicLink.requestFailed. The sender is only called for an email
-	// that has an account, so a slow one makes that request slower than a
-	// request for an unknown email.
+	// false (the default): the request returns once the message is queued
+	// (Mailer.SendAsync). A failed send is logged by the mailer. The link
+	// stays valid until it expires or the user's next request replaces it.
+	// The sender's speed then does not show in the response time, which
+	// would tell a known email from an unknown one.
 	//
-	// true: the request returns once the message is queued
-	// (Mailer.SendAsync). A failed send is logged by the mailer and the
-	// link stays valid until it expires; the user asks for another.
-	SendInBackground bool
+	// true: the request waits for the sender (Mailer.Send). A failed send
+	// revokes the link and fires auth.magicLink.requestFailed. Choose it
+	// when the sender only enqueues, so waiting costs nothing.
+	WaitForSend bool
 
 	// LinkURL is the page of the application the link points to, such as
 	// "https://app.example.com/auth/magic". Required, absolute, http or
@@ -228,6 +228,15 @@ type Options struct {
 	// route, a CLI, another plugin. It keeps one address from being sent
 	// link after link. Zero means 5 per 15 minutes.
 	RequestLimit types.Limit
+
+	// LeaveEmailUnverified turns off marking the address as verified. By
+	// default a verified link sets EmailVerified on a user who did not have
+	// it: the link was sent to the address, so following it shows the user
+	// controls it. Set it when verified should only ever mean "went through
+	// the application's own verification". A handler that refuses sign-ins
+	// of unverified users (emailverification's RequireVerified) then also
+	// refuses these.
+	LeaveEmailUnverified bool
 }
 
 // Plugin is the magic link plugin. It adds the request and verify routes,
@@ -452,10 +461,10 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 		Kind: types.MailMagicLink, To: email, URL: link.String(), Token: rawToken,
 		ExpiresAt: token.ExpiresAt, User: user, Metadata: req.Metadata,
 	}
-	if p.opts.SendInBackground {
-		err = ac.Mailer.SendAsync(hctx.Ctx, msg) // an error here means it was not queued
-	} else {
+	if p.opts.WaitForSend {
 		err = ac.Mailer.Send(hctx.Ctx, msg)
+	} else {
+		err = ac.Mailer.SendAsync(hctx.Ctx, msg) // an error here means it was not queued
 	}
 	if err != nil {
 		// A link nobody received should not stay valid.
@@ -490,7 +499,7 @@ func isTokenRejection(err error) bool {
 // The session is pending instead of active when a handler on
 // auth.signIn.credentialsVerified asked for a second factor. Following the
 // link shows the user controls the address, so a user whose email was not
-// verified is marked verified.
+// verified is marked verified, unless Options.LeaveEmailUnverified is set.
 //
 // A link that is unknown, expired, used or replaced by a newer one gets one
 // error, with the code ErrorCodeInvalidLink. So does a link of a user who
@@ -568,7 +577,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*types.Sig
 		return nil, errInvalidLink()
 	}
 
-	if !user.EmailVerified {
+	if !user.EmailVerified && !p.opts.LeaveEmailUnverified {
 		user, err = ac.Store.UpdateUser(hctx.Ctx, user.ID, behemoth.M{models.UserEmailVerified: true})
 		if err != nil {
 			return nil, err

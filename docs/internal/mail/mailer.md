@@ -32,9 +32,12 @@ The plugin chooses per operation, by what a failed send costs:
 
 | Plugin | Call | Why |
 | --- | --- | --- |
-| `magiclink`, default | `Send` | a link that was not sent is revoked and the failed point fires with `sendFailed` |
-| `magiclink`, `SendInBackground` | `SendAsync` | the application preferred a fast request |
+| `magiclink`, default | `SendAsync` | the sender's speed then does not show in the response time, which would tell a known email from an unknown one. A lost message costs a retry |
+| `magiclink`, with `WaitForSend` | `Send` | a link that was not sent is revoked and the failed point fires with `sendFailed` |
 | `emailverification`, its links | `SendAsync` | the send is triggered by a sign-up or a profile update, which should not wait for a mail provider. A lost message costs a retry, and a repeated send is harmless |
+| `emailpassword`, a password reset link, default | `SendAsync` | as for a magic link |
+| `emailpassword`, the notice that a password was reset | `SendAsync` | the password is already set, so there is nothing to undo when the notice fails |
+| `emailpassword`, with `Reset.WaitForSend` | `Send` | a link that was not sent is revoked and the failed point fires with `sendFailed` |
 | `emailverification`, the notice of an email change | `Send` | the notice is what lets the owner stop a change. If it can't be handed over, the request fails and no confirmation link is issued |
 
 ### **What `SendAsync` does**
@@ -64,12 +67,13 @@ The pool is a convenience for an application without a queue. It has no retry, n
 | `TestMailerSendWaits` | `types/init/mailer_test.go` | no sender, the sender's error returned, the metric |
 | `TestMailerSendAsync` | same | the send outlives the caller's canceled context, a failure and a panic are logged, a full queue refuses, `Close` drains and then refuses |
 | `TestMagicLinkSendsInBackground` | `tests/plugins/magiclink_test.go` | the request returns while the sender is blocked, and a failed send leaves the link valid |
+| `TestPasswordResetSendsInBackground` | `tests/plugins/passwordreset_test.go` | the same for a reset link |
 | `TestEmailVerificationAfterSignUp` | `tests/plugins/emailverification_test.go` | a sign-up returns while the sender is blocked |
 
 # **Design decisions**
 
 ### One sender for every plugin
-**Context:** The magic link plugin took a `SendLink` callback in its own options. Email verification needed to send too, and password reset will.
+**Context:** The magic link plugin took a `SendLink` callback in its own options. Email verification needed to send too, and so did password reset later.
 **Options considered:**
 - *A callback per plugin.* No shared surface. Every plugin adds an option to wire, and each defines its own message type.
 - *A mailer interface in core with SMTP and provider adapters.* Works out of the box. A large surface that every application replaces with its own provider and templates.

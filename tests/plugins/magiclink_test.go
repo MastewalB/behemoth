@@ -126,7 +126,7 @@ func TestMagicLinkRequestAndVerify(t *testing.T) {
 	type signInBefore struct{ payload, values behemoth.M }
 	var befores []signInBefore
 	var afters []any
-	app, user := bootMagicLink(t, magiclink.Options{}, func(reg types.HookRegistry) error {
+	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true}, func(reg types.HookRegistry) error {
 		if err := reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
 			befores = append(befores, signInBefore{payload, behemoth.M{hooks.HookValueEmail: hctx.Values[hooks.HookValueEmail]}})
 			return nil, nil
@@ -214,7 +214,7 @@ func TestMagicLinkRequestAndVerify(t *testing.T) {
 // unknown one and a failed send, and the verify route is a POST that
 // returns the user and the redirect.
 func TestMagicLinkRoutes(t *testing.T) {
-	app, user := bootMagicLink(t, magiclink.Options{}, nil)
+	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true}, nil)
 	request := app.mounted["/api/auth"+magiclink.PathRequest]
 	verify := app.mounted["/api/auth"+magiclink.PathVerify]
 	require.NotNil(t, request.Handler)
@@ -282,7 +282,7 @@ func TestMagicLinkRoutes(t *testing.T) {
 // answers the same for an email without an account.
 func TestMagicLinkRequestsAreLimitedPerEmail(t *testing.T) {
 	ctx := context.Background()
-	app, _ := bootMagicLink(t, magiclink.Options{RequestLimit: types.Limit{Max: 2, Window: time.Minute}}, nil)
+	app, _ := bootMagicLink(t, magiclink.Options{WaitForSend: true, RequestLimit: types.Limit{Max: 2, Window: time.Minute}}, nil)
 	limited := func(email string) bool {
 		_, err := app.plugin.RequestLink(ctx, magiclink.LinkRequest{Email: email})
 		return behemotherr.Is(err, behemotherr.CategoryRateLimited)
@@ -305,7 +305,7 @@ func TestMagicLinkRequestsAreLimitedPerEmail(t *testing.T) {
 func TestMagicLinkVerifyRefusalsAndSecondFactor(t *testing.T) {
 	ctx := context.Background()
 	stepUp := false
-	app, user := bootMagicLink(t, magiclink.Options{}, func(reg types.HookRegistry) error {
+	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true}, func(reg types.HookRegistry) error {
 		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
 			payload["requireStepUp"] = stepUp
 			return payload, nil
@@ -379,12 +379,12 @@ func TestMagicLinkOptions(t *testing.T) {
 	}
 }
 
-// With SendInBackground the request does not wait for the sender: it
+// By default the request does not wait for the sender: it
 // returns while the sender is still blocked, and a failed send leaves the
 // link valid.
 func TestMagicLinkSendsInBackground(t *testing.T) {
 	ctx := context.Background()
-	app, user := bootMagicLink(t, magiclink.Options{SendInBackground: true}, nil)
+	app, user := bootMagicLink(t, magiclink.Options{}, nil)
 	app.outbox.err = errors.New("smtp down")
 
 	app.outbox.mu.Lock() // the sender blocks until the request has returned
@@ -398,4 +398,19 @@ func TestMagicLinkSendsInBackground(t *testing.T) {
 	result, err := app.plugin.Verify(ctx, app.outbox.last(t).Token)
 	require.NoError(t, err, "the link was not revoked: nobody was waiting for the send")
 	assert.Equal(t, user.ID, result.User.ID)
+}
+
+// With LeaveEmailUnverified a magic link signs the user in and leaves the
+// verified flag as it was.
+func TestMagicLinkLeavesEmailUnverified(t *testing.T) {
+	ctx := context.Background()
+	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true, LeaveEmailUnverified: true}, nil)
+	_, err := app.plugin.RequestLink(ctx, magiclink.LinkRequest{Email: user.Email})
+	require.NoError(t, err)
+	result, err := app.plugin.Verify(ctx, app.outbox.last(t).Token)
+	require.NoError(t, err)
+	assert.False(t, result.User.EmailVerified)
+	stored, err := app.ac.Store.FindUserByID(ctx, user.ID)
+	require.NoError(t, err)
+	assert.False(t, stored.EmailVerified)
 }
