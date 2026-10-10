@@ -7,7 +7,7 @@ The project is under active development, and the API may still change.
 ## Features
 
 - **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in and sign-out. `magiclink` signs a user in with a link sent by email, and `emailverification` confirms a user's address.
-- **Migrations.** Behemoth builds a migration from the tables your plugins and your own schema declare, and writes it to a folder for you to review.
+- **Migrations.** Behemoth builds a migration from the tables your plugins and your own schema declare, and writes it to a folder for you to review. `behemoth generate` does it from your application's directory.
 - **Hooks.** Run your code before or after a user is written, or around a whole flow such as sign-up. A handler can change data, stop an operation or react afterwards.
 - **Sessions and tokens.** Sessions are stored in your database or a key-value store, and delivered as a cookie or a header.
 - **Router adapters.** Mount the routes on `net/http`, Gin, Echo, chi or Fiber.
@@ -95,6 +95,18 @@ go run . signup -email ada@example.com -password 'correct horse'
 
 `DATABASE_URL` defaults to a local PostgreSQL at `postgres://postgres:postgres@localhost:5432/behemoth`.
 
+[examples/cli](./examples/cli) is a smaller application on PostgreSQL and `net/http` whose migrations are generated with the `behemoth` command line. Its setup lives in one package that the server and the command line share.
+
+```bash
+go install ./cmd/behemoth     # the launcher, once, from the repository root
+cd examples/cli
+behemoth generate -confirm    # write the next migration to ./migrations
+psql "$DATABASE_URL" -f migrations/0001_create_accounts_and_6_more.sql
+go run .                      # Prepare + Boot, then serve HTTP
+```
+
+The comment at the top of its `main.go` has the full steps.
+
 ## Supported databases
 
 | Kind | Options |
@@ -118,6 +130,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | [Sessions](./docs/api/sessions.md) | Session settings, how the token travels (cookie, header, body), the sign-in response, protecting your own routes |
 | [Hooks](./docs/api/hooks.md) | Hook points, handlers, ordering and failure behavior |
 | [Telemetry](./docs/api/telemetry.md) | Loggers, audit, metrics, tracing and the OpenTelemetry adapter |
+| [Command line](./docs/api/cli.md) | `behemoth generate`: setup, the launcher, the draft file, running it without the launcher |
 | [Core tables](./docs/api/core-tables.md) | Writing Behemoth's tables from a plugin |
 | [MongoDB](./docs/api/mongodb.md) | What the server needs, and creating the indexes a schema declares |
 | [Internal docs](./docs/internal) | How the system works, for contributors |

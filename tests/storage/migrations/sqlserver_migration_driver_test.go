@@ -845,7 +845,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 	// being executed.
 	t.Run("RenderBaseline", func(t *testing.T) {
 		setup(t)
-		m := core.Migration{ID: "0000_baseline", IsBaseline: true, Up: tableOps(usersTable(), sqlServerAllTypesTable())}
+		m := core.Migration{ID: "0000", IsBaseline: true, Up: tableOps(usersTable(), sqlServerAllTypesTable())}
 		script, err := driver.RenderMigration(ctx, m)
 		require.NoError(t, err)
 		assert.Contains(t, script, "-- Baseline")

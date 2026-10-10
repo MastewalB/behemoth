@@ -31,6 +31,11 @@ type SchemaOperation struct {
 	Table string // table this operation targets; Also the primary signal auto-dependency-inference reads
 
 	// Only the field(s) relevant to Kind are populated. documented per Kind
+	//
+	// NewTable is created from its columns alone. Its Indexes and
+	// ForeignKeys have to be empty: each travels as an OpAddIndex or an
+	// OpAddForeignKey of its own, and MigrationGenerator rejects a table
+	// that still carries one.
 	NewTable       *schema.Table      // OpCreateTable
 	Column         *schema.Column     // OpAddColumn, OpAlterColumn
 	ColumnName     string             // OpDropColumn, OpRenameColumn (old name)

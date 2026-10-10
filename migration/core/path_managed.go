@@ -37,17 +37,37 @@ type RunResult struct {
 	Message   string // CLI-ready human text; not meant to be parsed
 }
 
-// RunMigration is the complete Path I entry point — handles BOTH greenfield
-// (no baseline candidates, falls straight into RunGenerate) and brownfield
-// (baseline runs first, then RunGenerate) cases. Superseded name for what
-// was RunBaseline, since it's no longer baseline-specific.
-func RunMigration(
+// The managed path (Path I) has two entry points, one per thing a developer
+// asks for. RunManagedGenerate writes the next migration file and never
+// changes the database. RunManagedApply applies the file that is waiting and
+// never writes one. A new migration is therefore always reviewed between the
+// two calls.
+//
+// Both start from DetermineRunState, so they agree on where a database
+// stands: untouched, waiting for its baseline to be recorded, or ongoing.
+// Both serve PathManaged alone and return a configuration error for any
+// other path, before they create the folder or read the database. Generate
+// and Migrate build deps from a Backend and call them.
+
+// RunManagedGenerate produces the next migration of the managed path: the
+// baseline of a database that already holds declared tables, or else the
+// difference between the declaration and the snapshot. Without confirmWrite
+// it reports that migration. With it, it writes the .json and its script to
+// FolderPath for review (writeForReview).
+//
+// It generates nothing while a migration on disk is unapplied: the snapshot
+// the next one is compared with would be out of date.
+func RunManagedGenerate(
 	ctx context.Context,
 	cfg MigrationConfig,
 	declared Declared,
 	deps MigrationDeps,
-	confirmApply bool,
+	confirmWrite bool,
 ) (*RunResult, error) {
+	const op = "Migration.RunManagedGenerate"
+	if err := checkPath(op, cfg, PathManaged); err != nil {
+		return nil, err
+	}
 	if err := EnsureMigrationFolder(cfg); err != nil {
 		return nil, err
 	}
@@ -58,14 +78,219 @@ func RunMigration(
 
 	switch state {
 	case StateFirstRunEmpty:
-		return runFirstTimeEmpty(ctx, cfg, declared, deps, confirmApply)
+		candidates, _, err := PartitionForBaseline(ctx, declared.Schemas, deps.Introspector)
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			return generateNext(ctx, cfg, declared, deps, confirmWrite)
+		}
+		baseline, err := buildBaselineMigrationOnly(ctx, candidates, deps)
+		if err != nil {
+			return nil, err
+		}
+		if !confirmWrite {
+			return &RunResult{Status: StatusAwaitingConfirmation, Migration: baseline,
+				Message: fmt.Sprintf("Some declared tables already exist, so the first migration is a baseline that records them (not yet written). Re-run with --confirm to write it to %s.", cfg.FolderPath)}, nil
+		}
+		written, err := writeForReview(ctx, cfg, deps, *baseline)
+		if err != nil {
+			return nil, err
+		}
+		return &RunResult{Status: StatusGenerated, Migration: baseline,
+			Message: fmt.Sprintf("Baseline migration written to %s. Review it, then run migrate to record it.", written)}, nil
+
 	case StateFirstRunAwaitingBaselineConfirm:
-		return runFirstTimeAwaitingConfirm(ctx, cfg, declared, deps, disk[0], confirmApply)
+		existing := disk[0]
+		regenerated, err := regenerateBaseline(ctx, declared, deps, existing)
+		if err != nil {
+			return nil, err
+		}
+		if migrationsEqual(existing, *regenerated) {
+			return &RunResult{Status: StatusAwaitingConfirmation, Migration: &existing,
+				Message: fmt.Sprintf("Baseline migration %s is written and waiting. Run migrate to record it.", existing.ID)}, nil
+		}
+		// Live schema drifted since the baseline was written: a stale
+		// review is never recorded. It is written again, and reviewed again.
+		if !confirmWrite {
+			return &RunResult{Status: StatusAwaitingConfirmation, Migration: regenerated,
+				Message: fmt.Sprintf("Live schema changed since baseline %s was written. Re-run with --confirm to write it again.", existing.ID)}, nil
+		}
+		written, err := writeForReview(ctx, cfg, deps, *regenerated)
+		if err != nil {
+			return nil, err
+		}
+		return &RunResult{Status: StatusGenerated, Migration: regenerated,
+			Message: fmt.Sprintf("Live schema changed since the baseline was written. It has been written again to %s. Review it, then run migrate to record it.", written)}, nil
+
 	case StateOngoing:
-		return runOngoing(ctx, cfg, declared, deps, confirmApply)
+		// Reusing Runner.Pending (dependency-ordered, ledger-diffed) rather than
+		// a naive "compare snapshot.Version to the last file" check — more
+		// robust if history is ever non-linear, and avoids duplicating logic
+		// Runner already owns correctly.
+		pending, err := deps.Runner.Pending(ctx, disk)
+		if err != nil {
+			return nil, err
+		}
+		if len(pending) > 0 {
+			next := pending[0]
+			return &RunResult{Status: StatusAwaitingConfirmation, Migration: &next,
+				Message: fmt.Sprintf("Migration %s is written and not applied yet. Run migrate before generating the next one.", next.ID)}, nil
+		}
+		return generateNext(ctx, cfg, declared, deps, confirmWrite)
+
 	default:
-		return nil, behemotherr.NewInternalError("Migration.RunMigration", fmt.Errorf("unhandled run state %q", state))
+		return nil, behemotherr.NewInternalError(op, fmt.Errorf("unhandled run state %q", state))
 	}
+}
+
+// generateNext plans the migration that follows the snapshot. Resolution's
+// own review (renames, narrowing alters) runs inside it, through the draft
+// file.
+func generateNext(ctx context.Context, cfg MigrationConfig, declared Declared, deps MigrationDeps, confirmWrite bool) (*RunResult, error) {
+	m, err := buildMigrationPlan(ctx, cfg, declared, deps.GenerateDeps, true)
+	if err != nil {
+		if behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationNothingToGenerate) {
+			return &RunResult{Status: StatusNoChanges, Message: "No schema changes detected."}, nil
+		}
+		return nil, err
+	}
+	if !confirmWrite {
+		return &RunResult{Status: StatusAwaitingConfirmation, Migration: m,
+			Message: fmt.Sprintf("Migration %s ready (not yet written). Re-run with --confirm to write it to %s.", m.ID, cfg.FolderPath)}, nil
+	}
+	written, err := writeForReview(ctx, cfg, deps, *m)
+	if err != nil {
+		return nil, err
+	}
+	return &RunResult{Status: StatusGenerated, Migration: m,
+		Message: fmt.Sprintf("Migration %s written to %s. Review it, then run migrate to apply it.", m.ID, written)}, nil
+}
+
+// writeForReview writes m and, when the driver renders, its script next to
+// it, and returns what it wrote as text for a message.
+//
+// The script is what a developer reads to review the migration. It is not
+// what gets applied: RunManagedApply runs m's operations, and checks first
+// that they still render to this script.
+//
+// It is rendered before anything is written, so a failure leaves no .json
+// without its script.
+func writeForReview(ctx context.Context, cfg MigrationConfig, deps MigrationDeps, m Migration) (string, error) {
+	ddl, err := renderMigrationDDL(ctx, m, deps.GenerateDeps.Renderer)
+	if err != nil {
+		return "", err
+	}
+	if err := writeMigrationFile(cfg, m); err != nil {
+		return "", err
+	}
+	if err := ddl.write(cfg, m); err != nil {
+		return "", err
+	}
+	if ddl == nil {
+		return migrationFilePath(cfg, m), nil
+	}
+	return fmt.Sprintf("%s, with its script at %s", migrationFilePath(cfg, m), migrationDDLPath(cfg, m, ddl.ext)), nil
+}
+
+// RunManagedApply applies the migration that is written and unapplied, or
+// records a baseline. Without confirmApply it reports which migration that
+// is. It never writes a migration file: one that does not exist yet, or a
+// baseline that no longer matches the database, is RunManagedGenerate's to
+// write.
+//
+// Before it applies, it renders the migration again and compares the result
+// with the script that was reviewed (scriptWentStale). Some drivers derive
+// statements from the live schema, so the same operations can become other
+// statements once the database has changed. A script that differs is written
+// again and nothing is applied until it has been reviewed.
+func RunManagedApply(
+	ctx context.Context,
+	cfg MigrationConfig,
+	declared Declared,
+	deps MigrationDeps,
+	confirmApply bool,
+) (*RunResult, error) {
+	const op = "Migration.RunManagedApply"
+	if err := checkPath(op, cfg, PathManaged); err != nil {
+		return nil, err
+	}
+	state, disk, err := DetermineRunState(ctx, cfg, deps)
+	if err != nil {
+		return nil, err
+	}
+
+	var next Migration
+	switch state {
+	case StateFirstRunEmpty:
+		return &RunResult{Status: StatusNoChanges, Message: "Nothing to apply: no migration has been written yet. Run generate first."}, nil
+
+	case StateFirstRunAwaitingBaselineConfirm:
+		next = disk[0]
+		regenerated, err := regenerateBaseline(ctx, declared, deps, next)
+		if err != nil {
+			return nil, err
+		}
+		if !migrationsEqual(next, *regenerated) {
+			return &RunResult{Status: StatusAwaitingConfirmation, Migration: &next,
+				Message: fmt.Sprintf("Live schema changed since baseline %s was written, so it was not recorded. Run generate with --confirm to write it again, and review it.", next.ID)}, nil
+		}
+
+	case StateOngoing:
+		pending, err := deps.Runner.Pending(ctx, disk)
+		if err != nil {
+			return nil, err
+		}
+		if len(pending) == 0 {
+			return &RunResult{Status: StatusNoChanges, Message: "Nothing to apply: every migration on disk is applied."}, nil
+		}
+		if len(pending) > 1 {
+			// Should be structurally impossible through these entry points:
+			// RunManagedGenerate refuses to produce a new file while one is
+			// pending. Surfaced rather than silently assumed away.
+			return nil, behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationMultipleUnapplied,
+				fmt.Errorf("%d unapplied migrations found — expected at most one; resolve manually", len(pending)))
+		}
+		next = pending[0]
+
+	default:
+		return nil, behemotherr.NewInternalError(op, fmt.Errorf("unhandled run state %q", state))
+	}
+
+	// A baseline is recorded, not executed: its tables already exist.
+	what, apply, applied := "Migration", "apply", "applied"
+	if next.IsBaseline {
+		what, apply, applied = "Baseline migration", "record", "recorded. The database was not changed"
+	}
+	ddl, renderErr := renderMigrationDDL(ctx, next, deps.GenerateDeps.Renderer)
+	if renderErr == nil {
+		stale, err := scriptWentStale(cfg, next, ddl)
+		if err != nil {
+			return nil, err
+		}
+		if stale {
+			return &RunResult{Status: StatusAwaitingConfirmation, Migration: &next,
+				Message: fmt.Sprintf("The database changed since %s was generated, and its operations now run as different statements. The script at %s has been written again and nothing was applied. Review it, then run migrate again.",
+					next.ID, migrationDDLPath(cfg, next, ddl.ext))}, nil
+		}
+	}
+	if !confirmApply {
+		return &RunResult{Status: StatusAwaitingConfirmation, Migration: &next,
+			Message: fmt.Sprintf("%s %s is ready. Re-run with --confirm to %s it.", what, next.ID, apply)}, nil
+	}
+	if err := deps.Runner.Apply(ctx, []Migration{next}); err != nil {
+		return nil, err
+	}
+	// The script is there already when generate wrote it. A migration file
+	// from before generate did, or one whose script was deleted, gets it
+	// now. Neither failure is fatal: Apply has committed, and a missing
+	// script must not be reported as if the migration had failed.
+	if renderErr != nil {
+		warn(ctx, deps.Telemetry, "failed to render migration script", telemetry.ErrorFields(renderErr, behemoth.M{"id": next.ID}))
+	} else if err := ddl.write(cfg, next); err != nil {
+		warn(ctx, deps.Telemetry, "failed to write migration script", telemetry.ErrorFields(err, behemoth.M{"id": next.ID}))
+	}
+	return &RunResult{Status: StatusApplied, Migration: &next, Message: fmt.Sprintf("%s %s %s.", what, next.ID, applied)}, nil
 }
 
 func buildBaselineMigrationOnly(ctx context.Context, candidates []BaselineCandidate, deps MigrationDeps) (*Migration, error) {
@@ -88,187 +313,40 @@ func buildBaselineMigrationOnly(ctx context.Context, candidates []BaselineCandid
 	return &m, nil
 }
 
-func runBaselinePhase(ctx context.Context, candidates []BaselineCandidate, cfg MigrationConfig, deps MigrationDeps) (*Migration, error) {
-
-	m, err := buildBaselineMigrationOnly(ctx, candidates, deps)
-	if err != nil {
-		return nil, err
-	}
-	if err := writeMigrationFile(cfg, *m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func runFirstTimeEmpty(
-	ctx context.Context,
-	cfg MigrationConfig,
-	declared Declared,
-	deps MigrationDeps,
-	confirmApply bool,
-) (*RunResult, error) {
+// regenerateBaseline builds the baseline again from the live database, to
+// be compared with the one on disk. A baseline that was reviewed against a
+// schema that has since changed must not be recorded.
+func regenerateBaseline(ctx context.Context, declared Declared, deps MigrationDeps, existing Migration) (*Migration, error) {
 	candidates, _, err := PartitionForBaseline(ctx, declared.Schemas, deps.Introspector)
 	if err != nil {
 		return nil, err
 	}
 	if len(candidates) == 0 {
-		// Falls straight into ordinary generation instead of forcing an empty confirmation round-trip.
-		return runOngoing(ctx, cfg, declared, deps, confirmApply)
-	}
-
-	baseline, err := runBaselinePhase(ctx, candidates, cfg, deps)
-	if err != nil {
-		return nil, err
-	}
-	return &RunResult{
-		Status:    StatusAwaitingConfirmation,
-		Migration: baseline,
-		Message:   fmt.Sprintf("Baseline migration written to %s. Review it, then re-run with --confirm to record it.", migrationFilePath(cfg, *baseline)),
-	}, nil
-}
-
-func runFirstTimeAwaitingConfirm(
-	ctx context.Context,
-	cfg MigrationConfig,
-	declared Declared,
-	deps MigrationDeps,
-	existing Migration,
-	confirmApply bool,
-) (*RunResult, error) {
-	candidates, _, err := PartitionForBaseline(ctx, declared.Schemas, deps.Introspector)
-	if err != nil {
-		return nil, err
-	}
-	if len(candidates) == 0 {
-		return nil, behemotherr.NewMigrationError("Migration.RunFirstTime", behemotherr.ErrorCodeMigrationBaselineCandidatesVanished,
+		return nil, behemotherr.NewMigrationError("Migration.regenerateBaseline", behemotherr.ErrorCodeMigrationBaselineCandidatesVanished,
 			fmt.Errorf("no baseline candidate tables found live, but %s is on disk awaiting confirmation — resolve manually", existing.ID))
 	}
-
-	regenerated, err := buildBaselineMigrationOnly(ctx, candidates, deps)
-	if err != nil {
-		return nil, err
-	}
-
-	if !migrationsEqual(existing, *regenerated) {
-		// Live schema drifted since the draft was written — never apply a
-		// stale review. Overwrite and require review again.
-		if err := writeMigrationFile(cfg, *regenerated); err != nil {
-			return nil, err
-		}
-		return &RunResult{
-			Status:    StatusAwaitingConfirmation,
-			Migration: regenerated,
-			Message:   fmt.Sprintf("Live schema changed since the baseline draft was written. %s has been regenerated — please review again.", regenerated.ID),
-		}, nil
-	}
-
-	if !confirmApply {
-		return &RunResult{
-			Status:    StatusAwaitingConfirmation,
-			Migration: &existing,
-			Message:   fmt.Sprintf("Baseline migration %s is unchanged and ready. Re-run with --confirm to apply.", existing.ID),
-		}, nil
-	}
-	if err := applyWithDDL(ctx, cfg, deps, existing); err != nil {
-		return nil, err
-	}
-	return &RunResult{
-		Status:    StatusApplied,
-		Migration: &existing,
-		Message:   fmt.Sprintf("Baseline migration %s applied.", existing.ID),
-	}, nil
+	return buildBaselineMigrationOnly(ctx, candidates, deps)
 }
 
-func runOngoing(
-	ctx context.Context,
-	cfg MigrationConfig,
-	declared Declared,
-	deps MigrationDeps,
-	confirmApply bool,
-) (*RunResult, error) {
-	disk, err := ReadDiskMigrations(cfg)
+// scriptWentStale compares ddl, m rendered against the database as it is
+// now, with the script on disk, and writes ddl in its place when they
+// differ. A migration without a script on disk, or a driver that does not
+// render, has nothing to go stale.
+func scriptWentStale(cfg MigrationConfig, m Migration, ddl *renderedDDL) (bool, error) {
+	if ddl == nil {
+		return false, nil
+	}
+	reviewed, err := os.ReadFile(migrationDDLPath(cfg, m, ddl.ext))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
 	if err != nil {
-		return nil, err
+		return false, behemotherr.NewMigrationError("Migration.scriptWentStale", behemotherr.ErrorCodeMigrationReadFileFailed, err)
 	}
-
-	// Reusing Runner.Pending (dependency-ordered, ledger-diffed) rather than
-	// a naive "compare snapshot.Version to the last file" check — more
-	// robust if history is ever non-linear, and avoids duplicating logic
-	// Runner already owns correctly.
-	pending, err := deps.Runner.Pending(ctx, disk)
-	if err != nil {
-		return nil, err
+	if string(reviewed) == ddl.body {
+		return false, nil
 	}
-
-	if len(pending) > 0 {
-		if len(pending) > 1 {
-			// Should be structurally impossible through this entry point —
-			// generation is gated (checkNoUnappliedMigrations) to refuse
-			// producing a new file while one is pending. Surfaced rather
-			// than silently assumed away if it ever happens anyway.
-			return nil, behemotherr.NewMigrationError("Migration.RunOngoing", behemotherr.ErrorCodeMigrationMultipleUnapplied,
-				fmt.Errorf("%d unapplied migrations found — expected at most one; resolve manually", len(pending)))
-		}
-		next := pending[0]
-		if !confirmApply {
-			return &RunResult{Status: StatusAwaitingConfirmation, Migration: &next,
-				Message: fmt.Sprintf("Migration %s is pending review. Re-run with --confirm to apply.", next.ID)}, nil
-		}
-		if err := applyWithDDL(ctx, cfg, deps, next); err != nil {
-			return nil, err
-		}
-		return &RunResult{
-			Status:    StatusApplied,
-			Migration: &next,
-			Message:   fmt.Sprintf("Migration %s applied.", next.ID),
-		}, nil
-	}
-
-	// Nothing pending — safe to generate a new one. Resolution's own
-	// interactive review (renames, narrowing alters) still runs INSIDE
-	// RunGenerate; that is a separate, inner confirmation layer from the
-	// outer confirmApply gate this function enforces.
-	m, err := RunGenerate(ctx, cfg, declared, deps.GenerateDeps, true)
-	if err != nil {
-		if behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationNothingToGenerate) {
-			return &RunResult{Status: StatusNoChanges, Message: "No schema changes detected."}, nil
-		}
-		return nil, err
-	}
-	// [Design fork, resolved conservatively] confirmApply does NOT
-	// short-circuit generate-then-apply in one call, even if it's already
-	// true — a brand-new, unreviewed file always requires a separate
-	// invocation before it can be applied, same as Branch A/B. This trades
-	// a faster one-shot path for a strictly enforced "every file survives
-	// at least one review round-trip" guarantee. Flagging in case a
-	// single-shot mode is actually wanted — that would be a deliberate,
-	// separate opt-in flag, not a side effect of confirmApply.
-	return &RunResult{Status: StatusAwaitingConfirmation, Migration: m,
-		Message: fmt.Sprintf("Migration %s written to %s. Review it, then re-run with --confirm to apply.", m.ID, migrationFilePath(cfg, *m))}, nil
-}
-
-// applyWithDDL applies m and writes its script next to its .json file.
-//
-// The script is rendered BEFORE Apply — some renderers derive statements from
-// the live schema, which must still be in its pre-migration state — but only
-// written AFTER Apply succeeds, so a script only ever exists for a migration
-// that actually ran. Rendering and writing are both non-fatal: once Apply has
-// committed, a missing script must not be reported as if the migration failed.
-func applyWithDDL(ctx context.Context, cfg MigrationConfig, deps MigrationDeps, m Migration) error {
-	ddl, renderErr := renderMigrationDDL(ctx, m, deps.GenerateDeps.Renderer)
-
-	if err := deps.Runner.Apply(ctx, []Migration{m}); err != nil {
-		return err
-	}
-
-	if renderErr != nil {
-		warn(ctx, deps.Telemetry, "failed to render migration script", telemetry.ErrorFields(renderErr, behemoth.M{"id": m.ID}))
-		return nil
-	}
-	if err := ddl.write(cfg, m); err != nil {
-		warn(ctx, deps.Telemetry, "failed to write migration script", telemetry.ErrorFields(err, behemoth.M{"id": m.ID}))
-	}
-	return nil
+	return true, ddl.write(cfg, m)
 }
 
 func warn(ctx context.Context, tel *telemetry.Telemetry, msg string, fields behemoth.M) {
@@ -294,6 +372,17 @@ func DetermineRunState(ctx context.Context, cfg MigrationConfig, deps MigrationD
 		return StateFirstRunEmpty, disk, nil
 	case !tableExists && len(disk) == 1 && disk[0].IsBaseline:
 		return StateFirstRunAwaitingBaselineConfirm, disk, nil
+	case !tableExists && len(disk) == 1:
+		// A new database after its first run: that run wrote this migration
+		// for review, and the ledger table does not exist yet because
+		// drivers create it with the first migration they record. The
+		// ordinary flow finds the file pending and applies it once the run
+		// is confirmed.
+		//
+		// A file that was applied by hand before the application moved to
+		// this path lands here too. Applying it again fails in the database
+		// (the tables exist) and nothing is recorded.
+		return StateOngoing, disk, nil
 	case !tableExists:
 		// Edge case: "folder has multiple migration files but no table"
 		// NOT handled. There is no safe way to guess whether these files
@@ -325,8 +414,13 @@ func BuildBaselineMigration(tables map[string]schema.Table) Migration {
 
 	for _, table := range names {
 		ts := tables[table]
+		// Neither is inline, as in a planned migration (checkNoInlineIndexes,
+		// checkNoInlineForeignKeys). The operations below carry them, and
+		// the snapshot is built from the operations: an index left on the
+		// table would be recorded twice.
 		bare := ts
-		bare.ForeignKeys = nil // never inline, per checkNoInlineForeignKeys' invariant
+		bare.Indexes = nil
+		bare.ForeignKeys = nil
 		up = append(up, SchemaOperation{
 			ID:        baselineTableID(table),
 			Kind:      OpCreateTable,
@@ -357,7 +451,11 @@ func BuildBaselineMigration(tables map[string]schema.Table) Migration {
 	}
 
 	return Migration{
-		ID:         "0000_baseline",
+		// The ID is the number alone, as for every migration: the snapshot's
+		// version is this ID, and checkNoUnappliedMigrations compares it
+		// with the number a file name starts with (LatestMigrationID). The
+		// file is 0000_baseline.json.
+		ID:         "0000",
 		Name:       "baseline",
 		Up:         up,
 		Down:       nil,

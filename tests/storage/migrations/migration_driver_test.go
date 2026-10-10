@@ -59,6 +59,11 @@ func TestPostgreSQLDriver(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		readBackThroughAdapter(t, postgres.NewPostgreSQLDriver(db, nil), testutils.SetupPostgresAdapter(db))
 	})
+
+	t.Run("MigrationBackend", func(t *testing.T) {
+		require.NoError(t, tm.DropAllTables(ctx))
+		migrationBackendPostgres(t, db)
+	})
 }
 
 // TestMySQLDriver runs the database-agnostic suite, then the MySQL-specific

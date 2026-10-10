@@ -28,6 +28,9 @@ func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, p
 	if err := checkNoInlineForeignKeys(resolvedPlan); err != nil {
 		return nil, err
 	}
+	if err := checkNoInlineIndexes(resolvedPlan); err != nil {
+		return nil, err
+	}
 	if err := checkCustomCollisions(resolvedPlan); err != nil {
 		return nil, err
 	}
@@ -59,7 +62,7 @@ func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, p
 	id := nextMigrationID(previousMigrationID)
 	return &Migration{
 		ID:        id,
-		Name:      id,
+		Name:      migrationName(resolvedPlan, id),
 		Up:        up,
 		Down:      down,
 		DependsOn: dependsOnList(previousMigrationID),
@@ -303,6 +306,35 @@ func checkNoInlineForeignKeys(resolved *ResolvedOperationSet) error {
 			if op.Kind == OpCreateTable && op.NewTable != nil && len(op.NewTable.ForeignKeys) > 0 {
 				return behemotherr.NewInternalError("MigrationGenerator.checkNoInlineForeignKeys",
 					fmt.Errorf("%s: operation %q (CreateTable %q) carries inline ForeignKeys. Planning must emit these as separate AddForeignKey operations",
+						source, op.ID, op.Table))
+			}
+		}
+		return nil
+	}
+
+	if err := check(resolved.Operations, "resolved.Operations"); err != nil {
+		return err
+	}
+
+	for _, c := range resolved.Custom {
+		if err := check(c.Up, "custom migration "+c.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkNoInlineIndexes is checkNoInlineForeignKeys for indexes. No driver
+// creates a table's indexes in its CREATE TABLE, so an index left on the
+// table of an OpCreateTable would be missing from the database without an
+// error, and on the managed path the snapshot would list it all the same.
+// Each index has to arrive as its own OpAddIndex.
+func checkNoInlineIndexes(resolved *ResolvedOperationSet) error {
+	check := func(ops []SchemaOperation, source string) error {
+		for _, op := range ops {
+			if op.Kind == OpCreateTable && op.NewTable != nil && len(op.NewTable.Indexes) > 0 {
+				return behemotherr.NewInternalError("MigrationGenerator.checkNoInlineIndexes",
+					fmt.Errorf("%s: operation %q (CreateTable %q) carries inline Indexes. Planning must emit these as separate AddIndex operations",
 						source, op.ID, op.Table))
 			}
 		}

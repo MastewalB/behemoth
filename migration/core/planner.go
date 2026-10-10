@@ -35,8 +35,14 @@ func BuildPlan(report *IntrospectionReport, current schema.Registry) (*Migration
 		if !ti.ExistsLive {
 			declared, _ := current.Lookup(table)
 
-			// separate foreign key creation from table create operation
+			// The table is created from its columns alone. Its indexes and
+			// foreign keys are operations of their own, and the table in the
+			// create operation carries neither: no driver creates them in
+			// its CREATE TABLE, and on the managed path the snapshot is
+			// built from these operations, so an index left on the table
+			// would be recorded without ever being created.
 			bare := declared
+			bare.Indexes = nil
 			bare.ForeignKeys = nil
 			plan.Operations = append(plan.Operations, PlannedOperation{
 				Operation: SchemaOperation{
@@ -48,6 +54,12 @@ func BuildPlan(report *IntrospectionReport, current schema.Registry) (*Migration
 				Source: "generated",
 			})
 
+			// On a table that does not exist every declared index is missing,
+			// so they are planned as a missing index of an existing table is.
+			plan.Operations = append(plan.Operations, planIndexes(table, diffIndexes(declared.Indexes, nil, false))...)
+
+			// A foreign key apart from its table also lets two new tables
+			// reference each other.
 			for _, fk := range declared.ForeignKeys {
 				plan.Operations = append(plan.Operations, PlannedOperation{
 					Operation: SchemaOperation{

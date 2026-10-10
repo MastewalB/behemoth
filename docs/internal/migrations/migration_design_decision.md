@@ -24,8 +24,9 @@ Behemoth might provide tool-specific generation (for goose or golang-migrate for
 | Package | Holds |
 | --- | --- |
 | `types/schema` | The declaration vocabulary shared across packages: `schema.Table`, `Column`, `Index`, `ForeignKey`, `ColumnOverride`, the `ColumnType` and `FK*` action constants, the contribution types, and `schema.Registry` (`DefaultRegistry`, `NewRegistry`). `[Convention, important]` It must never import `types` — it sits below it so `PluginInitContext` can carry a registry without an import cycle. |
-| `migration/core` | Everything about migrating: operations, `Migration`, `MigrationConfig`, `CustomMigration`, introspection/diff, planning, resolution, generation, the runner, `BuildSchemaResolverTable`, and the driver capability interfaces below. |
-| `storage/adapters/postgres`, `storage/adapters/sqlite`, `storage/adapters/mysql`, `storage/adapters/sqlserver` | One module per database, each holding the `behemoth.Database` adapter **and** the migration driver, built with the same `SchemaResolver` so application queries and migrations agree on physical names. SQLite is its own module so only applications using it link `go-sqlite3` (and therefore cgo). |
+| `migration/core` | Everything about migrating: operations, `Migration`, `MigrationConfig`, `CustomMigration`, introspection/diff, planning, resolution, generation, the runner, `BuildSchemaResolverTable`, the driver capability interfaces below, and `Backend` with `Generate` and `Migrate`, which bundle those capabilities and pick the entry point by path (see *Entry points*). |
+| `storage/adapters/postgres`, `storage/adapters/sqlite`, `storage/adapters/mysql`, `storage/adapters/sqlserver` | One module per database, each holding the `behemoth.Database` adapter **and** the migration driver, built with the same `SchemaResolver` so application queries and migrations agree on physical names. SQLite is its own module so only applications using it link `go-sqlite3` (and therefore cgo). The Postgres module also has `MigrationBackend`, which returns both as one `core.Backend`. |
+| `cli`, `cmd/behemoth` | The command line: the commands as a library an application links, and the launcher that builds that link for it. Described in [`cli.md`](cli.md). |
 
 ### **Declaration**
 
@@ -37,7 +38,40 @@ Tables are declared once, during `Prepare` (`types/init`), into a single registr
 
 `Prepare` then freezes the registry and derives the `SchemaResolver` from it (`BuildSchemaResolverTable`). `[Convention, important]` The resolver is therefore complete **before** any adapter or migration driver exists; the application builds both with `PreparedApp.Resolver`. Migration tooling calls `Prepare` only — it never needs `Boot` or a running application.
 
-Every migration entry point (`RunGenerateCLI`, `RunGenerate`, `RunMigration`) takes the declaration as one value, `core.Declared{Schemas, Custom}`, which `PreparedApp.Declared()` builds (see *Custom Migrations*). Introspection and baselining use only `Declared.Schemas`.
+Every migration entry point (`Generate`, `Migrate`, and `RunGenerateCLI`, `RunManagedGenerate`, `RunManagedApply` below them) takes the declaration as one value, `core.Declared{Schemas, Custom}`, which `PreparedApp.Declared()` builds (see *Custom Migrations*). Introspection and baselining use only `Declared.Schemas`.
+
+### **Entry points**
+
+```go
+func Generate(ctx context.Context, cfg MigrationConfig, declared Declared, backend Backend, opts RunOptions) (*RunResult, error)
+func Migrate(ctx context.Context, cfg MigrationConfig, declared Declared, backend Backend, opts RunOptions) (*RunResult, error)
+```
+
+These two are the entry points for an application or the command line. They follow what a developer does: `Generate` writes the next migration and never changes the database, and `Migrate` applies what `Generate` wrote.
+
+| | `PathGenerateOnly` | `PathManaged` |
+| --- | --- | --- |
+| `Generate` | `RunGenerateCLI`: compares with the live database | `RunManagedGenerate`: compares with the snapshot |
+| `Migrate` | configuration error: the application applies the files with its own tool | `RunManagedApply` |
+| Needs from `Backend` | `Introspector`; `Renderer` for a script | `Introspector`, `Driver` and `DB`; `Renderer` likewise |
+
+`opts.Confirm` means the same on every cell: without it the call reports what it would do, with it `Generate` writes the file and `Migrate` applies it.
+
+`Backend` is one database's side of a run in one value. A dialect module returns it from one constructor (`postgres.MigrationBackend(db, resolver)`), so the caller no longer passes the same driver three times and builds the runner itself. `core` still imports no database: the fields are its own interfaces.
+
+Both build what the paths share and the caller used to wire by hand: the `FilePresenter` on `DraftPath(cfg)` (`draft.json` inside `FolderPath`), the `DefaultMigrationGenerator` and, for `PathManaged`, the `MigrationRunner`. One presenter serves both the baseline and the generation after it, as `MigrationDeps` requires.
+
+`[Convention]` Both return a configuration error, before they create the folder or read the database, when `Declared.Schemas` or `Backend.Introspector` is nil, when `PathManaged` lacks `Driver` or `DB`, or when the path is unknown.
+
+`[Convention]` `RunGenerateCLI`, `RunManagedGenerate` and `RunManagedApply` stay exported for a caller that brings its own presenter, generator or runner. Each refuses another path's configuration (`checkPath`). Before that check, `RunGenerateCLI` with a managed configuration dereferenced the nil `Runner`.
+
+### Generating and applying are separate entry points on the managed path
+**Context:** the managed path used to have one entry point, `RunMigration`, driven by one `confirm` flag. A run wrote the next migration, and the next confirmed run applied it. What a call did depended on the state it found, so the same command with the same flag sometimes wrote a file and sometimes changed the schema.
+**Options considered:**
+- *Keep one entry point and one command.* Nothing to change. A developer cannot ask for one of the two things, and a command named after either half misdescribes the other.
+- *Two entry points.* `generate` means the same on both paths, and `migrate` can refuse an application on `PathGenerateOnly` outright.
+**Decision:** two. `RunManagedGenerate` writes and never touches the database. `RunManagedApply` applies or records and never writes a file. The rule that a migration is reviewed before it is applied is now structural: no single call does both. `Generate` also previews on the managed path now, as on the other: before, a managed run wrote its file without being asked to confirm.
+**Revisit if:** a one-shot mode for CI is wanted. It would be a third call that composes the two.
 
 ### **Driver capabilities**
 
@@ -601,7 +635,7 @@ This stage converts the Introspection Report's divergences and ambiguities into 
 
 #### **Branch - Table-Level Divergences**
 
-- **Fresh table (declared, missing live)** → `OpCreateTable` candidate. `[Tier: Auto]`. If the table has a foreign key declaration, a separate operation for the foreign key will be created for it to prevent cycle. 
+- **Fresh table (declared, missing live)** → `OpCreateTable` candidate. `[Tier: Auto]`. The table in it carries columns only. Each declared index becomes its own `OpAddIndex` and each foreign key its own `OpAddForeignKey`, both `[Tier: Auto]` (see *Indexes of a new table are operations of their own* in the Generation stage). 
 - **Table found live, matches** → no candidate generated.
 - **Table found live, incompatible object** (Introspection's VIEW-vs-TABLE case) `[Tier: Manual]` → blocking; no candidate generated, Plan won't proceed for that table until resolved outside the tool. `[Convention]`
 
@@ -773,6 +807,16 @@ type ResolvedOperationSet struct {
 
 This stage generates the migration object with ordered list of schema operations.
 
+### A migration's name is derived from its operations
+**Context:** a file is named `<ID>_<Name>`. The generator set the name to the ID, so every generated file was `0001_0001.json`, and a folder of them said nothing about what each migration does.
+**Options considered:**
+- *Drop the name when it equals the ID* (`0001.json`). Shortest, and no more telling.
+- *Derive it from the operations.* Readable without any input, and the same for a preview and the confirmed run after it.
+- *Ask the developer for it.* The best names, and one more thing to supply on every run.
+**Decision:** derive it (`migrationName` in `naming.go`). One operation is named by its kind and target (`add_column_users_plan`), several on one table by the table (`alter_notes`), new tables by their names (`create_users_sessions`), a mix by the tables it touches (`update_notes_users`), and a migration of custom migrations only by the first of their names. Beyond three tables the name is the first and a count (`create_accounts_and_6_more`). Tables are sorted first, because the planner walks a map. The name is reduced to lower-case letters, digits and underscores and cut to 60 characters. The baseline keeps its fixed name, `baseline`.
+`[Convention, important]` The ID is the number alone and is the only identity: the ledger, the snapshot's version, `DependsOn`, `LatestMigrationID` and the file pattern read nothing else. The name is read by nothing but the file name. Files generated before this change (`0001_0001.json`) carry their name inside and keep working.
+**Revisit if:** developers want to name migrations themselves. A `-name` flag on `generate` would override the derived name.
+
 ### Overall Steps 
 1. Build dependency-graph with structural and explicit edges and create topological ordering
 2. Build reverse operations for each schema operation 
@@ -790,6 +834,15 @@ This stage generates the migration object with ordered list of schema operations
 
 The dependency ordering logic should support logically valid cyclic dependencies, such as two tables with foreign keys referencing each other. Naively creating each table with its foreign key constraint can fail because neither table can be created before the other. Instead, the generator should create all cyclic tables without their foreign key constraints first, then add those constraints afterward using `ALTER TABLE`. This allows both tables to be created successfully while preserving the intended foreign key relationships.
 	***The fix - Put Foreign Key declarations separate from `CreateTable`** - The planner will put the two operations separately.*  **`OpCreateTable` will not carry foreign keys in its `NewTable.ForeignKeys`.**
+
+### Indexes of a new table are operations of their own
+**Context:** no driver creates a table's indexes in its `CREATE TABLE`: each builder reads the columns and the primary key and nothing else. `BuildPlan` used to leave a new table's indexes on the table inside `OpCreateTable` and plan nothing for them. The first migration of a new database therefore created no declared index, unique ones included (`uq_tokens_kind_lookup_hash`, `uq_accounts_provider_account`). On `PathGenerateOnly` a second run found them missing and added them. On `PathManaged` the snapshot recorded the table with its indexes, so no later diff would have.
+**Options considered:**
+- *Have every driver create `t.Indexes` in its create-table builder.* Four implementations, each with its own rules for an index (MySQL's prefix lengths, SQL Server's NULL filter), next to the `OpAddIndex` builders that already have them.
+- *Plan one `OpAddIndex` per index.* One change in `core`. It is what the drivers' comments, `BuildBaselineMigration` and the hand-built schemas of the test suites already assumed.
+**Decision:** the planner. For a new table `BuildPlan` clears `Indexes` and `ForeignKeys` on the table it puts in `OpCreateTable`, and plans the indexes with `planIndexes`, the function that plans a missing index of an existing table, so both cases produce the same operation and the same ID (`add_index_<table>_<index>`). Rule 1 orders each after its table's creation. `BuildBaselineMigration` clears `Indexes` too: it already emitted the separate operations, and the snapshot, which is built from the operations, listed each index twice. `checkNoInlineIndexes` makes the generator reject an `OpCreateTable` that still carries an index, as `checkNoInlineForeignKeys` does for foreign keys, so a hand-written custom migration fails instead of losing its indexes.
+`[Convention]` A database whose tables were created by an earlier first migration needs no special step: the next `generate` finds the indexes missing and adds them.
+`TestPlannedTablesGetTheirIndexes` in the driver suite runs the planner's own output through each driver and expects the indexes to exist and a second plan to be empty.
 
 #### **Branch - Explicit Edge Declaration**
 
@@ -828,17 +881,20 @@ The dependency ordering logic should support logically valid cyclic dependencies
 
 # **Runner Stage — Path I _(Apply)_**
 
-**Purpose:** the complete Path I entry point, covering both greenfield (no live tables yet) and brownfield (adopting tables that already exist live) cases under a single orchestrator. This is the stage where a schema change reaches the database by executing the DDL and write to the ledger/snapshot tables.`[Convention, important]`
+**Purpose:** the Path I entry points, covering both greenfield (no live tables yet) and brownfield (adopting tables that already exist live) cases. This is the stage where a schema change reaches the database by executing the DDL and write to the ledger/snapshot tables.`[Convention, important]`
 
 ### **Entry Point**
 
 ```go
-func RunMigration(ctx context.Context, cfg MigrationConfig, declared Declared, deps MigrationDeps, confirmApply bool) (*RunResult, error)
+func RunManagedGenerate(ctx context.Context, cfg MigrationConfig, declared Declared, deps MigrationDeps, confirmWrite bool) (*RunResult, error)
+func RunManagedApply(ctx context.Context, cfg MigrationConfig, declared Declared, deps MigrationDeps, confirmApply bool) (*RunResult, error)
 ```
+
+The steps below are shared out between the two. `RunManagedGenerate` does the detection, the introspection and the writing of a baseline (Steps 1, 2 and the first half of 4) and the ordinary generation (Step 5). `RunManagedApply` does the detection again and the recording or applying. The table under *Execution Flow* lists what each does in each state.
 
 ### **Step 0 - Precondition**
 
-`[Convention]` Only reachable when `MigrationConfig.Path == PathManaged`. Path II will stop at Generate Stage.
+`[Convention]` Only reachable when `MigrationConfig.Path == PathManaged`. Path II will stop at Generate Stage. Both entry points enforce this themselves: any other path is a configuration error, returned before the folder is created.
 
 ### **Step 1 - Folder & Candidate Detection**
 
@@ -871,26 +927,28 @@ This is a mandatory stage with no bypass, `[Convention, important]`, split into 
 
 ### **Step 4 - Recording**
 
-`BuildBaselineMigration(tables map[string]schema.Table) Migration` constructs one `Migration{ID: "0000_baseline", IsBaseline: true}` whose `Up` comprehensively reflects the recorded state: one `OpCreateTable` per table, plus separate `OpAddIndex`/`OpAddForeignKey` operations for every index and foreign key on that table.
+`BuildBaselineMigration(tables map[string]schema.Table) Migration` constructs one `Migration{ID: "0000", Name: "baseline", IsBaseline: true}` (the file is `0000_baseline.json`) whose `Up` comprehensively reflects the recorded state: one `OpCreateTable` per table, plus separate `OpAddIndex`/`OpAddForeignKey` operations for every index and foreign key on that table. The table in `OpCreateTable` carries neither.
+
+`[Convention, important]` A migration's ID is its number alone, and the baseline's is `0000`. The runner stores the ID as the snapshot's version, and `checkNoUnappliedMigrations` compares that version with the number a file name starts with (`LatestMigrationID`). The baseline's ID used to be `0000_baseline`: the two never matched, so every run after a recorded baseline was refused as if a migration were unapplied.
 
 `[Convention, important]` The recorded tables come from the introspection report (`introspectedShape`): a column that **matched** its declaration is recorded **as declared**, everything else as found live — see *Column Comparison → Baseline recording*. Tables are sorted by name and columns, indexes and foreign keys keep declaration order, so rebuilding the baseline gives an identical migration (it is regenerated and compared with the confirmed file before being recorded).
 
-`[Convention]` `OpCreateTable.NewTable.ForeignKeys` is always empty here to prevent table-foreign-key cycles.
+`[Convention]` `OpCreateTable.NewTable.ForeignKeys` is always empty here to prevent table-foreign-key cycles. `NewTable.Indexes` is empty too, so the snapshot built from the operations lists each index once.
 
 Before the migration is applied, the user can review and edit the file. Then `deps.Runner.Apply(ctx, []Migration{baselineMigration})` is called with this single migration. Because `IsBaseline` is `true`, the Runner's `applyOne` routes it to `driver.RecordBaseline` instead of `driver.ApplyMigration` — see Execution Semantics below for exactly what this means and does not mean.
 
 
 ## **Step 5 - Ordinary Flow Takeover**
 
-`[Convention, important]` Regardless of whether the Baseline Phase ran, `RunMigration`'s final action is always a direct call to `RunGenerate(ctx, cfg, declared, deps.GenerateDeps, interactive)`. This applies both to greenfield and brownfield cases. Any divergence between what baseline recorded and what `current` actually declares surfaces here, through the ordinary Planning/Resolution machinery, as the first real generated migration.
+`[Convention, important]` Once nothing is waiting to be applied, `RunManagedGenerate` plans the next migration from the snapshot (`generateNext`), whether or not a baseline was recorded before. This applies both to greenfield and brownfield cases. Any divergence between what baseline recorded and what `current` actually declares surfaces here, through the ordinary Planning/Resolution machinery, as the first real generated migration.
 
 ## **Execution Semantics - `ApplyMigration` vs. `RecordBaseline`**
 
 `[Convention, important]` This is the mechanism that makes "replay produces accurate state" true without literally re-executing history:
 
 - **`ApplyMigration`** (every ordinary migration): executes every operation in `Up` as real DDL against the live database, atomically with the ledger insert and snapshot upsert, per the driver's own `AtomicityLevel`.
-- **`RecordBaseline`** (the `0000_baseline` migration only): writes the ledger row and the snapshot upsert with the **exact same atomicity contract**, but executes **zero** schema-modifying statements. The tables already exist live; issuing `CREATE TABLE` against them would simply fail.
-- **What "replay" actually means, precisely stated:** nothing re-runs `0000_baseline`'s DDL. What is reproduced accurately is the **in-memory snapshot projection** — `applyOperationsToSnapshot` computes the resulting canonical state from a migration's `Up` operations identically whether that migration was really executed or only recorded. The distinction between "did DDL happen" and "is the snapshot accurate" is what allows baseline to seed history without rewriting it.
+- **`RecordBaseline`** (the baseline migration, `0000`, only): writes the ledger row and the snapshot upsert with the **exact same atomicity contract**, but executes **zero** schema-modifying statements. The tables already exist live; issuing `CREATE TABLE` against them would simply fail.
+- **What "replay" actually means, precisely stated:** nothing re-runs the baseline's DDL. What is reproduced accurately is the **in-memory snapshot projection** — `applyOperationsToSnapshot` computes the resulting canonical state from a migration's `Up` operations identically whether that migration was really executed or only recorded. The distinction between "did DDL happen" and "is the snapshot accurate" is what allows baseline to seed history without rewriting it.
 
 ## Path I / II Divergence Rule - `trackExtraColumns`
 
@@ -912,6 +970,8 @@ type MigrationDeps struct {
 
 `[Convention]` `Presenter` is duplicated as a field only to make the Baseline Phase's dependency explicit without reaching into `GenerateDeps` — it must always be the same concrete instance, and not a second, independently-configured presenter, or Steps 3 and 5 would write to two different draft files in one run.
 
+`Generate` and `Migrate` fill this struct from a `Backend` and satisfy the rule above by construction (see *Entry points*).
+
 ## Helper - `snapshotAsRegistry`
 
 `[Implementation Detail]` Adapts a persisted `SchemaSnapshot` into the read-only `schema.Registry` shape `FromSnapshotDiff` expects as "previous." `Declare`/`ExtendColumn`/`ExtendIndex` are unreachable on this adapter — it exists purely to carry values for a diff, never to accept new registrations, and returns an `Internal`-classified error if called, since that should never happen given how it's constructed.
@@ -921,16 +981,36 @@ type MigrationDeps struct {
 
 ## **Path Managed - I**
 
-1. Run Command
-2. `RunMigration` - Check run state, whether run is called for the first time or not. This check is performed by checking existence of the Ledger table. 
-	1. **First Time Run**
-		1. Empty Migration Folder - Run `PartitionForBaseline` to check if there are baseline candidates. If there are, proceed with baseline migration, otherwise, i.e. if no tables exist, proceed to `RunGenerate` from scratch
-		2. Folder has a single baseline migration file - If a single baseline migration is found in the folder, it means a first run has been made and was awaiting a confirmation. For maximum correctness, a baseline migration is generated afresh and compared with the user confirmed file. This will catch live state modifications in-between the two runs. If the state has changed, a new migration is regenerated and written, waiting for confirmation. Otherwise, the baseline migration is applied.
-	2. Not a First Time Run - The normal generate route continues (Check pending -> Apply Pending if any(with confirmation)  -> `RunGenerate` - {Plan -> Resolve -> Generate})
+Both commands start by reading the run state (`DetermineRunState`): whether the ledger table exists, and which files are in the folder.
+
+| State | `generate` (`RunManagedGenerate`) | `migrate` (`RunManagedApply`) |
+| --- | --- | --- |
+| No ledger, empty folder, no declared table exists | Plans the first migration from scratch. Writes it with `--confirm`. | Nothing to apply. |
+| No ledger, empty folder, declared tables exist | Builds the baseline from the live tables (`PartitionForBaseline`, `buildBaselineMigrationOnly`). Writes it with `--confirm`. | Nothing to apply. |
+| No ledger, one baseline file | Builds the baseline again and compares. Unchanged: reports that it is waiting. Changed: writes it again with `--confirm`, to be reviewed again. | Builds the baseline again and compares. Unchanged: records it with `--confirm` (`RecordBaseline`, no DDL). Changed: refuses, and points to `generate`. |
+| No ledger, one file that is not a baseline | Reports that it is waiting to be applied. | Applies it with `--confirm`. The driver creates the ledger with it. |
+| No ledger, several files | Error, `unapplied_migrations_no_ledger`. | The same error. |
+| Ledger, no files | Error, `ledger_without_files`. | The same error. |
+| Ledger and files, one unapplied | Reports that it is waiting. Generates nothing: the snapshot the next migration is compared with would be out of date. | Applies it with `--confirm`, after the script check below. |
+| Ledger and files, all applied | Plans the next migration from the snapshot. Writes it with `--confirm`, or reports no changes. | Nothing to apply. |
+
+`[Convention, important]` A stale baseline is never recorded. Both commands build the baseline again from the live database and compare it with the file on disk, because the file is a record of the database as it was reviewed. Only `generate` writes the new one.
+
+### The managed path writes the script at generate, and checks it at migrate
+**Context:** the managed path used to render a migration's script just before applying it and write it just after, so that a script only existed for a migration that ran. With generating and applying apart, the review between them had the `.json` alone to go by.
+**Options considered:**
+- *Write it at generate only.* The script could then differ from what was executed: SQLite's table rebuilds, most SQL Server operations and MySQL's index on a text column derive statements from the live schema, which can change before `migrate` runs.
+- *Write it at generate and overwrite it at migrate.* The file ends up as what ran, but what ran was never reviewed.
+- *Write it at generate, and have migrate compare.* `migrate` renders again against the database as it is and applies only when the result equals the script on disk.
+**Decision:** the third. `RunManagedGenerate` writes the `.json` and the script together (`writeForReview`), rendering first so that a failure writes neither, as `RunGenerateCLI` does. `RunManagedApply` renders again and compares byte for byte (`scriptWentStale`). The header carries the migration's `CreatedAt`, which is in the file, so an unchanged migration renders identically. On a difference it writes the new script, applies nothing and reports it; the next `migrate` finds them equal. This is the baseline's rule applied to scripts: what is applied is what was reviewed. On PostgreSQL the script is built from the operations alone and cannot differ.
+`[Convention]` A migration without a script on disk is applied without the check and gets its script then: a driver that does not render, a file from before this change, or a script someone deleted. A render failure at `migrate` is a warning, as before.
+`[Convention, important]` The script on this path is a rendering for review. `migrate` applies the operations in the `.json`. Running the script by hand leaves the ledger without the migration, and the next `migrate` applies it again.
+
+`[Convention]` The fourth row is a new database after its first `generate`: no ledger table exists yet because drivers create it with the first migration they record. `DetermineRunState` returns the ongoing state for it. Several files without a ledger are still refused: the tool never leaves that state behind. `[Known limitation]` A single file that was applied by hand, before the application moved to this path, is taken for unapplied too. Applying it fails in the database because its tables exist, and on a driver with full atomicity nothing is recorded.
 
 ## **Path Generate-Only - II**
 
-1. Run command — the application calls `Prepare` (not `Boot`), builds the migration driver with `PreparedApp.Resolver`, and calls `RunGenerateCLI(ctx, app.Migration, app.Declared(), deps, confirmWrite)`.
+1. Run command — the application calls `Prepare` (not `Boot`), builds the migration backend with `PreparedApp.Resolver`, and calls `Generate(ctx, app.Migration, app.Declared(), backend, RunOptions{Confirm: confirmWrite})`, which calls `RunGenerateCLI`. `behemoth generate` is this step as a command (see [`cli.md`](cli.md)).
 2. Introspect the live database against `Declared.Schemas` (`trackExtraColumns = false`), normalizing declarations through the driver's `ColumnNormalizer`; reject unmappable types.
 3. Plan → attach pending custom migrations → Resolve (draft file) → Generate.
 4. Without `confirmWrite`: report the migration that would be written. With it: render the script first (a render failure writes nothing), then write the `.json` and the script to `FolderPath`. Applying it is the developer's own tool's job.
@@ -953,7 +1033,7 @@ type CustomMigration struct {
 
 ### **Stage 0 - Declaration**
 
-- The application declares custom migrations in `PrepareConfig.Migrations`. `Prepare` carries them on `PreparedApp.Custom`, and `PreparedApp.Declared()` pairs them with the frozen schema registry into `core.Declared{Schemas, Custom}`, the single input every migration entry point takes (`RunGenerateCLI`, `RunGenerate`, `RunMigration`).
+- The application declares custom migrations in `PrepareConfig.Migrations`. `Prepare` carries them on `PreparedApp.Custom`, and `PreparedApp.Declared()` pairs them with the frozen schema registry into `core.Declared{Schemas, Custom}`, the single input every migration entry point takes (see *Entry points*).
 - `Prepare` validates them up front, before plugin ordering, via `ValidateCustomMigrations`. Each rule fails `Prepare` with a configuration error:
 	- every custom migration has a non-empty `Name`, and names are unique
 	- every operation, in `Up` and `Down`, has a non-empty `ID`
@@ -986,6 +1066,7 @@ type CustomMigration struct {
 Checks, before the graph is built (both abort generation):
 
 - **Inline foreign keys:** `checkNoInlineForeignKeys` covers each custom migration's `Up`. An `OpCreateTable` carrying `ForeignKeys` is rejected, and the foreign key must be authored as its own `OpAddForeignKey`, same as the planner's output.
+- **Inline indexes:** `checkNoInlineIndexes` does the same for `Indexes`. No driver creates them from the table, so each must be authored as its own `OpAddIndex`.
 - **Collisions with generated operations:** `checkCustomCollisions` rejects a custom migration whose `Name`, or any `Up`/`Down` operation ID, equals a generated operation ID in this plan. Once frozen, `Up` and `Down` are flat lists, and `Down` construction, rendering and the runner all key on operation IDs, so two operations with one ID cannot coexist in a migration.
 
 Dependency graph:
