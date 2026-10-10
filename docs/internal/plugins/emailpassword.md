@@ -29,6 +29,8 @@ Compare with a plugin such as the example `activity` (`examples/init/plugin.go`)
 
 `signUpBody` and `signInBody` are methods on the plugin, which `Init` wraps with `WithLifecycle`. `signUpBody` reads the options; `signInBody` reads none today and is a method so both flows have the same shape.
 
+Sign-up stores `email`, the password hash and three profile fields: `firstname`, `lastname` and `image_url`. It has no username: the username plugin adds the column and fills it from its own handlers; see [`username.md`](username.md).
+
 The wrapped flows are reached through two exported methods, `Plugin.SignUp(ctx, input)` and `Plugin.SignIn(ctx, creds)`. Each builds the flow's `HookContext` (`Plugin.operation`): the `AuthContext` kept by `Init`, the request found on `ctx` or nil, and `Values` copied from the operation `ctx` belongs to, if any. The route handlers call these methods with `rctx.Ctx`, so a route, a CLI and another plugin all enter the flow the same way. Called before `Boot` has run `Init`, they return a configuration error.
 
 Before entering the wrapped flow, both put the email they were called with in `Values` under `hooks.HookValueEmail`, in its stored form (`publishEmail`, which uses `store.NormalizeEmail`). A rate-limit rule on `auth.signUp.before` or `auth.signIn.before` keys on it, since a rule's `KeyFunc` does not get the payload. A call without an email leaves no entry, and `publishEmail` removes one copied from an enclosing operation, so a rule per email does not apply to that call.
@@ -52,6 +54,24 @@ Rules that follow from the two methods:
 - The payload is a copy. A handler's write does not reach the map the caller passed.
 - `Extra` is replaced, not merged, on the way back. A key a handler deleted is gone, and `Extra` is nil when no other key is left.
 - A missing or null `email` or `password` becomes an empty string, which sign-in refuses with `invalid_credentials`. A value of another type is a validation error (`400`), from the route's body and from a handler's rewrite alike.
+
+### Sign-in by another identifier
+
+`signInBody` takes an `IdentifierCredentials`, not an `EmailAndPasswordCredentials`. Its first step is `creds.Find(ctx, store, value)`, and everything after it is the same for every identifier: the hash for an unknown user, the credential account, the password check, `auth.signIn.credentialsVerified` and the session.
+
+| Entry point | `Key` | `Find` | Publishes |
+| --- | --- | --- | --- |
+| `Plugin.SignIn(ctx, EmailAndPasswordCredentials)` | `email` | `Store.FindUserByEmail` | `HookValueEmail`, normalized (`publishEmail`) |
+| `Plugin.SignInWith(ctx, IdentifierCredentials)` | the caller's, such as `username` | the caller's | `Value` under `Key`, as it is; removes an inherited `HookValueEmail` |
+
+- **`IdentifierCredentials` is `Serializable`,** by the rules of the table above: the payload is flat, with `Value` under `Key`. `FromMap` reads `Value`, `Password` and `Extra` back and keeps `Key`, `Method` and `Find`, so a handler can rewrite the identifier and can't change how it is looked up. The two types share `credentialFields`.
+- **`Find` is a function and is not in the payload.** The hook payload stays plain data.
+- **`SignIn` builds the same struct** with an unexported `normalize`, which keeps the email in a failed sign-in's audit metadata lowercased as before. `SignInWith` clears it: a caller's value is recorded as given.
+- **`SignInWith` refuses a `Key` that is empty or `password`, and a nil `Find`,** with a configuration error.
+- **The refusal's message names the key** (`invalid username or password`). The code is `invalid_credentials` for all.
+- **`SignInResult.Method` is `creds.Method`,** or this plugin's name when it is empty.
+
+The username plugin is the one caller; see [`username.md`](username.md) for the decision.
 
 `SignOut` is an exported function that takes a `HookContext` and only uses the `AuthContext` on it, so other plugins can call it. It turns the context into one operation with `types.AsOperation`.
 

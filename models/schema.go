@@ -23,7 +23,6 @@ func UserTableSchema() schema.Table {
 		Columns: []schema.Column{
 			{Name: UserID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true, Public: true},
 			{Name: UserEmail, Type: schema.ColTypeString, Length: 255, Unique: true, Public: true},
-			{Name: UserUsername, Type: schema.ColTypeString, Length: 255, Nullable: true, Public: true},
 			{Name: UserFirstname, Type: schema.ColTypeString, Length: 255, Nullable: true, Public: true},
 			{Name: UserLastname, Type: schema.ColTypeString, Length: 255, Nullable: true, Public: true},
 			{Name: UserEmailVerified, Type: schema.ColTypeBoolean, Default: false, Public: true},

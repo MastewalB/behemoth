@@ -6,7 +6,7 @@ The project is under active development, and the API may still change.
 
 ## Features
 
-- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in, sign-out and password reset. `magiclink` signs a user in with a link sent by email, and `emailverification` confirms a user's address.
+- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in, sign-out and password reset. `magiclink` signs a user in with a link sent by email, `emailverification` confirms a user's address, and `username` adds sign-in by username to `emailpassword`.
 - **Migrations.** Behemoth builds a migration from the tables your plugins and your own schema declare, and writes it to a folder for you to review. `behemoth generate` does it from your application's directory.
 - **Hooks.** Run your code before or after a user is written, or around a whole flow such as sign-up. A handler can change data, stop an operation or react afterwards.
 - **Sessions and tokens.** Sessions are stored in your database or a key-value store, and delivered as a cookie or a header.
@@ -123,6 +123,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | Page | Covers |
 | --- | --- |
 | [Email and password](./docs/api/emailpassword.md) | The plugin's options, routes and hook points |
+| [Username](./docs/api/username.md) | Usernames on top of email and password: the rules, sign-up, sign-in by username and rate limits |
 | [Magic link](./docs/api/magiclink.md) | Sign-in by emailed link: setup, sending the link, routes, redirects and rate limits |
 | [Email verification](./docs/api/emailverification.md) | Confirming a user's address: when a link is sent, routes, requiring a verified email, and changing an address safely |
 | [Mail](./docs/api/mail.md) | The mail sender plugins use, and waiting or background sends |

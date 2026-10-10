@@ -44,7 +44,7 @@ type Plugin struct {
 	authContext *types.AuthContext
 	log         telemetry.Logger
 	signUp      func(hctx *types.HookContext, in behemoth.M) (*models.User, error)
-	signIn      func(hctx *types.HookContext, in EmailAndPasswordCredentials) (*SignInResult, error)
+	signIn      func(hctx *types.HookContext, in IdentifierCredentials) (*SignInResult, error)
 
 	// Set by Init when reset is enabled, nil otherwise.
 	resetURL     *url.URL
@@ -259,6 +259,73 @@ func (c *EmailAndPasswordCredentials) ToMap() (map[string]any, error) {
 // which is replaced. A missing or null email or password is left empty, for
 // sign-in to refuse; one that is not a string is a validation error.
 func (c *EmailAndPasswordCredentials) FromMap(data map[string]any) error {
+	email, password, extra, err := credentialFields(credentialEmailKey, data)
+	if err != nil {
+		return err
+	}
+	c.Email, c.Password, c.Extra = email, password, extra
+	return nil
+}
+
+// IdentifierCredentials is the input of SignInWith: a sign-in by password
+// for a user who is named by something other than an email. The username
+// plugin signs in with it, with Key "username".
+//
+// It implements [behemoth.Serializable]. The auth.signIn.before payload is
+// flat, like an email sign-in's: Value under Key, "password", and the keys
+// of Extra. Method and Find are not part of it.
+type IdentifierCredentials struct {
+	// Key names the identifier: the payload key Value sits under, and the
+	// HookContext.Values key it is published under for rate-limit rules.
+	// Required, and not "password".
+	Key string
+	// Value is the identifier the caller sent, in the form a rule should
+	// count it by: SignInWith publishes it as it is.
+	Value    string
+	Password string
+	// Extra holds input only handlers on auth.signIn.before read, as in
+	// EmailAndPasswordCredentials.
+	Extra behemoth.M
+	// Method is the SignInResult's Method: the name of the plugin that
+	// calls SignInWith. Empty means this plugin's.
+	Method string
+	// Find looks the user up by the identifier, after the before chain, so
+	// value is what the handlers left. It returns a NotFound error when no
+	// user matches; any other error is a failure of the system. Required.
+	Find func(ctx context.Context, s *store.Store, value string) (*models.User, error)
+
+	// normalize puts Value in the form a failed sign-in's audit event
+	// records. nil = as it is.
+	normalize func(string) string
+}
+
+// ToMap returns the credentials as a hook payload: a copy of Extra with Key
+// and "password" set from the fields, so a key of Extra with one of those
+// names does not replace them.
+func (c *IdentifierCredentials) ToMap() (map[string]any, error) {
+	m := make(map[string]any, len(c.Extra)+2)
+	maps.Copy(m, c.Extra)
+	m[c.Key], m[credentialPasswordKey] = c.Value, c.Password
+	return m, nil
+}
+
+// FromMap sets Value, Password and Extra from a rewritten payload, by the
+// rules of EmailAndPasswordCredentials.FromMap. Key, Method and Find are
+// kept: a handler can't change how the user is looked up.
+func (c *IdentifierCredentials) FromMap(data map[string]any) error {
+	value, password, extra, err := credentialFields(c.Key, data)
+	if err != nil {
+		return err
+	}
+	c.Value, c.Password, c.Extra = value, password, extra
+	return nil
+}
+
+// credentialFields reads a sign-in's fields from a request body or a
+// payload: the identifier under key, "password", and every other key as the
+// extra input. A missing or null identifier or password is empty; one that
+// is not a string is a validation error.
+func credentialFields(key string, data map[string]any) (value, password string, extra behemoth.M, err error) {
 	field := func(key string) (string, error) {
 		switch v := data[key].(type) {
 		case nil:
@@ -269,18 +336,14 @@ func (c *EmailAndPasswordCredentials) FromMap(data map[string]any) error {
 			return "", behemotherr.NewValidationError("emailpassword.SignIn", key, fmt.Errorf("%s must be a string", key))
 		}
 	}
-	email, err := field(credentialEmailKey)
-	if err != nil {
-		return err
+	if value, err = field(key); err != nil {
+		return "", "", nil, err
 	}
-	password, err := field(credentialPasswordKey)
-	if err != nil {
-		return err
+	if password, err = field(credentialPasswordKey); err != nil {
+		return "", "", nil, err
 	}
-
-	var extra behemoth.M
 	for k, v := range data {
-		if k == credentialEmailKey || k == credentialPasswordKey {
+		if k == key || k == credentialPasswordKey {
 			continue
 		}
 		if extra == nil {
@@ -288,8 +351,7 @@ func (c *EmailAndPasswordCredentials) FromMap(data map[string]any) error {
 		}
 		extra[k] = v
 	}
-	c.Email, c.Password, c.Extra = email, password, extra
-	return nil
+	return value, password, extra, nil
 }
 
 // Codes of the errors sign-up returns for its own rejections. A client
@@ -378,7 +440,6 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 	// only once the transaction has committed.
 	profile := func(key string) string { v, _ := userData[key].(string); return strings.TrimSpace(v) }
 	user := &models.User{
-		Username:  profile(models.UserUsername),
 		Firstname: profile(models.UserFirstname),
 		Lastname:  profile(models.UserLastname),
 		ImageUrl:  profile(models.UserImageURL),
@@ -451,20 +512,31 @@ const ErrorCodeInvalidCredentials = "invalid_credentials"
 // not tell which emails have an account. It is typed (unauthorized, 401), so
 // a caller can tell it from a failure of the system, which is any other
 // error SignIn returns apart from a hook handler's typed rejection.
-func errInvalidCredentials() error {
-	return behemotherr.NewUnauthorized("emailpassword.SignIn", ErrorCodeInvalidCredentials, "invalid email or password")
+//
+// identifier is the credentials' Key, for the message: "invalid email or
+// password", "invalid username or password". The code is the same for all.
+func errInvalidCredentials(identifier string) error {
+	return behemotherr.NewUnauthorized("emailpassword.SignIn", ErrorCodeInvalidCredentials, "invalid "+identifier+" or password")
 }
 
-func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCredentials) (*SignInResult, error) {
+// signInBody is the one sign-in by password. How the user is found is the
+// credentials' (creds.Find): by email for SignIn, by another plugin's
+// identifier for SignInWith. Everything after the lookup is the same.
+func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials) (*SignInResult, error) {
 	ac := hctx.Auth
 	hasher := ac.Crypto.Passwords
 	dispatcher := ac.Dispatcher
-	user, err := ac.Store.FindUserByEmail(hctx.Ctx, creds.Email) // the store normalizes the email
+	errInvalidCredentials := func() error { return errInvalidCredentials(creds.Key) }
+	user, err := creds.Find(hctx.Ctx, ac.Store, creds.Value)
 	if err != nil {
 		hashPassword(hctx, creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
+			attempted := creds.Value
+			if creds.normalize != nil {
+				attempted = creds.normalize(attempted)
+			}
 			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
-				Code: "userNotFound", Metadata: behemoth.M{hooks.HookValueEmail: strings.ToLower(strings.TrimSpace(creds.Email))},
+				Code: "userNotFound", Metadata: behemoth.M{creds.Key: attempted},
 			}); err != nil {
 				return nil, err
 			}
@@ -534,7 +606,11 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds EmailAndPasswordCrede
 		return nil, err
 	}
 
-	return &SignInResult{User: user, Session: session, RawToken: rawToken, Method: PluginName}, nil
+	method := creds.Method
+	if method == "" {
+		method = PluginName
+	}
+	return &SignInResult{User: user, Session: session, RawToken: rawToken, Method: method}, nil
 }
 
 // SignInResult is types.SignInResult, the result every sign-in plugin
@@ -544,8 +620,8 @@ type SignInResult = types.SignInResult
 
 // SignUp creates a user with an email and a password, and the user's
 // credential account. input holds the sign-up fields under their column
-// names ("email", "password", and optionally "username", "firstname",
-// "lastname", "image_url"); other keys are not stored, but handlers on
+// names ("email", "password", and optionally "firstname", "lastname",
+// "image_url"); other keys are not stored, but handlers on
 // auth.signUp.before see them. It fires auth.signUp.before, .after and
 // .failed.
 //
@@ -579,6 +655,48 @@ func (p *Plugin) SignIn(ctx context.Context, creds EmailAndPasswordCredentials) 
 		return nil, err
 	}
 	publishEmail(hctx, creds.Email)
+	return p.signIn(hctx, IdentifierCredentials{
+		Key: credentialEmailKey, Value: creds.Email, Password: creds.Password, Extra: creds.Extra,
+		Find: func(ctx context.Context, s *store.Store, email string) (*models.User, error) {
+			return s.FindUserByEmail(ctx, email) // the store normalizes the email
+		},
+		normalize: store.NormalizeEmail,
+	})
+}
+
+// SignInWith is SignIn for a user named by something other than an email:
+// creds.Find looks the user up, and the password check, the second-factor
+// checkpoint and the session are this plugin's, as in SignIn. It fires the
+// same auth.signIn.* points, and answers a user Find does not know, a user
+// without a password and a wrong password with the same typed error.
+//
+// It is how a plugin adds an identifier without checking passwords itself:
+// the username plugin's sign-in is a call of it. That plugin names this one
+// in PluginMeta.Dependencies and is given it at construction.
+//
+// creds.Value is published in the operation's Values under creds.Key, where
+// a rate-limit rule on auth.signIn.before keys on it. No email is published:
+// it is not known before the lookup, so a rule per email does not count
+// these sign-ins.
+func (p *Plugin) SignInWith(ctx context.Context, creds IdentifierCredentials) (*SignInResult, error) {
+	const op = "emailpassword.SignInWith"
+	hctx, err := p.operation(ctx, op)
+	if err != nil {
+		return nil, err
+	}
+	if creds.Key == "" || creds.Key == credentialPasswordKey {
+		return nil, behemotherr.NewConfigurationError(op, fmt.Sprintf("IdentifierCredentials.Key %q can't name an identifier", creds.Key), nil)
+	}
+	if creds.Find == nil {
+		return nil, behemotherr.NewConfigurationError(op, "IdentifierCredentials.Find is not set", nil)
+	}
+	creds.normalize = nil
+	delete(hctx.Values, hooks.HookValueEmail) // an enclosing operation's, not this sign-in's
+	if creds.Value == "" {
+		delete(hctx.Values, creds.Key)
+	} else {
+		hctx.Values[creds.Key] = creds.Value
+	}
 	return p.signIn(hctx, creds)
 }
 

@@ -104,7 +104,7 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 			require.Equal(t, []string{"user"}, slices.Collect(maps.Keys(signedUp)), "a sign-up creates no session: %s", w.Body.String())
 			user := signedUp["user"]
 			assert.ElementsMatch(t,
-				[]string{"id", "email", "username", "firstname", "lastname", "email_verified", "image_url", "created_at", "updated_at"},
+				[]string{"id", "email", "firstname", "lastname", "email_verified", "image_url", "created_at", "updated_at"},
 				slices.Collect(maps.Keys(user)), "the user is keyed by column name")
 			assert.Equal(t, "ada@example.com", user["email"])
 			assert.Equal(t, false, user["email_verified"])
@@ -401,7 +401,7 @@ ALTER TABLE users ADD COLUMN risk_note TEXT;`)
 		}, 5*time.Second, time.Millisecond, "no %s message", kind)
 		return found
 	}
-	wantColumns := []string{"id", "email", "username", "firstname", "lastname", "email_verified", "image_url", "created_at", "updated_at", "plan", "beta"}
+	wantColumns := []string{"id", "email", "firstname", "lastname", "email_verified", "image_url", "created_at", "updated_at", "plan", "beta"}
 	check := func(route string, w *httptest.ResponseRecorder, wantStatus int) {
 		t.Helper()
 		require.Equal(t, wantStatus, w.Code, "%s: %s", route, w.Body.String())

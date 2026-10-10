@@ -43,6 +43,16 @@ func (s *Store) FindUserByEmail(ctx context.Context, email string) (*models.User
 	return s.findUser(ctx, eq(models.UserEmail, NormalizeEmail(email)))
 }
 
+// FindUserBy returns the user whose column holds value, compared as it is:
+// the caller passes value in its stored form. column is a canonical column
+// name, one of the table's own or one a plugin contributed. It is for a
+// plugin that identifies users by a column of its own, as the username
+// plugin does; the column should be unique, since one of several matching
+// rows is returned otherwise. A NotFound error means no user matches.
+func (s *Store) FindUserBy(ctx context.Context, column string, value any) (*models.User, error) {
+	return s.findUser(ctx, eq(column, value))
+}
+
 // UpdateUser applies updates (canonical column names, e.g. models.UserEmail)
 // to the user with id — after BeforeUpdate hooks, which may rewrite them —
 // stamps updated_at, and returns the stored user. The caller's map is never

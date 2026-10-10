@@ -51,7 +51,7 @@ func TestPublicView(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := behemoth.M{
-		"id": "u1", "email": "ada@example.com", "username": "", "firstname": "Ada", "lastname": "",
+		"id": "u1", "email": "ada@example.com", "firstname": "Ada", "lastname": "",
 		"email_verified": true, "image_url": "", "created_at": at, "updated_at": at,
 		"plan": "pro", "beta": true, "unset": nil,
 	}

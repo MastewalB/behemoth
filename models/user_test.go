@@ -10,7 +10,7 @@ import (
 // The column constants are the single source of the users table's names:
 // ToMap must produce exactly them, and FromMap must read every one back.
 func TestUserColumnsAreTheConstants(t *testing.T) {
-	want := []string{UserID, UserEmail, UserUsername, UserFirstname, UserLastname,
+	want := []string{UserID, UserEmail, UserFirstname, UserLastname,
 		UserEmailVerified, UserImageURL, UserCreatedAt, UserUpdatedAt}
 	row, err := (&User{}).ToMap()
 	if err != nil {
@@ -32,7 +32,7 @@ func TestUserColumnsAreTheConstants(t *testing.T) {
 
 func TestUserRoundTrip(t *testing.T) {
 	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
-	in := &User{ID: "u1", Email: "a@example.com", Username: "a", Firstname: "A", Lastname: "B",
+	in := &User{ID: "u1", Email: "a@example.com", Firstname: "A", Lastname: "B",
 		EmailVerified: true, ImageUrl: "i", CreatedAt: now, UpdatedAt: now}
 	row, err := in.ToMap()
 	if err != nil {

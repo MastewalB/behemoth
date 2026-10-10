@@ -10,6 +10,8 @@ The code lives in:
 - `plugins/adapters/{gin,echo,chi,fiber}` — one `FrameworkDriver` per framework, each in its own module
 - `plugins/adapters/nethttp` — the `FrameworkDriver` for the standard library's `*http.ServeMux`, a package of the root module
 
+Two guideline documents apply to anyone who adds or changes a route: [`../guidelines/http_contract.md`](../guidelines/http_contract.md) for what a client depends on, and [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md) for what belongs in a handler and what belongs in the flow behind it.
+
 ### **Ownership boundary**
 
 `[Convention, important]` Behemoth never owns the HTTP server. The application creates its framework instance (`*gin.Engine`, `*echo.Echo`, `chi.Router`, `*http.ServeMux`, `*fiber.App`), registers its own routes on it, and hands it to `Boot` wrapped in an adapter:

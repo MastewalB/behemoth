@@ -18,6 +18,8 @@ ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{ /* ... */ })
 
 The plugin's name is `emailpassword` (`emailpassword.PluginName`). Use it in `PluginMeta.Dependencies` to build on the plugin, and in `HookOptions.Before`/`After` to order a handler around it.
 
+To let users sign in with a username as well, add the [username](username.md) plugin.
+
 A user who signs up starts with `EmailVerified` false. To confirm addresses, add the [email verification](emailverification.md) plugin: it sends the link without any change here, and can refuse sign-ins until the address is confirmed.
 
 ## Options
@@ -55,7 +57,7 @@ The routes sit directly under the router's base path.
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `POST /sign-up/email` | `email`, `password`, and optionally `username`, `firstname`, `lastname`, `image_url` | `201` with `{"user": {...}}`. Other fields in the body are ignored. |
+| `POST /sign-up/email` | `email`, `password`, and optionally `firstname`, `lastname`, `image_url` | `201` with `{"user": {...}}`. Other fields in the body are not stored by this plugin. A plugin can take one: the [username](username.md) plugin stores `username`. |
 | `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
 | `POST /sign-out` | none; needs a valid session | `200` with `{"status": "signed_out"}`, and the session is revoked. With a cookie transport the response also removes the cookie. |
 
@@ -145,6 +147,27 @@ default:
 	// a hook's rejection, a rate limit, or a failure such as a database outage
 }
 ```
+
+### Signing in by another identifier
+
+`SignInWith` is `SignIn` for a user who is named by something other than an email. A plugin that adds an identifier calls it and supplies the lookup. The password check, the second-factor checkpoint, the session and the `auth.signIn.*` points are the same as for `SignIn`. The [username](username.md) plugin signs in this way:
+
+```go
+result, err := plugin.SignInWith(ctx, emailpassword.IdentifierCredentials{
+	Key:      "username", // the payload key, and the Values key for rate-limit rules
+	Value:    name,
+	Password: password,
+	Method:   "username", // SignInResult.Method
+	Find: func(ctx context.Context, s *store.Store, value string) (*models.User, error) {
+		return s.FindUserBy(ctx, "username", value)
+	},
+})
+```
+
+- `Find` returns a NotFound error for an unknown identifier. Sign-in then answers `invalid_credentials`, as for a wrong password.
+- Handlers on `auth.signIn.before` see `Value` under `Key`, where an email sign-in has `email`. `Find` gets the value they left.
+- `Value` is published in `Values` under `Key` as it is, so pass it in the form a rate-limit rule should count by. No email is published.
+- The error message names the key: `invalid username or password`.
 
 `emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points. It writes nothing to a response, so the session's cookie stays with its browser. A route of yours that calls it for the caller's own session removes the cookie afterwards with `ac.SessionManager.ClearToken(rctx)`; see [Sessions](sessions.md#writing-a-route-that-ends-the-session).
 

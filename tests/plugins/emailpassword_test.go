@@ -38,7 +38,7 @@ import (
 
 const schema = `
 CREATE TABLE users (
-	id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, username TEXT, firstname TEXT, lastname TEXT,
+	id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, firstname TEXT, lastname TEXT,
 	email_verified BOOLEAN NOT NULL DEFAULT 0, image_url TEXT,
 	created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL);
 CREATE TABLE accounts (

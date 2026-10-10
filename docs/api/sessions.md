@@ -89,7 +89,6 @@ A user is keyed by its column names, the same names a request uses:
 {
   "id": "8b41bcc4-81f3-46a4-920a-9326d9cb01a1",
   "email": "ada@example.com",
-  "username": "",
   "firstname": "Ada",
   "lastname": "",
   "email_verified": false,

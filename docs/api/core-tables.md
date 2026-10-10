@@ -38,7 +38,7 @@ Nothing enforces this. The adapter accepts any declared model, and a write to a 
 
 ### What a client sees of a user
 
-Every route that returns a user answers with the user's **public columns** and nothing else. Core's own nine columns are public. A column you add to `users` is private until you say otherwise, where you declare it:
+Every route that returns a user answers with the user's **public columns** and nothing else. Core's own eight columns are public. A column you add to `users` is private until you say otherwise, where you declare it:
 
 ```go
 var Plan = schema.Field[string]{Table: models.UserTable, Name: "plan"}

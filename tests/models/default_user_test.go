@@ -17,7 +17,6 @@ var schema = `
 CREATE TABLE users (
 	id TEXT PRIMARY KEY,
 	email TEXT UNIQUE NOT NULL,
-	username TEXT UNIQUE NOT NULL,
 	firstname TEXT,
 	lastname TEXT,
 	email_verified TEXT,
@@ -31,7 +30,6 @@ func newTestUser(id string) *models.User {
 	return &models.User{
 		ID:            id,
 		Email:         fmt.Sprintf("user%s@example.com", id),
-		Username:      fmt.Sprintf("user%s", id),
 		Firstname:     "John",
 		Lastname:      "Doe",
 		EmailVerified: false,
@@ -43,12 +41,11 @@ func newTestUser(id string) *models.User {
 
 func insertUser(t *testing.T, db *sql.DB, u *models.User) {
 	_, err := db.Exec(`INSERT INTO users 
-		(id, email, username, firstname, lastname, email_verified, image_url, created_at, updated_at) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, email, firstname, lastname, email_verified, image_url, created_at, updated_at) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`,
 		u.ID,
 		u.Email,
-		u.Username,
 		u.Firstname,
 		u.Lastname,
 		u.EmailVerified,
@@ -73,7 +70,6 @@ func TestCreateUser(t *testing.T) {
 		Scan(
 			&u.ID,
 			&u.Email,
-			&u.Username,
 			&u.Firstname,
 			&u.Lastname,
 			&u.EmailVerified,
@@ -83,7 +79,7 @@ func TestCreateUser(t *testing.T) {
 		)
 	assert.NoError(t, err)
 	assert.Equal(t, user.Email, u.Email)
-	assert.Equal(t, user.Username, u.Username)
+	assert.Equal(t, user.Firstname, u.Firstname)
 }
 
 func TestReadUser(t *testing.T) {
@@ -97,7 +93,6 @@ func TestReadUser(t *testing.T) {
 		Scan(
 			&u.ID,
 			&u.Email,
-			&u.Username,
 			&u.Firstname,
 			&u.Lastname,
 			&u.EmailVerified,
@@ -117,11 +112,11 @@ func TestUpdateUser(t *testing.T) {
 	user := newTestUser("3")
 	insertUser(t, db, user)
 
-	// Update username and email_verified
-	newUsername := "newuser3"
+	// Update firstname and email_verified
+	newFirstname := "Jane"
 	newVerified := "true"
-	_, err := db.Exec("UPDATE users SET username=?, email_verified=?, updated_at=? WHERE id=?",
-		newUsername, newVerified, time.Now().Format(time.RFC3339), user.ID)
+	_, err := db.Exec("UPDATE users SET firstname=?, email_verified=?, updated_at=? WHERE id=?",
+		newFirstname, newVerified, time.Now().Format(time.RFC3339), user.ID)
 	assert.NoError(t, err)
 
 	var u models.User
@@ -129,7 +124,6 @@ func TestUpdateUser(t *testing.T) {
 		Scan(
 			&u.ID,
 			&u.Email,
-			&u.Username,
 			&u.Firstname,
 			&u.Lastname,
 			&u.EmailVerified,
@@ -139,7 +133,7 @@ func TestUpdateUser(t *testing.T) {
 		)
 
 	assert.NoError(t, err)
-	assert.Equal(t, newUsername, u.Username)
+	assert.Equal(t, newFirstname, u.Firstname)
 	assert.True(t, u.EmailVerified)
 }
 
@@ -170,11 +164,10 @@ func TestDuplicateEmailFails(t *testing.T) {
 
 	insertUser(t, db, user1)
 	_, err := db.Exec(`INSERT INTO users 
-		(id, email, username, firstname, lastname, email_verified, image_url, created_at, updated_at) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(id, email, firstname, lastname, email_verified, image_url, created_at, updated_at) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, user2.ID,
 		user2.Email,
-		user2.Username,
 		user2.Firstname,
 		user2.Lastname,
 		user2.EmailVerified,
@@ -184,29 +177,4 @@ func TestDuplicateEmailFails(t *testing.T) {
 	)
 
 	assert.Error(t, err, "expected duplicate email constraint violation")
-}
-
-func TestDuplicateUsernameFails(t *testing.T) {
-	db := testutils.SetupSQLiteTestDBWithSchema(t, schema)
-
-	user1 := newTestUser("7")
-	user2 := newTestUser("8")
-	user2.Username = user1.Username // duplicate username
-
-	insertUser(t, db, user1)
-
-	_, err := db.Exec(`INSERT INTO users 
-		(id, email, username, firstname, lastname, email_verified, image_url, created_at, updated_at) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, user2.ID,
-		user2.Email,
-		user2.Username,
-		user2.Firstname,
-		user2.Lastname,
-		user2.EmailVerified,
-		user2.ImageUrl,
-		user2.CreatedAt,
-		user2.UpdatedAt,
-	)
-	assert.Error(t, err, "expected duplicate username constraint violation")
 }

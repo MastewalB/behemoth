@@ -40,7 +40,7 @@ func (d *recordingDispatcher) Fail(*types.HookContext, types.HookPoint, types.Fa
 }
 
 func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
-	d := &recordingDispatcher{rewrite: behemoth.M{models.UserUsername: "from-hook"}}
+	d := &recordingDispatcher{rewrite: behemoth.M{models.UserFirstname: "from-hook"}}
 	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	ctx := context.Background()
 
@@ -48,7 +48,7 @@ func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row[models.UserUsername] != "from-hook" {
+	if row[models.UserFirstname] != "from-hook" {
 		t.Errorf("BeforeCreate did not return the dispatcher's rewrite: %v", row)
 	}
 	h.AfterCreate(ctx, store.New(nil), "users", &models.User{})

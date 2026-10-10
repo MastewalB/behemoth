@@ -66,7 +66,7 @@ A model has two serializations, and neither is what a route should send:
 Both carry every column. A route answers with a third form, `AuthContext.Public.Of(model)`, which is `ToMap()` reduced to the columns the table declares public:
 
 1. `schema.Column` has a `Public` flag. It is false unless the declarer sets it, for a table's own columns and for a contribution alike.
-2. `models.UserTableSchema` marks the nine user columns. No other core table marks any.
+2. `models.UserTableSchema` marks the eight user columns. No other core table marks any.
 3. `Boot` builds `types.NewPublicView(app.Schemas.All())`: for each merged table, the public columns by name.
 4. `Of(m)` calls `m.ToMap()`, keeps the public columns of `m.SchemaName()`, and passes each value through `schema.Normalize`.
 
@@ -74,7 +74,7 @@ Both carry every column. A route answers with a third form, `AuthContext.Public.
 
 | Model | `Of` returns |
 | --- | --- |
-| a user | the nine core columns, plus the contributed columns marked `Public` |
+| a user | the eight core columns, plus the contributed columns marked `Public` |
 | a session, an account, a token | an empty map: their tables declare nothing public |
 | a model whose table was not declared | a configuration error |
 

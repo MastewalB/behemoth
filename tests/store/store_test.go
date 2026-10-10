@@ -41,7 +41,7 @@ func usersDB(t *testing.T) behemoth.Database {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(`CREATE TABLE users (
-		id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, username TEXT, firstname TEXT, lastname TEXT,
+		id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, firstname TEXT, lastname TEXT,
 		email_verified BOOLEAN NOT NULL DEFAULT 0, image_url TEXT,
 		created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL)`)
 	require.NoError(t, err)
@@ -194,7 +194,7 @@ func TestCreateUserAssignsIDTimestampsAndNormalizedEmail(t *testing.T) {
 	ctx := context.Background()
 	s := store.New(usersDB(t), store.WithClock(fixedClock(t0)), store.WithIDs(sequentialIDs()))
 
-	u := &models.User{Email: "  Ada@Example.COM ", Username: "ada"}
+	u := &models.User{Email: "  Ada@Example.COM ", Firstname: "ada"}
 	require.NoError(t, s.CreateUser(ctx, u))
 	assert.Equal(t, "id-1", u.ID)
 	assert.Equal(t, "ada@example.com", u.Email)
@@ -207,22 +207,22 @@ func TestCreateUserAssignsIDTimestampsAndNormalizedEmail(t *testing.T) {
 
 	byID, err := s.FindUserByID(ctx, "id-1")
 	require.NoError(t, err)
-	assert.Equal(t, "ada", byID.Username)
+	assert.Equal(t, "ada", byID.Firstname)
 }
 
 func TestCreateUserRunsHooks(t *testing.T) {
 	ctx := context.Background()
-	h := &recordingHooks{rewrite: behemoth.M{models.UserUsername: "from-hook"}}
+	h := &recordingHooks{rewrite: behemoth.M{models.UserFirstname: "from-hook"}}
 	s := store.New(usersDB(t), store.WithHooks(h))
 
-	u := &models.User{Email: "a@example.com", Username: "mine"}
+	u := &models.User{Email: "a@example.com", Firstname: "mine"}
 	require.NoError(t, s.CreateUser(ctx, u))
 	assert.Equal(t, []string{models.UserTable}, h.tables)
-	assert.Equal(t, "from-hook", u.Username, "the caller's model reflects the hook's rewrite")
+	assert.Equal(t, "from-hook", u.Firstname, "the caller's model reflects the hook's rewrite")
 
 	stored, err := s.FindUserByID(ctx, u.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "from-hook", stored.Username, "the hook's rewrite is what was stored")
+	assert.Equal(t, "from-hook", stored.Firstname, "the hook's rewrite is what was stored")
 	require.Len(t, h.createdAs, 1)
 	assert.Same(t, u, h.createdAs[0], "AfterCreate receives the stored model")
 }
@@ -527,7 +527,7 @@ func (usernamePlugin) Declare(*types.PluginInitContext) error { return nil }
 func (usernamePlugin) Register(reg types.HookRegistry) error {
 	if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
 		email, _ := row[models.UserEmail].(string)
-		row[models.UserUsername] = strings.SplitN(email, "@", 2)[0]
+		row[models.UserFirstname] = strings.SplitN(email, "@", 2)[0]
 		return row, nil
 	}, nil); err != nil {
 		return err
@@ -536,7 +536,7 @@ func (usernamePlugin) Register(reg types.HookRegistry) error {
 	// which user it was (published in Values, not in the payload).
 	return reg.OnBefore(hooks.HookUserBeforeUpdate, func(hctx *types.HookContext, changes behemoth.M) (behemoth.M, error) {
 		if email, ok := changes[models.UserEmail].(string); ok {
-			changes[models.UserUsername] = strings.SplitN(email, "@", 2)[0]
+			changes[models.UserFirstname] = strings.SplitN(email, "@", 2)[0]
 		}
 		if id, _ := hctx.Values[hooks.HookValueUserID].(string); id != "" {
 			changes[models.UserLastname] = "updated:" + id
@@ -561,11 +561,11 @@ func TestBootWiresStoreToPluginHooks(t *testing.T) {
 	require.NoError(t, ac.Store.CreateUser(ctx, u))
 	stored, err := ac.Store.FindUserByID(ctx, u.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "grace", stored.Username, "the plugin's before-create handler ran through the Dispatcher")
+	assert.Equal(t, "grace", stored.Firstname, "the plugin's before-create handler ran through the Dispatcher")
 
 	updated, err := ac.Store.UpdateUser(ctx, u.ID, behemoth.M{models.UserEmail: "hopper@example.com"})
 	require.NoError(t, err)
-	assert.Equal(t, "hopper", updated.Username, "the plugin's before-update handler ran through the Dispatcher")
+	assert.Equal(t, "hopper", updated.Firstname, "the plugin's before-update handler ran through the Dispatcher")
 	assert.Equal(t, "updated:"+u.ID, updated.Lastname, "the handler was told which user")
 }
 
@@ -586,7 +586,7 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 		Crypto: cryptoCfg,
 		Hooks: func(reg types.HookRegistry) error {
 			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
-				sawUsername = row[models.UserUsername]
+				sawUsername = row[models.UserFirstname]
 				row[models.UserFirstname] = "from-app"
 				return row, nil
 			}, nil); err != nil {
@@ -653,7 +653,7 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 		Crypto: cryptoCfg,
 		Hooks: func(reg types.HookRegistry) error {
 			return reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
-				sawUsername = row[models.UserUsername]
+				sawUsername = row[models.UserFirstname]
 				return row, nil
 			}, &types.HookOptions{Before: []string{pluginName}})
 		},
@@ -728,9 +728,9 @@ func (p *signupPlugin) Routes() []types.Route {
 func (p *signupPlugin) Register(reg types.HookRegistry) error {
 	return reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
 		if hctx.Request == nil {
-			row[models.UserUsername] = "no-request"
+			row[models.UserFirstname] = "no-request"
 		} else {
-			row[models.UserUsername] = hctx.Request.Request.Header.Get("X-Username")
+			row[models.UserFirstname] = hctx.Request.Request.Header.Get("X-Username")
 		}
 		return row, nil
 	}, nil)
@@ -763,12 +763,12 @@ func TestDataHooksSeeTheRequestBeingHandled(t *testing.T) {
 
 	created, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
 	require.NoError(t, err)
-	assert.Equal(t, "from-header", created.Username, "the data hook saw the request the route was handling")
+	assert.Equal(t, "from-header", created.Firstname, "the data hook saw the request the route was handling")
 
 	// The same write outside any request: the hook is told there is none.
 	outside := &models.User{Email: "job@example.com"}
 	require.NoError(t, ac.Store.CreateUser(ctx, outside))
-	assert.Equal(t, "no-request", outside.Username)
+	assert.Equal(t, "no-request", outside.Firstname)
 }
 
 // noTransactionsDB is a database whose deployment has no transactions, the
