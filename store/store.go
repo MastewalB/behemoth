@@ -125,6 +125,11 @@ func WithSchema(r behemoth.SchemaResolver) Option { return func(s *Store) { s.sc
 // WithClock replaces the timestamp source, for tests.
 func WithClock(now func() time.Time) Option { return func(s *Store) { s.now = now } }
 
+// Now returns the store's time: the clock its timestamps come from. A
+// manager that compares against a timestamp the store wrote uses it, so that
+// a test clock (WithClock) governs both.
+func (s *Store) Now() time.Time { return s.now() }
+
 // WithIDs replaces the id generator, for tests.
 func WithIDs(newID func() string) Option { return func(s *Store) { s.newID = newID } }
 

@@ -74,8 +74,8 @@ The routes sit directly under the router's base path. Neither needs a session.
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `POST /email/send-verification` | `email`, and optionally `redirectURL` and `metadata` (an object) | `200` with `{"status": "ok"}` |
-| `POST /email/verify` | `token` | `200` with `{"user": ..., "redirectURL": "..."}` |
+| `POST /email/send-verification` | `email`, and optionally `redirect_url` and `metadata` (an object) | `200` with `{"status": "ok"}` |
+| `POST /email/verify` | `token` | `200` with `{"user": ..., "redirect_url": "..."}` |
 
 **The send route answers the same for every email.** An unknown address, one that is verified already and one that is sent a link all get a `200` with the same body, so the response does not show which addresses are registered.
 
@@ -87,12 +87,12 @@ Verifying does not sign the user in. No session is created.
 | --- | --- | --- | --- |
 | both | the body is not valid JSON | `400` | `request_validation_error` |
 | send | `email` is missing or not an email address | `400` | `email_invalid_input` |
-| send | `redirectURL` is not allowed | `400` | `redirect_url_invalid_input` |
+| send | `redirect_url` is not allowed | `400` | `redirect_url_invalid_input` |
 | verify | `token` is missing | `400` | `token_invalid_input` |
 | verify | the link is unknown, expired, already used, or replaced by a newer one | `401` | `invalid_verification_link` |
 | both | too many requests | `429` with `Retry-After` | `rate_limited` |
 
-`redirectURL` follows the same rule as for a magic link: a path on your own site, or a URL on one of `RouterConfig.TrustedOrigins`. See [The redirect URL](magiclink.md#the-redirect-url).
+`redirect_url` follows the same rule as for a magic link: a path on your own site, or a URL on one of `RouterConfig.TrustedOrigins`. See [The redirect URL](magiclink.md#the-redirect-url).
 
 ## Requiring a verified email
 
@@ -141,8 +141,8 @@ Your mail sender gets two more kinds of message. Both carry the two addresses in
 
 | Route | Needs | Body | Result |
 | --- | --- | --- | --- |
-| `POST /email/change` | a fresh session | `email` (the new address), and optionally `redirectURL` and `metadata` | `200` with `{"status": "ok"}` |
-| `POST /email/change/confirm` | nothing | `token` | `200` with `{"user": ..., "redirectURL": "..."}` |
+| `POST /email/change` | a fresh session | `email` (the new address), and optionally `redirect_url` and `metadata` | `200` with `{"status": "ok"}` |
+| `POST /email/change/confirm` | nothing | `token` | `200` with `{"user": ..., "redirect_url": "..."}` |
 | `POST /email/change/revert` | nothing | `token` | `200` with `{"status": "reverted"}` |
 
 | Route | When | Status | Code |
@@ -150,7 +150,7 @@ Your mail sender gets two more kinds of message. Both carry the two addresses in
 | change | there is no session | `401` | |
 | change | the session did not sign in recently enough | `401` | `session_not_fresh` |
 | change | `email` is not an address, or is the one the account has | `400` | `email_invalid_input` |
-| change | `redirectURL` is not allowed | `400` | `redirect_url_invalid_input` |
+| change | `redirect_url` is not allowed | `400` | `redirect_url_invalid_input` |
 | change | the notice could not be handed to your mail sender | `500` | |
 | confirm, revert | the link is unknown, expired, used, or overtaken by a later request or a revert | `401` | `invalid_email_change_link` |
 | confirm, revert | the address belongs to another account by now | `409` | `email_taken` |
@@ -237,7 +237,7 @@ The plugin declares six points.
 
 | Point | Phase | What the handler gets |
 | --- | --- | --- |
-| `auth.emailVerification.beforeSend` (`emailverification.HookSendBefore`) | before | payload `email`, `redirectURL`, `metadata`. A handler may rewrite the last two or stop the send. The address can't be changed. |
+| `auth.emailVerification.beforeSend` (`emailverification.HookSendBefore`) | before | payload `email`, `redirect_url`, `metadata`. A handler may rewrite the last two or stop the send. The address can't be changed. |
 | `auth.emailVerification.afterSend` (`HookSendAfter`) | after | a `*emailverification.SendResult`: user id, email, token id, expiry. Not the token. |
 | `auth.emailVerification.sendFailed` (`HookSendFailed`) | failed | codes `userNotFound`, `issueFailed`, `sendFailed` (the message could not be queued), `rejectedByHook` |
 | `auth.emailVerification.beforeVerify` (`HookVerifyBefore`) | before | payload `email`, when the token names one. Veto only. |
@@ -250,7 +250,7 @@ With the change flow on, it declares nine more, three per step:
 
 | Points | What the handler gets |
 | --- | --- |
-| `auth.emailChange.beforeRequest`, `.afterRequest`, `.requestFailed` | before: payload `userID`, `email` (the new address), `redirectURL`, `metadata`; the last two may be rewritten. After: a `*emailverification.ChangeResult`. Failed: codes `issueFailed`, `noticeFailed`, `emailTaken`, `sendFailed`, `rejectedByHook`. |
+| `auth.emailChange.beforeRequest`, `.afterRequest`, `.requestFailed` | before: payload `userID`, `email` (the new address), `redirect_url`, `metadata`; the last two may be rewritten. After: a `*emailverification.ChangeResult`. Failed: codes `issueFailed`, `noticeFailed`, `emailTaken`, `sendFailed`, `rejectedByHook`. |
 | `auth.emailChange.beforeConfirm`, `.afterConfirm`, `.confirmFailed` | before: payload `email`, veto only. After: the `*models.User` with its new address. Failed: codes `invalidLink`, `userNotFound`, `emailChanged`, `emailTaken`, `rejectedByHook`. |
 | `auth.emailChange.beforeRevert`, `.afterRevert`, `.revertFailed` | before: payload `email` (the address to put back), veto only. After: the `*models.User`. Failed: codes `invalidLink`, `userNotFound`, `emailTaken`, `rejectedByHook`. |
 

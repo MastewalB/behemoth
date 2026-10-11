@@ -12,7 +12,7 @@ Sessions and tokens have a third door above the store: `ac.SessionManager` and `
 ## The convention
 
 - Your own tables: use the adapter. The store has no operations for them.
-- Behemoth's tables (`users`, `accounts`, `sessions`, `tokens`, `rate_limits`): use the store, and for sessions and tokens the managers.
+- Behemoth's tables (`users`, `accounts`, `sessions`, `tokens`, `verification_codes`, `rate_limits`): use the store, and for sessions, tokens and one-time codes the managers (`ac.Codes` for codes; see [SMS and one-time codes](sms.md)).
 
 Nothing enforces this. The adapter accepts any declared model, and a write to a core table through it succeeds. The adapter writes the row you give it and nothing else, so every step listed below becomes your job. The rest of this page lists those steps per table. If you write directly, do it knowing which ones you are taking over.
 

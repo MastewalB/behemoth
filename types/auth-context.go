@@ -41,6 +41,14 @@ type AuthContext struct {
 	// given. The application calls Mailer.Close at shutdown to let
 	// background sends finish.
 	Mailer Mailer
+	// SMS sends the text messages plugins produce (a one-time code) through
+	// the application's SMSSender. Never nil on an AuthContext Boot returns;
+	// SMS.Configured says whether a sender was given. The application calls
+	// SMS.Close at shutdown, as for Mailer.
+	SMS SMS
+	// Codes issues and checks one-time codes: short numeric secrets sent by
+	// text message. See CodeManager for how they differ from tokens.
+	Codes CodeManager
 	// Telemetry is never nil on an AuthContext Boot returns, and neither are
 	// its fields. Plugins take their logger from here, usually through
 	// telemetry.Named.

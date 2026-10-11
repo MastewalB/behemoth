@@ -76,7 +76,7 @@ Every route that signs a user in answers with the same JSON, whichever plugin it
 | a second factor is pending | `{"status": "requires_second_factor"}` |
 | either, with `TransportBody` | the same, plus `"token": "..."` |
 
-- A plugin can add fields of its own next to these. The magic link plugin adds `redirectURL`.
+- A plugin can add fields of its own next to these. The magic link plugin adds `redirect_url`.
 - A pending session's token is delivered like any other. The client presents it together with the second factor.
 - The response has `Cache-Control: no-store`.
 - Sign-up answers `{"user": {...}}` too. It creates no session, so it has no token.

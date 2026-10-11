@@ -85,7 +85,7 @@ The routes that return a user (`WriteSignIn`, sign-up, the two verify routes, th
 
 ### **Declaration**
 
-`CoreDeclareSchema` declares the five tables under owner `"core"` during `Prepare`, before any plugin declares. `rate_limits` is declared whether or not a key-value store is configured, because `Prepare` runs without a live connection and cannot know. With a key-value store that counts natively, the table exists and stays empty.
+`CoreDeclareSchema` declares core's tables (`users`, `sessions`, `tokens`, `accounts`, `rate_limits`, `audit_log` and `verification_codes`) under owner `"core"` during `Prepare`, before any plugin declares. `rate_limits` is declared whether or not a key-value store is configured, because `Prepare` runs without a live connection and cannot know. With a key-value store that counts natively, the table exists and stays empty.
 
 ### **NULL versus empty**
 

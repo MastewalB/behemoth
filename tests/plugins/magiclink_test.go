@@ -34,7 +34,11 @@ CREATE TABLE rate_limits (limit_key TEXT PRIMARY KEY, count BIGINT NOT NULL, exp
 CREATE TABLE tokens (
 	id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT, lookup_hash TEXT NOT NULL, token_hash TEXT NOT NULL,
 	key_version INTEGER NOT NULL, metadata TEXT, expires_at TIMESTAMP, consumed_at TIMESTAMP, revoked_at TIMESTAMP,
-	created_at TIMESTAMP NOT NULL);`
+	created_at TIMESTAMP NOT NULL);
+CREATE TABLE verification_codes (
+	id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT NOT NULL, code_hash TEXT NOT NULL,
+	key_version INTEGER NOT NULL, attempts_left INTEGER NOT NULL, metadata TEXT,
+	expires_at TIMESTAMP NOT NULL, created_at TIMESTAMP NOT NULL, UNIQUE (kind, subject));`
 
 // outbox is a MailSender that keeps what it was asked to send, and fails
 // when told to. The lock is for background sends.
@@ -221,7 +225,7 @@ func TestMagicLinkRoutes(t *testing.T) {
 	require.NotNil(t, verify.Handler)
 	assert.Equal(t, http.MethodPost, verify.Method, "a GET would let a mail scanner use the link up")
 
-	known := call(t, app.ac, request, `{"email":"ada@example.com","redirectURL":"/dashboard","metadata":{"locale":"fr"}}`)
+	known := call(t, app.ac, request, `{"email":"ada@example.com","redirect_url":"/dashboard","metadata":{"locale":"fr"}}`)
 	require.Equal(t, http.StatusOK, known.Code, known.Body.String())
 	link := app.outbox.last(t)
 	assert.Equal(t, behemoth.M{"locale": "fr"}, link.Metadata)
@@ -247,13 +251,13 @@ func TestMagicLinkRoutes(t *testing.T) {
 		`{`:                        http.StatusBadRequest,
 		`{"email":42}`:             http.StatusBadRequest,
 		`{"email":"not an email"}`: http.StatusBadRequest,
-		`{"email":"ada@example.com","redirectURL":"https://evil.example.com/"}`: http.StatusBadRequest,
-		`{"email":"ada@example.com","metadata":"x"}`:                            http.StatusBadRequest,
+		`{"email":"ada@example.com","redirect_url":"https://evil.example.com/"}`: http.StatusBadRequest,
+		`{"email":"ada@example.com","metadata":"x"}`:                             http.StatusBadRequest,
 	} {
 		assert.Equal(t, want, call(t, app.ac, request, body).Code, "request body %s", body)
 	}
 
-	require.Equal(t, http.StatusOK, call(t, app.ac, request, `{"email":"ada@example.com","redirectURL":"/dashboard"}`).Code)
+	require.Equal(t, http.StatusOK, call(t, app.ac, request, `{"email":"ada@example.com","redirect_url":"/dashboard"}`).Code)
 	link = app.outbox.last(t)
 	assert.Equal(t, http.StatusBadRequest, call(t, app.ac, verify, `{}`).Code, "a verify without a token")
 
@@ -261,7 +265,7 @@ func TestMagicLinkRoutes(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var body struct {
 		User        models.User `json:"user"`
-		RedirectURL string      `json:"redirectURL"`
+		RedirectURL string      `json:"redirect_url"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.Equal(t, user.ID, body.User.ID)

@@ -61,6 +61,7 @@ const (
 	MetricAuditRecordFailures = "behemoth.audit.record_failures" // counter: audit events that could not be stored
 
 	MetricMailSent = "behemoth.mail.sent" // counter: messages handed to the mail sender, by kind and result
+	MetricSMSSent  = "behemoth.sms.sent"  // counter: messages handed to the SMS sender, by kind and result
 )
 
 // Attribute keys of the metrics above.

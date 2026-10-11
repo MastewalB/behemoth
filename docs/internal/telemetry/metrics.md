@@ -118,7 +118,7 @@ A rejection is still also an audit event; see the entry "Every rate-limit reject
 
 ### Mail
 
-`DefaultMailer` counts `behemoth.mail.sent` by `kind` and `result`: `sent` or `error` where the application's sender returns, for a send the caller waited for and for a background one, and `dropped` when `SendAsync` found the queue full. See [`../mail/mailer.md`](../mail/mailer.md).
+`DefaultSMS` counts `behemoth.sms.sent` the same way, from the queue code the two share. `DefaultMailer` counts `behemoth.mail.sent` by `kind` and `result`: `sent` or `error` where the application's sender returns, for a send the caller waited for and for a background one, and `dropped` when `SendAsync` found the queue full. See [`../mail/mailer.md`](../mail/mailer.md).
 
 ### Hook handlers
 

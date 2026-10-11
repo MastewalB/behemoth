@@ -133,6 +133,22 @@ The two flows have the shape of the magic link plugin's request and verify; see 
 | `TestPasswordResetOptions` | same | off by default with no routes and no sender needed; the configuration errors |
 | `TestPasswordResetSendsInBackground` | same | the default send does not hold the request, and a failed send leaves the link valid |
 
+## Setting a password for another plugin
+
+`Plugin.SetPassword(ctx, userID, password)` is the write half of a reset without the link: `validatePassword`, `hashPassword`, `storePasswordHash` in a transaction, then `afterPasswordChange`. `resetBody` uses the same two helpers, so a reset by link and one through `SetPassword` end the same way.
+
+| Helper | What |
+| --- | --- |
+| `storePasswordHash(ctx, tx, userID, hash)` | updates the credential account, or creates it for a user who had no password |
+| `afterPasswordChange(ctx, user)` | `RevokeAllForUser` with `SessionRevokedPasswordReset`, then the `MailPasswordChanged` notice in the background |
+
+- `SetPassword` does not touch `EmailVerified`. A reset by link marks the email verified because the link was sent to it; a caller of `SetPassword` proved something else.
+- The notice is skipped when no mail sender is configured or the user has no address. Reset by link requires a sender, so nothing changes there.
+- `Plugin.ValidatePassword` is exported next to it for a caller that would lose something by a late refusal. The phone number plugin checks the password before it consumes its code.
+- Both work with `Options.Reset` off.
+
+The phone number plugin is the one caller; see [`phonenumber.md`](phonenumber.md).
+
 ## Limits to know
 
 - `[Not built]` Password change for a signed-in user. It needs a way to re-check the current password; see *Nothing refreshes a session in place* in `docs/ongoing.md`.
@@ -206,7 +222,7 @@ Three changes a client can observe: the three rejections carry a `code`, a taken
 - *Part of this plugin, always on.* Nothing to wire. Every application with passwords would then need a mail sender and the `tokens` table, and `emailpassword.New(Options{})` would stop working without them.
 - *Part of this plugin, on when `Options.Reset.LinkURL` is set.* The rules stay private, and an application that does not set the URL sees no change.
 **Decision:** The third. The link URL is required for reset anyway, so it doubles as the switch and no separate `Enabled` field can disagree with it.
-**Revisit if:** another plugin needs to set passwords (an admin screen). An exported `SetPassword` would then be justified, and reset could move out onto it.
+**Revisit if:** reset by link should become a plugin of its own. `SetPassword` now exists (the phone number plugin needed it), so such a plugin has what it would call.
 
 ### A reset ends the user's sessions and does not start one
 **Context:** After the password is set, the flow could hand back a session, as a magic link does.

@@ -18,7 +18,7 @@ ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{ /* ... */ })
 
 The plugin's name is `emailpassword` (`emailpassword.PluginName`). Use it in `PluginMeta.Dependencies` to build on the plugin, and in `HookOptions.Before`/`After` to order a handler around it.
 
-To let users sign in with a username as well, add the [username](username.md) plugin.
+To let users sign in with a username as well, add the [username](username.md) plugin. For a phone number, with a one-time code or the password, add the [phone number](phonenumber.md) plugin.
 
 A user who signs up starts with `EmailVerified` false. To confirm addresses, add the [email verification](emailverification.md) plugin: it sends the link without any change here, and can refuse sign-ins until the address is confirmed.
 
@@ -169,6 +169,20 @@ result, err := plugin.SignInWith(ctx, emailpassword.IdentifierCredentials{
 - `Value` is published in `Values` under `Key` as it is, so pass it in the form a rate-limit rule should count by. No email is published.
 - The error message names the key: `invalid username or password`.
 
+### Setting a password from another plugin
+
+```go
+if err := plugin.ValidatePassword(newPassword); err != nil { /* password_invalid_input */ }
+user, err := plugin.SetPassword(ctx, userID, newPassword)
+```
+
+`SetPassword` is for a plugin that has established by its own means that the caller may set the password. The [phone number](phonenumber.md) plugin calls it after a code was confirmed.
+
+- It applies the password rules, gives a user without a password one, ends every session of the user and creates none.
+- It sends the `types.MailPasswordChanged` notice when a mail sender is configured.
+- It does not check who is asking, fires no points, and works with password reset by email off.
+- Call `ValidatePassword` first when a later refusal would cost you something, such as a code already used up.
+
 `emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points. It writes nothing to a response, so the session's cookie stays with its browser. A route of yours that calls it for the caller's own session removes the cookie afterwards with `ac.SessionManager.ClearToken(rctx)`; see [Sessions](sessions.md#writing-a-route-that-ends-the-session).
 
 ## Rejecting a sign-up from a hook
@@ -315,4 +329,4 @@ The rule per email is attached to `auth.passwordReset.beforeRequest`, so it also
 
 ## Not built yet
 
-Password change for a signed-in user. A plugin that adds it should depend on `emailpassword` so that the password rules stay in one place.
+Password change for a signed-in user. A plugin that adds it should depend on `emailpassword` and call `SetPassword`, so that the password rules stay in one place.

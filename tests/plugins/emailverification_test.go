@@ -213,7 +213,7 @@ func TestEmailVerificationRoutes(t *testing.T) {
 	_, err := app.plugin.Verify(context.Background(), mail.Token)
 	require.NoError(t, err)
 
-	pending := call(t, app.ac, send, `{"email":"ada@example.com","redirectURL":"https://app.example.com/welcome","metadata":{"locale":"fr"}}`)
+	pending := call(t, app.ac, send, `{"email":"ada@example.com","redirect_url":"https://app.example.com/welcome","metadata":{"locale":"fr"}}`)
 	require.Equal(t, http.StatusOK, pending.Code, pending.Body.String())
 	link := app.mail(t, 3)
 	assert.Equal(t, "ada@example.com", link.To)
@@ -233,7 +233,7 @@ func TestEmailVerificationRoutes(t *testing.T) {
 	for body, want := range map[string]int{
 		`{`:                        http.StatusBadRequest,
 		`{"email":"not an email"}`: http.StatusBadRequest,
-		`{"email":"ada@example.com","redirectURL":"https://evil.example.com/"}`: http.StatusBadRequest,
+		`{"email":"ada@example.com","redirect_url":"https://evil.example.com/"}`: http.StatusBadRequest,
 	} {
 		assert.Equal(t, want, call(t, app.ac, send, body).Code, "send body %s", body)
 	}
@@ -243,7 +243,7 @@ func TestEmailVerificationRoutes(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var body struct {
 		User        models.User `json:"user"`
-		RedirectURL string      `json:"redirectURL"`
+		RedirectURL string      `json:"redirect_url"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.Equal(t, user.ID, body.User.ID)

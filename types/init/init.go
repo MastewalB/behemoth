@@ -207,6 +207,11 @@ type BootConfig struct {
 	// = no sender; such a plugin then fails Boot.
 	Mail types.MailConfig
 
+	// SMS gives behemoth the application's SMS sender, which plugins that
+	// send text messages need (phone number). Zero value = no sender; such
+	// a plugin then fails Boot.
+	SMS types.SMSConfig
+
 	// Router configures behemoth's routes: base path, error mapping and
 	// client-IP resolution. Zero value = documented defaults.
 	Router types.RouterConfig
@@ -335,6 +340,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		Telemetry:   tel,
 		Origins:     origins,
 		Mailer:      NewMailer(cfg.Mail, tel),
+		SMS:         NewSMS(cfg.SMS, tel),
 		Public:      types.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
 	}
 	if err := checkDataHookPoints(app.Hooks, coreDataHookPoints); err != nil {
@@ -344,6 +350,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// through the store, so they are built in that order.
 	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}), store.WithSchema(app.Resolver),
 		store.WithEncryptor(cryptoSuite.AtRest), store.WithTelemetry(tel))
+	ac.Codes = transport.NewCodeManager(ac.Store, cryptoSuite)
 	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token, ac)
 	// One client-IP configuration for sessions and route rate limiting, so
 	// both see the same address for a request.
@@ -1094,6 +1101,7 @@ func CoreDeclareSchema(ic *types.PluginInitContext) error {
 		{&models.Account{}, models.AccountTableSchema()},
 		{&models.RateLimit{}, models.RateLimitTableSchema()},
 		{&models.AuditLog{}, models.AuditLogTableSchema()},
+		{&models.VerificationCode{}, models.VerificationCodeTableSchema()},
 	} {
 		if err := ic.Schemas.Declare(d.model, d.table); err != nil {
 			return err

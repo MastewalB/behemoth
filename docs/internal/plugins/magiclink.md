@@ -40,7 +40,7 @@ The token kind is database-backed on purpose. `RevokeAllForSubject` is not suppo
 | 2 | check `RedirectURL` with `types.TrustedRedirect(ac.Origins, url)`, if one was given | a validation error |
 | 3 | `Store.FindUserByEmail` | not found: `Fail` with `userNotFound`, return `ErrNoAccount` |
 | 4 | `TokenManager.RevokeAllForSubject(magic_link, user.ID)` | `Fail` with `issueFailed` |
-| 5 | `TokenManager.Issue(magic_link, user.ID, {email, redirectURL})` | `Fail` with `issueFailed` |
+| 5 | `TokenManager.Issue(magic_link, user.ID, {email, redirect_url})` | `Fail` with `issueFailed` |
 | 6 | build the URL: `LinkURL` plus `token=<raw>` | |
 | 7 | `ac.Mailer.SendAsync(ctx, MailMessage{Kind: MailMagicLink, ...})`, or `Send` with `Options.WaitForSend` | revoke the token, `Fail` with `sendFailed` |
 | 8 | return a `*LinkResult`; `WithLifecycle` fires `auth.magicLink.afterRequest` | |

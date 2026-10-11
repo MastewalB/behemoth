@@ -103,8 +103,8 @@ Without `-confirm` the command writes nothing but the draft file described below
 
 | File | Holds |
 | --- | --- |
-| `0001_create_accounts_and_6_more.json` | The migration as Behemoth records it. Keep it in the folder: the next migration's number comes from it. |
-| `0001_create_accounts_and_6_more.sql` | The same migration as a script for your database. Apply this one with your own tool, such as `psql`, goose or golang-migrate. |
+| `0001_create_accounts_and_7_more.json` | The migration as Behemoth records it. Keep it in the folder: the next migration's number comes from it. |
+| `0001_create_accounts_and_7_more.sql` | The same migration as a script for your database. Apply this one with your own tool, such as `psql`, goose or golang-migrate. |
 
 The name after the number says what the migration does. Behemoth derives it from the operations:
 
@@ -112,7 +112,7 @@ The name after the number says what the migration does. Behemoth derives it from
 | --- | --- |
 | One operation | `0002_add_column_users_plan` |
 | Several operations on one table | `0003_alter_notes` |
-| New tables only | `0001_create_users_sessions_tokens`, or `0001_create_accounts_and_6_more` beyond three |
+| New tables only | `0001_create_users_sessions_tokens`, or `0001_create_accounts_and_7_more` beyond three |
 | Changes across tables | `0004_update_notes_users` |
 
 Only the number identifies a migration. You can't choose the name yet.

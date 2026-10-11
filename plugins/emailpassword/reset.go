@@ -557,21 +557,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 	// what it needs from the token manager.
 	markVerified := !user.EmailVerified && !p.opts.Reset.LeaveEmailUnverified
 	err = ac.Store.Transaction(hctx.Ctx, func(ctx context.Context, tx *store.Store) error {
-		credential, err := tx.FindAccount(ctx, models.ProviderCredential, user.ID)
-		switch {
-		case err == nil:
-			_, err = tx.UpdateAccount(ctx, credential.ID, behemoth.M{models.AccountPasswordHash: passwordHash})
-		case behemotherr.IsNotFound(err):
-			// No password yet: the account was made by a magic link or a
-			// provider. The reset gives it one.
-			err = tx.CreateAccount(ctx, &models.Account{
-				UserID:       user.ID,
-				ProviderID:   models.ProviderCredential,
-				AccountID:    user.ID,
-				PasswordHash: passwordHash,
-			})
-		}
-		if err != nil || !markVerified {
+		if err := storePasswordHash(ctx, tx, user.ID, passwordHash); err != nil || !markVerified {
 			return err
 		}
 		updated, err := tx.UpdateUser(ctx, user.ID, behemoth.M{models.UserEmailVerified: true})
@@ -592,21 +578,110 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 		return nil, err
 	}
 
-	// Whoever knew the old password, or held a session made with it, is
-	// signed out. The password is already changed when this fails, so the
-	// error is a failure of the system and the caller sees it.
-	if err := ac.SessionManager.RevokeAllForUser(hctx.Ctx, user.ID, SessionRevokedPasswordReset, ""); err != nil {
-		return nil, fmt.Errorf("emailpassword: the password was reset, but ending the user's sessions failed: %w", err)
+	if err := p.afterPasswordChange(hctx.Ctx, user); err != nil {
+		return nil, err
 	}
+	return user, nil
+}
 
-	// Tell the owner, in case the reset was not theirs. In the background:
-	// the password is set either way, and the reset should not fail or wait
-	// for a notice. A message that could not be queued is logged.
+// storePasswordHash writes hash as the password of the user with userID:
+// onto the user's credential account, or onto a new one for a user who had
+// no password (an account made by a magic link or a provider).
+func storePasswordHash(ctx context.Context, tx *store.Store, userID, hash string) error {
+	credential, err := tx.FindAccount(ctx, models.ProviderCredential, userID)
+	switch {
+	case err == nil:
+		_, err = tx.UpdateAccount(ctx, credential.ID, behemoth.M{models.AccountPasswordHash: hash})
+	case behemotherr.IsNotFound(err):
+		err = tx.CreateAccount(ctx, &models.Account{
+			UserID:       userID,
+			ProviderID:   models.ProviderCredential,
+			AccountID:    userID,
+			PasswordHash: hash,
+		})
+	}
+	return err
+}
+
+// afterPasswordChange does what follows every password set outside
+// sign-up, once the new hash is stored.
+//
+// Whoever knew the old password, or held a session made with it, is signed
+// out. The password is already changed when this fails, so the error is a
+// failure of the system and the caller sees it.
+//
+// Then the owner is told, in case the change was not theirs. In the
+// background: the password is set either way, and the change should not fail
+// or wait for a notice. A message that could not be queued is logged, and
+// without a mail sender or an address none is sent.
+func (p *Plugin) afterPasswordChange(ctx context.Context, user *models.User) error {
+	ac := p.authContext
+	if err := ac.SessionManager.RevokeAllForUser(ctx, user.ID, SessionRevokedPasswordReset, ""); err != nil {
+		return fmt.Errorf("emailpassword: the password was set, but ending the user's sessions failed: %w", err)
+	}
+	if ac.Mailer == nil || !ac.Mailer.Configured() || user.Email == "" {
+		return nil
+	}
 	notice := types.MailMessage{Kind: types.MailPasswordChanged, To: store.NormalizeEmail(user.Email), User: user}
-	if err := ac.Mailer.SendAsync(hctx.Ctx, notice); err != nil {
-		p.log.Warn(hctx.Ctx, "the password changed notice was not queued", telemetry.ErrorFields(err))
+	if err := ac.Mailer.SendAsync(ctx, notice); err != nil {
+		p.log.Warn(ctx, "the password changed notice was not queued", telemetry.ErrorFields(err))
 	}
+	return nil
+}
 
+// ValidatePassword applies the plugin's rules to a new password
+// (Options.MinPasswordLength, MaxPasswordLength, ValidatePassword) and
+// returns the validation error sign-up answers with, code
+// ErrorCodeInvalidPassword. A plugin that sets passwords through SetPassword
+// calls it first when it has something to lose by a refusal later, such as a
+// one-time code it would have used up.
+func (p *Plugin) ValidatePassword(password string) error {
+	if err := p.validatePassword(password); err != nil {
+		return errInvalidPassword("emailpassword.ValidatePassword", err)
+	}
+	return nil
+}
+
+// SetPassword sets password on the user with userID and returns the user.
+// It is for a plugin that has established by its own means that the caller
+// may set it: the phone number plugin calls it after a code sent to the
+// user's number was confirmed. It does not check who is asking.
+//
+// It is the second half of ResetPassword without the link: the password
+// goes through the plugin's rules, a user without a credential account gets
+// one, every session of the user ends (SessionRevokedPasswordReset) and none
+// is created, and the user is sent a types.MailPasswordChanged notice when a
+// mail sender is configured. It does not touch EmailVerified, and it fires
+// no points: the calling flow has its own.
+//
+// It works with password reset by email off. The plugin must have been
+// initialized by Boot.
+func (p *Plugin) SetPassword(ctx context.Context, userID, password string) (*models.User, error) {
+	const op = "emailpassword.SetPassword"
+	hctx, err := p.operation(ctx, op)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.validatePassword(password); err != nil {
+		return nil, errInvalidPassword(op, err)
+	}
+	ac := p.authContext
+	user, err := ac.Store.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	passwordHash, err := hashPassword(hctx, password)
+	if err != nil {
+		return nil, err
+	}
+	if err := ac.Store.Transaction(ctx, func(ctx context.Context, tx *store.Store) error {
+		return storePasswordHash(ctx, tx, user.ID, passwordHash)
+	}); err != nil {
+		return nil, err
+	}
+	if err := p.afterPasswordChange(ctx, user); err != nil {
+		return nil, err
+	}
 	return user, nil
 }
 

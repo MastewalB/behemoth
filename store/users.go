@@ -66,8 +66,8 @@ func (s *Store) UpdateUser(ctx context.Context, id string, updates behemoth.M) (
 }
 
 // DeleteUser deletes the user with id and everything that lets someone act
-// as that user: the user's sessions, accounts and database-backed tokens. It
-// returns a NotFound error when there is no such user.
+// as that user: the user's sessions, accounts, database-backed tokens and
+// one-time codes. It returns a NotFound error when there is no such user.
 //
 // The deletes share one transaction, the caller's when s is bound to one,
 // and run children first, so they work whether or not the database enforces
@@ -76,7 +76,7 @@ func (s *Store) UpdateUser(ctx context.Context, id string, updates behemoth.M) (
 //  1. BeforeDelete (data.user.beforeDelete), which may refuse the delete
 //  2. the user's sessions, revoked ones included
 //  3. the user's accounts
-//  4. the tokens whose subject is the user's id
+//  4. the tokens and the one-time codes whose subject is the user's id
 //  5. the user
 //  6. AfterDelete (data.user.afterDelete), whose error rolls all of it back
 //
@@ -114,6 +114,7 @@ func (s *Store) DeleteUser(ctx context.Context, id string) error {
 			{&models.Session{}, models.SessionUserID},
 			{&models.Account{}, models.AccountUserID},
 			{&models.Token{}, models.TokenSubject},
+			{&models.VerificationCode{}, models.VerificationCodeSubject},
 		} {
 			if err := tx.db.DeleteMany(ctx, owned.model, eq(owned.column, id)); err != nil {
 				return err

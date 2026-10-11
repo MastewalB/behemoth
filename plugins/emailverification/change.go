@@ -62,7 +62,7 @@ const (
 // The points of the flow. The after and failed points are audited.
 const (
 	// HookChangeRequestBefore runs on a change request: "userID", "email"
-	// (the new address), "redirectURL" and "metadata". A handler may
+	// (the new address), "redirect_url" and "metadata". A handler may
 	// rewrite the last two or stop the request.
 	HookChangeRequestBefore types.HookPoint = "auth.emailChange.beforeRequest"
 	// HookChangeRequestAfter runs once both messages are on their way,

@@ -6,7 +6,7 @@ The project is under active development, and the API may still change.
 
 ## Features
 
-- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in, sign-out and password reset. `magiclink` signs a user in with a link sent by email, `emailverification` confirms a user's address, and `username` adds sign-in by username to `emailpassword`.
+- **Plugins.** Each plugin declares its routes, tables, hooks and rate limits. The first one, `emailpassword`, handles sign-up, sign-in, sign-out and password reset. `magiclink` signs a user in with a link sent by email, `emailverification` confirms a user's address, `username` adds sign-in by username to `emailpassword`, and `phonenumber` adds a confirmed phone number, sign-in by one-time code or password, and password reset by code.
 - **Migrations.** Behemoth builds a migration from the tables your plugins and your own schema declare, and writes it to a folder for you to review. `behemoth generate` does it from your application's directory.
 - **Hooks.** Run your code before or after a user is written, or around a whole flow such as sign-up. A handler can change data, stop an operation or react afterwards.
 - **Sessions and tokens.** Sessions are stored in your database or a key-value store, and delivered as a cookie or a header.
@@ -101,7 +101,7 @@ go run . signup -email ada@example.com -password 'correct horse'
 go install ./cmd/behemoth     # the launcher, once, from the repository root
 cd examples/cli
 behemoth generate -confirm    # write the next migration to ./migrations
-psql "$DATABASE_URL" -f migrations/0001_create_accounts_and_6_more.sql
+psql "$DATABASE_URL" -f migrations/0001_create_accounts_and_7_more.sql
 go run .                      # Prepare + Boot, then serve HTTP
 ```
 
@@ -124,6 +124,8 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | --- | --- |
 | [Email and password](./docs/api/emailpassword.md) | The plugin's options, routes and hook points |
 | [Username](./docs/api/username.md) | Usernames on top of email and password: the rules, sign-up, sign-in by username and rate limits |
+| [Phone number](./docs/api/phonenumber.md) | Confirming a number by one-time code, sign-in by code or password, password reset by code, and rate limits |
+| [SMS and one-time codes](./docs/api/sms.md) | The SMS sender plugins use, and the code manager |
 | [Magic link](./docs/api/magiclink.md) | Sign-in by emailed link: setup, sending the link, routes, redirects and rate limits |
 | [Email verification](./docs/api/emailverification.md) | Confirming a user's address: when a link is sent, routes, requiring a verified email, and changing an address safely |
 | [Mail](./docs/api/mail.md) | The mail sender plugins use, and waiting or background sends |

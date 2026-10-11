@@ -59,7 +59,7 @@ Both sends run in after-commit handlers. An error there is logged by the dispatc
 | 1 | check the email's shape and the redirect URL (`types.TrustedRedirect`) | a validation error |
 | 2 | find the user by email, unless the request came with one | not found: `Fail` with `userNotFound`, return `ErrNoAccount` |
 | 3 | the user is verified already | return `ErrAlreadyVerified`; no point fires |
-| 4 | `RevokeAllForSubject(email_verification, user.ID)`, then `Issue` with `{email, redirectURL}` | `Fail` with `issueFailed` |
+| 4 | `RevokeAllForSubject(email_verification, user.ID)`, then `Issue` with `{email, redirect_url}` | `Fail` with `issueFailed` |
 | 5 | `ac.Mailer.SendAsync(ctx, MailMessage{Kind: MailEmailVerification, ...})` | the message was not queued: revoke the token, `Fail` with `sendFailed` |
 | 6 | return a `*SendResult`; `WithLifecycle` fires `.afterSend` | |
 
@@ -126,7 +126,7 @@ No table or column holds the pending change. The two addresses travel in the tok
 
 | Token | Metadata | Read by |
 | --- | --- | --- |
-| `email_change` | `from` (the address the user had), `to` (the one asked for), `redirectURL` | `changeConfirmBody` |
+| `email_change` | `from` (the address the user had), `to` (the one asked for), `redirect_url` | `changeConfirmBody` |
 | `email_change_revert` | `restore` (the address the user had) | `changeRevertBody` |
 
 ### Request

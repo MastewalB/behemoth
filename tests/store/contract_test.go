@@ -73,6 +73,7 @@ func coreSchemaWithForeignKeys(t *testing.T) ([]schema.Table, behemoth.SchemaRes
 	require.NoError(t, reg.Declare(&models.Account{}, models.AccountTableSchema()))
 	require.NoError(t, reg.Declare(&models.RateLimit{}, models.RateLimitTableSchema()))
 	require.NoError(t, reg.Declare(&models.AuditLog{}, models.AuditLogTableSchema()))
+	require.NoError(t, reg.Declare(&models.VerificationCode{}, models.VerificationCodeTableSchema()))
 	tfa := twoFactorEnabled.Contribution(schema.Column{Type: schema.ColTypeBoolean, Default: false})
 	tfa.Owner = "two-factor"
 	require.NoError(t, reg.ExtendColumn(tfa))
@@ -84,7 +85,7 @@ func coreSchemaWithForeignKeys(t *testing.T) ([]schema.Table, behemoth.SchemaRes
 	resolver := core.NewSchemaResolver()
 	resolver.Freeze(core.BuildSchemaResolverTable(reg, core.NewMigrationConfig(core.MigrationConfig{})))
 	var tables []schema.Table
-	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable, models.AccountTable, models.RateLimitTable, models.AuditLogTable} {
+	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable, models.AccountTable, models.RateLimitTable, models.AuditLogTable, models.VerificationCodeTable} {
 		t, _ := reg.Lookup(name)
 		tables = append(tables, t)
 	}
@@ -238,6 +239,7 @@ func TestStoreContract(t *testing.T) {
 			t.Run("Accounts", func(t *testing.T) { accountsContract(t, st, db) })
 			t.Run("RateLimits", func(t *testing.T) { rateLimitsContract(t, db, resolver) })
 			t.Run("AuditLog", func(t *testing.T) { auditLogContract(t, st) })
+			t.Run("VerificationCodes", func(t *testing.T) { verificationCodesContract(t, st) })
 		})
 	}
 }
@@ -779,4 +781,68 @@ func auditLogContract(t *testing.T, st *store.Store) {
 	// Purge removes what was recorded before the cutoff and keeps the rest.
 	require.NoError(t, st.PurgeAuditEvents(ctx, base.Add(3*time.Minute)))
 	assert.Equal(t, 4, count(telemetry.AuditFilter{}), "minutes 3, 4, 5 and 10 remain")
+}
+
+// verificationCodesContract covers the store's one-time code operations: one
+// row per kind and subject, attempts that are taken one at a time, a delete
+// that happens once, and a user's codes going with the user.
+func verificationCodesContract(t *testing.T, st *store.Store) {
+	ctx := context.Background()
+	const kind models.CodeKind = "contract.kind"
+	expires := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+
+	first := &models.VerificationCode{Kind: kind, Subject: "subject", CodeHash: "hash-1", KeyVersion: 1, AttemptsLeft: 2,
+		Metadata: behemoth.M{"phone_number": "+14155550101"}, ExpiresAt: expires}
+	require.NoError(t, st.ReplaceVerificationCode(ctx, first))
+	require.NotEmpty(t, first.ID)
+
+	found, err := st.FindVerificationCode(ctx, kind, "subject")
+	require.NoError(t, err)
+	assert.Equal(t, "hash-1", found.CodeHash)
+	assert.Equal(t, 1, found.KeyVersion)
+	assert.Equal(t, 2, found.AttemptsLeft)
+	assert.Equal(t, "+14155550101", found.Metadata["phone_number"], "the metadata round-trips")
+	assert.True(t, found.ExpiresAt.Equal(expires), "expires_at %v, want %v", found.ExpiresAt, expires)
+	_, err = st.FindVerificationCode(ctx, "contract.other", "subject")
+	assert.True(t, behemotherr.IsNotFound(err), "another kind: %v", err)
+
+	// A second code for the same kind and subject replaces the first.
+	second := &models.VerificationCode{Kind: kind, Subject: "subject", CodeHash: "hash-2", KeyVersion: 1, AttemptsLeft: 2, ExpiresAt: expires}
+	require.NoError(t, st.ReplaceVerificationCode(ctx, second))
+	found, err = st.FindVerificationCode(ctx, kind, "subject")
+	require.NoError(t, err)
+	assert.Equal(t, "hash-2", found.CodeHash)
+	assert.Nil(t, found.Metadata, "no metadata is stored as none")
+	assert.True(t, behemotherr.IsNotFound(st.DeleteVerificationCode(ctx, first.ID)), "the first code is gone")
+
+	// Two attempts, then none.
+	for want := 2; want > 0; want-- {
+		spent, err := st.SpendVerificationCodeAttempt(ctx, kind, "subject")
+		require.NoError(t, err)
+		assert.Equal(t, want, spent.AttemptsLeft, "the code as it was before the attempt")
+	}
+	_, err = st.SpendVerificationCodeAttempt(ctx, kind, "subject")
+	assert.True(t, behemotherr.IsNotFound(err), "no attempts left: %v", err)
+	_, err = st.SpendVerificationCodeAttempt(ctx, kind, "nobody")
+	assert.True(t, behemotherr.IsNotFound(err), "no code: %v", err)
+
+	require.NoError(t, st.DeleteVerificationCode(ctx, second.ID))
+	assert.True(t, behemotherr.IsNotFound(st.DeleteVerificationCode(ctx, second.ID)), "a code is deleted once")
+
+	// An expired code is purged, a live one is kept, and a user's code goes
+	// with the user.
+	u := &models.User{Email: "codes@example.com"}
+	require.NoError(t, st.CreateUser(ctx, u))
+	require.NoError(t, st.ReplaceVerificationCode(ctx, &models.VerificationCode{Kind: kind, Subject: "expired", CodeHash: "h", AttemptsLeft: 1, ExpiresAt: time.Now().UTC().Add(-time.Hour)}))
+	require.NoError(t, st.ReplaceVerificationCode(ctx, &models.VerificationCode{Kind: kind, Subject: u.ID, CodeHash: "h", AttemptsLeft: 1, ExpiresAt: expires}))
+	require.NoError(t, st.PurgeExpiredVerificationCodes(ctx))
+	_, err = st.FindVerificationCode(ctx, kind, "expired")
+	assert.True(t, behemotherr.IsNotFound(err), "the expired code was purged: %v", err)
+	_, err = st.FindVerificationCode(ctx, kind, u.ID)
+	require.NoError(t, err, "the live code was kept")
+	require.NoError(t, st.DeleteUser(ctx, u.ID))
+	_, err = st.FindVerificationCode(ctx, kind, u.ID)
+	assert.True(t, behemotherr.IsNotFound(err), "the user's code went with the user: %v", err)
+
+	require.NoError(t, st.DeleteVerificationCodeFor(ctx, kind, "nobody"), "removing a code that is not there is not an error")
 }

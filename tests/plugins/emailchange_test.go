@@ -330,7 +330,7 @@ func TestEmailChangeRoutes(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, callAs(t, app.ac, change, `{"email":"ada@new.example.com"}`, "").Code, "without a session")
 
-	sent := callAs(t, app.ac, change, `{"email":"ada@new.example.com","redirectURL":"/settings"}`, rawSession)
+	sent := callAs(t, app.ac, change, `{"email":"ada@new.example.com","redirect_url":"/settings"}`, rawSession)
 	require.Equal(t, http.StatusOK, sent.Code, sent.Body.String())
 	msgs := app.mails(t, 2)
 	notice, link := msgs[0], msgs[1]
@@ -343,7 +343,7 @@ func TestEmailChangeRoutes(t *testing.T) {
 	for body, reason := range map[string]string{
 		`{"email":"not an email"}`:    "not an address",
 		`{"email":"ADA@example.com"}`: "the address the account has",
-		`{"email":"ada@other.example.com","redirectURL":"https://evil.example.com/"}`: "a redirect outside the trusted origins",
+		`{"email":"ada@other.example.com","redirect_url":"https://evil.example.com/"}`: "a redirect outside the trusted origins",
 	} {
 		assert.Equal(t, http.StatusBadRequest, callAs(t, app.ac, change, body, rawSession).Code, reason)
 	}

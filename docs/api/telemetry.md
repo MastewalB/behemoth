@@ -390,6 +390,7 @@ Durations are in seconds. Attribute values come from fixed sets (a route pattern
 | `behemoth.store.errors` | counter | `op`, `entity`, `error_category` | database operations that returned an error |
 | `behemoth.audit.record_failures` | counter | `type` | audit events that could not be stored |
 | `behemoth.mail.sent` | counter | `kind`, `result` | messages handed to your mail sender; see [Mail](mail.md) |
+| `behemoth.sms.sent` | counter | `kind`, `result` | messages handed to your SMS sender; see [SMS](sms.md) |
 
 The names and attribute keys are constants in the `telemetry` package (`telemetry.MetricSignIn`, `telemetry.AttrOutcome`).
 

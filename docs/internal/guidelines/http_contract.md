@@ -21,7 +21,7 @@ A client never sees hooks, the store, migrations or the router adapters. Those c
 | Part of the contract | Example | Decided by |
 | --- | --- | --- |
 | Method and path | `POST /api/auth/sign-in/email` | `Route`, `RouterConfig.BasePath`, `PluginMeta.MountPath` |
-| Request body keys | `email`, `password`, `redirectURL` | the input type's `FromMap` |
+| Request body keys | `email`, `password`, `redirect_url` | the input type's `FromMap` |
 | Response body | `{"user": {...}}`, `{"status": "ok"}` | the handler, `WriteSignIn`, `PublicView` |
 | Error status and code | `401` with `invalid_credentials` | the `DomainError`'s category and code, the error mapper |
 | Response headers | `Set-Cookie`, `Set-Auth-Token`, `Retry-After`, `X-Request-ID` | the session manager, the router |
@@ -68,9 +68,11 @@ A new sign-in plugin calls `WriteSignIn`, as the magic link plugin does, and its
 
 Sign-in and sign-up decode the body into a map and hand the fields they do not read to the before hooks (`EmailAndPasswordCredentials.Extra`). An application sends a captcha token this way. A route that decodes into a struct drops those fields, and one that refuses unknown fields breaks the applications that send them.
 
-### Name a body key in the style of the body it joins
+### Name a body key in snake case
 
-The style is not settled: a user's keys are column names (`email_verified`), and the plugins' own keys are camel case (`redirectURL`). `docs/ongoing.md` has the entry, "Body keys mix two naming styles". Until it is decided, a new key follows the keys already in the same body, and a single word avoids the question.
+Request and response body keys are snake case: `phone_number`, `redirect_url`, `email_verified`. A user's keys are its column names, which are snake case already, so a client sees one style. Status values and error codes are snake case too (`signed_out`, `invalid_credentials`).
+
+Hook payload keys that never reach a client are a separate matter. Some are camel case (`userID`, `sessionID`), and a failure code is too (`userNotFound`). A key that is in both a request body and a hook payload uses the body's spelling.
 
 ### Keep a route's path a constant of its plugin
 
@@ -115,7 +117,6 @@ Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted titl
 - No route returns the caller's session, and `POST /sign-out` is mounted by the email/password plugin. "No route answers with the caller's session, and sign-out belongs to one plugin".
 - An application's `RouterConfig.ErrorMapper` returns the whole error body and can leave `code` out. "An application's error mapper decides the error body".
 - Two sign-ups racing for one email answer with the store's code and not `email_taken`. "Two sign-ups racing for one email answer with the store's code".
-- Body keys come in two styles. "Body keys mix two naming styles".
 - A route does not describe its input, its output or its codes, so no contract file can be generated or tested. "Routes do not describe their input and output".
 - The session cookie's attributes are fixed, which limits where a front end can be hosted. "The session cookie's attributes are fixed".
 - The email/password plugin's sign-up, sign-in and sign-out paths are string literals, repeated in core's rate-limit rules. No entry.

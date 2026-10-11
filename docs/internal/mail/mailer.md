@@ -56,6 +56,21 @@ A worker runs `sender.Send` under `context.WithTimeout(q.ctx, SendTimeout)`. It 
 
 The pool is a convenience for an application without a queue. It has no retry, no backoff and no persistence: a failed message is logged and gone, and queued messages are lost when the process dies. An application that needs more gives a `MailSender` that enqueues onto its own queue. `Send` and `SendAsync` then both return in the time an enqueue takes.
 
+# **The SMS sender**
+
+`AuthContext.SMS` (`types.SMS`, `DefaultSMS`) is the same component for text messages: `types.SMSSender` is the application's, `SMSMessage` carries a kind, a number and a code, and a plugin picks `Send` or `SendAsync` per operation. The phone number plugin is its one caller.
+
+Both are thin types over `sendQueue[M]` (`types/init/sendqueue.go`), which holds what this document describes: the direct call, the bounded queue, the workers that start with the first background send, the timeout, the panic recovery, `Close`, and the metric. `DefaultMailer` and `DefaultSMS` each embed one and set its name, its metric and its errors.
+
+| | Mail | SMS |
+| --- | --- | --- |
+| Config | `BootConfig.Mail` | `BootConfig.SMS` |
+| Message | `MailMessage`: a link | `SMSMessage`: a code |
+| Metric | `behemoth.mail.sent` | `behemoth.sms.sent` |
+| Queue | its own | its own |
+
+The queues are separate so that a slow mail provider does not delay a code that expires in five minutes.
+
 # **Metrics**
 
 `behemoth.mail.sent{kind, result}`: `sent` and `error` are counted where the sender returns, in both modes. `dropped` is counted in `SendAsync` when the queue is full.
@@ -71,6 +86,16 @@ The pool is a convenience for an application without a queue. It has no retry, n
 | `TestEmailVerificationAfterSignUp` | `tests/plugins/emailverification_test.go` | a sign-up returns while the sender is blocked |
 
 # **Design decisions**
+
+### A sender per channel, not one message type
+**Context:** The phone number plugin needed to send a code by text message.
+**Options considered:**
+- *Widen `MailMessage` with a channel and a code, and send everything through `MailSender`.* One interface for the application. A mail has a link and a URL, a text has a code and neither; each sender would switch on the channel and ignore half the fields. Applications usually have different providers for the two.
+- *A second sender, `SMSSender`, with its own message.* Two small interfaces. The queue code would exist twice.
+- *The second, over a shared generic queue.* Two interfaces, one implementation of background sending.
+
+**Decision:** The third.
+
 
 ### One sender for every plugin
 **Context:** The magic link plugin took a `SendLink` callback in its own options. Email verification needed to send too, and so did password reset later.

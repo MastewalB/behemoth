@@ -46,7 +46,7 @@ const DefaultTTL = 24 * time.Hour
 
 // The points the plugin declares and fires.
 const (
-	// HookSendBefore runs before a link is sent, on "email", "redirectURL"
+	// HookSendBefore runs before a link is sent, on "email", "redirect_url"
 	// and "metadata". A handler may rewrite the last two or stop the send.
 	HookSendBefore types.HookPoint = "auth.emailVerification.beforeSend"
 	// HookSendAfter runs once the message has been queued, with a
@@ -82,7 +82,7 @@ const (
 // Keys of the hook payloads and request bodies.
 const (
 	keyEmail       = "email"
-	keyRedirectURL = "redirectURL"
+	keyRedirectURL = "redirect_url"
 	keyMetadata    = "metadata"
 	keyToken       = "token"
 )
@@ -162,7 +162,7 @@ func (r *SendRequest) FromMap(data map[string]any) error {
 }
 
 // requestFields reads the three fields a request body and a before payload
-// share: "email", "redirectURL" and "metadata". A missing key is empty; a
+// share: "email", "redirect_url" and "metadata". A missing key is empty; a
 // value of the wrong type is a validation error.
 func requestFields(op string, data map[string]any) (email, redirect string, metadata behemoth.M, err error) {
 	field := func(key string) (string, error) {

@@ -44,7 +44,7 @@ WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBo
 | Route | Calls |
 | --- | --- |
 | `POST /sign-in/email` | `types.WriteSignIn(rctx, result, nil)` |
-| `POST /magic-link/verify` | `types.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirectURL": ...})` |
+| `POST /magic-link/verify` | `types.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
 
 A pending session's token is delivered like an active one's. The client needs it to present the second factor, and `SessionManager.Get` resolves a pending session by its token.
 
@@ -252,7 +252,7 @@ A response carries a user as `AuthContext.Public.Of(user)`: a flat map of the us
 **Revisit if:** a route needs to tell an unauthenticated visitor from a failed lookup without the router, such as a middleware that lets anonymous requests through. It would then want a helper that returns the session or the reason, and `RequireSession` would be built on it.
 
 ### One body for every sign-in route
-**Context:** The email/password sign-in answered with the bare user, and the magic link verify with `{"user": ..., "redirectURL": ...}`. A token in the body needs an object to sit in.
+**Context:** The email/password sign-in answered with the bare user, and the magic link verify with `{"user": ..., "redirect_url": ...}`. A token in the body needs an object to sit in.
 **Options considered:**
 - *Wrap only under the body transport.* No change for existing clients. The shape of a response would depend on a server setting.
 - *Always `{"user": ...}`.* One shape for every plugin and transport. It changes the email/password responses.

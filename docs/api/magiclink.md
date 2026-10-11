@@ -73,8 +73,8 @@ The routes sit directly under the router's base path.
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `POST /sign-in/magic-link` | `email`, and optionally `redirectURL` and `metadata` (an object) | `200` with `{"status": "ok"}` |
-| `POST /magic-link/verify` | `token` | `200` with `{"user": {...}, "redirectURL": "..."}`, or `{"status": "requires_second_factor", "redirectURL": "..."}` when a second factor is pending. It is the body every sign-in answers with, plus the redirect, and the session token arrives by the configured transport; see [Sessions](sessions.md#the-sign-in-response). |
+| `POST /sign-in/magic-link` | `email`, and optionally `redirect_url` and `metadata` (an object) | `200` with `{"status": "ok"}` |
+| `POST /magic-link/verify` | `token` | `200` with `{"user": {...}, "redirect_url": "..."}`, or `{"status": "requires_second_factor", "redirect_url": "..."}` when a second factor is pending. It is the body every sign-in answers with, plus the redirect, and the session token arrives by the configured transport; see [Sessions](sessions.md#the-sign-in-response). |
 
 **The request route answers the same whether or not the email has an account.** An unknown email, a link that could not be issued and a failed send are all a `200` with the same body, so the response does not show which addresses are registered. The plugin does not create accounts: an unknown email gets no link.
 
@@ -84,7 +84,7 @@ The routes sit directly under the router's base path.
 | --- | --- | --- | --- |
 | both | the body is not valid JSON | `400` | `request_validation_error` |
 | request | `email` is missing or not an email address | `400` | `email_invalid_input` |
-| request | `redirectURL` is not allowed | `400` | `redirect_url_invalid_input` |
+| request | `redirect_url` is not allowed | `400` | `redirect_url_invalid_input` |
 | request | `metadata` is not an object | `400` | `metadata_invalid_input` |
 | verify | `token` is missing | `400` | `token_invalid_input` |
 | verify | the link is unknown, expired, already used, or replaced by a newer one | `401` | `invalid_magic_link` |
@@ -149,7 +149,7 @@ The plugin declares three points of its own around a link request:
 
 | Point | Phase | What the handler gets |
 | --- | --- | --- |
-| `auth.magicLink.beforeRequest` (`magiclink.HookRequestBefore`) | before | payload `email`, `redirectURL`, `metadata`. The returned payload becomes the request's input. |
+| `auth.magicLink.beforeRequest` (`magiclink.HookRequestBefore`) | before | payload `email`, `redirect_url`, `metadata`. The returned payload becomes the request's input. |
 | `auth.magicLink.afterRequest` (`magiclink.HookRequestAfter`) | after | a `*magiclink.LinkResult`: user id, email, token id, expiry. Not the token. |
 | `auth.magicLink.requestFailed` (`magiclink.HookRequestFailed`) | failed | codes `userNotFound`, `issueFailed`, `sendFailed`, `rejectedByHook` |
 

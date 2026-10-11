@@ -43,7 +43,7 @@ const DefaultTTL = 15 * time.Minute
 // a link is a sign-in and fires core's auth.signIn.* points instead.
 const (
 	// HookRequestBefore runs on a link request's input: "email",
-	// "redirectURL" and "metadata". A handler may rewrite them or stop the
+	// "redirect_url" and "metadata". A handler may rewrite them or stop the
 	// request.
 	HookRequestBefore types.HookPoint = "auth.magicLink.beforeRequest"
 	// HookRequestAfter runs once the link has been handed to the mail
@@ -72,7 +72,7 @@ const (
 // Keys of a link request's hook payload and request body.
 const (
 	keyEmail       = "email"
-	keyRedirectURL = "redirectURL"
+	keyRedirectURL = "redirect_url"
 	keyMetadata    = "metadata"
 	keyToken       = "token"
 )
