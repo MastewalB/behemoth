@@ -79,8 +79,8 @@ The two tiers show in this trace. Steps 5 to 10 are Tier 1: the store fires them
 
 What a failure does depends on where it happens:
 
-- A handler error in step 3 stops the sign-up before anything is written. `WithLifecycle` fires `auth.signUp.failed` with code `rejectedByHook`.
-- A handler error in step 5 or 7, or a failed insert in step 8, rolls the transaction back. Step 10 never runs. A handler's typed rejection is returned to the caller as it is, and `signUpBody` fires `auth.signUp.failed` with code `rejectedByHook` for it. A system failure fires no failed point.
+- A handler error in step 3 stops the sign-up before anything is written. `WithLifecycle` fires `auth.signUp.failed` with code `rejected_by_hook`.
+- A handler error in step 5 or 7, or a failed insert in step 8, rolls the transaction back. Step 10 never runs. A handler's typed rejection is returned to the caller as it is, and `signUpBody` fires `auth.signUp.failed` with code `rejected_by_hook` for it. A system failure fires no failed point.
 - A handler error in step 10 or 11 is logged. The user exists and the sign-up succeeds.
 
 ---

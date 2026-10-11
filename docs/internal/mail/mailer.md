@@ -33,11 +33,11 @@ The plugin chooses per operation, by what a failed send costs:
 | Plugin | Call | Why |
 | --- | --- | --- |
 | `magiclink`, default | `SendAsync` | the sender's speed then does not show in the response time, which would tell a known email from an unknown one. A lost message costs a retry |
-| `magiclink`, with `WaitForSend` | `Send` | a link that was not sent is revoked and the failed point fires with `sendFailed` |
+| `magiclink`, with `WaitForSend` | `Send` | a link that was not sent is revoked and the failed point fires with `send_failed` |
 | `emailverification`, its links | `SendAsync` | the send is triggered by a sign-up or a profile update, which should not wait for a mail provider. A lost message costs a retry, and a repeated send is harmless |
 | `emailpassword`, a password reset link, default | `SendAsync` | as for a magic link |
 | `emailpassword`, the notice that a password was reset | `SendAsync` | the password is already set, so there is nothing to undo when the notice fails |
-| `emailpassword`, with `Reset.WaitForSend` | `Send` | a link that was not sent is revoked and the failed point fires with `sendFailed` |
+| `emailpassword`, with `Reset.WaitForSend` | `Send` | a link that was not sent is revoked and the failed point fires with `send_failed` |
 | `emailverification`, the notice of an email change | `Send` | the notice is what lets the owner stop a change. If it can't be handed over, the request fails and no confirmation link is issued |
 
 ### **What `SendAsync` does**

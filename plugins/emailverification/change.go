@@ -69,8 +69,8 @@ const (
 	// with a *ChangeResult.
 	HookChangeRequestAfter types.HookPoint = "auth.emailChange.afterRequest"
 	// HookChangeRequestFailed fires for a request that started no change:
-	// codes "issueFailed", "noticeFailed", "emailTaken", "sendFailed" and
-	// "rejectedByHook".
+	// codes "issue_failed", "notice_failed", "email_taken", "send_failed" and
+	// "rejected_by_hook".
 	HookChangeRequestFailed types.HookPoint = "auth.emailChange.requestFailed"
 
 	// HookChangeConfirmBefore runs before a change is applied. Veto only.
@@ -79,8 +79,8 @@ const (
 	// *models.User.
 	HookChangeConfirmAfter types.HookPoint = "auth.emailChange.afterConfirm"
 	// HookChangeConfirmFailed fires for a confirm that was refused: codes
-	// "invalidLink", "userNotFound", "emailChanged", "emailTaken" and
-	// "rejectedByHook".
+	// "invalid_link", "user_not_found", "email_changed", "email_taken" and
+	// "rejected_by_hook".
 	HookChangeConfirmFailed types.HookPoint = "auth.emailChange.confirmFailed"
 
 	// HookChangeRevertBefore runs before a change is undone. Veto only.
@@ -89,7 +89,7 @@ const (
 	// sessions have ended, with the *models.User.
 	HookChangeRevertAfter types.HookPoint = "auth.emailChange.afterRevert"
 	// HookChangeRevertFailed fires for a revert that was refused: codes
-	// "invalidLink", "userNotFound", "emailTaken" and "rejectedByHook".
+	// "invalid_link", "user_not_found", "email_taken" and "rejected_by_hook".
 	HookChangeRevertFailed types.HookPoint = "auth.emailChange.revertFailed"
 )
 
@@ -407,7 +407,7 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	// issued it, and an older one has to outlive every newer request (see
 	// changeRevertBody).
 	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, TokenKindEmailChange, user.ID); err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 
 	// The notice comes first, and the request waits for it. It is what
@@ -415,7 +415,7 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	// a change whose notice could not be handed over does not start.
 	revert, rawRevert, err := ac.TokenManager.Issue(hctx.Ctx, TokenKindEmailChangeRevert, user.ID, behemoth.M{keyRestore: current})
 	if err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 	err = ac.Mailer.Send(hctx.Ctx, types.MailMessage{
 		Kind: types.MailEmailChangeNotice, To: current, URL: withToken(p.revertURL, rawRevert), Token: rawRevert,
@@ -423,14 +423,14 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	})
 	if err != nil {
 		revoke(revert)
-		return nil, failed("noticeFailed", fmt.Errorf("emailverification: send change notice: %w", err))
+		return nil, failed("notice_failed", fmt.Errorf("emailverification: send change notice: %w", err))
 	}
 
 	// Checked after the notice, so that a request for an address that is
 	// taken does the same work as one for a free address up to here. The
 	// address is not reserved: the confirm checks again, by writing it.
 	if _, err := ac.Store.FindUserByEmail(hctx.Ctx, newEmail); err == nil {
-		return nil, failed("emailTaken", ErrEmailTaken)
+		return nil, failed("email_taken", ErrEmailTaken)
 	} else if !behemotherr.IsNotFound(err) {
 		return nil, err
 	}
@@ -441,7 +441,7 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	}
 	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, TokenKindEmailChange, user.ID, meta)
 	if err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 	// In the background, like a verification link: if it is lost, the user
 	// asks again. An error here means the message was not queued.
@@ -451,7 +451,7 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	})
 	if err != nil {
 		revoke(token)
-		return nil, failed("sendFailed", fmt.Errorf("emailverification: queue change link: %w", err))
+		return nil, failed("send_failed", fmt.Errorf("emailverification: queue change link: %w", err))
 	}
 
 	return &ChangeResult{UserID: user.ID, OldEmail: current, NewEmail: newEmail, TokenID: token.ID, ExpiresAt: token.ExpiresAt}, nil
@@ -554,7 +554,7 @@ func (p *Plugin) changeConfirmBody(hctx *types.HookContext, in changeTokenInput)
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad link
 		}
-		return nil, refuse("invalidLink", err, "", errInvalidChangeLink(op))
+		return nil, refuse("invalid_link", err, "", errInvalidChangeLink(op))
 	}
 	userID := fmt.Sprint(token.Subject)
 	user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
@@ -562,7 +562,7 @@ func (p *Plugin) changeConfirmBody(hctx *types.HookContext, in changeTokenInput)
 		if !behemotherr.IsNotFound(err) {
 			return nil, err
 		}
-		return nil, refuse("userNotFound", nil, userID, errInvalidChangeLink(op))
+		return nil, refuse("user_not_found", nil, userID, errInvalidChangeLink(op))
 	}
 
 	// The request was made for the address the user had then. If the
@@ -571,7 +571,7 @@ func (p *Plugin) changeConfirmBody(hctx *types.HookContext, in changeTokenInput)
 	from, _ := token.MetadataJSON[keyFrom].(string)
 	to, _ := token.MetadataJSON[keyTo].(string)
 	if to == "" || from != store.NormalizeEmail(user.Email) {
-		return nil, refuse("emailChanged", nil, userID, errInvalidChangeLink(op))
+		return nil, refuse("email_changed", nil, userID, errInvalidChangeLink(op))
 	}
 
 	// Both columns in one write. The plugin's own data.user.beforeUpdate
@@ -580,7 +580,7 @@ func (p *Plugin) changeConfirmBody(hctx *types.HookContext, in changeTokenInput)
 	updated, err := ac.Store.UpdateUser(hctx.Ctx, user.ID, behemoth.M{models.UserEmail: to, models.UserEmailVerified: true})
 	if err != nil {
 		if behemotherr.IsDuplicateKey(err) {
-			return nil, refuse("emailTaken", err, userID, errEmailTaken(op))
+			return nil, refuse("email_taken", err, userID, errEmailTaken(op))
 		}
 		return nil, err
 	}
@@ -630,7 +630,7 @@ func (p *Plugin) changeRevertBody(hctx *types.HookContext, in changeTokenInput) 
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad link
 		}
-		return nil, refuse("invalidLink", err, "", errInvalidChangeLink(op))
+		return nil, refuse("invalid_link", err, "", errInvalidChangeLink(op))
 	}
 	userID := fmt.Sprint(token.Subject)
 	restore, _ := token.MetadataJSON[keyRestore].(string)
@@ -639,10 +639,10 @@ func (p *Plugin) changeRevertBody(hctx *types.HookContext, in changeTokenInput) 
 		if !behemotherr.IsNotFound(err) {
 			return nil, err
 		}
-		return nil, refuse("userNotFound", nil, userID, errInvalidChangeLink(op))
+		return nil, refuse("user_not_found", nil, userID, errInvalidChangeLink(op))
 	}
 	if restore == "" {
-		return nil, refuse("invalidLink", nil, userID, errInvalidChangeLink(op))
+		return nil, refuse("invalid_link", nil, userID, errInvalidChangeLink(op))
 	}
 
 	// A change that has not been confirmed yet is dropped.
@@ -688,7 +688,7 @@ func (p *Plugin) changeRevertBody(hctx *types.HookContext, in changeTokenInput) 
 		return nil, err
 	}
 	if taken {
-		return nil, refuse("emailTaken", nil, userID, errEmailTaken(op))
+		return nil, refuse("email_taken", nil, userID, errEmailTaken(op))
 	}
 	return user, nil
 }

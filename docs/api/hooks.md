@@ -85,14 +85,17 @@ A failed handler is a notification. It fires when a flow rejects an operation fo
 
 ```go
 type FailureReason struct {
-	Code  string // "invalidCredentials", "userExists", "rejectedByHook", ...
+	Code  string // "invalid_credentials", "user_exists", "rejected_by_hook", ...
 	Cause error  // the underlying error, or nil
 }
 ```
 
+- `Code` is snake case, like the error codes a client receives. A flow of your own picks its codes the same way.
 - It can't change the outcome. Its error is logged and later handlers still run.
 - It does not fire for system errors such as a database timeout. Those are returned to the caller as ordinary errors.
-- When a before handler stops a flow, the flow's failed point fires with code `rejectedByHook` and your error as `Cause`.
+- When a before handler refuses a flow with a typed error, the flow's failed point fires with code `rejected_by_hook` (`types.FailureRejectedByHook`) and your error as `Cause`. The code is the same whichever handler refused, at any point of the flow: a refusal on `auth.signIn.credentialsVerified` is reported this way too. Read `Cause` for the reason. The audit event has your error's code as `causeCode` in its metadata.
+- A handler's untyped error, or a typed one that is not a rejection (`behemotherr.IsRejection`), counts as a system error. It stops the flow and fires no failed point.
+- A flow of your own that runs a before chain reports the chain's error with `types.FailIfRejected`, which applies both rules.
 - Tier 1 has no failed points.
 
 ## HookContext
@@ -582,7 +585,7 @@ signUp := types.WithLifecycle(ac.Dispatcher,
 	signUpBody)
 ```
 
-It runs the before chain on the input, calls the function with the rewritten input, and runs the after chain on the output. The whole call is one operation: you pass a `HookContext` with `Ctx`, `Auth` and `Request`, and `WithLifecycle` sets up `Values` and puts them on `hctx.Ctx` for the function to pass on. If a before handler stops it, it fires the failed point with `rejectedByHook`. If the function itself returns an error, no after chain runs; the function is expected to have fired the failed point for its own business rejections.
+It runs the before chain on the input, calls the function with the rewritten input, and runs the after chain on the output. The whole call is one operation: you pass a `HookContext` with `Ctx`, `Auth` and `Request`, and `WithLifecycle` sets up `Values` and puts them on `hctx.Ctx` for the function to pass on. If a before handler refuses it with a typed error, it fires the failed point with `rejected_by_hook`; a handler's system error stops it without firing one. If the function itself returns an error, no after chain runs; the function is expected to have fired the failed point for its own business rejections.
 
 ## Hook point reference
 
@@ -610,11 +613,11 @@ Core declares these, so a handler can be registered on any of them.
 | --- | --- | --- | --- |
 | `auth.signUp.before` | before | email/password sign-up | the sign-up fields from the request, including `email` and the plaintext `password`. The returned payload becomes the sign-up's input. |
 | `auth.signUp.after` | after | email/password sign-up | the created `*models.User` |
-| `auth.signUp.failed` | failed | email/password sign-up | codes `userExists`, `rejectedByHook` (a handler on `auth.signUp.before` or on a `data.user.*` create point rejected the sign-up) |
+| `auth.signUp.failed` | failed | email/password sign-up | codes `user_exists`, `rejected_by_hook` (a handler on `auth.signUp.before` or on a `data.user.*` create point rejected the sign-up) |
 | `auth.signIn.before` | before | email/password sign-in | `email`, the plaintext `password`, and any other field of the request (the keys of `EmailAndPasswordCredentials.Extra` for a call from code). The returned payload becomes the sign-in's input. An `email` or `password` that is not a string is a validation error. A sign-in by username has `username` in place of `email`. |
 | `auth.signIn.credentialsVerified` | before | sign-in, after the password check | `HookValueUserID`. A second-factor plugin stops the sign-in here, or sets `requireStepUp` to `true` to make the session pending. No other key is read back. |
 | `auth.signIn.after` | after | email/password sign-in, magic link verify | a `*types.SignInResult`: the user, the session, the raw session token, and `Method`, the name of the plugin that signed the user in (`"emailpassword"`, `"magiclink"`, `"username"`, `"phonenumber"`) |
-| `auth.signIn.failed` | failed | email/password sign-in | codes `userNotFound`, `noCredentialAccount`, `invalidCredentials`, `secondFactorRejected`, `rejectedByHook` |
+| `auth.signIn.failed` | failed | email/password sign-in | codes `user_not_found`, `no_credential_account`, `invalid_credentials`, `rejected_by_hook` |
 | `auth.signOut.before` | before | sign-out | `sessionID`. Veto only. |
 | `auth.signOut.after` | after | sign-out | nil |
 | `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent. The last two come from the request being handled unless the caller of `SessionManager.Create` set them, and are empty when `CaptureIPAndAgent` is off or there is no request. A handler can rewrite the IP address and the user agent (`HookValueIPAddress`, `HookValueUserAgent`), to mask the address for example. The rewrite is stored only when `CaptureIPAndAgent` is on. The user id and state are not read back. |

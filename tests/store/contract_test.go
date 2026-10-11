@@ -704,7 +704,7 @@ func auditLogContract(t *testing.T, st *store.Store) {
 		ActorType:   telemetry.ActorAnonymous,
 		SubjectType: models.UserTable, SubjectID: "user-1",
 		SessionID: "sess-1", RequestID: "req-1", IPAddress: "203.0.113.7", UserAgent: "curl/8",
-		Metadata:  behemoth.M{"code": "invalidCredentials", "email": "ada@example.com"},
+		Metadata:  behemoth.M{"code": "invalid_credentials", "email": "ada@example.com"},
 		Timestamp: base,
 	}
 	require.NoError(t, st.RecordAuditEvent(ctx, full))

@@ -119,7 +119,7 @@ type Account struct {
 
 - **Uniqueness.** The unique index `uq_accounts_provider_account` covers `(provider_id, account_id)`. Creating a second account with the same pair is a `DuplicateKey` error.
 - **The credential account.** `models.ProviderCredential` is `"credential"`. Its `AccountID` is the user's own id, so the email/password plugin finds it with `Store.FindAccount(ctx, models.ProviderCredential, user.ID)`.
-- **A user without a credential account** signed up through an OAuth provider only and has no password. Sign-in answers them exactly like a wrong password, runs the same dummy hash for timing, and fires the failed hook with code `noCredentialAccount`.
+- **A user without a credential account** signed up through an OAuth provider only and has no password. Sign-in answers them exactly like a wrong password, runs the same dummy hash for timing, and fires the failed hook with code `no_credential_account`.
 - **JSON.** `PasswordHash` and the three tokens are tagged `json:"-"`. Handlers return models as JSON, and these must never be in a response.
 
 ### **Secret columns**

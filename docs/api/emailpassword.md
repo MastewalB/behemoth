@@ -198,7 +198,7 @@ reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behem
 }, nil)
 ```
 
-The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejectedByHook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but it counts as a failure of the system: the client gets a `500`, the error is logged, and no failed point fires.
+The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejected_by_hook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but it counts as a failure of the system: the client gets a `500`, the error is logged, and no failed point fires. `behemotherr.IsRejection(err)` reports which of the two an error is: it is true for a typed error of category validation, conflict, unauthorized, forbidden or rate limited.
 
 With `SessionConfig.CaptureIPAndAgent` on, the session created at sign-in records the client's IP address and user agent. The address is resolved with `RouterConfig.TrustedProxies` and `ClientIPHeader`, so behind a load balancer it is the client's and not the proxy's.
 
@@ -310,10 +310,10 @@ The plugin declares six points when reset is on.
 | --- | --- | --- |
 | `auth.passwordReset.beforeRequest` (`emailpassword.HookResetRequestBefore`) | before | `email` and `metadata`. A handler may rewrite them or stop the request. |
 | `auth.passwordReset.afterRequest` (`emailpassword.HookResetRequestAfter`) | after | a `*emailpassword.ResetRequestResult`: user id, email, token id, expiry. Not the token. |
-| `auth.passwordReset.requestFailed` (`emailpassword.HookResetRequestFailed`) | failed | codes `userNotFound`, `issueFailed`, `sendFailed`, `rejectedByHook` |
+| `auth.passwordReset.requestFailed` (`emailpassword.HookResetRequestFailed`) | failed | codes `user_not_found`, `issue_failed`, `send_failed`, `rejected_by_hook` |
 | `auth.passwordReset.before` (`emailpassword.HookResetBefore`) | before | `password`, and `email` when the token is valid. A handler can stop the reset; what it writes to the payload is not used. |
 | `auth.passwordReset.after` (`emailpassword.HookResetAfter`) | after | the `*models.User` |
-| `auth.passwordReset.failed` (`emailpassword.HookResetFailed`) | failed | codes `invalidToken`, `userNotFound`, `emailChanged`, `rejectedByHook` |
+| `auth.passwordReset.failed` (`emailpassword.HookResetFailed`) | failed | codes `invalid_token`, `user_not_found`, `email_changed`, `rejected_by_hook` |
 
 The after and failed points are audited under their point names. Issuing and consuming the token also fire the token manager's points with the kind `password_reset`, and each ended session fires the session revoke points.
 

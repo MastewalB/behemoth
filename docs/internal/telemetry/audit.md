@@ -122,10 +122,12 @@ A failed operation is never attributed to its subject. A wrong password for an a
 | Field | Source |
 | --- | --- |
 | `Outcome` | `failure` for `Fail`, otherwise left to normalization (`success`) |
-| `Metadata` | for `Fail`: `FailureReason.Metadata`, then `code`, and `cause` when the reason has one. For a token result: `kind`. |
+| `Metadata` | for `Fail`: `FailureReason.Metadata`, then `code`, and when the reason has a cause, `cause` (the error's text) and `causeCode` (the code of a cause that is a `DomainError` with one). For a token result: `kind`. |
 | `SessionID` | the request's session; else the result's, when it is a session; else `Values[HookValueSessionID]` |
 | `IPAddress` | `types.ClientIP` with the router's proxy configuration, so it is the same address a session and a rate limit see |
 | `UserAgent` | the request's `User-Agent` header |
+
+`causeCode` is what tells one hook refusal from another. Every one of them has the `code` `rejected_by_hook`, since the firing site can't know which handler refused, and the handler's own error code (`email_not_verified`, `rate_limited`) is in `causeCode`. The metric attribute is still the reason's `code`, so a plugin's error codes do not become metric label values.
 
 `FailureReason.Metadata` carries what was attempted when there is no subject to name. A sign-in for an address with no account records the address there.
 

@@ -70,7 +70,7 @@ const (
 	AttrRoute         = "route"          // a route's pattern, never the request path
 	AttrStatus        = "status"         // HTTP status code
 	AttrOutcome       = "outcome"        // "success" or "failure"
-	AttrReason        = "reason"         // a failure's code, e.g. "invalidCredentials"
+	AttrReason        = "reason"         // a failure's code, e.g. "invalid_credentials"
 	AttrKind          = "kind"           // a token kind, or a mail kind
 	AttrCache         = "cache"          // "hit" or "miss"
 	AttrRule          = "rule"           // a rate-limit rule's name

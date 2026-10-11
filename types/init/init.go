@@ -1717,6 +1717,10 @@ func (d *DefaultDispatcher) recordAuditTx(hctx *types.HookContext, point types.H
 // see: the point, its result or failure reason, the operation's Values and
 // the request.
 //
+// Metadata of a failure: the reason's Metadata, its Code as "code", and for
+// a reason with a Cause the error's text as "cause" and, when it is a typed
+// error with a code, that code as "causeCode".
+//
 // Subject, first match: the failure reason's, the result's (auditSubject),
 // the operation's user (Values[HookValueUserID]).
 //
@@ -1737,6 +1741,12 @@ func (d *DefaultDispatcher) auditEvent(hctx *types.HookContext, point types.Hook
 		event.Metadata["code"] = reason.Code
 		if reason.Cause != nil {
 			event.Metadata["cause"] = reason.Cause.Error()
+			// The cause's own code says why, where the reason's code only
+			// says that a hook refused (types.FailureRejectedByHook). It is
+			// not a metric attribute: any plugin can define one. See ADR-0001.
+			if de, ok := errors.AsType[*behemotherr.DomainError](reason.Cause); ok && de.Code != "" {
+				event.Metadata["causeCode"] = de.Code
+			}
 		}
 		if reason.SubjectID != "" {
 			subjectType, subjectID, subjectUser = reason.SubjectType, reason.SubjectID, ""

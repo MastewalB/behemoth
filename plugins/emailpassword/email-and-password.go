@@ -414,7 +414,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 	if err == nil {
 		hashPassword(hctx, password) // timing mitigation, unchanged
-		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "userExists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
+		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "user_exists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
 			return nil, err
 		}
 		return nil, errEmailTaken()
@@ -463,13 +463,8 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 		// or afterCreate, or a classified store error. An untyped one is a
 		// failure of the system: the router answers 500 without its text
 		// and logs it.
-		if isRejection(err) {
-			if failErr := dispatcher.Fail(hctx, hooks.HookSignUpFailed,
-				types.FailureReason{Code: "rejectedByHook", Cause: err, Metadata: behemoth.M{hooks.HookValueEmail: email}}); failErr != nil {
-				return nil, failErr
-			}
-		}
-		return nil, err
+		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignUpFailed, err,
+			types.FailureReason{Metadata: behemoth.M{hooks.HookValueEmail: email}})
 	}
 
 	return user, nil
@@ -484,23 +479,6 @@ func hashPassword(hctx *types.HookContext, password string) (string, error) {
 	hash, err := hctx.Auth.Crypto.Passwords.Hash(password)
 	telemetry.FinishSpan(span, err)
 	return hash, err
-}
-
-// isRejection reports whether err is a refusal of the request, as opposed to
-// a failure of the system: a typed error in one of the categories a hook
-// handler or a rate limit answers with. Only rejections fire a failed point,
-// so an outage is not counted as a refused sign-up.
-func isRejection(err error) bool {
-	de, ok := errors.AsType[*behemotherr.DomainError](err)
-	if !ok {
-		return false
-	}
-	switch de.Category {
-	case behemotherr.CategoryValidation, behemotherr.CategoryConflict, behemotherr.CategoryUnauthorized,
-		behemotherr.CategoryForbidden, behemotherr.CategoryRateLimited:
-		return true
-	}
-	return false
 }
 
 // ErrorCodeInvalidCredentials is the code of the error sign-in returns for an
@@ -536,7 +514,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 				attempted = creds.normalize(attempted)
 			}
 			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
-				Code: "userNotFound", Metadata: behemoth.M{creds.Key: attempted},
+				Code: "user_not_found", Metadata: behemoth.M{creds.Key: attempted},
 			}); err != nil {
 				return nil, err
 			}
@@ -558,7 +536,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 	if err != nil {
 		hashPassword(hctx, creds.Password) // timing mitigation
 		if behemotherr.IsNotFound(err) {
-			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("noCredentialAccount", nil)); err != nil {
+			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("no_credential_account", nil)); err != nil {
 				return nil, err
 			}
 			return nil, errInvalidCredentials()
@@ -574,7 +552,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 	}
 
 	if !isValid {
-		if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("invalidCredentials", nil)); err != nil {
+		if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("invalid_credentials", nil)); err != nil {
 			return nil, err
 		}
 		return nil, errInvalidCredentials()
@@ -582,15 +560,14 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 
 	// The seam a 2FA plugin hooks. requireStepUp travels back via the mutated
 	// payload - this is the mechanism by which SignIn decides Pending vs Active
-	// without knowing anything about TOTP, backup codes, etc.
+	// without knowing anything about TOTP, backup codes, etc. Any plugin may
+	// refuse the sign-in here, so a refusal is reported as one by a hook and
+	// not as a second factor's. See ADR-0001.
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed,
-			rejected("secondFactorRejected", err)); failErr != nil {
-			return nil, failErr
-		}
-		return nil, err
+		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
+			types.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
 
 	state := types.SessionActive

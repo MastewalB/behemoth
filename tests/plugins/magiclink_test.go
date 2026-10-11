@@ -210,7 +210,7 @@ func TestMagicLinkRequestAndVerify(t *testing.T) {
 	assert.Equal(t, user.ID, requested[0].SubjectID)
 	failed := app.rec.Audit.OfType(string(magiclink.HookRequestFailed))
 	require.Len(t, failed, 1)
-	assert.Equal(t, "userNotFound", failed[0].Metadata["code"])
+	assert.Equal(t, "user_not_found", failed[0].Metadata["code"])
 	assert.Equal(t, "nobody@example.com", failed[0].Metadata[hooks.HookValueEmail])
 }
 
@@ -336,7 +336,7 @@ func TestMagicLinkVerifyRefusalsAndSecondFactor(t *testing.T) {
 	assert.True(t, invalidLink(err), "a link sent to the old address: %v", err)
 	failures := app.rec.Audit.OfType(string(hooks.HookSignInFailed))
 	require.NotEmpty(t, failures)
-	assert.Equal(t, "emailChanged", failures[len(failures)-1].Metadata["code"])
+	assert.Equal(t, "email_changed", failures[len(failures)-1].Metadata["code"])
 	assert.Equal(t, user.ID, failures[len(failures)-1].SubjectID)
 
 	// The user is deleted after the link was sent: the link goes with it.

@@ -88,10 +88,10 @@ The two flows have the shape of the magic link plugin's request and verify; see 
 | Step | What | On failure |
 | --- | --- | --- |
 | 1 | normalize the email and check its shape (`utils.IsValidEmail`) | a validation error |
-| 2 | `Store.FindUserByEmail` | `Fail` with `userNotFound`, `ErrNoAccount` |
-| 3 | `TokenManager.RevokeAllForSubject(password_reset, user.ID)` | `Fail` with `issueFailed` |
-| 4 | `TokenManager.Issue`, subject the user's id, the email in the metadata | `Fail` with `issueFailed` |
-| 5 | `Mailer.SendAsync`, or `Send` with `WaitForSend` | the token is revoked, `Fail` with `sendFailed` |
+| 2 | `Store.FindUserByEmail` | `Fail` with `user_not_found`, `ErrNoAccount` |
+| 3 | `TokenManager.RevokeAllForSubject(password_reset, user.ID)` | `Fail` with `issue_failed` |
+| 4 | `TokenManager.Issue`, subject the user's id, the email in the metadata | `Fail` with `issue_failed` |
+| 5 | `Mailer.SendAsync`, or `Send` with `WaitForSend` | the token is revoked, `Fail` with `send_failed` |
 
 - **Step 1 does not use `Options.ValidateEmail`.** That option is the policy for new accounts. An account created under an older policy can still reset its password.
 - **The user needs no credential account.** A user created by a magic link gets a link too.
@@ -104,12 +104,12 @@ The two flows have the shape of the magic link plugin's request and verify; see 
 | Step | What | On failure |
 | --- | --- | --- |
 | 1 | `validatePassword`, the rules sign-up uses | a validation error; the token is untouched |
-| 2 | the token `Verify` read is usable | `Fail` with `invalidToken` |
-| 3 | `Store.FindUserByID(token.Subject)` | `Fail` with `userNotFound` |
-| 4 | compare the email in the token's metadata with the user's | `Fail` with `emailChanged` |
+| 2 | the token `Verify` read is usable | `Fail` with `invalid_token` |
+| 3 | `Store.FindUserByID(token.Subject)` | `Fail` with `user_not_found` |
+| 4 | compare the email in the token's metadata with the user's | `Fail` with `email_changed` |
 | 5 | `hashPassword` | the error is returned |
-| 6 | `TokenManager.Consume(password_reset, token)` | `Fail` with `invalidToken`: another reset used the link since step 2 |
-| 7 | in one `Store.Transaction`: update the credential account's hash, or create the account; set `email_verified` unless it is set or `LeaveEmailUnverified` | a typed veto of a data hook fires `Fail` with `rejectedByHook` |
+| 6 | `TokenManager.Consume(password_reset, token)` | `Fail` with `invalid_token`: another reset used the link since step 2 |
+| 7 | in one `Store.Transaction`: update the credential account's hash, or create the account; set `email_verified` unless it is set or `LeaveEmailUnverified` | a typed veto of a data hook fires `Fail` with `rejected_by_hook` |
 | 8 | `SessionManager.RevokeAllForUser(user.ID, "password_reset", "")` | the error is returned; the password is already changed |
 | 9 | `Mailer.SendAsync` a `MailPasswordChanged` notice to the user's address | logged at Warn; the reset stands |
 | 10 | return the `*models.User` | |
@@ -154,7 +154,7 @@ The phone number plugin is the one caller; see [`phonenumber.md`](phonenumber.md
 - `[Not built]` Password change for a signed-in user. It needs a way to re-check the current password; see *Nothing refreshes a session in place* in `docs/ongoing.md`.
 - `[Limit]` A reset consumes its token just before it writes the password, outside the write's transaction. If that write fails, the link is spent and the user asks for another. `docs/ongoing.md` has what consuming inside the transaction would need.
 - `[Not built]` Rehash on sign-in. `PasswordHasher.NeedsRehash` exists but sign-in does not call it.
-- Sign-up, sign-in and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejectedByHook` for it (`isRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
+- Sign-up, sign-in and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`behemotherr.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
 - `Options.ValidateEmail` and `ValidatePassword` errors are replaced by `invalid email` and `invalid password` in the response, so a custom message does not reach the client. The function's error is the typed error's cause, for logs.
 
 ### The email and password rules belong to the plugin
@@ -192,7 +192,7 @@ What the router does with each error:
 | a database error, or any category without a status | `500` | the category's public message, never the error's text |
 | an untyped error (a hook handler's `errors.New`, an unexpected failure) | `500` | `{"error": "internal server error"}` |
 
-The three refusals share one code and one message on purpose: a different answer for an unknown email would tell a caller which addresses have an account. The failure code a hook handler sees on `auth.signIn.failed` still tells them apart (`userNotFound`, `noCredentialAccount`, `invalidCredentials`).
+The three refusals share one code and one message on purpose: a different answer for an unknown email would tell a caller which addresses have an account. The failure code a hook handler sees on `auth.signIn.failed` still tells them apart (`user_not_found`, `no_credential_account`, `invalid_credentials`).
 
 Two changes a client can observe: a wrong password is a `401` where it was a `400`, and an untyped error from a handler on a sign-in point is a `500` where it was a `400`. The second matches what the hook docs ask for, a typed error from a handler that rejects.
 

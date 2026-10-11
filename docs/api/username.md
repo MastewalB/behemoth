@@ -145,9 +145,9 @@ The plugin declares no points. A sign-in by username fires the `auth.signIn.*` p
 | `auth.signIn.before` | `username` in its stored form, the plaintext `password`, and the other fields of the request. The returned payload becomes the sign-in's input. |
 | `auth.signIn.credentialsVerified` | the user's id, as for an email sign-in. A second-factor plugin and `emailverification`'s `RequireVerified` apply here. |
 | `auth.signIn.after` | a `*types.SignInResult` with `Method` `"username"` |
-| `auth.signIn.failed` | codes `userNotFound` (with the username in the audit event's metadata), `noCredentialAccount`, `invalidCredentials`, `secondFactorRejected`, `rejectedByHook` |
+| `auth.signIn.failed` | codes `user_not_found` (with the username in the audit event's metadata), `no_credential_account`, `invalid_credentials`, `rejected_by_hook` |
 
-It registers three handlers: on `auth.signUp.before`, `data.user.beforeCreate` and `data.user.beforeUpdate`. A refused username at sign-up fires `auth.signUp.failed` with `rejectedByHook`.
+It registers three handlers: on `auth.signUp.before`, `data.user.beforeCreate` and `data.user.beforeUpdate`. A refused username at sign-up fires `auth.signUp.failed` with `rejected_by_hook`.
 
 ## Rate limits
 

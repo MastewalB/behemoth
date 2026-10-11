@@ -378,7 +378,7 @@ func TestPhoneNumberSignIn(t *testing.T) {
 	assert.True(t, invalidPhoneCode(err), "%v", err)
 	_, err = app.phones.SignInWithCode(ctx, graceNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "a number nobody holds: %v", err)
-	assert.Equal(t, []string{"invalidCode", "userNotFound"}, failed)
+	assert.Equal(t, []string{"invalid_code", "user_not_found"}, failed)
 
 	before = nil
 	result, err := app.phones.SignInWithCode(ctx, adaNumber, msg.Code)
@@ -595,7 +595,7 @@ func TestPhonePasswordReset(t *testing.T) {
 	assert.True(t, invalidPhoneCode(err), "a number nobody holds: %v", err)
 	_, err = app.phones.ResetPassword(ctx, adaNumber, wrongCode(msg.Code), "a new password")
 	assert.True(t, invalidPhoneCode(err), "%v", err)
-	assert.Equal(t, []string{"noAccount", "invalidCode"}, failed)
+	assert.Equal(t, []string{"no_account", "invalid_code"}, failed)
 
 	user, err := app.phones.ResetPassword(ctx, adaNumber, msg.Code, "a new password")
 	require.NoError(t, err)

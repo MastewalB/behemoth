@@ -155,7 +155,7 @@ func TestEmailChangeConfirmAndRevert(t *testing.T) {
 	}
 	refused := app.rec.Audit.OfType(string(emailverification.HookChangeRevertFailed))
 	require.Len(t, refused, 1)
-	assert.Equal(t, "invalidLink", refused[0].Metadata["code"])
+	assert.Equal(t, "invalid_link", refused[0].Metadata["code"])
 }
 
 // Before the new address confirms, the notice's link drops the pending
@@ -241,7 +241,7 @@ func TestEmailChangeToAnAddressThatIsTaken(t *testing.T) {
 	assert.Equal(t, types.MailEmailChangeNotice, msgs[0].Kind, "the account's own address is still told")
 	failed := app.rec.Audit.OfType(string(emailverification.HookChangeRequestFailed))
 	require.Len(t, failed, 1)
-	assert.Equal(t, "emailTaken", failed[0].Metadata["code"])
+	assert.Equal(t, "email_taken", failed[0].Metadata["code"])
 
 	// Free at the request, taken before the confirm.
 	_, confirm := app.requestChange(t, user.ID, "ada@new.example.com", 3)
@@ -286,7 +286,7 @@ func TestEmailChangeNeedsItsNotice(t *testing.T) {
 	assert.True(t, invalidChangeLink(err), "the link of the notice that was not sent is revoked: %v", err)
 	failed := app.rec.Audit.OfType(string(emailverification.HookChangeRequestFailed))
 	require.Len(t, failed, 1)
-	assert.Equal(t, "noticeFailed", failed[0].Metadata["code"])
+	assert.Equal(t, "notice_failed", failed[0].Metadata["code"])
 }
 
 // callAs invokes a mounted route the way call does, with a session token.

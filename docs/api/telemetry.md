@@ -220,7 +220,7 @@ Each event has:
 | `SubjectType`, `SubjectID` | what it was done to: a table name such as `users` or `sessions`, and the row's id |
 | `SessionID`, `RequestID` | the session and request involved, when there is one |
 | `IPAddress`, `UserAgent` | of the request, when there is one |
-| `Metadata` | details of the event type: the failure `code`, a token's `kind`, the `email` tried in a sign-in for an unknown address |
+| `Metadata` | details of the event type: the failure `code`, with `cause` and `causeCode` (the text and the error code of the error behind it, when there is one), a token's `kind`, the `email` tried in a sign-in for an unknown address |
 | `Timestamp` | when it was recorded |
 
 Things worth knowing:
@@ -401,7 +401,7 @@ Attribute values:
 | `route` | the route's pattern, such as `/api/auth/sign-in/email` or `/users/{id}` |
 | `status` | the HTTP status the client received |
 | `outcome` | `success` or `failure` |
-| `reason` | on failure only: the failure's code, such as `invalidCredentials`, `userNotFound`, `session_expired` |
+| `reason` | on failure only: the failure's code, such as `invalid_credentials`, `user_not_found`, `session_expired` |
 | `cache` | `hit` or `miss` |
 | `result` | rate limits: `allowed`, `limited`, `error` when the rate-limit store could not be reached, or `skipped` when a hook rule did not apply to the call. Mail: `sent`, `error`, or `dropped` when the background queue was full |
 | `phase` | `before`, `after` or `failed` |
@@ -412,7 +412,7 @@ Attribute values:
 
 ### Reading them
 
-- **Failed sign-ins:** `behemoth.auth.sign_in` with `outcome="failure"`, split by `reason`. A rise in `invalidCredentials` for a steady `success` rate is what a password-guessing run looks like.
+- **Failed sign-ins:** `behemoth.auth.sign_in` with `outcome="failure"`, split by `reason`. A rise in `invalid_credentials` for a steady `success` rate is what a password-guessing run looks like.
 - **Session cache hit ratio:** `behemoth.session.validated` with `cache="hit"` over all of them.
 - **Database health:** alert on `behemoth.store.errors` with `error_category="database"`. `not_found` is counted too and is a normal answer: sign-up looks an address up and expects to find nothing.
 - **A slow hook handler:** `behemoth.hook.duration` by `plugin`. Handlers on data points run inside a database transaction, so a slow one also holds locks.

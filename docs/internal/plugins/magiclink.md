@@ -38,11 +38,11 @@ The token kind is database-backed on purpose. `RevokeAllForSubject` is not suppo
 | --- | --- | --- |
 | 1 | normalize the email and check its shape (`utils.IsValidEmail`) | a validation error |
 | 2 | check `RedirectURL` with `types.TrustedRedirect(ac.Origins, url)`, if one was given | a validation error |
-| 3 | `Store.FindUserByEmail` | not found: `Fail` with `userNotFound`, return `ErrNoAccount` |
-| 4 | `TokenManager.RevokeAllForSubject(magic_link, user.ID)` | `Fail` with `issueFailed` |
-| 5 | `TokenManager.Issue(magic_link, user.ID, {email, redirect_url})` | `Fail` with `issueFailed` |
+| 3 | `Store.FindUserByEmail` | not found: `Fail` with `user_not_found`, return `ErrNoAccount` |
+| 4 | `TokenManager.RevokeAllForSubject(magic_link, user.ID)` | `Fail` with `issue_failed` |
+| 5 | `TokenManager.Issue(magic_link, user.ID, {email, redirect_url})` | `Fail` with `issue_failed` |
 | 6 | build the URL: `LinkURL` plus `token=<raw>` | |
-| 7 | `ac.Mailer.SendAsync(ctx, MailMessage{Kind: MailMagicLink, ...})`, or `Send` with `Options.WaitForSend` | revoke the token, `Fail` with `sendFailed` |
+| 7 | `ac.Mailer.SendAsync(ctx, MailMessage{Kind: MailMagicLink, ...})`, or `Send` with `Options.WaitForSend` | revoke the token, `Fail` with `send_failed` |
 | 8 | return a `*LinkResult`; `WithLifecycle` fires `auth.magicLink.afterRequest` | |
 
 Steps 1 and 2 come before the lookup, so a validation error does not depend on whether the email has an account.
@@ -76,11 +76,11 @@ The response time still differs: a known email pays for the token writes, and wi
 
 | Step | What | On failure |
 | --- | --- | --- |
-| 1 | `TokenManager.Consume(magic_link, token)` | `Fail` with `invalidMagicLink` |
-| 2 | `Store.FindUserByID(token.Subject)` | `Fail` with `userNotFound` |
-| 3 | compare the email in the token's metadata with the user's | `Fail` with `emailChanged` |
+| 1 | `TokenManager.Consume(magic_link, token)` | `Fail` with `invalid_magic_link` |
+| 2 | `Store.FindUserByID(token.Subject)` | `Fail` with `user_not_found` |
+| 3 | compare the email in the token's metadata with the user's | `Fail` with `email_changed` |
 | 4 | set `email_verified` if it is not set (`Store.UpdateUser`), unless `Options.LeaveEmailUnverified` | the error is returned |
-| 5 | `RunBefore(auth.signIn.credentialsVerified)`; `requireStepUp` makes the session pending | `Fail` with `secondFactorRejected` |
+| 5 | `RunBefore(auth.signIn.credentialsVerified)`; `requireStepUp` makes the session pending | `FailIfRejected`: `Fail` with `rejected_by_hook` for a rejection |
 | 6 | `SessionManager.Create` | the error is returned |
 | 7 | return a `*types.SignInResult` with `Method: "magiclink"` | |
 

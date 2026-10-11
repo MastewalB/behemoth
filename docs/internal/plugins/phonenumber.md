@@ -57,12 +57,12 @@ All three kinds have a user id as their subject, and the number in their metadat
 | 1 | `Parse` the number | a validation error |
 | 2 | publish the number in `Values`, `RunBefore` on `auth.phoneNumber.beforeSend` (the per-number rate limit runs here) | a rate-limit error, or a handler's |
 | 3 | find who holds the number | |
-| 4 | for `verify`: load the user; refuse a number the user has (`alreadySet`) or another user has (`numberTaken`). Otherwise: refuse a number nobody holds (`noAccount`) | a result with `Sent: false` |
+| 4 | for `verify`: load the user; refuse a number the user has (`already_set`) or another user has (`number_taken`). Otherwise: refuse a number nobody holds (`no_account`) | a result with `Sent: false` |
 | 5 | `Codes.Issue` | the error is returned |
 | 6 | `SMS.SendAsync`, or `Send` with `WaitForSend` | the code is revoked; a result with `Sent: false`, `send_failed` |
 | 7 | `RunAfter` on `auth.phoneNumber.afterSend` | |
 
-- **It does not use `WithLifecycle`.** That helper fires the after point for every result that is not an error. Here a request that sent nothing still returns a result, and the after point should mean "a code went out". So `send` calls the dispatcher itself and fires `sendFailed` for the cases of steps 4 and 6.
+- **It does not use `WithLifecycle`.** That helper fires the after point for every result that is not an error. Here a request that sent nothing still returns a result, and the after point should mean "a code went out". So `send` calls the dispatcher itself and fires `send_failed` for the cases of steps 4 and 6.
 - **The flow decides what a client learns, not the handler.** `SendResult.Sent` and `Reason` tell a caller in code everything; `handleSend` ignores the result and answers `{"status": "ok"}`. No wrapper has an error to hide. This follows *What a client may learn is decided in the flow* in [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md); the magic link and reset routes still hide errors in their handlers.
 - **The rate limit runs before the lookup**, in step 2, so it counts a number nobody holds like any other.
 - **A failed send is logged by the flow**, since the result does not carry the error.

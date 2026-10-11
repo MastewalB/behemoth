@@ -32,6 +32,24 @@ const (
 	CategoryInternal       Category = "internal"        // catch-all, should shrink over time as gaps get classified
 )
 
+// IsRejection reports whether an error of the category refuses the request,
+// as opposed to reporting a failure of the system. A rejection is what a hook
+// handler or a rate limit answers with to stop an operation: the caller did
+// something that is not allowed, and the system worked. Every other category
+// counts as a failure of the system, such as a database that is down.
+//
+// This is the one place that draws the line. Code that fires a failed hook
+// point asks it, so that an outage is not counted or audited as a refused
+// request.
+func (c Category) IsRejection() bool {
+	switch c {
+	case CategoryValidation, CategoryConflict, CategoryUnauthorized,
+		CategoryForbidden, CategoryRateLimited:
+		return true
+	}
+	return false
+}
+
 const (
 	ErrorCodeUnknown = "unknown_error"
 )
@@ -62,6 +80,17 @@ func (e *DomainError) Unwrap() error { return e.Original } // preserves errors.I
 func Is(err error, category Category) bool {
 	if de, ok := errors.AsType[*DomainError](err); ok {
 		return de.Category == category
+	}
+	return false
+}
+
+// IsRejection reports whether err is a typed refusal of the request (see
+// [Category.IsRejection]). An error that is not a [DomainError] is not one:
+// it is taken as a failure of the system, so a hook handler that means to
+// refuse a request returns a typed error.
+func IsRejection(err error) bool {
+	if de, ok := errors.AsType[*DomainError](err); ok {
+		return de.Category.IsRejection()
 	}
 	return false
 }

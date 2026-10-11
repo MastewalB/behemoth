@@ -54,7 +54,7 @@ func appHooks(reg types.HookRegistry) error {
 		if !ok {
 			trace("app", hctx, "unknown invite code, rejecting")
 			// A typed error: the client gets a 400 with this message, and
-			// auth.signUp.failed fires with code "rejectedByHook".
+			// auth.signUp.failed fires with code "rejected_by_hook".
 			return nil, behemotherr.NewInvalidInputError("app.invite", "invite", "this invite code is not valid", nil)
 		}
 		hctx.Values[valueInviter] = inviter

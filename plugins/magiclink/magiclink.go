@@ -50,7 +50,7 @@ const (
 	// sender, with a *LinkResult.
 	HookRequestAfter types.HookPoint = "auth.magicLink.afterRequest"
 	// HookRequestFailed fires for a request that sent no link: codes
-	// "userNotFound", "issueFailed", "sendFailed" and "rejectedByHook".
+	// "user_not_found", "issue_failed", "send_failed" and "rejected_by_hook".
 	HookRequestFailed types.HookPoint = "auth.magicLink.requestFailed"
 )
 
@@ -419,7 +419,7 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 		}
 		// Sign-up by link is not built: an unknown email gets no link.
 		if failErr := ac.Dispatcher.Fail(hctx, HookRequestFailed, types.FailureReason{
-			Code: "userNotFound", Metadata: behemoth.M{hooks.HookValueEmail: email},
+			Code: "user_not_found", Metadata: behemoth.M{hooks.HookValueEmail: email},
 		}); failErr != nil {
 			return nil, failErr
 		}
@@ -441,7 +441,7 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 	// email, so Store.DeleteUser removes the links with the user. The email
 	// the link was sent to is kept next to it and checked at verify.
 	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, types.TokenKindMagicLink, user.ID); err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 	meta := behemoth.M{keyEmail: email}
 	if req.RedirectURL != "" {
@@ -449,7 +449,7 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 	}
 	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, types.TokenKindMagicLink, user.ID, meta)
 	if err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 
 	link := *p.linkURL
@@ -471,7 +471,7 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 		if revokeErr := ac.TokenManager.Revoke(hctx.Ctx, token.ID); revokeErr != nil {
 			p.log.Warn(hctx.Ctx, "the link that could not be sent was not revoked", telemetry.ErrorFields(revokeErr))
 		}
-		return nil, failed("sendFailed", fmt.Errorf("magiclink: send link: %w", err))
+		return nil, failed("send_failed", fmt.Errorf("magiclink: send link: %w", err))
 	}
 
 	return &LinkResult{UserID: user.ID, Email: email, TokenID: token.ID, ExpiresAt: token.ExpiresAt}, nil
@@ -545,7 +545,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*types.Sig
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad link
 		}
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalidMagicLink", Cause: err}); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalid_magic_link", Cause: err}); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidLink()
@@ -561,7 +561,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*types.Sig
 		if !behemotherr.IsNotFound(err) {
 			return nil, err
 		}
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("userNotFound", nil)); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("user_not_found", nil)); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidLink()
@@ -571,7 +571,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*types.Sig
 	// email has changed since, that is no longer the account's address.
 	sentTo, _ := token.MetadataJSON[keyEmail].(string)
 	if sentTo == "" || sentTo != store.NormalizeEmail(user.Email) {
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("emailChanged", nil)); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("email_changed", nil)); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidLink()
@@ -588,10 +588,8 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*types.Sig
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("secondFactorRejected", err)); failErr != nil {
-			return nil, failErr
-		}
-		return nil, err
+		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
+			types.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
 	}
 	state := types.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {

@@ -43,7 +43,7 @@ const (
 	// sender, with a *ResetRequestResult.
 	HookResetRequestAfter types.HookPoint = "auth.passwordReset.afterRequest"
 	// HookResetRequestFailed fires for a request that sent no link: codes
-	// "userNotFound", "issueFailed", "sendFailed" and "rejectedByHook".
+	// "user_not_found", "issue_failed", "send_failed" and "rejected_by_hook".
 	HookResetRequestFailed types.HookPoint = "auth.passwordReset.requestFailed"
 
 	// HookResetBefore runs before a token is consumed, with "password" and,
@@ -54,7 +54,7 @@ const (
 	// have ended, with the *models.User.
 	HookResetAfter types.HookPoint = "auth.passwordReset.after"
 	// HookResetFailed fires for a reset that set no password: codes
-	// "invalidToken", "userNotFound", "emailChanged" and "rejectedByHook".
+	// "invalid_token", "user_not_found", "email_changed" and "rejected_by_hook".
 	HookResetFailed types.HookPoint = "auth.passwordReset.failed"
 )
 
@@ -362,7 +362,7 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 			return nil, err // infra error (DB down): not "no such user"
 		}
 		if failErr := ac.Dispatcher.Fail(hctx, HookResetRequestFailed, types.FailureReason{
-			Code: "userNotFound", Metadata: behemoth.M{hooks.HookValueEmail: email},
+			Code: "user_not_found", Metadata: behemoth.M{hooks.HookValueEmail: email},
 		}); failErr != nil {
 			return nil, failErr
 		}
@@ -384,11 +384,11 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 	// email, so Store.DeleteUser removes the links with the user. The email
 	// the link was sent to is kept next to it and checked at the reset.
 	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, types.TokenKindPasswordReset, user.ID); err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, types.TokenKindPasswordReset, user.ID, behemoth.M{credentialEmailKey: email})
 	if err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 
 	link := *p.resetURL
@@ -410,7 +410,7 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 		if revokeErr := ac.TokenManager.Revoke(hctx.Ctx, token.ID); revokeErr != nil {
 			p.log.Warn(hctx.Ctx, "the reset link that could not be sent was not revoked", telemetry.ErrorFields(revokeErr))
 		}
-		return nil, failed("sendFailed", fmt.Errorf("emailpassword: send reset link: %w", err))
+		return nil, failed("send_failed", fmt.Errorf("emailpassword: send reset link: %w", err))
 	}
 
 	return &ResetRequestResult{UserID: user.ID, Email: email, TokenID: token.ID, ExpiresAt: token.ExpiresAt}, nil
@@ -498,7 +498,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 	// after the consume, so little can still fail with the link spent.
 	token := in.verified
 	if token == nil {
-		if failErr := dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{Code: "invalidToken", Cause: in.verifyErr}); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{Code: "invalid_token", Cause: in.verifyErr}); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidResetToken()
@@ -514,7 +514,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 		if !behemotherr.IsNotFound(err) {
 			return nil, err
 		}
-		if failErr := dispatcher.Fail(hctx, HookResetFailed, rejected("userNotFound", nil)); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, HookResetFailed, rejected("user_not_found", nil)); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidResetToken()
@@ -524,7 +524,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 	// email has changed since, that is no longer the account's address.
 	sentTo, _ := token.MetadataJSON[credentialEmailKey].(string)
 	if sentTo == "" || sentTo != store.NormalizeEmail(user.Email) {
-		if failErr := dispatcher.Fail(hctx, HookResetFailed, rejected("emailChanged", nil)); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, HookResetFailed, rejected("email_changed", nil)); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidResetToken()
@@ -544,7 +544,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad link
 		}
-		if failErr := dispatcher.Fail(hctx, HookResetFailed, rejected("invalidToken", err)); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, HookResetFailed, rejected("invalid_token", err)); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidResetToken()
@@ -570,12 +570,8 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 	if err != nil {
 		// A data hook's typed veto is a refusal of the reset. Anything else
 		// is a failure of the system.
-		if isRejection(err) {
-			if failErr := dispatcher.Fail(hctx, HookResetFailed, rejected("rejectedByHook", err)); failErr != nil {
-				return nil, failErr
-			}
-		}
-		return nil, err
+		return nil, types.FailIfRejected(dispatcher, hctx, HookResetFailed, err,
+			types.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
 	}
 
 	if err := p.afterPasswordChange(hctx.Ctx, user); err != nil {

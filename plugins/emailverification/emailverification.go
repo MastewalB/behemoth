@@ -53,7 +53,7 @@ const (
 	// *SendResult.
 	HookSendAfter types.HookPoint = "auth.emailVerification.afterSend"
 	// HookSendFailed fires for a send that queued nothing: codes
-	// "userNotFound", "issueFailed", "sendFailed" and "rejectedByHook".
+	// "user_not_found", "issue_failed", "send_failed" and "rejected_by_hook".
 	HookSendFailed types.HookPoint = "auth.emailVerification.sendFailed"
 
 	// HookVerifyBefore runs before a link is verified. Veto only.
@@ -62,7 +62,7 @@ const (
 	// *models.User.
 	HookVerifyAfter types.HookPoint = "auth.emailVerification.afterVerify"
 	// HookVerifyFailed fires for a link that was refused: codes
-	// "invalidLink", "userNotFound", "emailChanged" and "rejectedByHook".
+	// "invalid_link", "user_not_found", "email_changed" and "rejected_by_hook".
 	HookVerifyFailed types.HookPoint = "auth.emailVerification.verifyFailed"
 )
 
@@ -634,7 +634,7 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 				return nil, err // infra error (DB down): not "no such user"
 			}
 			if failErr := ac.Dispatcher.Fail(hctx, HookSendFailed, types.FailureReason{
-				Code: "userNotFound", Metadata: behemoth.M{hooks.HookValueEmail: email},
+				Code: "user_not_found", Metadata: behemoth.M{hooks.HookValueEmail: email},
 			}); failErr != nil {
 				return nil, failErr
 			}
@@ -661,7 +661,7 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 	// Store.DeleteUser removes the links with the user. The address the
 	// link was sent to is kept next to it and checked at verify.
 	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, types.TokenKindEmailVerification, user.ID); err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 	meta := behemoth.M{keyEmail: email}
 	if req.RedirectURL != "" {
@@ -669,7 +669,7 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 	}
 	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, types.TokenKindEmailVerification, user.ID, meta)
 	if err != nil {
-		return nil, failed("issueFailed", err)
+		return nil, failed("issue_failed", err)
 	}
 
 	// In the background: the request, often a sign-up, does not wait for
@@ -682,7 +682,7 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 		if revokeErr := ac.TokenManager.Revoke(hctx.Ctx, token.ID); revokeErr != nil {
 			p.log.Warn(hctx.Ctx, "the link that could not be queued was not revoked", telemetry.ErrorFields(revokeErr))
 		}
-		return nil, failed("sendFailed", fmt.Errorf("emailverification: queue link: %w", err))
+		return nil, failed("send_failed", fmt.Errorf("emailverification: queue link: %w", err))
 	}
 
 	return &SendResult{UserID: user.ID, Email: email, TokenID: token.ID, ExpiresAt: token.ExpiresAt}, nil
@@ -749,7 +749,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad link
 		}
-		if failErr := dispatcher.Fail(hctx, HookVerifyFailed, types.FailureReason{Code: "invalidLink", Cause: err}); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, HookVerifyFailed, types.FailureReason{Code: "invalid_link", Cause: err}); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidLink()
@@ -770,14 +770,14 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 		if !behemotherr.IsNotFound(err) {
 			return nil, err
 		}
-		return nil, refuse("userNotFound")
+		return nil, refuse("user_not_found")
 	}
 
 	// The link confirms the address it was sent to. If the user's email
 	// has changed since, that address is no longer the account's.
 	sentTo, _ := token.MetadataJSON[keyEmail].(string)
 	if sentTo == "" || sentTo != store.NormalizeEmail(user.Email) {
-		return nil, refuse("emailChanged")
+		return nil, refuse("email_changed")
 	}
 
 	if user.EmailVerified {

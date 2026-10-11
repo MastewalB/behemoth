@@ -239,10 +239,10 @@ The plugin declares six points.
 | --- | --- | --- |
 | `auth.emailVerification.beforeSend` (`emailverification.HookSendBefore`) | before | payload `email`, `redirect_url`, `metadata`. A handler may rewrite the last two or stop the send. The address can't be changed. |
 | `auth.emailVerification.afterSend` (`HookSendAfter`) | after | a `*emailverification.SendResult`: user id, email, token id, expiry. Not the token. |
-| `auth.emailVerification.sendFailed` (`HookSendFailed`) | failed | codes `userNotFound`, `issueFailed`, `sendFailed` (the message could not be queued), `rejectedByHook` |
+| `auth.emailVerification.sendFailed` (`HookSendFailed`) | failed | codes `user_not_found`, `issue_failed`, `send_failed` (the message could not be queued), `rejected_by_hook` |
 | `auth.emailVerification.beforeVerify` (`HookVerifyBefore`) | before | payload `email`, when the token names one. Veto only. |
 | `auth.emailVerification.afterVerify` (`HookVerifyAfter`) | after | the verified `*models.User` |
-| `auth.emailVerification.verifyFailed` (`HookVerifyFailed`) | failed | codes `invalidLink`, `userNotFound`, `emailChanged`, `rejectedByHook` |
+| `auth.emailVerification.verifyFailed` (`HookVerifyFailed`) | failed | codes `invalid_link`, `user_not_found`, `email_changed`, `rejected_by_hook` |
 
 The after and failed points are audited under their point names. `auth.emailVerification.afterVerify` is where to react to a confirmed address: grant access, send a welcome message.
 
@@ -250,9 +250,9 @@ With the change flow on, it declares nine more, three per step:
 
 | Points | What the handler gets |
 | --- | --- |
-| `auth.emailChange.beforeRequest`, `.afterRequest`, `.requestFailed` | before: payload `userID`, `email` (the new address), `redirect_url`, `metadata`; the last two may be rewritten. After: a `*emailverification.ChangeResult`. Failed: codes `issueFailed`, `noticeFailed`, `emailTaken`, `sendFailed`, `rejectedByHook`. |
-| `auth.emailChange.beforeConfirm`, `.afterConfirm`, `.confirmFailed` | before: payload `email`, veto only. After: the `*models.User` with its new address. Failed: codes `invalidLink`, `userNotFound`, `emailChanged`, `emailTaken`, `rejectedByHook`. |
-| `auth.emailChange.beforeRevert`, `.afterRevert`, `.revertFailed` | before: payload `email` (the address to put back), veto only. After: the `*models.User`. Failed: codes `invalidLink`, `userNotFound`, `emailTaken`, `rejectedByHook`. |
+| `auth.emailChange.beforeRequest`, `.afterRequest`, `.requestFailed` | before: payload `userID`, `email` (the new address), `redirect_url`, `metadata`; the last two may be rewritten. After: a `*emailverification.ChangeResult`. Failed: codes `issue_failed`, `notice_failed`, `email_taken`, `send_failed`, `rejected_by_hook`. |
+| `auth.emailChange.beforeConfirm`, `.afterConfirm`, `.confirmFailed` | before: payload `email`, veto only. After: the `*models.User` with its new address. Failed: codes `invalid_link`, `user_not_found`, `email_changed`, `email_taken`, `rejected_by_hook`. |
+| `auth.emailChange.beforeRevert`, `.afterRevert`, `.revertFailed` | before: payload `email` (the address to put back), veto only. After: the `*models.User`. Failed: codes `invalid_link`, `user_not_found`, `email_taken`, `rejected_by_hook`. |
 
 Their constants are `emailverification.HookChangeRequestBefore`, `HookChangeConfirmAfter` and so on. The after and failed points are audited, so the audit log shows who asked for a change, when it was applied and whether it was undone. `auth.emailChange.afterRevert` is a signal worth alerting on: someone said a change to their account was not theirs.
 

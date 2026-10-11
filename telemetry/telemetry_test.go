@@ -289,7 +289,7 @@ func TestNormalizeAuditEvent(t *testing.T) {
 
 	got := telemetry.NormalizeAuditEvent(inRequest, telemetry.AuditEvent{
 		Type:     "auth.signIn.failed",
-		Metadata: behemoth.M{"email": "ada@example.com", "password": "hunter2", "code": "invalidCredentials"},
+		Metadata: behemoth.M{"email": "ada@example.com", "password": "hunter2", "code": "invalid_credentials"},
 	})
 	if got.Timestamp.IsZero() || got.RequestID != "req-1" || got.Outcome != telemetry.OutcomeSuccess {
 		t.Errorf("defaults not applied: %+v", got)

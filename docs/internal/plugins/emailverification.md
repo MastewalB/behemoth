@@ -57,10 +57,10 @@ Both sends run in after-commit handlers. An error there is logged by the dispatc
 | Step | What | On failure |
 | --- | --- | --- |
 | 1 | check the email's shape and the redirect URL (`types.TrustedRedirect`) | a validation error |
-| 2 | find the user by email, unless the request came with one | not found: `Fail` with `userNotFound`, return `ErrNoAccount` |
+| 2 | find the user by email, unless the request came with one | not found: `Fail` with `user_not_found`, return `ErrNoAccount` |
 | 3 | the user is verified already | return `ErrAlreadyVerified`; no point fires |
-| 4 | `RevokeAllForSubject(email_verification, user.ID)`, then `Issue` with `{email, redirect_url}` | `Fail` with `issueFailed` |
-| 5 | `ac.Mailer.SendAsync(ctx, MailMessage{Kind: MailEmailVerification, ...})` | the message was not queued: revoke the token, `Fail` with `sendFailed` |
+| 4 | `RevokeAllForSubject(email_verification, user.ID)`, then `Issue` with `{email, redirect_url}` | `Fail` with `issue_failed` |
+| 5 | `ac.Mailer.SendAsync(ctx, MailMessage{Kind: MailEmailVerification, ...})` | the message was not queued: revoke the token, `Fail` with `send_failed` |
 | 6 | return a `*SendResult`; `WithLifecycle` fires `.afterSend` | |
 
 - **Step 5 does not wait.** `afterSend` means the message was queued, not delivered. A send that fails later is logged by the mailer.
@@ -71,9 +71,9 @@ Both sends run in after-commit handlers. An error there is logged by the dispatc
 
 `Verify` reads the token without consuming it, for the redirect URL and the email in the before payload, then runs `verifyBody` wrapped with `.beforeVerify`, `.afterVerify` and `.verifyFailed`:
 
-1. `Consume` the token. A rejection is `invalidLink`.
-2. Find the user by the token's subject. Gone: `userNotFound`.
-3. Compare the email in the token's metadata with the user's. Different: `emailChanged`.
+1. `Consume` the token. A rejection is `invalid_link`.
+2. Find the user by the token's subject. Gone: `user_not_found`.
+3. Compare the email in the token's metadata with the user's. Different: `email_changed`.
 4. Set `email_verified` with `Store.UpdateUser`, unless it is set already.
 
 Every refusal answers with one typed unauthorized error, `invalid_verification_link`. No session is created.
@@ -109,7 +109,7 @@ Every refusal answers with one typed unauthorized error, `invalid_verification_l
 **Options considered:**
 - *`auth.signIn.before`.* Earliest. The payload differs by sign-in method and has no user, and refusing before the password is checked tells anyone whether an address is verified.
 - *`auth.signIn.credentialsVerified`.* It has the user id whatever the method, and runs after the credentials were accepted.
-**Decision:** `credentialsVerified`. The sign-in flows report the refusal as `secondFactorRejected` in the audit event, which is the name they give any veto at that point.
+**Decision:** `credentialsVerified`. The sign-in flows report the refusal as `rejected_by_hook` in the audit event, like any handler's refusal, with the plugin's error as the cause.
 
 ## The email change flow
 
@@ -136,10 +136,10 @@ No table or column holds the pending change. The two addresses travel in the tok
 | Step | What | On failure |
 | --- | --- | --- |
 | 1 | check the new address's shape, the redirect URL, and that it differs from the current address | a validation error |
-| 2 | `RevokeAllForSubject(email_change, user)`: a new request replaces the pending one | `Fail` with `issueFailed` |
-| 3 | issue the revert token and `Mailer.Send` the notice to the current address | revoke the token, `Fail` with `noticeFailed` |
-| 4 | look for another user with the new address | found: `Fail` with `emailTaken`, return `ErrEmailTaken` |
-| 5 | issue the change token and `Mailer.SendAsync` the confirmation to the new address | revoke the token, `Fail` with `sendFailed` |
+| 2 | `RevokeAllForSubject(email_change, user)`: a new request replaces the pending one | `Fail` with `issue_failed` |
+| 3 | issue the revert token and `Mailer.Send` the notice to the current address | revoke the token, `Fail` with `notice_failed` |
+| 4 | look for another user with the new address | found: `Fail` with `email_taken`, return `ErrEmailTaken` |
+| 5 | issue the change token and `Mailer.SendAsync` the confirmation to the new address | revoke the token, `Fail` with `send_failed` |
 
 - **Nothing in `users` changes.**
 - **Revert tokens are never revoked when a new one is issued.** Each belongs to its request. Why is under *The older revert link wins*.
@@ -150,10 +150,10 @@ No table or column holds the pending change. The two addresses travel in the tok
 
 `ConfirmChange` reads the token without consuming it (`readChangeToken`: the user for `Values`, the address for the payload, the redirect URL for the result), then `changeConfirmBody`:
 
-1. `Consume` the token. A rejection is `invalidLink`.
-2. Find the user. Gone: `userNotFound`.
-3. The user's address has to be the token's `from`. If not, a revert or another change came first: `emailChanged`.
-4. `Store.UpdateUser` with `email` and `email_verified: true` in one write. A duplicate-key error is `emailTaken`, answered with a `409`.
+1. `Consume` the token. A rejection is `invalid_link`.
+2. Find the user. Gone: `user_not_found`.
+3. The user's address has to be the token's `from`. If not, a revert or another change came first: `email_changed`.
+4. `Store.UpdateUser` with `email` and `email_verified: true` in one write. A duplicate-key error is `email_taken`, answered with a `409`.
 
 Step 4 goes through the plugin's own fallback handlers. `data.user.beforeUpdate` sees an update that sets the flag and leaves it alone. `data.user.updated` finds the note and a verified user, and sends nothing.
 
@@ -165,7 +165,7 @@ Step 4 goes through the plugin's own fallback handlers. `data.user.beforeUpdate`
 2. `ListForSubject(email_change_revert, user)`, and revoke every token that was not created before this one.
 3. If the user's address is not `restore`, write `email: restore` and `email_verified: true`. A duplicate-key error is remembered and not returned yet.
 4. `SessionManager.RevokeAllForUser` with the reason `email_change_reverted`.
-5. If step 3 hit a duplicate key: `Fail` with `emailTaken` and return the `409`.
+5. If step 3 hit a duplicate key: `Fail` with `email_taken` and return the `409`.
 
 The same link therefore cancels a change that is pending and undoes one that was applied. Steps 1, 2 and 4 run in both cases.
 

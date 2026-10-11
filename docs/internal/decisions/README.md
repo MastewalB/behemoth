@@ -147,4 +147,4 @@ Keep this list current, newest last.
 
 | ADR | Title | Status |
 |---|---|---|
-| _None yet_ | | |
+| [0001](0001-reporting-a-hook-refusal.md) | Report a hook chain's error through one helper, with one code | Proposed |

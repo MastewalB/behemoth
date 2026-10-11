@@ -163,11 +163,11 @@ func TestUsernameSignUpAndSignIn(t *testing.T) {
 		creds username.Credentials
 		code  string
 	}{
-		"unknown username":        {username.Credentials{Username: "nobody", Password: "correct horse"}, "userNotFound"},
-		"wrong password":          {username.Credentials{Username: "ada_l", Password: "wrong"}, "invalidCredentials"},
-		"no password":             {username.Credentials{Username: "grace", Password: "correct horse"}, "noCredentialAccount"},
-		"empty username":          {username.Credentials{Password: "correct horse"}, "userNotFound"},
-		"the email as a username": {username.Credentials{Username: "ada@example.com", Password: "correct horse"}, "userNotFound"},
+		"unknown username":        {username.Credentials{Username: "nobody", Password: "correct horse"}, "user_not_found"},
+		"wrong password":          {username.Credentials{Username: "ada_l", Password: "wrong"}, "invalid_credentials"},
+		"no password":             {username.Credentials{Username: "grace", Password: "correct horse"}, "no_credential_account"},
+		"empty username":          {username.Credentials{Password: "correct horse"}, "user_not_found"},
+		"the email as a username": {username.Credentials{Username: "ada@example.com", Password: "correct horse"}, "user_not_found"},
 	} {
 		failed = nil
 		_, err := app.names.SignIn(ctx, tc.creds)
@@ -207,7 +207,7 @@ func TestUsernameRulesAtSignUp(t *testing.T) {
 		_, err := app.passwords.SignUp(ctx, behemoth.M{"email": "new@example.com", "password": "correct horse", "username": name})
 		require.Error(t, err, name)
 		assert.True(t, behemotherr.IsCode(err, code), "%q: %v", name, err)
-		assert.Equal(t, []string{"rejectedByHook"}, failed, "%q: the sign-up's failed point fires", name)
+		assert.Equal(t, []string{"rejected_by_hook"}, failed, "%q: the sign-up's failed point fires", name)
 		_, err = app.ac.Store.FindUserByEmail(ctx, "new@example.com")
 		assert.True(t, behemotherr.IsNotFound(err), "%q: no user was created", name)
 	}

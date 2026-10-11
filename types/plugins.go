@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/MastewalB/behemoth"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -378,9 +379,19 @@ type AfterHookFunc func(hctx *HookContext, result any) error
 // system errors like a DB timeout, should just propagate as ordinary errors.
 type FailedHookFunc func(hctx *HookContext, reason FailureReason) error
 
+// FailureRejectedByHook is the FailureReason code of an operation that a
+// before handler, a data hook handler or a rate limit refused. The firing
+// site can't know which handler refused or why, so it says only that one
+// did. The handler's error is the reason's Cause. FailIfRejected sets it.
+const FailureRejectedByHook = "rejected_by_hook"
+
 type FailureReason struct {
-	Code  string // "invalidCredentials", "userNotFound", "secondFactorRejected", ...
-	Cause error  // underlying error, if any. nil for pure business rejections
+	// Code names the rejection, in snake case like a DomainError's code:
+	// "invalid_credentials", "user_not_found", FailureRejectedByHook. The
+	// firing site chooses it. It is the audit event's "code" and the
+	// metric's reason attribute, so keep the set of values small.
+	Code  string
+	Cause error // underlying error, if any. nil for pure business rejections
 
 	// SubjectType and SubjectID name what the rejected operation targeted,
 	// for the audit event of an audited failed point: the account a failed
@@ -484,10 +495,34 @@ const (
 	PriorityLowest  HookPriority = 100 // observers: logging, analytics; should see the final mutated state
 )
 
+// FailIfRejected reports an error that came out of a hook chain: the error
+// of RunBefore, or of a write whose data hooks may have refused it. Every
+// place that runs such a chain inside a flow calls it, so that the flows
+// agree on what a refusal is and how it is named.
+//
+// When err is a rejection (behemotherr.IsRejection), it fires failed with
+// reason, after setting reason's Code to FailureRejectedByHook and its Cause
+// to err. The caller fills in what only it knows: the subject and the
+// metadata. Any other error is a failure of the system and fires nothing, so
+// an outage inside a handler is not counted or audited as a refused request.
+//
+// It returns the error the flow should return: err, or the error of firing
+// failed.
+func FailIfRejected(dispatcher Dispatcher, hctx *HookContext, failed HookPoint, err error, reason FailureReason) error {
+	if !behemotherr.IsRejection(err) {
+		return err
+	}
+	reason.Code, reason.Cause = FailureRejectedByHook, err
+	if failErr := dispatcher.Fail(hctx, failed, reason); failErr != nil {
+		return failErr
+	}
+	return err
+}
+
 // WithLifecycle wraps fn, the body of a flow, with the flow's three points:
 // before runs on the input and may rewrite it or stop the flow, success runs
-// on fn's result, and failed fires when a before handler stopped the flow.
-// fn fires failed itself for its own business rejections.
+// on fn's result, and failed fires when a before handler refused the flow
+// (FailIfRejected). fn fires failed itself for its own business rejections.
 //
 // The wrapped call is one operation (AsOperation): all three points and fn
 // share the HookContext's Values, and what fn does with hctx.Ctx nests under
@@ -508,10 +543,7 @@ func WithLifecycle[TIn, TOut any](
 
 		mutated, err := dispatcher.RunBefore(hctx, before, payload)
 		if err != nil {
-			if failErr := dispatcher.Fail(hctx, failed, FailureReason{Code: "rejectedByHook", Cause: err}); failErr != nil {
-				return zero, failErr
-			}
-			return zero, err
+			return zero, FailIfRejected(dispatcher, hctx, failed, err, FailureReason{})
 		}
 
 		if err := mFromStruct(mutated, &in); err != nil {

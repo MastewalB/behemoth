@@ -82,7 +82,7 @@ func TestMetrics(t *testing.T) {
 	tel := telemetry.New(nil, nil, behemothotel.NewMetrics(provider))
 	ctx := context.Background()
 
-	failure := behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrReason: "invalidCredentials"}
+	failure := behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrReason: "invalid_credentials"}
 	tel.Count(ctx, telemetry.MetricSignIn, failure)
 	tel.Count(ctx, telemetry.MetricSignIn, failure)
 	tel.Count(ctx, telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "success"})

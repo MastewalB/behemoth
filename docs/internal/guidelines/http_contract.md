@@ -72,7 +72,7 @@ Sign-in and sign-up decode the body into a map and hand the fields they do not r
 
 Request and response body keys are snake case: `phone_number`, `redirect_url`, `email_verified`. A user's keys are its column names, which are snake case already, so a client sees one style. Status values and error codes are snake case too (`signed_out`, `invalid_credentials`).
 
-Hook payload keys that never reach a client are a separate matter. Some are camel case (`userID`, `sessionID`), and a failure code is too (`userNotFound`). A key that is in both a request body and a hook payload uses the body's spelling.
+Hook payload keys that never reach a client are a separate matter. Some are camel case (`userID`, `sessionID`). A failure code (`FailureReason.Code`) is snake case like an error code (`user_not_found`, `rejected_by_hook`), and where a failure and an error a client receives name the same thing they use the same string (`invalid_credentials`). A key that is in both a request body and a hook payload uses the body's spelling.
 
 ### Keep a route's path a constant of its plugin
 

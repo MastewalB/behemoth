@@ -143,7 +143,7 @@ Verifying a link is a sign-in. It fires the same points as a password sign-in, s
 | `auth.signIn.before` | payload `method` (`"magiclink"`) and, when the token names one, `email`. Veto only. The token is not in the payload. |
 | `auth.signIn.credentialsVerified` | `HookValueUserID`. Set `requireStepUp` to make the session pending. |
 | `auth.signIn.after` | a `*types.SignInResult` with `Method` set to `"magiclink"` |
-| `auth.signIn.failed` | codes `invalidMagicLink`, `userNotFound`, `emailChanged`, `secondFactorRejected`, `rejectedByHook` |
+| `auth.signIn.failed` | codes `invalid_magic_link`, `user_not_found`, `email_changed`, `rejected_by_hook` |
 
 The plugin declares three points of its own around a link request:
 
@@ -151,7 +151,7 @@ The plugin declares three points of its own around a link request:
 | --- | --- | --- |
 | `auth.magicLink.beforeRequest` (`magiclink.HookRequestBefore`) | before | payload `email`, `redirect_url`, `metadata`. The returned payload becomes the request's input. |
 | `auth.magicLink.afterRequest` (`magiclink.HookRequestAfter`) | after | a `*magiclink.LinkResult`: user id, email, token id, expiry. Not the token. |
-| `auth.magicLink.requestFailed` (`magiclink.HookRequestFailed`) | failed | codes `userNotFound`, `issueFailed`, `sendFailed`, `rejectedByHook` |
+| `auth.magicLink.requestFailed` (`magiclink.HookRequestFailed`) | failed | codes `user_not_found`, `issue_failed`, `send_failed`, `rejected_by_hook` |
 
 The after and failed points are audited under their point names. A captcha check belongs on `auth.magicLink.beforeRequest`: read the answer from `payload["metadata"]` and return an error to refuse.
 

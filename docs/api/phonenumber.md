@@ -173,15 +173,15 @@ Signing in, by code or by password, fires core's `auth.signIn.*` points, with `M
 | --- | --- | --- |
 | `auth.phoneNumber.beforeSend` (`phonenumber.HookSendBefore`) | before | `phone_number`, `purpose` (`verify`, `sign_in`, `password_reset`), and `userID` for a signed-in caller. Veto only. |
 | `auth.phoneNumber.afterSend` (`phonenumber.HookSendAfter`) | after | a `*phonenumber.SendResult`. Not the code. |
-| `auth.phoneNumber.sendFailed` (`phonenumber.HookSendFailed`) | failed | codes `noAccount`, `numberTaken`, `alreadySet`, `sendFailed`, `rejectedByHook` |
+| `auth.phoneNumber.sendFailed` (`phonenumber.HookSendFailed`) | failed | codes `no_account`, `number_taken`, `already_set`, `send_failed`, `rejected_by_hook` |
 | `auth.phoneNumber.beforeVerify` (`phonenumber.HookVerifyBefore`) | before | `phone_number`, `userID`. Veto only. |
 | `auth.phoneNumber.afterVerify` (`phonenumber.HookVerifyAfter`) | after | the `*models.User` |
-| `auth.phoneNumber.verifyFailed` (`phonenumber.HookVerifyFailed`) | failed | codes `invalidCode`, `numberMismatch`, `numberTaken`, `rejectedByHook` |
+| `auth.phoneNumber.verifyFailed` (`phonenumber.HookVerifyFailed`) | failed | codes `invalid_code`, `number_mismatch`, `number_taken`, `rejected_by_hook` |
 | `auth.phoneNumber.beforePasswordReset` (`phonenumber.HookResetBefore`) | before | `phone_number`, `password`. Veto only. Declared with `PasswordReset`. |
 | `auth.phoneNumber.afterPasswordReset` (`phonenumber.HookResetAfter`) | after | the `*models.User` |
-| `auth.phoneNumber.passwordResetFailed` (`phonenumber.HookResetFailed`) | failed | codes `noAccount`, `invalidCode`, `rejectedByHook` |
+| `auth.phoneNumber.passwordResetFailed` (`phonenumber.HookResetFailed`) | failed | codes `no_account`, `invalid_code`, `rejected_by_hook` |
 
-The after and failed points are audited. On `auth.signIn.before`, a sign-in by code has `method` and `phone_number`, and one by password has `phone_number`, `password` and the request's other fields. `auth.signIn.failed` has the code `invalidCode` for a refused code.
+The after and failed points are audited. On `auth.signIn.before`, a sign-in by code has `method` and `phone_number`, and one by password has `phone_number`, `password` and the request's other fields. `auth.signIn.failed` has the code `invalid_code` for a refused code and `rejected_by_hook` for a sign-in a before handler refused.
 
 Every flow publishes the number under `phonenumber.HookValuePhoneNumber` in `Values`, for rate-limit rules.
 

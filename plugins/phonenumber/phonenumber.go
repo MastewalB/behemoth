@@ -72,8 +72,8 @@ const (
 	// sender, with a *SendResult.
 	HookSendAfter types.HookPoint = "auth.phoneNumber.afterSend"
 	// HookSendFailed fires for a request that sent no code: codes
-	// "noAccount", "numberTaken", "alreadySet", "sendFailed" and
-	// "rejectedByHook".
+	// "no_account", "number_taken", "already_set", "send_failed" and
+	// "rejected_by_hook".
 	HookSendFailed types.HookPoint = "auth.phoneNumber.sendFailed"
 
 	// HookVerifyBefore runs before a number is added to a user, on
@@ -83,7 +83,7 @@ const (
 	// *models.User.
 	HookVerifyAfter types.HookPoint = "auth.phoneNumber.afterVerify"
 	// HookVerifyFailed fires for a number that was not added: codes
-	// "invalidCode", "numberMismatch", "numberTaken" and "rejectedByHook".
+	// "invalid_code", "number_mismatch", "number_taken" and "rejected_by_hook".
 	HookVerifyFailed types.HookPoint = "auth.phoneNumber.verifyFailed"
 
 	// HookResetBefore runs before a password is reset with a code, on
@@ -92,7 +92,7 @@ const (
 	// HookResetAfter runs once the password is set, with the *models.User.
 	HookResetAfter types.HookPoint = "auth.phoneNumber.afterPasswordReset"
 	// HookResetFailed fires for a reset that was refused: codes
-	// "noAccount", "invalidCode" and "rejectedByHook".
+	// "no_account", "invalid_code" and "rejected_by_hook".
 	HookResetFailed types.HookPoint = "auth.phoneNumber.passwordResetFailed"
 )
 
@@ -617,10 +617,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 		payload[hooks.HookValueUserID] = req.UserID
 	}
 	if _, err := dispatcher.RunBefore(hctx, HookSendBefore, payload); err != nil {
-		if failErr := dispatcher.Fail(hctx, HookSendFailed, types.FailureReason{Code: "rejectedByHook", Cause: err}); failErr != nil {
-			return nil, failErr
-		}
-		return nil, err
+		return nil, types.FailIfRejected(dispatcher, hctx, HookSendFailed, err, types.FailureReason{})
 	}
 
 	// Who the code is for. Its subject is always a user id, so that the
@@ -639,10 +636,10 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 			return nil, err
 		}
 		if holder != nil && holder.ID == user.ID {
-			return notSent(ReasonAlreadySet, "alreadySet", nil, user.ID)
+			return notSent(ReasonAlreadySet, "already_set", nil, user.ID)
 		}
 		if holder != nil {
-			return notSent(ReasonNumberTaken, "numberTaken", nil, user.ID)
+			return notSent(ReasonNumberTaken, "number_taken", nil, user.ID)
 		}
 	default:
 		kind, message = codeSignIn, types.SMSSignIn
@@ -650,7 +647,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 			kind, message = codeReset, types.SMSPasswordReset
 		}
 		if holder == nil {
-			return notSent(ReasonNoAccount, "noAccount", nil, "")
+			return notSent(ReasonNoAccount, "no_account", nil, "")
 		}
 		user = holder
 	}
@@ -676,7 +673,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 		if revokeErr := ac.Codes.Revoke(hctx.Ctx, kind, user.ID); revokeErr != nil {
 			p.log.Warn(hctx.Ctx, "the unsent code was not revoked", telemetry.ErrorFields(revokeErr))
 		}
-		return notSent(ReasonSendFailed, "sendFailed", err, user.ID)
+		return notSent(ReasonSendFailed, "send_failed", err, user.ID)
 	}
 
 	result := &SendResult{Sent: true, Purpose: purpose, UserID: user.ID, PhoneNumber: number, ExpiresAt: issued.ExpiresAt}
@@ -776,39 +773,23 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 		if !behemotherr.IsCodeRejection(err) {
 			return nil, err
 		}
-		return refuse("invalidCode", err, errInvalidCode(op))
+		return refuse("invalid_code", err, errInvalidCode(op))
 	}
 	// The code proves control of the number it was sent to, and of no
 	// other.
 	if sentTo, _ := consumed.Metadata[HookValuePhoneNumber].(string); sentTo != in.number {
-		return refuse("numberMismatch", nil, errInvalidCode(op))
+		return refuse("number_mismatch", nil, errInvalidCode(op))
 	}
 
 	user, err := p.write(hctx.Ctx, in.userID, in.number)
 	if err != nil {
 		if behemotherr.IsCode(err, ErrorCodePhoneNumberTaken) || behemotherr.IsDuplicateKey(err) {
-			return refuse("numberTaken", err, errNumberTaken(op))
+			return refuse("number_taken", err, errNumberTaken(op))
 		}
-		if isRejection(err) {
-			return refuse("rejectedByHook", err, err)
-		}
-		return nil, err
+		return nil, types.FailIfRejected(ac.Dispatcher, hctx, HookVerifyFailed, err,
+			types.FailureReason{SubjectType: models.UserTable, SubjectID: in.userID})
 	}
 	return user, nil
-}
-
-// isRejection reports whether err is a typed refusal of the request, as
-// opposed to a failure of the system.
-func isRejection(err error) bool {
-	for _, category := range []behemotherr.Category{
-		behemotherr.CategoryValidation, behemotherr.CategoryConflict, behemotherr.CategoryUnauthorized,
-		behemotherr.CategoryForbidden, behemotherr.CategoryRateLimited,
-	} {
-		if behemotherr.Is(err, category) {
-			return true
-		}
-	}
-	return false
 }
 
 // signInInput is the input of the wrapped flow behind SignInWithCode. Its
@@ -857,7 +838,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.Sig
 			return nil, err
 		}
 		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
-			Code: "userNotFound", Metadata: behemoth.M{HookValuePhoneNumber: in.number},
+			Code: "user_not_found", Metadata: behemoth.M{HookValuePhoneNumber: in.number},
 		}); failErr != nil {
 			return nil, failErr
 		}
@@ -871,7 +852,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.Sig
 		if !behemotherr.IsCodeRejection(err) {
 			return nil, err
 		}
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("invalidCode", err)); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("invalid_code", err)); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidCode(op)
@@ -881,10 +862,8 @@ func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.Sig
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("secondFactorRejected", err)); failErr != nil {
-			return nil, failErr
-		}
-		return nil, err
+		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
+			types.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
 	state := types.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
@@ -1058,7 +1037,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 			return nil, err
 		}
 		if failErr := ac.Dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{
-			Code: "noAccount", Metadata: behemoth.M{HookValuePhoneNumber: in.number},
+			Code: "no_account", Metadata: behemoth.M{HookValuePhoneNumber: in.number},
 		}); failErr != nil {
 			return nil, failErr
 		}
@@ -1069,7 +1048,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 			return nil, err
 		}
 		if failErr := ac.Dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{
-			Code: "invalidCode", Cause: err, SubjectType: models.UserTable, SubjectID: user.ID,
+			Code: "invalid_code", Cause: err, SubjectType: models.UserTable, SubjectID: user.ID,
 		}); failErr != nil {
 			return nil, failErr
 		}

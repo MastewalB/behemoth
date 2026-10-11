@@ -346,7 +346,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, signOutWith(rawToken).Code, "the session is revoked")
 
 	assert.Equal(t, []types.HookPoint{hooks.HookSignUpAfter, hooks.HookSignInAfter, hooks.HookSignOutAfter}, fired)
-	assert.Equal(t, []string{"invalidCredentials"}, failures)
+	assert.Equal(t, []string{"invalid_credentials"}, failures)
 }
 
 // A data hook that rejects the new user with a typed error stops the sign-up,
@@ -407,7 +407,7 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	assert.Equal(t, "this email domain is not allowed", body["error"])
 
 	require.Len(t, failures, 1)
-	assert.Equal(t, "rejectedByHook", failures[0].Code)
+	assert.Equal(t, "rejected_by_hook", failures[0].Code)
 	assert.ErrorIs(t, failures[0].Cause, veto)
 	_, err = ac.Store.FindUserByEmail(ctx, "eve@blocked.example")
 	assert.True(t, behemotherr.IsNotFound(err), "nothing was written: %v", err)
@@ -1149,10 +1149,11 @@ func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 	require.Len(t, failed.Events, 2)
 	unknown, wrong := failed.Events[0], failed.Events[1]
 	assert.Equal(t, string(hooks.HookSignInFailed), unknown.Type)
-	assert.Equal(t, "userNotFound", unknown.Metadata["code"])
+	assert.Equal(t, "user_not_found", unknown.Metadata["code"])
+	assert.NotContains(t, unknown.Metadata, "causeCode", "a rejection without a typed cause has none")
 	assert.Equal(t, "nobody@example.com", unknown.Metadata["email"], "the address that was tried is kept")
 	assert.Empty(t, unknown.SubjectID)
-	assert.Equal(t, "invalidCredentials", wrong.Metadata["code"])
+	assert.Equal(t, "invalid_credentials", wrong.Metadata["code"])
 	assert.Equal(t, user.ID, wrong.SubjectID, "a failed sign-in names the account it targeted")
 	assert.Equal(t, telemetry.ActorAnonymous, wrong.ActorType)
 	assert.Empty(t, wrong.ActorID)
@@ -1297,7 +1298,7 @@ func TestEmailPasswordMetrics(t *testing.T) {
 
 	assert.EqualValues(t, 1, m.Count(telemetry.MetricSignUp, behemoth.M{telemetry.AttrOutcome: "success"}))
 	assert.EqualValues(t, 1, m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "success"}))
-	assert.EqualValues(t, 1, m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrReason: "invalidCredentials"}))
+	assert.EqualValues(t, 1, m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrReason: "invalid_credentials"}))
 	assert.EqualValues(t, 1, m.Count(telemetry.MetricSessionCreated, nil))
 
 	// The store's operations are timed by table and operation, those inside

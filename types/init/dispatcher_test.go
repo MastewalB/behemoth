@@ -323,7 +323,7 @@ func TestDispatcherMetrics(t *testing.T) {
 	if err := d.RunAfter(hctx, hooks.HookSignInAfter, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalidCredentials"}); err != nil {
+	if err := d.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalid_credentials"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.RunAfter(hctx, hooks.HookTokenAfterIssue, &models.Token{Kind: "password_reset"}); err != nil {
@@ -344,7 +344,7 @@ func TestDispatcherMetrics(t *testing.T) {
 	if n := m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "success"}); n != 1 {
 		t.Errorf("successful sign-ins = %d, want 1", n)
 	}
-	if n := m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrReason: "invalidCredentials"}); n != 1 {
+	if n := m.Count(telemetry.MetricSignIn, behemoth.M{telemetry.AttrOutcome: "failure", telemetry.AttrReason: "invalid_credentials"}); n != 1 {
 		t.Errorf("failed sign-ins = %d, want 1 with its reason", n)
 	}
 	if n := m.Count(telemetry.MetricTokenIssued, behemoth.M{telemetry.AttrKind: "password_reset"}); n != 1 {

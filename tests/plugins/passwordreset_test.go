@@ -201,13 +201,13 @@ func TestPasswordResetRequestAndConfirm(t *testing.T) {
 	assert.Equal(t, user.ID, requested[0].SubjectID)
 	requestFailed := app.rec.Audit.OfType(string(emailpassword.HookResetRequestFailed))
 	require.Len(t, requestFailed, 1)
-	assert.Equal(t, "userNotFound", requestFailed[0].Metadata["code"])
+	assert.Equal(t, "user_not_found", requestFailed[0].Metadata["code"])
 	done := app.rec.Audit.OfType(string(emailpassword.HookResetAfter))
 	require.Len(t, done, 1)
 	assert.Equal(t, user.ID, done[0].SubjectID)
 	failed := app.rec.Audit.OfType(string(emailpassword.HookResetFailed))
 	require.Len(t, failed, 3)
-	assert.Equal(t, "invalidToken", failed[0].Metadata["code"])
+	assert.Equal(t, "invalid_token", failed[0].Metadata["code"])
 }
 
 // The routes: the request route answers the same for a known email, an
@@ -309,7 +309,7 @@ func TestPasswordResetRefusals(t *testing.T) {
 	assert.True(t, invalidResetToken(err), "a link sent to the old address: %v", err)
 	failures := app.rec.Audit.OfType(string(emailpassword.HookResetFailed))
 	require.NotEmpty(t, failures)
-	assert.Equal(t, "emailChanged", failures[len(failures)-1].Metadata["code"])
+	assert.Equal(t, "email_changed", failures[len(failures)-1].Metadata["code"])
 	assert.Equal(t, user.ID, failures[len(failures)-1].SubjectID)
 
 	// The user is deleted after the link was sent: the link goes with it.
