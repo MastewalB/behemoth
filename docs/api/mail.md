@@ -30,7 +30,7 @@ A plugin that needs a sender (`magiclink`, `emailverification`, `emailpassword` 
 | `Token` | the raw token, if you build the URL yourself. It is a credential: don't log it. |
 | `ExpiresAt` | when the link stops working |
 | `User` | the `*models.User` the message is about |
-| `Data` | what the plugin adds for the text beyond the link. The two email change messages carry the old and the new address here; the other kinds leave it empty. |
+| `Data` | what the plugin adds for the text beyond the link. The two email change messages carry the old and the new address here. The other kinds leave it empty. |
 | `Metadata` | whatever the request carried under `metadata`: a locale, a template name |
 
 ```go
@@ -68,7 +68,9 @@ Background sends run on a small pool inside Behemoth:
 | `QueueSize` | 256 | messages that may wait. When it is full, a new message is refused and the plugin treats that as a failed send. |
 | `SendTimeout` | 30 seconds | how long one background send may take |
 
-- **The queue is in memory and does not retry.** A message that fails is gone, and messages still waiting are lost if the process stops without `Close`. If you need retries or durability, give a sender that puts the message on your own queue; it then returns quickly in both modes.
+Background sends behave as follows:
+
+- **The queue is in memory and does not retry.** A message that fails is gone, and messages still waiting are lost if the process stops without `Close`. If you need retries or durability, use a sender that puts the message on your own queue. It then returns quickly in both modes.
 - **Call `ac.Mailer.Close(ctx)` at shutdown.** It stops accepting messages and waits for the queued ones, or for `ctx` to end.
 - **A background send does not see the request's cancellation.** It keeps the context's values, such as the request ID in its log lines, and runs under `SendTimeout`.
 - **The workers start with the first background send.** A process that never sends starts none.
@@ -77,7 +79,7 @@ Background sends run on a small pool inside Behemoth:
 
 `behemoth.mail.sent` counts messages by `kind` and `result`: `sent`, `error` when your sender returned an error, and `dropped` when the background queue was full.
 
-## Sending from your own plugin
+## Send from your own plugin
 
 A plugin takes the mailer from the `AuthContext`:
 

@@ -1,10 +1,10 @@
 # Email and password
 
-The `emailpassword` plugin adds sign-up, sign-in and sign-out with an email address and a password. It can also reset a forgotten password by a link sent to the user's address; see [Password reset](#password-reset).
+The `emailpassword` plugin adds sign-up, sign-in, and sign-out with an email address and a password. It can also reset a forgotten password by a link sent to the user's address. See [Password reset](#password-reset).
 
 ## Setup
 
-Pass the plugin to `Prepare`. It needs no tables of its own: users, accounts and sessions are core tables.
+Pass the plugin to `Prepare`. It needs no tables of its own: users, accounts, and sessions are core tables.
 
 ```go
 import "github.com/MastewalB/behemoth/plugins/emailpassword"
@@ -61,7 +61,9 @@ The routes sit directly under the router's base path.
 | `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
 | `POST /sign-out` | none; needs a valid session | `200` with `{"status": "signed_out"}`, and the session is revoked. With a cookie transport the response also removes the cookie. |
 
-The user is keyed by column name (`id`, `email`, `email_verified`, `image_url`, ...). [Sessions](sessions.md) describes the transports, the response body and the user's JSON in full.
+The user is keyed by column name (for example `id`, `email`, `email_verified`, and `image_url`). [Sessions](sessions.md) describes the transports, the response body, and the user's JSON in full.
+
+With `SessionConfig.CaptureIPAndAgent` on, the session created at sign-in records the client's IP address and user agent. The address is resolved with `RouterConfig.TrustedProxies` and `ClientIPHeader`, so behind a load balancer it is the client's and not the proxy's.
 
 ### Error responses
 
@@ -75,22 +77,24 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 | `POST /sign-up/email` | the email already has an account | `409` | `{"error": "an account with this email already exists", "code": "email_taken"}` |
 | `POST /sign-in/email` | unknown email, wrong password, or a user who has no password | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
 | `POST /sign-out` | the request has no session token | `401` | `{"error": "missing session token", "code": "session_missing"}` |
-| `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. With a cookie transport the response also removes the cookie. See [Sessions](sessions.md#protecting-your-own-routes). |
+| `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. With a cookie transport the response also removes the cookie. See [Sessions](sessions.md#protect-your-own-routes). |
 | any | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
 | any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
 
 Sign-in gives the same answer for an unknown email and a wrong password, so the response does not show which addresses have an account. Sign-up does show it: a `409` says the address is registered.
 
-The codes are exported: `emailpassword.ErrorCodeInvalidEmail`, `ErrorCodeInvalidPassword`, `ErrorCodeEmailTaken` and `ErrorCodeInvalidCredentials`. Branch on the code and not on the message.
+The codes are exported: `emailpassword.ErrorCodeInvalidEmail`, `ErrorCodeInvalidPassword`, `ErrorCodeEmailTaken`, and `ErrorCodeInvalidCredentials`. Branch on the code and not on the message.
 
 A handler on one of the plugin's hook points that rejects a request should return one of the `errors` package's types. An untyped error (`errors.New`) is treated as a failure of the system: the client gets a `500` and the error is logged.
 
 ## Hook points
 
-## Calling the flows from code
+The plugin fires the `auth.signUp.*`, `auth.signIn.*`, and `auth.signOut.*` points. See [Flow points](hooks.md#flow-points-tier-2) for their payloads and failure codes.
 
-The routes are thin wrappers around two methods on the plugin. Use them from a CLI, a job, a test or another plugin, after `Boot`:
+## Call the flows from code
+
+The routes are thin wrappers around two methods on the plugin. Use them from a CLI, a job, a test, or another plugin, after `Boot`:
 
 ```go
 user, err := plugin.SignUp(ctx, behemoth.M{
@@ -126,14 +130,16 @@ reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behem
 }, nil)
 ```
 
+Both flows follow these rules:
+
 - They fire the same hook points as the routes, with the same payloads.
-- `SignUp` stores `email`, `password` and the profile fields listed above. Other keys in the input are not stored, but handlers on `auth.signUp.before` see them, which is how a plugin accepts a field of its own (an invite code, for example).
+- `SignUp` stores `email`, `password`, and the profile fields listed above. Other keys in the input are not stored, but handlers on `auth.signUp.before` see them, which is how a plugin accepts a field of its own (an invite code, for example).
 - `Extra` is not stored, and a key in it named `email` or `password` is ignored: the struct's fields are used.
 - Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `hctx.Request` is nil and the session has neither.
 - `SignIn` returns a `*emailpassword.SignInResult`, which is `types.SignInResult`: the user, the session, the raw token, and `Method` (`"emailpassword"`). Handlers on `auth.signIn.after` receive the same value.
-- `SignIn` returns the raw session token and delivers nothing. From a route of your own, hand the result to `types.WriteSignIn`, which is what the plugin's route does; see [Writing a sign-in route](sessions.md#writing-a-sign-in-route).
+- `SignIn` returns the raw session token and delivers nothing. From a route of your own, hand the result to `types.WriteSignIn`, which is what the plugin's route does. See [Write a sign-in route](sessions.md#write-a-sign-in-route).
 - Called before `Boot`, both return a configuration error.
-- `SignUp` returns typed errors for its own rejections too: check `behemotherr.IsCode(err, emailpassword.ErrorCodeEmailTaken)`, `ErrorCodeInvalidEmail` or `ErrorCodeInvalidPassword`.
+- `SignUp` returns typed errors for its own rejections too: check `behemotherr.IsCode(err, emailpassword.ErrorCodeEmailTaken)`, `ErrorCodeInvalidEmail`, or `ErrorCodeInvalidPassword`.
 - `SignIn` returns a typed error for a refused credential, so you can tell it from a failure:
 
 ```go
@@ -148,9 +154,9 @@ default:
 }
 ```
 
-### Signing in by another identifier
+### Sign in by another identifier
 
-`SignInWith` is `SignIn` for a user who is named by something other than an email. A plugin that adds an identifier calls it and supplies the lookup. The password check, the second-factor checkpoint, the session and the `auth.signIn.*` points are the same as for `SignIn`. The [username](username.md) plugin signs in this way:
+`SignInWith` is `SignIn` for a user who is named by something other than an email. A plugin that adds an identifier calls it and supplies the lookup. The password check, the second-factor checkpoint, the session, and the `auth.signIn.*` points are the same as for `SignIn`. The [username](username.md) plugin signs in this way:
 
 ```go
 result, err := plugin.SignInWith(ctx, emailpassword.IdentifierCredentials{
@@ -164,12 +170,14 @@ result, err := plugin.SignInWith(ctx, emailpassword.IdentifierCredentials{
 })
 ```
 
+`SignInWith` behaves as follows:
+
 - `Find` returns a NotFound error for an unknown identifier. Sign-in then answers `invalid_credentials`, as for a wrong password.
 - Handlers on `auth.signIn.before` see `Value` under `Key`, where an email sign-in has `email`. `Find` gets the value they left.
 - `Value` is published in `Values` under `Key` as it is, so pass it in the form a rate-limit rule should count by. No email is published.
 - The error message names the key: `invalid username or password`.
 
-### Setting a password from another plugin
+### Set a password from another plugin
 
 ```go
 if err := plugin.ValidatePassword(newPassword); err != nil { /* password_invalid_input */ }
@@ -178,16 +186,18 @@ user, err := plugin.SetPassword(ctx, userID, newPassword)
 
 `SetPassword` is for a plugin that has established by its own means that the caller may set the password. The [phone number](phonenumber.md) plugin calls it after a code was confirmed.
 
-- It applies the password rules, gives a user without a password one, ends every session of the user and creates none.
+`SetPassword` behaves as follows:
+
+- It applies the password rules, gives a user without a password one, ends every session of the user, and creates none.
 - It sends the `types.MailPasswordChanged` notice when a mail sender is configured.
 - It does not check who is asking, fires no points, and works with password reset by email off.
 - Call `ValidatePassword` first when a later refusal would cost you something, such as a code already used up.
 
-`emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points. It writes nothing to a response, so the session's cookie stays with its browser. A route of yours that calls it for the caller's own session removes the cookie afterwards with `ac.SessionManager.ClearToken(rctx)`; see [Sessions](sessions.md#writing-a-route-that-ends-the-session).
+`emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points. It writes nothing to a response, so the session's cookie stays with its browser. A route of yours that calls it for the caller's own session removes the cookie afterwards with `ac.SessionManager.ClearToken(rctx)`; see [Sessions](sessions.md#write-a-route-that-ends-the-session).
 
-## Rejecting a sign-up from a hook
+## Reject a sign-up from a hook
 
-A hook handler can reject a sign-up with its own status and message. Return a typed error from a handler on `auth.signUp.before`, `data.user.beforeCreate` or `data.user.afterCreate`:
+A hook handler can reject a sign-up with its own status and message. Return a typed error from a handler on `auth.signUp.before`, `data.user.beforeCreate`, or `data.user.afterCreate`:
 
 ```go
 reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
@@ -198,17 +208,13 @@ reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behem
 }, nil)
 ```
 
-The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejected_by_hook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but it counts as a failure of the system: the client gets a `500`, the error is logged, and no failed point fires. `behemotherr.IsRejection(err)` reports which of the two an error is: it is true for a typed error of category validation, conflict, unauthorized, forbidden or rate limited.
-
-With `SessionConfig.CaptureIPAndAgent` on, the session created at sign-in records the client's IP address and user agent. The address is resolved with `RouterConfig.TrustedProxies` and `ClientIPHeader`, so behind a load balancer it is the client's and not the proxy's.
-
-The plugin fires the `auth.signUp.*`, `auth.signIn.*` and `auth.signOut.*` points. See [hooks.md](hooks.md#flow-points-tier-2) for their payloads and failure codes.
+The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejected_by_hook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but it counts as a failure of the system. The client gets a `500`, the error is logged, and no failed point fires. `behemotherr.IsRejection(err)` reports which of the two an error is. It is true for a typed error of category validation, conflict, unauthorized, forbidden, or rate limited.
 
 ## Password reset
 
 A user who forgot their password asks for a link by email and sets a new password with it. Reset is off until you set `Options.Reset.LinkURL`.
 
-The plugin does not send email. It hands the link to the mail sender you give Behemoth at `Boot`; see [Mail](mail.md).
+The plugin does not send email. It hands the link to the mail sender you give Behemoth at `Boot`. See [Mail](mail.md).
 
 | Step | Who | What happens |
 | --- | --- | --- |
@@ -255,7 +261,7 @@ Your sender gets two kinds of message, both as a `types.MailMessage`:
 | `WaitForSend` | false | false: the request returns once the message is queued, and a failed send is logged. true: the request waits for your sender, and a failed send revokes the link. |
 | `LeaveEmailUnverified` | false | Set it to stop a completed reset from marking the email as verified. |
 
-With reset on, a missing mail sender, a `LinkURL` that is not an absolute URL and a negative `TTL` are configuration errors from `Boot`.
+With reset on, a missing mail sender, a `LinkURL` that is not an absolute URL, and a negative `TTL` are configuration errors from `Boot`.
 
 `examples/init` runs reset end to end: a sender that prints the link (`mail.go`) and the page the link opens (`pages.go`).
 
@@ -274,22 +280,24 @@ With reset on, a missing mail sender, a `LinkURL` that is not an absolute URL an
 | confirm | the password fails the plugin's rules | `400` | `password_invalid_input`. The link stays usable. |
 | confirm | the link is unknown, expired, already used, or replaced by a newer one | `401` | `invalid_reset_token` |
 
-The request route gives one answer for an unknown email, a known one and a send that failed, so the response does not show which addresses have an account. Confirm gives one answer for every link it refuses.
+The request route gives one answer for an unknown email, a known one, and a send that failed, so the response does not show which addresses have an account. Confirm gives one answer for every link it refuses.
 
 ### What a reset does
 
-- **It sets the password under the same rules as sign-up.** `MinPasswordLength`, `MaxPasswordLength` and `ValidatePassword` apply. The password is checked before the token, so a refused password does not cost the user the link.
+A reset has these effects:
+
+- **It sets the password under the same rules as sign-up.** `MinPasswordLength`, `MaxPasswordLength`, and `ValidatePassword` apply. The password is checked before the token, so a refused password does not cost the user the link.
 - **The link works once.** It is used up at the moment the password is written. If that write fails (a database error, a data hook's veto), the link is spent and the user asks for a new one.
 - **A new link replaces the old one.** A user has one live reset link.
 - **It ends every session of the user.** They are revoked with the reason `password_reset` (`emailpassword.SessionRevokedPasswordReset`).
 - **It does not sign the user in.** The user signs in with the new password, so a second factor still applies.
 - **It gives a password to a user who had none.** A user created by a magic link or a provider can ask for a reset link, and using it creates their credential account.
-- **It marks the email as verified.** The link was sent to the address, so using it shows the user controls it. Set `LeaveEmailUnverified` if verified should only mean "went through your own verification".
+- **It marks the email as verified.** The link was sent to the address, so using it shows the user controls it. Set `LeaveEmailUnverified` if verified should only mean that your own verification passed.
 - **It is tied to the address it was sent to.** If the user's email changes before the link is used, the link is refused.
 - **It tells the user.** A `types.MailPasswordChanged` message goes to the account's address in the background. If it can't be queued or sent, that is logged and the reset still stands.
 - **Asking for a link changes nothing.** The old password and the sessions keep working until the link is used.
 
-### Calling the flows from code
+### Call the flows from code
 
 ```go
 sent, err := plugin.RequestPasswordReset(ctx, emailpassword.ResetRequest{Email: "ada@example.com"})
@@ -297,6 +305,8 @@ sent, err := plugin.RequestPasswordReset(ctx, emailpassword.ResetRequest{Email: 
 
 user, err := plugin.ResetPassword(ctx, rawToken, newPassword)
 ```
+
+The flows behave as follows:
 
 - Unlike the route, `RequestPasswordReset` reports an unknown email (`emailpassword.ErrNoAccount`) and a failed send.
 - `ResetPassword` returns a typed error with the code `emailpassword.ErrorCodeInvalidResetToken` for a link it refuses, and a validation error for a refused password.
@@ -327,6 +337,6 @@ The after and failed points are audited under their point names. Issuing and con
 
 The rule per email is attached to `auth.passwordReset.beforeRequest`, so it also holds for `RequestPasswordReset` called from code. It counts requests for unknown emails too, so a `429` does not show whether the address has an account.
 
-## Not built yet
+## Limits
 
-Password change for a signed-in user. A plugin that adds it should depend on `emailpassword` and call `SetPassword`, so that the password rules stay in one place.
+The plugin has no password change for a signed-in user. To add one, write a plugin that depends on `emailpassword` and calls `SetPassword`, so that the password rules stay in one place.

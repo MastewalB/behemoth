@@ -42,6 +42,8 @@ It reads the tables you pass and creates, for each one:
 | a column with `Unique` | a unique index | `uq_<table>_<column>` |
 | an index of the table | that index | the name it was declared with |
 
+It behaves as follows:
+
 - Pass `app.Schemas.All()`. It holds every table, including the columns and indexes that plugins added to tables they do not own.
 - A unique index on a nullable column only covers documents that have a value, so any number of documents may have none. This matches how the SQL databases treat `NULL`. MongoDB does not use such an index for lookups, so a second, plain index named `<name>_lookup` is created with it.
 - Collection and field names are the physical ones the adapter writes.
@@ -54,8 +56,8 @@ It reads the tables you pass and creates, for each one:
 | The collection has | Result |
 | --- | --- |
 | the index already | nothing happens |
-| the same index under another name, for example an `email_1` you created | nothing happens; yours counts |
-| a unique index where a plain one is declared | nothing happens; it serves the same lookups |
+| the same index under another name, for example an `email_1` you created | nothing happens. Your index counts. |
+| a unique index where a plain one is declared | nothing happens. It serves the same lookups. |
 | a plain index where a unique one is declared | the unique index is created next to yours |
 | another index under the declared name | an error that names it. Drop or rename that index, then call `EnsureIndexes` again |
 | documents with the same value in a field that should be unique | an error that names the collection and fields. Remove the duplicates, then call `EnsureIndexes` again. No document is deleted for you |
@@ -64,6 +66,8 @@ When an index can't be created, the others are still created, and one error repo
 
 ### When to call it
 
+Follow these rules:
+
 - Call it before `Boot`, from a deploy step or at startup. Calling it again when everything exists costs one index listing per collection.
 - Call it again after adding a plugin or changing your schema, so new indexes are created.
 - Call it outside a transaction.
@@ -71,7 +75,7 @@ When an index can't be created, the others are still created, and one error repo
 
 ### What `Boot` checks
 
-`Boot` compares the declared indexes with the database and creates nothing.
+`Boot` compares the declared indexes with the database and creates nothing. It reacts to a missing index as follows:
 
 - A missing unique index stops `Boot`. The error lists each one and where it was declared.
 - A missing plain index only makes reads slower. `Boot` starts and logs a warning for each.
@@ -86,6 +90,6 @@ When an index can't be created, the others are still created, and one error repo
 
 ## Other differences
 
-- **Foreign keys are not enforced.** MongoDB has none, so a row that references a missing user is stored, and deleting a row does not delete the rows that reference it. `Store.DeleteUser` removes a user's sessions, accounts and tokens itself, on every database. Delete your own rows that reference a user in a handler on `data.user.beforeDelete`; see [Deleting a user](hooks.md#deleting-a-user).
+- **Foreign keys are not enforced.** MongoDB has none, so a row that references a missing user is stored, and deleting a row does not delete the rows that reference it. `Store.DeleteUser` removes a user's sessions, accounts, and tokens itself, on every database. Delete your own rows that reference a user in a handler on `data.user.beforeDelete`. See [Delete a user](hooks.md#delete-a-user).
 - **Hook handlers can run more than once.** The driver retries a transaction on a transient error. See [Hooks](hooks.md#other-things-to-know).
 - **Dates are stored in milliseconds** and read back in UTC.

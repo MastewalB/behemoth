@@ -10,7 +10,7 @@ Before writing, decide which of the three types you are producing. Each has diff
 
 | Type | Where it lives | Primary reader |
 |---|---|---|
-| **API docs** | Go doc comments (`//` above exported identifiers), `doc.go`, and `example_test.go` | A developer who imports Behemoth |
+| **API docs** | Go doc comments (`//` above exported identifiers), `doc.go`, and the guides in `docs/api/*` | A developer who imports Behemoth |
 | **Website docs** | Compiled from API docs plus guide pages | A developer evaluating or learning Behemoth |
 | **Internal docs** | `docs/internal/`, ADRs, design notes, unexported-code comments, `CONTRIBUTING.md` | A Behemoth maintainer or contributor |
 
@@ -87,9 +87,9 @@ This is the biggest difference. API and website docs are public and must stand a
 
 ### 3.4 Structure and format
 
-**API docs (Go doc comments)**
+**API docs (Go doc comments and `docs/api/`)**
 
-- Follow Go conventions on top of the Google guide: the comment begins with the identifier name, and the first sentence is a complete summary ("`Driver` executes schema operations against a database.").
+- In Go doc comments, follow Go conventions on top of the Google guide: the comment begins with the identifier name, and the first sentence is a complete summary ("`Driver` executes schema operations against a database.").
 - Document every exported type, function, method, constant, and variable.
 - For methods and functions, cover as needed, in this order: what it does, parameters that need explanation, return values, errors returned (name the error codes or types), side effects, concurrency safety, and lifecycle constraints (for example, "must be called before `Freeze`").
 - For interfaces, state the contract an implementer must satisfy, including what the caller guarantees and what the implementation must guarantee.
@@ -97,7 +97,10 @@ This is the biggest difference. API and website docs are public and must stand a
 - Don't describe how the code works internally. Describe observable behavior.
 - Don't include rationale, history, or alternatives you considered.
 - Add an `Example*` function for any non-trivial symbol.
-- Use Go doc link syntax (`[MigrationConfig]`) for cross-references.
+- In Go doc comments, use Go doc link syntax (`[MigrationConfig]`) for cross-references.
+- In `docs/api/`, each page covers one component or feature for a developer who uses it. Start the page with one or two sentences saying what it does.
+- In `docs/api/`, cover setup, configuration, public types, and usage examples. Leave out internals unless they affect behavior the user can observe.
+- In `docs/api/`, link to other pages with Markdown links and descriptive text, and keep every code example complete enough to compile.
 
 **Website docs**
 

@@ -4,7 +4,7 @@ The `emailverification` plugin confirms that a user controls their email address
 
 It works with any way of creating users. You don't call it from your sign-up code: it notices a new user and sends the link.
 
-It also has the flow for [changing an address](#changing-an-email-address), in which the new address has to confirm before it replaces the old one.
+It also has the flow for [changing an address](#change-an-email-address), in which the new address has to confirm before it replaces the old one.
 
 ## How it works
 
@@ -44,8 +44,8 @@ The plugin's name is `emailverification` (`emailverification.PluginName`). It de
 | `LinkURL` | required | The page of your application the link points to. Absolute, `http` or `https`. The plugin adds the token as the `token` query parameter. |
 | `TTL` | 24 hours | How long a link works. `TokenConfig.TTLOverrides[types.TokenKindEmailVerification]` takes precedence. |
 | `SendLimit` | 5 per 15 minutes | Links sent per email. See [Rate limits](#rate-limits). |
-| `RequireVerified` | false | Refuse the sign-in of a user whose email is not verified. See [Requiring a verified email](#requiring-a-verified-email). |
-| `ChangeLinkURL`, `RevertLinkURL` | none | The two pages of the email change flow. Setting both turns the flow on. See [Changing an email address](#changing-an-email-address). |
+| `RequireVerified` | false | Refuse the sign-in of a user whose email is not verified. See [Require a verified email](#require-a-verified-email). |
+| `ChangeLinkURL`, `RevertLinkURL` | none | The two pages of the email change flow. Setting both turns the flow on. See [Change an email address](#change-an-email-address). |
 | `ChangeTTL` | 1 hour | How long the new address has to confirm a change. |
 | `RevertTTL` | 72 hours | How long the old address can undo a change. |
 | `ChangeLimit` | 3 an hour | Change requests per user. |
@@ -58,10 +58,12 @@ A missing mail sender, a `LinkURL` that is not an absolute URL, and a negative `
 | --- | --- |
 | a user is created with `EmailVerified` false | sends a link, once the write has committed |
 | a user is created with `EmailVerified` true | nothing. A plugin that trusts the address, such as an OAuth provider that vouches for it, creates the user verified. |
-| a user's email is changed by a direct write (`Store.UpdateUser`) | clears `EmailVerified` and sends a link to the new address. The new address is in effect at once; to change an address safely, use [the change flow](#changing-an-email-address). |
+| a user's email is changed by a direct write (`Store.UpdateUser`) | clears `EmailVerified` and sends a link to the new address. The new address is in effect at once. To change an address safely, use [the change flow](#change-an-email-address). |
 | a user's email changes in an update that also sets `EmailVerified` | leaves the flag as the update set it. This is for code that has checked the address itself, such as an admin screen. |
 | any other update to a user | nothing |
 | `POST /email/send-verification`, or `SendVerification` from code | sends a link, unless the address is verified already |
+
+Sending behaves as follows:
 
 - **Sending never holds the request up.** The link is handed to your mail sender in the background, so a sign-up returns without waiting for it. If the send fails, the failure is logged and the user asks for another link.
 - **Asking again is harmless.** A new link replaces the earlier one, and a request for an address that is verified already sends nothing.
@@ -77,7 +79,7 @@ The routes sit directly under the router's base path. Neither needs a session.
 | `POST /email/send-verification` | `email`, and optionally `redirect_url` and `metadata` (an object) | `200` with `{"status": "ok"}` |
 | `POST /email/verify` | `token` | `200` with `{"user": ..., "redirect_url": "..."}` |
 
-**The send route answers the same for every email.** An unknown address, one that is verified already and one that is sent a link all get a `200` with the same body, so the response does not show which addresses are registered.
+**The send route answers the same for every email.** An unknown address, one that is verified already, and one that is sent a link all get a `200` with the same body, so the response does not show which addresses are registered.
 
 Verifying does not sign the user in. No session is created.
 
@@ -94,17 +96,17 @@ Verifying does not sign the user in. No session is created.
 
 `redirect_url` follows the same rule as for a magic link: a path on your own site, or a URL on one of `RouterConfig.TrustedOrigins`. See [The redirect URL](magiclink.md#the-redirect-url).
 
-## Requiring a verified email
+## Require a verified email
 
-With `RequireVerified`, a sign-in by a user whose email is not verified is refused with `403` and the code `email_not_verified`.
+With `RequireVerified`, a sign-in by a user whose email is not verified is refused with `403` and the code `email_not_verified`. The check works as follows:
 
 - It applies to every sign-in that reaches `auth.signIn.credentialsVerified`, so a password sign-in is covered. A magic link sign-in passes, because the link verifies the address first.
 - It is checked after the credentials. A wrong password is still answered with `invalid_credentials`, so the response does not show whether an address is verified to someone who does not know the password.
 - The user gets a new link from `POST /email/send-verification`, which is why that route needs no session.
 
-Your client shows the "check your inbox" screen when it sees `email_not_verified`.
+Show a "check your inbox" screen in your client when it receives `email_not_verified`.
 
-## Changing an email address
+## Change an email address
 
 A user's address is how they sign in, and where sign-in links and future password resets go. Writing a new address straight into the user row makes whoever holds that address the owner of the account, before anyone has shown they hold it. The change flow keeps the old address until the new one confirms, and tells the old one.
 
@@ -116,7 +118,7 @@ A user's address is how they sign in, and where sign-in links and future passwor
 | 4 | new address | opens the link; your page posts the token to `POST /email/change/confirm`. The account now has the new address, marked verified. |
 | at any time | old address | opens the notice's link; your page posts the token to `POST /email/change/revert`. The change is dropped or undone, and the user is signed out everywhere. |
 
-### Turning it on
+### Turn it on
 
 Set both pages. The flow is off without them, and its routes are not mounted.
 
@@ -156,6 +158,8 @@ Your mail sender gets two more kinds of message. Both carry the two addresses in
 | confirm, revert | the address belongs to another account by now | `409` | `email_taken` |
 | all | too many requests | `429` with `Retry-After` | `rate_limited` |
 
+The change flow behaves as follows:
+
 - **The change route answers the same when the new address is taken.** It returns the `200` of a request that went through, and sends nothing to that address, so a signed-in user can't use it to find out which addresses have an account. The current address still gets its notice.
 - **A new request replaces the pending one.** The earlier confirmation link stops working.
 - **Confirming leaves the user's sessions alone.**
@@ -164,7 +168,7 @@ Your mail sender gets two more kinds of message. Both carry the two addresses in
 
 `POST /email/change` uses `types.RequireFreshSession`: the session has to be valid and has to have signed in, or passed its second factor, within `SessionConfig.FreshAge` (15 minutes by default). A session that is older gets `401` with the code `session_not_fresh`. Your client asks the user to sign in again and retries.
 
-This is what stops someone who got hold of a long-lived session, from a shared computer for example, from moving the account to their own address. Nothing refreshes a session in place yet, so signing in again is the only way to get a fresh one.
+This is what stops someone who got hold of a long-lived session, for example from a shared computer, from moving the account to their own address. Nothing refreshes a session in place, so signing in again is the only way to get a fresh one.
 
 You can put the same check on a route of your own ([Sessions](sessions.md#fresh-sessions) has more):
 
@@ -179,21 +183,21 @@ It does what `types.RequireSession` does first, so use it alone.
 
 The link in the notice works from the moment the change is requested until `RevertTTL` has passed, whether or not the new address has confirmed:
 
-- a change that is still pending is dropped;
-- a change that was applied is undone: the old address is put back and marked verified;
-- every session of the user ends. The change was requested from one of them;
-- revert links from later requests stop working.
+- A change that is still pending is dropped.
+- A change that was applied is undone: the old address is put back and marked verified.
+- Every session of the user ends, because the change was requested from one of them.
+- Revert links from later requests stop working.
 
-The last point matters after several changes in a row. Say the account goes from `a@` to `b@` to `c@`, and `a@` never asked for any of it. The link in `a@`'s mailbox puts `a@` back, whatever happened since, and then the link in `b@`'s mailbox no longer works. If `b@`'s link is used first, `a@`'s link still works afterwards. The older address always has the last word.
+The last point matters after several changes in sequence. Suppose the account goes from `a@` to `b@` to `c@`, and `a@` never asked for any of it. The link in `a@`'s mailbox puts `a@` back, whatever happened since, and then the link in `b@`'s mailbox no longer works. If `b@`'s link is used first, `a@`'s link still works afterwards. The older address takes precedence.
 
 ### What to know about the revert link
 
-- **The old mailbox keeps a say over the account for `RevertTTL`.** That is the purpose: the owner can take the account back. It also means that a user who changed address because the old mailbox was compromised can have the change undone from that mailbox. Shorten `RevertTTL` if that is the likelier case for your users.
-- **The old address is not reserved.** If another account registers it during the window, the revert can't put it back. The revert then ends the sessions and answers `409` with `email_taken`. Someone who took over an account could do this on purpose; handle that code by sending the user to your support.
+- **The old mailbox can still affect the account for `RevertTTL`.** That is the purpose: the owner can take the account back. It also means that a user who changed address because the old mailbox was compromised can have the change undone from that mailbox. Shorten `RevertTTL` if that is the likelier case for your users.
+- **The old address is not reserved.** If another account registers it during the window, the revert can't put it back. The revert then ends the sessions and answers `409` with `email_taken`. Someone who took over an account could do this on purpose; handle that code by sending the user to your support channel.
 - **The request waits for the notice.** If your mail sender returns an error for it, the change does not start. The confirmation to the new address is sent in the background, like a verification link.
 - **A direct write still bypasses all of this.** `Store.UpdateUser` with a new `email` takes effect at once. Use `RequestChange` in your own code.
 
-### From code
+### Call the change flow from code
 
 ```go
 result, err := verification.RequestChange(ctx, emailverification.ChangeRequest{
@@ -204,17 +208,19 @@ confirmed, err := verification.ConfirmChange(ctx, rawToken) // confirmed.User, c
 user, err := verification.RevertChange(ctx, rawToken)
 ```
 
-- `RequestChange` does not check who is asking. The route does that with the fresh session; a caller from code vouches for the request.
+- `RequestChange` does not check who is asking. The route does that with the fresh session, and a caller from code vouches for the request.
 - It returns `emailverification.ErrEmailTaken` when the address belongs to another account, which the route hides, and `emailverification.ErrNoAccount` for an unknown user.
 - With the flow off, all three return a configuration error.
 
 ## What a link does
 
+A verification link has these properties:
+
 - **It works once**, and a new link replaces the old one.
 - **It is tied to the address it was sent to.** If the user's email changes before the link is used, the link is refused.
 - **It goes with the user.** `Store.DeleteUser` removes a user's links.
 
-## Calling the flows from code
+## Call the flows from code
 
 ```go
 result, err := verification.SendVerification(ctx, emailverification.SendRequest{
@@ -226,6 +232,8 @@ result, err := verification.SendVerification(ctx, emailverification.SendRequest{
 verified, err := verification.Verify(ctx, rawToken)
 // verified.User, verified.RedirectURL
 ```
+
+The flows behave as follows:
 
 - `SendVerification` reports what the route hides: `emailverification.ErrNoAccount` when no user matches and `emailverification.ErrAlreadyVerified` when there is nothing to do (check with `errors.Is`).
 - It returns once the message is queued. A `nil` error does not mean the message was delivered.
@@ -254,9 +262,9 @@ With the change flow on, it declares nine more, three per step:
 | `auth.emailChange.beforeConfirm`, `.afterConfirm`, `.confirmFailed` | before: payload `email`, veto only. After: the `*models.User` with its new address. Failed: codes `invalid_link`, `user_not_found`, `email_changed`, `email_taken`, `rejected_by_hook`. |
 | `auth.emailChange.beforeRevert`, `.afterRevert`, `.revertFailed` | before: payload `email` (the address to put back), veto only. After: the `*models.User`. Failed: codes `invalid_link`, `user_not_found`, `email_taken`, `rejected_by_hook`. |
 
-Their constants are `emailverification.HookChangeRequestBefore`, `HookChangeConfirmAfter` and so on. The after and failed points are audited, so the audit log shows who asked for a change, when it was applied and whether it was undone. `auth.emailChange.afterRevert` is a signal worth alerting on: someone said a change to their account was not theirs.
+Their constants are `emailverification.HookChangeRequestBefore`, `HookChangeConfirmAfter` and so on. The after and failed points are audited, so the audit log shows who asked for a change, when it was applied, and whether it was undone. `auth.emailChange.afterRevert` is a signal worth alerting on: someone said a change to their account was not theirs.
 
-The plugin also registers handlers of its own on `data.user.created`, `data.user.beforeUpdate` and `data.user.updated`, and with `RequireVerified` on `auth.signIn.credentialsVerified`. Use `emailverification.PluginName` in `HookOptions.Before`/`After` to order a handler around them.
+The plugin also registers handlers of its own on `data.user.created`, `data.user.beforeUpdate`, and `data.user.updated`, and with `RequireVerified` on `auth.signIn.credentialsVerified`. Use `emailverification.PluginName` in `HookOptions.Before`/`After` to order a handler around them.
 
 ## Rate limits
 
@@ -270,8 +278,10 @@ With the change flow on there are four more: 10 a minute per client address on e
 
 The rule per email is attached to `auth.emailVerification.beforeSend`, so it counts every send: the automatic one for a new user, the route, and `SendVerification` from code. From the route it counts requests for unknown addresses too, so a `429` does not show whether the address has an account.
 
-## Not built
+## Limits
 
-- **Signing in on verify.** Verifying sets the flag and creates no session.
-- **Reserving the old address during the revert window.** See [What to know about the revert link](#what-to-know-about-the-revert-link).
-- **Refreshing a session without signing in again.** A user whose session is no longer fresh signs in again before changing their address.
+The plugin has these limits:
+
+- **Verifying does not sign the user in.** It sets the flag and creates no session.
+- **The old address is not reserved during the revert window.** See [What to know about the revert link](#what-to-know-about-the-revert-link).
+- **A session is not refreshed in place.** A user whose session is no longer fresh signs in again before changing their address.

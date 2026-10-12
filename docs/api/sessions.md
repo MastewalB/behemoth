@@ -41,9 +41,9 @@ The transport names where the token travels in both directions: how a sign-in ha
 | `types.TransportBody` | the JSON body, under `token` | `Authorization: Bearer <token>` |
 | `types.TransportBoth` | the cookie and `Set-Auth-Token` | either |
 
-**Cookie.** The browser stores the token and sends it by itself. The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, with the path `/`, and expires with the session. When [rolling expiration](#rolling-expiration) extends the session, the cookie is set again with the new date. Scripts on the page can't read it, and can't delete it either: the sign-out response removes it. See [Signing out](#signing-out). This is the choice for a browser application served from the same site as the API.
+**Cookie.** The browser stores the token and sends it by itself. The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, with the path `/`, and expires with the session. When [rolling expiration](#rolling-expiration) extends the session, the cookie is set again with the new date. Scripts on the page can't read it, and can't delete it either: the sign-out response removes it. See [Sign out](#sign-out). This is the choice for a browser application served from the same site as the API.
 
-**Header.** The client reads the token from `Set-Auth-Token`, keeps it, and sends it as a bearer token. This suits mobile apps, command-line tools and other servers.
+**Header.** The client reads the token from `Set-Auth-Token`, keeps it, and sends it as a bearer token. This suits mobile apps, command-line tools, and other servers.
 
 ```bash
 curl -i -X POST localhost:8080/api/auth/sign-in/email -d '{"email":"ada@example.com","password":"correct horse"}'
@@ -56,7 +56,7 @@ curl -X POST localhost:8080/api/auth/sign-out -H 'Authorization: Bearer r8_x6fau
 
 A browser script on another origin can read a response header only when your CORS configuration exposes it. With the header transport and a browser client, add `Set-Auth-Token` to `Access-Control-Expose-Headers`. Without it the sign-in succeeds and the script sees no token.
 
-**Body.** The token is a field of the sign-in response's JSON. The client sends it back the same way as with the header transport, as a bearer token; only the delivery differs. Choose it when reading a response header is awkward for your client, a cross-origin browser script for example.
+**Body.** The token is a field of the sign-in response's JSON. The client sends it back the same way as with the header transport, as a bearer token. Only the delivery differs. Choose it when reading a response header is awkward for your client, for example a cross-origin browser script.
 
 ```json
 {"user": {"id": "8b41...", "email": "ada@example.com"}, "token": "r8_x6fau4053kWPOukmnuUFxoY8iz..."}
@@ -75,6 +75,8 @@ Every route that signs a user in answers with the same JSON, whichever plugin it
 | signed in | `{"user": {...}}` |
 | a second factor is pending | `{"status": "requires_second_factor"}` |
 | either, with `TransportBody` | the same, plus `"token": "..."` |
+
+The response follows these rules:
 
 - A plugin can add fields of its own next to these. The magic link plugin adds `redirect_url`.
 - A pending session's token is delivered like any other. The client presents it together with the second factor.
@@ -132,11 +134,13 @@ curl -i localhost:8080/api/auth/me --cookie 'session_token=r8_x6fau4053kWPOukmnu
 # Set-Cookie: session_token=r8_x6fau4053kWPOukmnuUFxoY8iz...; Path=/; Expires=Fri, 16 Oct 2026 18:16:16 GMT; HttpOnly; Secure; SameSite=Lax
 ```
 
+The extension behaves as follows:
+
 - **The response that sets the cookie is marked `Cache-Control: no-store`**, also when your handler set another value. It carries the session token, and a cache that stored it could hand the token to someone else. This affects one response per extension, not every response of the route.
 - The token does not change. Only the cookie's date does.
-- `FreshAge` is not affected. An extended session is no fresher than before: see [Fresh sessions](#fresh-sessions).
+- `FreshAge` is not affected. An extended session is no fresher than before. See [Fresh sessions](#fresh-sessions).
 
-## Signing out
+## Sign out
 
 `POST /sign-out` of the `emailpassword` plugin revokes the session the request carries. What happens to the token on the client depends on the transport:
 
@@ -155,9 +159,9 @@ curl -i -X POST localhost:8080/api/auth/sign-out --cookie 'session_token=r8_x6fa
 
 The cookie is removed when the sign-out went through. If a hook handler refuses the sign-out, the session is still live and the cookie stays.
 
-A session can also end without a sign-out from that browser: it was revoked from another device, ended with all the user's sessions, or expired. The browser still holds the cookie. The next request it sends to a route behind `types.RequireSession` is refused with `401`, and that response removes the cookie. See [Protecting your own routes](#protecting-your-own-routes).
+A session can also end without a sign-out from that browser: it was revoked from another device, ended with all the user's sessions, or expired. The browser still holds the cookie. The next request it sends to a route behind `types.RequireSession` is refused with `401`, and that response removes the cookie. See [Protect your own routes](#protect-your-own-routes).
 
-## Protecting your own routes
+## Protect your own routes
 
 ```go
 {Method: http.MethodGet, Path: "/me", Handler: me,
@@ -176,7 +180,7 @@ A request it refuses does not reach your handler. The response is JSON with a me
 | has the token of an expired session | `401` | `{"error": "session expired", "code": "session_expired"}` | removed |
 | has the token of a session that waits for a second factor | `401` | `{"error": "additional verification required", "code": "session_pending"}` | kept: the client needs it to present the second factor |
 
-A session that is invalid, revoked or expired will not come back, so with a cookie transport the refusal also removes the cookie. A browser can't delete it itself, and would send the dead token with every request until the cookie expired. With `types.TransportBoth` this applies when the token came in the cookie; a request that sent a bearer token keeps its cookie. Clients of the header and body transports hold the token themselves and discard it when they get one of these codes.
+A session that is invalid, revoked, or expired does not come back, so with a cookie transport the refusal also removes the cookie. A browser can't delete it itself, and would send the dead token with every request until the cookie expired. With `types.TransportBoth` this applies when the token came in the cookie. A request that sent a bearer token keeps its cookie. Clients of the header and body transports hold the token themselves and discard it when they get one of these codes.
 
 A `401` always means the client has no usable session. If Behemoth could not check the session, because the database is down for example, the answer is `500` with a generic message, and the error is logged. No cookie is removed, and a client should not sign its user out on a `500`.
 
@@ -190,9 +194,9 @@ A session is fresh for `FreshAge` after its sign-in, or after its second factor.
 Middlewares: []types.Middleware{types.RequireFreshSession(ac.SessionManager)},
 ```
 
-Nothing refreshes a session in place yet. Signing in again is how a user gets a fresh one.
+Nothing refreshes a session in place. Signing in again is how a user gets a fresh one.
 
-## Writing a sign-in route
+## Write a sign-in route
 
 A plugin that signs users in builds a `types.SignInResult` and hands it to `types.WriteSignIn`:
 
@@ -205,11 +209,11 @@ result := &types.SignInResult{User: user, Session: session, RawToken: rawToken, 
 return types.WriteSignIn(rctx, result, nil) // the body above, and the token by the configured transport
 ```
 
-`WriteSignIn` is what makes the token arrive. If you write the response yourself, call `ac.SessionManager.WriteToken(rctx, rawToken, session)`: it sets the cookie or the header, and returns `true` when the transport is the body, in which case putting the token in your JSON is up to you.
+`WriteSignIn` is what makes the token arrive. If you write the response yourself, call `ac.SessionManager.WriteToken(rctx, rawToken, session)`. It sets the cookie or the header. It returns `true` when the transport is the body, and then putting the token in your JSON is up to you.
 
 A flow called from code, such as `emailpassword.Plugin.SignIn`, returns the raw token in its result and delivers nothing. The caller decides what to do with it.
 
-## Writing a route that ends the session
+## Write a route that ends the session
 
 A route that ends its caller's own session takes the token back afterwards with `ClearToken`, the counterpart of `WriteToken`. With a cookie transport it removes the cookie the request presented its token in, and it does nothing for the other transports.
 

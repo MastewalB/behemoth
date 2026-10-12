@@ -11,7 +11,7 @@ This page lists the adapters and covers what is specific to each router.
 | `net/http` (`http.ServeMux`) | `github.com/MastewalB/behemoth/plugins/adapters/nethttp` | Behemoth itself | `*http.ServeMux` |
 | Gin | `github.com/MastewalB/behemoth/plugins/adapters/gin` | its own `go get` | `*gin.Engine` or a `*gin.RouterGroup` |
 | Echo v5 | `github.com/MastewalB/behemoth/plugins/adapters/echo` | its own `go get` | `*echo.Echo` |
-| chi v5 | `github.com/MastewalB/behemoth/plugins/adapters/chi` | its own `go get` | `chi.Router`: a mux, a `Group` or a `Route` |
+| chi v5 | `github.com/MastewalB/behemoth/plugins/adapters/chi` | its own `go get` | `chi.Router`: a mux, a `Group`, or a `Route` |
 | Fiber v3 | `github.com/MastewalB/behemoth/plugins/adapters/fiber` | its own `go get` | `*fiber.App` |
 
 The framework adapters are separate modules, so your application downloads Gin only if it uses Gin. The `net/http` adapter needs nothing outside the standard library and is part of Behemoth's module.
@@ -64,7 +64,7 @@ Behemoth registers each route as a method and a path, for example `POST /api/aut
 | `/api/auth/{action}` (no method, a wildcard) | `POST /api/auth/sign-in/email` | Error, for the same reason. |
 | `GET /api/auth/sign-in/email` | `POST /api/auth/sign-in/email` | No error. The methods differ. |
 | `POST /api/auth/{action}` | `POST /api/auth/sign-in/email` | No error. Your pattern names its method, so the mux's own rule applies: the more specific pattern answers, which is Behemoth's. |
-| `/api/`, `/` or `/api/auth/{rest...}` (a subtree) | `POST /api/auth/sign-in/email` | No error. A subtree is a catch-all: your handler answers what no more specific pattern claims. |
+| `/api/`, `/`, or `/api/auth/{rest...}` (a subtree) | `POST /api/auth/sign-in/email` | No error. A subtree is a catch-all: your handler answers what no more specific pattern claims. |
 
 To fix an error, give your pattern its methods (`GET /api/auth/{action}`), move it to another path, or move Behemoth with `RouterConfig.BasePath`.
 
@@ -153,7 +153,7 @@ Fiber differs from the `net/http` routers in a few ways that reach your hooks an
 | A request URI Go cannot parse | The route answers `400`. One example is a path with a broken percent escape, such as `%zz`. |
 | `HEAD` requests | Fiber answers them with the matching `GET` route unless you set `Config.DisableHeadAutoRegister`. |
 
-## Gin, Echo and chi
+## Gin, Echo, and chi
 
 ```go
 import ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"

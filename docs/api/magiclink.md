@@ -19,7 +19,7 @@ The link points at your page and not at Behemoth, and step 5 is a `POST`. Mail s
 
 ## Setup
 
-Pass the plugin to `Prepare`. It uses the core `users`, `sessions` and `tokens` tables and has none of its own.
+Pass the plugin to `Prepare`. It uses the core `users`, `sessions`, and `tokens` tables and has none of its own.
 
 ```go
 import "github.com/MastewalB/behemoth/plugins/magiclink"
@@ -49,7 +49,7 @@ The plugin's name is `magiclink` (`magiclink.PluginName`). It works next to the 
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `WaitForSend` | false | Whether the request waits for the mail sender. See [Sending the link](#sending-the-link). |
+| `WaitForSend` | false | Whether the request waits for the mail sender. See [Send the link](#send-the-link). |
 | `LinkURL` | required | The page of your application the link points to. Absolute, `http` or `https`. The plugin adds the token as the `token` query parameter and keeps any query the URL already has. |
 | `TTL` | 15 minutes | How long a link works. `TokenConfig.TTLOverrides[types.TokenKindMagicLink]` takes precedence. |
 | `RequestLimit` | 5 per 15 minutes | Link requests allowed per email. See [Rate limits](#rate-limits). |
@@ -57,15 +57,17 @@ The plugin's name is `magiclink` (`magiclink.PluginName`). It works next to the 
 
 A missing mail sender (`BootConfig.Mail.Sender`), a `LinkURL` that is not an absolute URL, and a negative `TTL` are configuration errors from `Boot`.
 
-## Sending the link
+## Send the link
 
 The link is handed to your mail sender as a `types.MailMessage` with `Kind` set to `types.MailMagicLink`. [Mail](mail.md) describes the message and the sender.
 
 `Metadata` on the message is whatever the request carried under `metadata`. The plugin passes it through without reading or storing it. Use it for what your message needs: a locale, a template name, the name of the device that asked.
 
+Sending behaves as follows:
+
 - **From the route, `Metadata` is what the client sent.** Treat it like any other request input. A handler on `auth.magicLink.beforeRequest` can set or remove entries before the sender sees them.
 - **By default the request does not wait for your sender.** It returns once the message is queued. A send that fails later is logged by the mailer. The link stays valid until it expires or the user's next request replaces it.
-- **With `WaitForSend` the request waits.** A returned error revokes the link; the route still answers `200` (see below) and the error is logged at Error under the `magiclink` component. The sender is only called for an email that has an account, so a slow one makes that request slower than one for an unknown email, which shows which addresses are registered. Choose this when your sender only puts the message on a queue.
+- **With `WaitForSend` the request waits.** A returned error revokes the link. The route still answers `200` (see below), and the error is logged at Error level under the `magiclink` component. The sender is only called for an email that has an account, so a slow sender makes that request slower than one for an unknown email, and the difference shows which addresses are registered. Choose this when your sender only puts the message on a queue.
 
 ## Routes
 
@@ -76,7 +78,7 @@ The routes sit directly under the router's base path.
 | `POST /sign-in/magic-link` | `email`, and optionally `redirect_url` and `metadata` (an object) | `200` with `{"status": "ok"}` |
 | `POST /magic-link/verify` | `token` | `200` with `{"user": {...}, "redirect_url": "..."}`, or `{"status": "requires_second_factor", "redirect_url": "..."}` when a second factor is pending. It is the body every sign-in answers with, plus the redirect, and the session token arrives by the configured transport; see [Sessions](sessions.md#the-sign-in-response). |
 
-**The request route answers the same whether or not the email has an account.** An unknown email, a link that could not be issued and a failed send are all a `200` with the same body, so the response does not show which addresses are registered. The plugin does not create accounts: an unknown email gets no link.
+**The request route answers the same whether or not the email has an account.** An unknown email, a link that could not be issued, and a failed send are all a `200` with the same body, so the response does not show which addresses are registered. The plugin does not create accounts: an unknown email gets no link.
 
 ### Error responses
 
@@ -102,21 +104,23 @@ Two forms are accepted:
 - a path on your own site, starting with one `/`: `/dashboard?tab=1`
 - an absolute `http` or `https` URL whose origin is in `RouterConfig.TrustedOrigins`
 
-Anything else is a `400`, including `//other.example.com` and a URL with credentials in it. An origin is a scheme, a host and an optional port, and it is matched exactly: `https://app.example.com` does not cover `http://app.example.com` or `https://www.app.example.com`. List each one. An entry that is not an origin is a configuration error from `Boot`.
+Anything else is a `400`, including `//other.example.com` and a URL with credentials in it. An origin is a scheme, a host, and an optional port, and it is matched exactly: `https://app.example.com` does not cover `http://app.example.com` or `https://www.app.example.com`. List each one. An entry that is not an origin is a configuration error from `Boot`.
 
 Without the check, anyone could mail your users a real sign-in link that ends on a site of their choosing.
 
 ## What a link does
 
+A link has these properties:
+
 - **It works once.** The token is consumed at verify, also when a later step refuses the sign-in (a second-factor handler's rejection, a session limit). The user asks for a new link.
 - **A new link replaces the old one.** A user has one live link. Requesting again revokes the earlier ones.
-- **It marks the email as verified.** Following the link shows the user controls the address, so `EmailVerified` is set on a user who did not have it. Set `LeaveEmailUnverified` if verified should only mean "went through your own verification". The link then signs the user in and leaves the flag as it was. With the email verification plugin's `RequireVerified`, such a sign-in is refused until the address is verified.
+- **It marks the email as verified.** Following the link shows the user controls the address, so `EmailVerified` is set on a user who did not have it. Set `LeaveEmailUnverified` if verified should only mean that your own verification passed. The link then signs the user in and leaves the flag as it was. With the email verification plugin's `RequireVerified`, such a sign-in is refused until the address is verified.
 - **It is tied to the address it was sent to.** If the user's email changes before the link is used, the link is refused.
 - **It goes with the user.** `Store.DeleteUser` removes a user's links.
 
-## Calling the flows from code
+## Call the flows from code
 
-Both flows are exported for a CLI, a job or another plugin.
+Both flows are exported for a CLI, a job, or another plugin.
 
 ```go
 result, err := plugin.RequestLink(ctx, magiclink.LinkRequest{
@@ -128,6 +132,8 @@ result, err := plugin.RequestLink(ctx, magiclink.LinkRequest{
 signIn, err := plugin.Verify(ctx, rawToken)
 // signIn.User, signIn.Session, signIn.RawToken, signIn.RedirectURL
 ```
+
+The flows behave as follows:
 
 - `RequestLink` reports what the route hides. It returns `magiclink.ErrNoAccount` for an unknown email (check with `errors.Is`), and the error of a failed issue or send.
 - `Verify` returns the raw session token and delivers nothing. From a route of your own, hand `signIn.SignInResult` to `types.WriteSignIn`, which is what the plugin's route does.
@@ -169,7 +175,9 @@ The plugin declares three rules.
 
 The rule per email is attached to `auth.magicLink.beforeRequest` and not to the route, so it also holds for `RequestLink` called from code. It keeps one address from being sent link after link. It counts requests for unknown emails too, so a `429` does not show whether the address has an account.
 
-## Not built
+## Limits
 
-- **Sign-up by link.** An unknown email gets no link and no account.
-- **Wildcards in trusted origins.** Each origin is listed.
+The plugin has these limits:
+
+- **No sign-up by link.** An unknown email gets no link and no account.
+- **No wildcards in trusted origins.** List each origin.

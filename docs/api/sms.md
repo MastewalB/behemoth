@@ -1,6 +1,6 @@
 # SMS and one-time codes
 
-Plugins that send text messages hand them to an SMS sender you give Behemoth at `Boot`. Behemoth writes no message text and talks to no provider. The [phone number](phonenumber.md) plugin is the one that needs it today.
+Plugins that send text messages hand them to an SMS sender you give Behemoth at `Boot`. Behemoth writes no message text and talks to no provider. The [phone number](phonenumber.md) plugin uses it.
 
 It works like the [mail sender](mail.md), with a code where a mail has a link.
 
@@ -33,9 +33,11 @@ defer ac.SMS.Close(context.Background())
 | `QueueSize` | 256 | Background sends that may wait. |
 | `SendTimeout` | 30 seconds | How long one background send may take. |
 
+The sender and the queue behave as follows:
+
 - Your provider's API key belongs to your sender. It is not part of `SMSConfig`.
-- A plugin either waits for your sender or queues the message; the phone number plugin queues by default (`WaitForSend`).
-- The queue is in memory and does not retry, like the mailer's. If you need retries, give a sender that puts the message on your own queue.
+- A plugin either waits for your sender or queues the message. The phone number plugin queues by default (`WaitForSend`).
+- The queue is in memory and does not retry, like the mailer's. If you need retries, use a sender that puts the message on your own queue.
 - Call `ac.SMS.Close(ctx)` at shutdown. Mail and SMS have separate queues.
 - Messages are counted in `behemoth.sms.sent`, by kind and result (`sent`, `error`, `dropped`).
 
@@ -59,10 +61,12 @@ if behemotherr.IsCodeRejection(err) {
 | `MaxAttempts` | 5 | Tries, the right one included. |
 | `Metadata` | none | Stored with the code and returned by `Consume`. |
 
+Codes behave as follows:
+
 - There is one live code per kind and subject. Issuing another replaces it.
-- Only a keyed hash is stored, in the core `verification_codes` table. The table is new in core: generate and apply a migration before you deploy a version that has it, whether or not you use codes, because deleting a user clears the user's codes from it.
+- Only a keyed hash is stored, in the core `verification_codes` table. The table is new in core. Generate and apply a migration before you deploy a version that has it, whether or not you use codes, because deleting a user clears the user's codes from it.
 - `Consume` gives one error for every refusal, with the code `code_invalid`.
 - Use a user id as the subject when the code belongs to a user: `Store.DeleteUser` removes the codes whose subject is the user's id.
-- Expired codes that were never used stay until `ac.Store.PurgeExpiredVerificationCodes(ctx)` runs. Nothing schedules it; call it from a job, next to the other purges.
+- Expired codes that were never used stay until `ac.Store.PurgeExpiredVerificationCodes(ctx)` runs. Nothing schedules it, so call it from a job, next to the other purges.
 
 A code is not a token. Use `ac.TokenManager` for a long secret that travels in a link, and a code for a short one a person types.

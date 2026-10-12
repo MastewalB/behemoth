@@ -1,6 +1,6 @@
 # Username
 
-The `username` plugin gives users a unique username and lets them sign in with it and their password. It builds on the [email and password](emailpassword.md) plugin: the password, the sign-up route and the email sign-in stay there, and a user can sign in either way.
+The `username` plugin gives users a unique username and lets them sign in with it and their password. It builds on the [email and password](emailpassword.md) plugin: the password, the sign-up route, and the email sign-in stay there, and a user can sign in either way.
 
 ## Setup
 
@@ -20,8 +20,10 @@ app, err := bmth.Prepare([]types.Plugin{passwords, names}, bmth.PrepareConfig{})
 ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{ /* ... */ })
 ```
 
+The setup has these requirements:
+
 - The plugin's name is `username` (`username.PluginName`). It depends on `emailpassword`, so `Prepare` fails when that plugin is missing.
-- It adds two columns to `users`, both nullable strings of up to 64 characters: `username`, which is unique, and `display_username`. Generate and apply a migration after adding the plugin. On MongoDB, run `EnsureIndexes`; see [MongoDB](mongodb.md).
+- It adds two columns to `users`, both nullable strings of up to 64 characters: `username`, which is unique, and `display_username`. Generate and apply a migration after adding the plugin. On MongoDB, run `EnsureIndexes`. See [MongoDB](mongodb.md).
 - Build the database adapter with `app.Resolver`, as for any plugin that adds a column to a core table. Without it the adapter does not read the columns.
 - On SQLite, open the database with `_txlock=immediate`. The plugin checks a username inside the write's transaction, and without that setting two writes at the same moment can fail with "database is locked".
 
@@ -35,14 +37,16 @@ The zero value works.
 | `MaxLength` | 30 | Longest username accepted. At most 64 (`username.MaxColumnLength`). |
 | `Reserved` | none | Usernames nobody may take, such as `admin`. `Admin` in the list also covers `admin`. |
 | `RequireAtSignUp` | false | Refuse a sign-up that names no username. By default a username is optional. |
-| `AvailabilityRoute` | false | Mount `POST /username/available`; see [Checking availability](#checking-availability). |
+| `AvailabilityRoute` | false | Mount `POST /username/available`. See [Check availability](#check-availability). |
 
-A minimum above the maximum, a negative limit, a maximum above 64 and a nil email/password plugin are configuration errors from `Boot`.
+A minimum above the maximum, a negative limit, a maximum above 64, and a nil email/password plugin are configuration errors from `Boot`.
 
 ## The rules
 
-- A username holds the letters `a` to `z`, digits, `_` and `.`, and starts with a letter or a digit.
-- It is stored trimmed and lowercased. `Ada` and `ada` are one username. The form the user typed is kept next to it; see [The display username](#the-display-username).
+A username follows these rules:
+
+- A username holds the letters `a` to `z`, digits, `_`, and `.`, and starts with a letter or a digit.
+- It is stored trimmed and lowercased. `Ada` and `ada` are one username. The form the user typed is kept next to it. See [The display username](#the-display-username).
 - It can't contain `@`, so a username is never an email address.
 - It is unique. A user without a username has no value in the column, and any number of users can go without one.
 - The length limits apply where a username is set, not at sign-in. Lowering `MaxLength` later does not lock out a user whose username is longer.
@@ -51,7 +55,7 @@ The rules are applied to every write of a user: a sign-up, `Plugin.SetUsername`,
 
 ## The display username
 
-`display_username` holds the username as the user typed it, for showing: `Ada_L` for the username `ada_l`. Sign-in and uniqueness use `username` only.
+`display_username` holds the username as the user typed it, for showing: `Ada_L` for the username `ada_l`. Sign-in and uniqueness use `username` only. The display username follows these rules:
 
 - You don't have to send it. It is set from the username whenever a username is set.
 - When you do send it, at sign-up or in an update, it has to spell the username: `ADA_L` passes for `ada_l`, and `Grace` does not. This keeps a user from showing another user's name.
@@ -59,7 +63,7 @@ The rules are applied to every write of a user: a sign-up, `Plugin.SetUsername`,
 - A user without a username has no display username. Removing the username removes both.
 - It is a public column, so a user in a response has `display_username` next to `username`.
 
-## Signing up
+## Sign up
 
 There is no extra route. Send `username` with the other sign-up fields:
 
@@ -77,9 +81,9 @@ The response is the email/password plugin's `201` with `{"user": {...}}`, and th
 | `display_username` is not a string, does not spell the username, or comes without one | `400` | `{"error": "<which rule>", "code": "display_username_invalid_input"}` |
 | another user holds the username | `409` | `{"error": "this username is taken", "code": "username_taken"}` |
 
-A `409` shows that a username exists, as the email/password plugin's `email_taken` does for an address. Two sign-ups that ask for the same new username at the same moment are both checked before either is written; the second is then refused by the database with a `409` that carries the store's code, not `username_taken`.
+A `409` shows that a username exists, as the email/password plugin's `email_taken` does for an address. Two sign-ups that ask for the same new username at the same moment are both checked before either is written. The database then refuses the second with a `409` that carries the store's code, not `username_taken`.
 
-## Signing in
+## Sign in
 
 | Route | Body | Result |
 | --- | --- | --- |
@@ -96,9 +100,9 @@ The `401` is the same for the three refusals, so the response does not show whic
 
 The user in a response has the `username` and `display_username` keys next to the core columns. They are `null`, or absent, for a user without a username.
 
-## Checking availability
+## Check availability
 
-A sign-up form can ask whether a username is free before the user submits. The route is off until you set `Options.AvailabilityRoute`, because it tells anyone who asks which usernames exist. Sign-up's `409` tells the same, one account-creating request at a time; this route makes it cheap, so it has a rate limit of its own.
+A sign-up form can ask whether a username is free before the user submits. The route is off until you set `Options.AvailabilityRoute`, because it tells anyone who asks which usernames exist. Sign-up's `409` tells the same, one account-creating request at a time. This route makes it cheap, so it has a rate limit of its own.
 
 | Route | Body | Result |
 | --- | --- | --- |
@@ -112,7 +116,7 @@ A sign-up form can ask whether a username is free before the user submits. The r
 
 `true` is not a reservation. Another user can take the name before the sign-up arrives, and the sign-up checks again.
 
-## Calling the flows from code
+## Call the flows from code
 
 ```go
 result, err := names.SignIn(ctx, username.Credentials{
@@ -129,7 +133,9 @@ name, ok, err := username.Column.Get(user)         // ok is false for a user wit
 shown, ok, err := username.DisplayColumn.Get(user) // "Ada.L"
 ```
 
-- `SignIn` is the flow behind the route. It returns the raw session token and delivers nothing; from a route of your own, hand the result to `types.WriteSignIn`.
+The flows behave as follows:
+
+- `SignIn` is the flow behind the route. It returns the raw session token and delivers nothing. From a route of your own, hand the result to `types.WriteSignIn`.
 - `SetUsername` applies the rules and returns the same typed errors as sign-up (`username.ErrorCodeInvalidUsername`, `username.ErrorCodeUsernameTaken`). It does not check who is asking, so call it from a route that has checked the session. The old username is free for another user at once.
 - To give usernames to users you had before adding the plugin, call `SetUsername` for each of them from a job, and handle the two errors for names that break the rules or collide.
 - `Available` returns false for a taken or reserved username, and a validation error for one that breaks a rule of length or characters.
@@ -147,7 +153,7 @@ The plugin declares no points. A sign-in by username fires the `auth.signIn.*` p
 | `auth.signIn.after` | a `*types.SignInResult` with `Method` `"username"` |
 | `auth.signIn.failed` | codes `user_not_found` (with the username in the audit event's metadata), `no_credential_account`, `invalid_credentials`, `rejected_by_hook` |
 
-It registers three handlers: on `auth.signUp.before`, `data.user.beforeCreate` and `data.user.beforeUpdate`. A refused username at sign-up fires `auth.signUp.failed` with `rejected_by_hook`.
+It registers three handlers: on `auth.signUp.before`, `data.user.beforeCreate`, and `data.user.beforeUpdate`. A refused username at sign-up fires `auth.signUp.failed` with `rejected_by_hook`.
 
 ## Rate limits
 
@@ -170,7 +176,9 @@ ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
 
 The plugin declares no such rule itself: a limit per username lets anyone keep a user out by failing on purpose.
 
-## Not built yet
+## Limits
 
-- A route that changes the caller's username or its spelling. Call `SetUsername` from a route of your own until then.
-- Holding a released username back for a time, so that another user can't take it at once.
+The plugin has these limits:
+
+- **No route to change a username or its spelling.** Call `SetUsername` from a route of your own.
+- **No holding period for released usernames.** Another user can take a released username at once.

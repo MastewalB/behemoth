@@ -1,6 +1,6 @@
 # Command line
 
-`behemoth generate` compares the tables your application declares with your database, and writes the migration that closes the gap.
+`behemoth generate` compares the tables your application declares with your database, and writes the migration that makes the database match.
 
 ```bash
 behemoth generate            # show the next migration
@@ -9,9 +9,9 @@ behemoth generate -confirm   # write it to your migrations folder
 
 `behemoth migrate` applies it, for applications that let Behemoth apply their migrations.
 
-The command reads your plugins, your schema and your migration settings from your own code. You don't describe them a second time in a config file.
+The command reads your plugins, your schema, and your migration settings from your own code. You don't describe them a second time in a config file.
 
-This is a first version, with a ready-made setup for PostgreSQL. The limits are listed at the end.
+**Experimental:** the command line is a first version, with a ready-made setup for PostgreSQL only. See [Limits](#limits) for what it does not cover.
 
 ## Setup
 
@@ -65,7 +65,7 @@ ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{ /* ... */ })
 
 Because both start from one function, the tables a migration creates are the tables your server reads. `MigrationBackend` is the only code you write for the command alone.
 
-Keep `Prepare` free of connections and secrets. The command calls it before it opens the database, and `Boot`'s settings (crypto, sessions, mail) are not needed for a migration.
+Keep `Prepare` free of connections and secrets. The command calls it before it opens the database, and a migration needs none of `Boot`'s settings (crypto, sessions, and mail).
 
 ### 2. Install the launcher
 
@@ -80,9 +80,9 @@ cd my-app
 behemoth generate
 ```
 
-A relative `FolderPath` such as `"migrations"` is resolved against the directory you run the command in, as it is for your own binary. Run it from another directory and it starts a second migrations folder there.
+The command resolves a relative `FolderPath` such as `"migrations"` against the directory you run it in, as your own binary does. If you run it from another directory, it starts a second migrations folder there.
 
-## generate
+## `generate`
 
 ```
 $ behemoth generate
@@ -99,14 +99,14 @@ Migration 0001 ready (not yet written). Re-run with --confirm to write it to mig
   add foreign key fk_sessions_user on sessions
 ```
 
-Without `-confirm` the command writes nothing but the draft file described below. With `-confirm` it writes two more files to your migrations folder:
+Without `-confirm`, the command writes nothing except the draft file described below. With `-confirm`, it writes two more files to your migrations folder:
 
 | File | Holds |
 | --- | --- |
-| `0001_create_accounts_and_7_more.json` | The migration as Behemoth records it. Keep it in the folder: the next migration's number comes from it. |
-| `0001_create_accounts_and_7_more.sql` | The same migration as a script for your database. Apply this one with your own tool, such as `psql`, goose or golang-migrate. |
+| `0001_create_accounts_and_7_more.json` | The migration as Behemoth records it. Keep it in the folder, because the next migration's number comes from it. |
+| `0001_create_accounts_and_7_more.sql` | The same migration as a script for your database. Apply this one with your own tool, such as `psql`. |
 
-The name after the number says what the migration does. Behemoth derives it from the operations:
+The name after the number says what the migration does. Behemoth derives it from the schema operations:
 
 | Migration | Name |
 | --- | --- |
@@ -115,11 +115,11 @@ The name after the number says what the migration does. Behemoth derives it from
 | New tables only | `0001_create_users_sessions_tokens`, or `0001_create_accounts_and_7_more` beyond three |
 | Changes across tables | `0004_update_notes_users` |
 
-Only the number identifies a migration. You can't choose the name yet.
+Only the number identifies a migration. You can't choose the name.
 
 `generate` never changes your database.
 
-After you apply a script, run `behemoth generate` again. When the database matches your declarations it answers:
+After you apply a script, run `behemoth generate` again. When the database matches your declarations, it answers:
 
 ```
 No schema changes detected.
@@ -127,7 +127,7 @@ No schema changes detected.
 
 ### Questions and the draft file
 
-Some differences have more than one answer. A column that got shorter in your declaration could be altered, which may reject existing rows, or left as it is. The command does not ask. It writes the question to `draft.json` in your migrations folder with a default answer, "Leave as-is", and tells you that it read an answer:
+Some differences have more than one answer. If a column becomes shorter in your declaration, Behemoth can alter it, which may reject existing rows, or leave it as it is. The command does not prompt. It writes the question to `draft.json` in your migrations folder with a default answer, "Leave as-is". When the command reads an answer from that file, it tells you:
 
 ```
 No schema changes detected.
@@ -151,9 +151,9 @@ The file lists each question with its options. `chosen` is the position of the a
 }
 ```
 
-Set `chosen` to `0` and run `behemoth generate` again to get the alter. So read the last lines of the output before you trust a "No schema changes detected".
+Set `chosen` to `0` and run `behemoth generate` again to get the alter. Read the last lines of the output before you trust "No schema changes detected", because the command prints it even when it read answers from the draft file.
 
-## migrate
+## `migrate`
 
 `migrate` is for an application whose `MigrationConfig.Path` is `core.PathManaged`. There Behemoth applies the migrations itself and keeps a record of them in two tables of its own.
 
@@ -165,21 +165,21 @@ behemoth migrate -confirm    # apply it
 
 `generate` works as described above, with one difference: while a written migration is unapplied, it generates no further one and tells you to run `migrate` first.
 
-The `.sql` is there for you to read. `migrate` applies the migration from the `.json`, so editing the script changes nothing, and running the script yourself leaves Behemoth's record without it: the next `migrate` would try to apply it again.
+The `.sql` file is there for you to read. `migrate` applies the migration from the `.json` file, so editing the script changes nothing. If you run the script yourself, Behemoth's record does not include it, and the next `migrate` tries to apply the migration again.
 
 `migrate` never writes a migration. It applies the one that is waiting, and answers `Nothing to apply` when there is none.
 
-On SQLite, MySQL and SQL Server some statements depend on the database as it is when they run. If the database changed since you generated, `migrate` applies nothing, writes the script again and asks you to review it and run `migrate` once more. On PostgreSQL the script depends on the migration alone, so this does not happen.
+On SQLite, MySQL, and SQL Server, some statements depend on the database as it is when they run. If the database changed since you generated the migration, `migrate` applies nothing, writes the script again, and asks you to review it and run `migrate` once more. On PostgreSQL, the script depends on the migration alone, so this does not happen.
 
-If your database already holds some of the declared tables when you start, the first migration `generate` writes is a baseline, `0000_baseline.json`. It describes those tables as they are. `migrate -confirm` records it without changing the database. If the database changes between the two, `migrate` refuses the baseline and asks you to generate and review it again.
+If your database already holds some of the declared tables when you start, the first migration `generate` writes is a baseline, `0000_baseline.json`. It describes those tables as they are. `migrate -confirm` records it without changing the database. If the database changes between `generate` and `migrate`, `migrate` refuses the baseline and asks you to generate and review it again.
 
-On the default path, `migrate` ends with an error that names the path: you apply the files with your own tool.
+On the default path, `migrate` fails with an error that names the path. There you apply the files with your own tool.
 
 ## How the launcher finds your code
 
 The launcher looks for a file named `behemoth.go` in the current directory and the directories below it. The package that file is in must export `Prepare` and `MigrationBackend`.
 
-It does not look in directories whose name starts with `.` or `_`, in `testdata` and `vendor`, or in a directory that is another Go module.
+It does not look in directories whose name starts with `.` or `_`, in `testdata` or `vendor`, or in a directory that is another Go module.
 
 If your setup is somewhere else, or the search finds more than one, name the directory:
 
@@ -200,7 +200,7 @@ Three things follow from that:
 
 - **It needs the Go toolchain.** `go` must be on your `PATH`, as it is where you develop.
 - **Your module decides the version.** The commands that run are those of the Behemoth version in your `go.mod`. Updating the launcher does not change them.
-- **Nothing is written into your source tree.** The program is built in a temporary directory. It can still import a package under `internal/`.
+- **Nothing is written into your source tree.** The launcher builds the program in a temporary directory, and the program can still import a package under `internal/`.
 
 ## Without the launcher
 
@@ -223,7 +223,7 @@ func main() { cli.Main(auth.Prepare, auth.MigrationBackend) }
 go run ./cmd/behemoth generate
 ```
 
-Use this where there is no Go toolchain, by building the binary into your image, and in a module that vendors its dependencies. The launcher's program is not part of your code, so `go mod vendor` leaves the `cli` package out and the launcher's build fails there.
+Use this where there is no Go toolchain, for example when you build the binary into your image, and in a module that vendors its dependencies. The launcher's program is not part of your code, so `go mod vendor` leaves out the `cli` package and the launcher's build fails.
 
 To offer the commands from your application's own binary, call `cli.Run` with the arguments and use its result as the exit code:
 
@@ -235,17 +235,19 @@ if len(os.Args) > 1 && os.Args[1] == "behemoth" {
 
 ## Exit codes
 
+The commands exit with one of these codes:
+
 | Code | Meaning |
 | --- | --- |
 | 0 | The command ran. It found changes or it found none. |
 | 1 | It failed: `Prepare` returned an error, the database could not be reached, or the migration could not be built. |
-| 2 | Unknown command, unknown flag or an argument it did not expect. |
+| 2 | Unknown command, unknown flag, or an argument it did not expect. |
 
 The launcher returns the command's own exit code. It returns 1 itself when it cannot find or build your setup.
 
 ## Other databases
 
-`postgres.MigrationBackend` exists for PostgreSQL only so far. For MySQL, SQLite or SQL Server, fill `core.Backend` yourself from the module's driver. `generate` needs `Introspector`, and `Renderer` for the script. `migrate` also needs `Driver` and `DB`, the module's driver and its adapter:
+`postgres.MigrationBackend` is available for PostgreSQL only. For MySQL, SQLite, or SQL Server, fill `core.Backend` yourself from the module's driver. `generate` needs `Introspector`, and `Renderer` for the script. `migrate` also needs `Driver` and `DB`: the module's driver and its adapter:
 
 ```go
 func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (core.Backend, error) {
@@ -273,8 +275,10 @@ res, err := core.Generate(ctx, app.Migration, app.Declared(), backend, core.RunO
 
 ## Limits
 
-- **No prompt.** Questions are answered in `draft.json`, as described above.
-- **Vendored modules** need the hand-written program.
-- **A moved file is forgotten.** Migration numbers come from the files in your migrations folder. If you move a generated `.json` out of it, the next migration gets its number again.
+The command line has these limits:
 
-[examples/cli](../../examples/cli) is a complete application set up this way.
+- **No prompt.** The command asks no questions. You answer them in `draft.json`, as described above.
+- **No vendored modules.** The launcher can't build in a vendored module. Use the hand-written program.
+- **Moved files.** Migration numbers come from the files in your migrations folder. If you move a generated `.json` out of it, the next migration gets its number again.
+
+The [examples/cli](../../examples/cli) directory holds a complete application set up this way.
