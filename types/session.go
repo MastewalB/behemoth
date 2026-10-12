@@ -178,6 +178,13 @@ const (
 	TransportBoth TokenTransport = "both"
 )
 
+// ReadsCookie reports whether a request under t is authenticated by a cookie
+// the browser attaches by itself. Those are the transports a cross-site
+// request can abuse, and the ones Boot installs the origin check for.
+func (t TokenTransport) ReadsCookie() bool {
+	return t == TransportCookie || t == TransportBoth
+}
+
 // SessionTokenHeader is the response header a sign-in returns the session
 // token in under TransportHeader and TransportBoth. It mirrors Set-Cookie:
 // the server sets a credential, and the client stores it.

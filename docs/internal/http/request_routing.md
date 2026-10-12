@@ -186,6 +186,7 @@ adapter: build RequestContext (Request, Params, empty Response, Values)
   ├─ withTracing              one span per request; rctx.Ctx carries it         (Build)
   ├─ withMetrics              counts and times the request, by route pattern    (Build)
   ├─ wrapWithErrorMapping     returned error → mapped JSON response             (Build)
+  ├─ origin check             OriginCheck.Middleware, cookie transports only    (Build)
   ├─ global middleware[0]                                                      (Build)
   ├─ …
   ├─ global middleware[n]     every plugin's Middlewares(), dependency order    (Build)
@@ -220,7 +221,8 @@ How each step builds it:
 - **Tracing inside the request scope.** `withTracing` needs the request ID for the span, and replaces `rctx.Ctx` with the span's context so middleware and the handler nest under it. See `docs/internal/telemetry/tracing.md`.
 - **Metrics outside error mapping.** `withMetrics` reads the status after the mapper has run, so `behemoth.http.requests` reports what the client received. See `docs/internal/telemetry/metrics.md`.
 - **Error mapping inside that, outside everything that can fail.** An error from a global middleware, the rate limiter, a route middleware or the handler all become a response through the same mapper. Before this order, only handler errors were mapped; a rate-limit rejection reached the adapter as a raw error.
-- **Global middleware outside route-specific layers.** Cross-cutting concerns (request IDs, security headers, CSRF) see every request first, including ones the rate limiter is about to reject.
+- **The origin check first among the global middleware.** `Boot` passes `OriginCheck.Middleware` to `Build` ahead of the plugins' middleware when the session token travels in a cookie. A cross-site request is refused before any plugin code or rate limit sees it. See [`origin_check.md`](origin_check.md).
+- **Global middleware outside route-specific layers.** Cross-cutting concerns (request IDs, security headers) see every request first, including ones the rate limiter is about to reject.
 - **Route middleware innermost.** It is the route's own concern and sees the request last, after everything general has passed.
 
 `[Question, open]` Rate limiting currently runs *after* global middleware, so a rate-limited request still pays for every global middleware. Moving it to just inside error mapping would make rejection cheaper, at the cost of global middleware (e.g. a request logger) no longer seeing rejected requests.
@@ -326,13 +328,13 @@ Passing a group (gin `RouterGroup`, chi `Group`/`Route`) puts behemoth's routes 
 
 ### **What exists: middleware across behemoth's routes**
 
-`Plugin.Middlewares()` is behemoth-wide: every plugin's list is composed, in dependency order, around **every behemoth route** (mounted and absolute). It is applied by the router during `Build`, never with the framework's `Use()`. Cross-cutting concerns that apply to every auth endpoint — request IDs, security headers, CSRF/origin checks — belong here; without it every plugin would repeat them per route.
+`Plugin.Middlewares()` is behemoth-wide: every plugin's list is composed, in dependency order, around **every behemoth route** (mounted and absolute). It is applied by the router during `Build`, never with the framework's `Use()`. Cross-cutting concerns that apply to every auth endpoint — request IDs, security headers — belong here; without it every plugin would repeat them per route. Core's origin check uses the same mechanism: `Boot` puts it first in the list (see [`origin_check.md`](origin_check.md)).
 
 `[Convention, important]` Behemoth-wide does **not** mean server-wide. A plugin's global middleware never runs on the application's own routes. Registering it with `engine.Use()` would have done exactly that, which is why the router composes it instead.
 
 Known gaps:
 
-- **Ordering between plugins is implicit.** Global middleware runs in plugin dependency order — a by-product of plugin resolution, not a decision anyone makes. Hooks already have explicit ordering (`HookPriority`, `HookOptions.Before/After`); middleware should get the same model, so "the CSRF check runs before the audit logger" is declared rather than inherited.
+- **Ordering between plugins is implicit.** Global middleware runs in plugin dependency order — a by-product of plugin resolution, not a decision anyone makes. Hooks already have explicit ordering (`HookPriority`, `HookOptions.Before/After`); middleware should get the same model, so "the request logger runs before the audit logger" is declared rather than inherited. Core's origin check does not depend on this: `Boot` places it ahead of every plugin's middleware.
 - **Scope is all-or-nothing.** A plugin wanting middleware on its own routes only already has `Route.Middlewares`. For anything in between, a declared path pattern could reuse the matcher route rate-limit rules already use (`MatchesMethod` / `MatchesPath` / `BestRouteMatch`). `[Deferred]` until a plugin needs it.
 
 ### **What does not exist: plugins intercepting every request to the server**

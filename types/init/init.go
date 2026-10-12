@@ -331,6 +331,11 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err != nil {
 		return nil, behemotherr.NewConfigurationError("Boot", "RouterConfig.TrustedOrigins", err)
 	}
+	// Built whatever the transport, so a malformed BaseURL fails here.
+	originCheck, err := types.NewOriginCheck(cfg.Router.BaseURL, origins)
+	if err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", "RouterConfig.BaseURL", err)
+	}
 	ac := &types.AuthContext{
 		DB:          db,
 		KV:          kv,
@@ -377,6 +382,12 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// driver, so a misconfiguration surfaces the same way in every process.
 	router := types.NewRouter(cfg.Router, ac)
 	var globalMiddleware []types.Middleware
+	// A bearer token is never sent by the browser on its own, so only the
+	// cookie transports need the origin check. It runs before the plugins'
+	// middleware.
+	if cfg.Session.WithDefaults().Transport.ReadsCookie() {
+		globalMiddleware = append(globalMiddleware, originCheck.Middleware())
+	}
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if err := router.Mount(name, p.Meta().MountPath, p.Routes()); err != nil {
@@ -415,6 +426,10 @@ func logBootSummary(ctx context.Context, log telemetry.Logger, order []string, r
 	if cfg.Router.ClientIPHeader != "" && len(cfg.Router.TrustedProxies) == 0 {
 		log.Warn(ctx, "RouterConfig.ClientIPHeader is set but TrustedProxies is empty; the header is ignored and every request is attributed to its direct peer",
 			behemoth.M{"header": cfg.Router.ClientIPHeader})
+	}
+	// Only where routes are served: a worker or a CLI answers no request.
+	if cfg.HTTP != nil && cfg.Router.BaseURL == "" && cfg.Session.WithDefaults().Transport.ReadsCookie() {
+		log.Warn(ctx, "RouterConfig.BaseURL is not set; the origin check compares each request's Origin with its Host header, which refuses browser requests behind a proxy that rewrites Host", nil)
 	}
 }
 

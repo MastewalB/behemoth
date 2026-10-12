@@ -19,11 +19,22 @@ import (
 type RouterConfig struct {
 	BasePath    string      // default "/api/auth"
 	ErrorMapper ErrorMapper // default DefaultErrorMapper{}
+	// BaseURL is the origin a browser reaches behemoth at, such as
+	// "https://auth.example.com": a scheme, a host and an optional port,
+	// without BasePath. The origin check (OriginCheck) accepts a
+	// state-changing request from it. Boot fails on a value that is not an
+	// origin. Empty = the check compares a request's Origin with its Host
+	// header instead, which fails behind a proxy that rewrites Host; set
+	// it in production.
+	BaseURL string
 	// TrustedOrigins are the origins a browser may be redirected to, such as
 	// "https://app.example.com": a scheme, a host and an optional port,
 	// matched exactly. Boot builds AuthContext.Origins from them and fails
-	// on an entry that is not an origin. Empty = no origin is trusted, and
-	// a redirect may only be a path on the application's own site.
+	// on an entry that is not an origin. The origin check also accepts a
+	// state-changing request from one of them, so list a front end that is
+	// served from another origin than behemoth. Empty = no origin is
+	// trusted: a redirect may only be a path on the application's own
+	// site, and only behemoth's own origin may send such a request.
 	TrustedOrigins []string
 
 	// TrustedProxies are the CIDR blocks (load balancers, reverse proxies)
@@ -311,12 +322,14 @@ func (r *Router) ApplyRateLimiting(rl RateLimiter, catalog RateLimitCatalog, ipC
 // Build wraps every route in the request pipeline and hands the table to
 // driver. From outermost to innermost, a request passes through:
 //
-//	request scope (Auth, request on Ctx) -> tracing -> metrics -> error mapping -> global middlewares -> route rate limit -> route middlewares -> handler
+//	request scope (Auth, request on Ctx) -> tracing -> metrics -> error mapping -> origin check -> global middlewares -> route rate limit -> route middlewares -> handler
 //
 // Error mapping sits outside everything that can fail, so an error from a
 // middleware or the rate limiter becomes a response the same way a handler
 // error does. Global middlewares wrap only behemoth's routes, never the rest
-// of the application sharing the framework instance.
+// of the application sharing the framework instance. The origin check is the
+// first of them: Boot passes OriginCheck.Middleware ahead of the plugins'
+// when the session token travels in a cookie.
 func (r *Router) Build(driver FrameworkDriver, globalMiddleware ...Middleware) error {
 	routes := make([]Route, len(r.routes))
 	for i, mr := range r.routes {

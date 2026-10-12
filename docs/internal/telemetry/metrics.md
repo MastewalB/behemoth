@@ -57,6 +57,7 @@ Names and attribute keys are constants in `telemetry/metrics.go` (`MetricSignIn`
 | --- | --- | --- | --- |
 | `behemoth.http.requests` | counter | `method`, `route`, `status` | `Router.withMetrics` |
 | `behemoth.http.duration` | histogram | `method`, `route`, `status` | `Router.withMetrics` |
+| `behemoth.http.origin_refused` | counter | `reason` | `OriginCheck.Middleware` |
 | `behemoth.auth.sign_in` | counter | `outcome`, `reason` on failure | dispatcher, `auth.signIn.after` and `.failed` |
 | `behemoth.auth.sign_up` | counter | `outcome`, `reason` on failure | dispatcher, `auth.signUp.after` and `.failed` |
 | `behemoth.session.created` | counter | | dispatcher, `auth.session.afterCreate` |

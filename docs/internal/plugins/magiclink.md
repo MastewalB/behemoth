@@ -155,6 +155,8 @@ Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with
 | `javascript:alert(1)` | refused | not `http` or `https` |
 | `` (empty) | refused | a caller with an optional redirect checks for empty first |
 
+The same list also says which origins may send a state-changing request under the cookie transports. See [`../http/origin_check.md`](../http/origin_check.md).
+
 A plugin checks a redirect URL when it receives it, before storing it. The magic link plugin checks at request time and not at verify: a bad URL is then a `400` for the request, and nothing unchecked is kept with the token.
 
 ### Origins match exactly

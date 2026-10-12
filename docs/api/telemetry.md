@@ -375,6 +375,7 @@ Durations are in seconds. Attribute values come from fixed sets (a route pattern
 | --- | --- | --- | --- |
 | `behemoth.http.requests` | counter | `method`, `route`, `status` | requests to Behemoth's routes |
 | `behemoth.http.duration` | histogram | `method`, `route`, `status` | how long each took |
+| `behemoth.http.origin_refused` | counter | `reason` | requests the origin check refused; see [Cross-site requests](sessions.md#cross-site-requests) |
 | `behemoth.auth.sign_in` | counter | `outcome`, `reason` | sign-ins that finished or were refused |
 | `behemoth.auth.sign_up` | counter | `outcome`, `reason` | sign-ups that finished or were refused |
 | `behemoth.session.created` | counter | | sessions created |

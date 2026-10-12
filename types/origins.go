@@ -24,13 +24,9 @@ type TrustedOrigins struct {
 func NewTrustedOrigins(origins []string) (*TrustedOrigins, error) {
 	t := &TrustedOrigins{origins: make(map[string]bool, len(origins))}
 	for _, raw := range origins {
-		u, err := url.Parse(strings.TrimSpace(raw))
+		origin, err := parseOrigin(raw)
 		if err != nil {
-			return nil, fmt.Errorf("trusted origin %q: %w", raw, err)
-		}
-		origin, ok := originOf(u)
-		if !ok || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-			return nil, fmt.Errorf("trusted origin %q: want a scheme and a host, such as https://app.example.com", raw)
+			return nil, fmt.Errorf("trusted origin %w", err)
 		}
 		t.origins[origin] = true
 	}
@@ -76,6 +72,21 @@ func TrustedRedirect(v OriginValidator, target string) bool {
 	}
 	origin, ok := originOf(u)
 	return ok && v != nil && v.IsTrusted(origin)
+}
+
+// parseOrigin returns raw in the form trusted origins are stored in. raw is
+// a setting: it may carry spaces around it and a lone "/" as its path, and
+// anything else that is not an http or https origin is an error.
+func parseOrigin(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("%q: %w", raw, err)
+	}
+	origin, ok := originOf(u)
+	if !ok || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%q: want a scheme and a host, such as https://app.example.com", raw)
+	}
+	return origin, nil
 }
 
 // originOf returns u's origin in the form trusted origins are stored in:

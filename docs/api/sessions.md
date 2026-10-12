@@ -41,7 +41,7 @@ The transport names where the token travels in both directions: how a sign-in ha
 | `types.TransportBody` | the JSON body, under `token` | `Authorization: Bearer <token>` |
 | `types.TransportBoth` | the cookie and `Set-Auth-Token` | either |
 
-**Cookie.** The browser stores the token and sends it by itself. The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, with the path `/`, and expires with the session. When [rolling expiration](#rolling-expiration) extends the session, the cookie is set again with the new date. Scripts on the page can't read it, and can't delete it either: the sign-out response removes it. See [Sign out](#sign-out). This is the choice for a browser application served from the same site as the API.
+**Cookie.** The browser stores the token and sends it by itself. The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, with the path `/`, and expires with the session. When [rolling expiration](#rolling-expiration) extends the session, the cookie is set again with the new date. Scripts on the page can't read it, and can't delete it either: the sign-out response removes it. See [Sign out](#sign-out). This is the choice for a browser application served from the same site as the API. Behemoth checks where each state-changing request comes from under this transport. See [Cross-site requests](#cross-site-requests).
 
 **Header.** The client reads the token from `Set-Auth-Token`, keeps it, and sends it as a bearer token. This suits mobile apps, command-line tools, and other servers.
 
@@ -160,6 +160,50 @@ curl -i -X POST localhost:8080/api/auth/sign-out --cookie 'session_token=r8_x6fa
 The cookie is removed when the sign-out went through. If a hook handler refuses the sign-out, the session is still live and the cookie stays.
 
 A session can also end without a sign-out from that browser: it was revoked from another device, ended with all the user's sessions, or expired. The browser still holds the cookie. The next request it sends to a route behind `types.RequireSession` is refused with `401`, and that response removes the cookie. See [Protect your own routes](#protect-your-own-routes).
+
+## Cross-site requests
+
+A browser attaches the session cookie to every request to your API, including one that a page of another site caused. Under `types.TransportCookie` and `types.TransportBoth`, Behemoth therefore refuses a `POST`, `PUT`, `PATCH`, or `DELETE` to one of its routes that a browser sent from an origin it does not trust. The check also covers sign-in and sign-up, which need no cookie. Under `types.TransportHeader` and `types.TransportBody` there is no check.
+
+Configure the check with two fields of `BootConfig.Router`:
+
+```go
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+	Router: types.RouterConfig{
+		BaseURL:        "https://auth.example.com",
+		TrustedOrigins: []string{"https://app.example.com"},
+	},
+	// ...
+})
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `BaseURL` | empty | The origin a browser reaches Behemoth at: a scheme, a host, and an optional port, without the base path. Requests from it pass. |
+| `TrustedOrigins` | empty | Other origins whose pages may call Behemoth, such as a front end on another host. Each entry is matched exactly. The same list decides where a [redirect URL](magiclink.md#the-redirect-url) may point. |
+
+A value that is not an `http` or `https` origin is a configuration error from `Boot`.
+
+A request passes in these cases:
+
+- Its method is `GET`, `HEAD`, or `OPTIONS`.
+- Its `Origin` header is `BaseURL` or one of `TrustedOrigins`.
+- It has no `Origin` header, and its `Sec-Fetch-Site` header is absent, `same-origin`, or `none`. A client that is not a browser, such as a mobile app, a command-line tool, or another server, sends neither header and needs no change.
+
+Every other request is refused with `403` and the code `untrusted_origin`, before any rate limit or handler runs. That includes a request with `Origin: null`, which a browser sends from a sandboxed frame or a local file.
+
+```bash
+curl -i -X POST https://auth.example.com/api/auth/sign-in/email \
+  -H 'Origin: https://other.example' -d '{"email":"ada@example.com","password":"correct horse"}'
+# HTTP/1.1 403 Forbidden
+# {"code":"untrusted_origin","error":"request from an untrusted origin"}
+```
+
+Set `BaseURL` in production. When it is empty and `Boot` mounts routes, `Boot` logs a warning, and Behemoth compares the host and port of `Origin` with the request's `Host` header. The scheme is not compared. Behind a reverse proxy that replaces `Host` with an internal name, that comparison fails and every request from a browser is refused.
+
+The check does not replace CORS. Your server's CORS configuration still decides whether a script on another origin may read a response.
+
+Refusals are counted in the `behemoth.http.origin_refused` metric by `reason`. See [Telemetry](telemetry.md).
 
 ## Protect your own routes
 

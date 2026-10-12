@@ -38,6 +38,9 @@ func (NoOpMetrics) Histogram(context.Context, string, float64, behemoth.M) {}
 const (
 	MetricHTTPRequests = "behemoth.http.requests" // counter: one per request to a behemoth route
 	MetricHTTPDuration = "behemoth.http.duration" // histogram, seconds
+	// MetricOriginRefused counts the requests the origin check refused, by
+	// reason. A refusal is also one MetricHTTPRequests with status 403.
+	MetricOriginRefused = "behemoth.http.origin_refused"
 
 	MetricSignIn = "behemoth.auth.sign_in" // counter: finished and refused sign-ins
 	MetricSignUp = "behemoth.auth.sign_up" // counter: finished and refused sign-ups
