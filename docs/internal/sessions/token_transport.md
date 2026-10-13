@@ -64,7 +64,9 @@ ClearToken(rctx *RequestContext)
 Set-Cookie: session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Secure; SameSite=Lax
 ```
 
-- A browser replaces a cookie only with one of the same name and path. `WriteToken`, `ExtendToken` and `ClearToken` therefore build the cookie in one function, `DefaultSessionManager.sessionCookie`, and differ in the value and the expiry.
+- A browser replaces a cookie only with one of the same name, path and domain. `WriteToken`, `ExtendToken` and `ClearToken` therefore build the cookie in one function, `DefaultSessionManager.sessionCookie`, and differ in the value and the expiry.
+- `HttpOnly` and `Path=/` are fixed. `Domain`, `SameSite` and `Secure` come from `SessionConfig.CookieDomain`, `CookieSameSite` and `CookieInsecure`; the line above shows the defaults. `SessionConfig.Validate` refuses an unknown mode, a domain that is not a host name, and `SameSiteNone` without `Secure`. `Boot` checks the two that depend on `RouterConfig.BaseURL`: see [`../http/origin_check.md`](../http/origin_check.md), "The cookie and the base URL".
+- Invariant: a changed `CookieDomain` does not reach cookies already in browsers. `ClearToken` then emits a cookie of the new domain, and the old one stays until it expires. Its token is refused once the session is gone.
 - `Max-Age=0` is what current browsers act on. `Expires` is for a client that reads only that.
 - It writes to the response and nothing else. It does not revoke.
 - It removes the cookie for the request that presented its token in it (`DefaultSessionManager.cookieCarries`, which `ExtendToken` uses too). Under `TransportBoth` the token is read from the `Authorization` header first, and the cookie next to it may be another session's, which is live. A request without the cookie gets no `Set-Cookie`.
@@ -137,10 +139,11 @@ ExtendToken(rctx *RequestContext, rawToken string, session *models.Session) (wri
 | `ExpiresIn` | 7 days |
 | `PendingExpiresIn` | 10 minutes |
 | `FreshAge` | 15 minutes |
+| `CookieSameSite` | `lax` |
 
 `UpdateAge` is not in the table. Its comment used to name a default of one day, which was never applied, and zero has a working meaning: `Touch` then never extends a session. Applying a day would change that for every application that left it unset, and with an `ExpiresIn` of a day or less it would extend the session on every request. `docs/ongoing.md` has the entry.
 
-`SessionConfig.Validate` reports what no default can repair: a `Transport` that is not one of the four values, and a negative duration. `Boot` calls it before it builds the session manager and returns a configuration error.
+`SessionConfig.Validate` reports what no default can repair: a `Transport` that is not one of the four values, a negative duration, a `CookieSameSite` that is not one of the three modes, `SameSiteNone` with `CookieInsecure`, and a `CookieDomain` that is not a host name. `Boot` calls it before it builds the session manager and returns a configuration error.
 
 Before this, the comments on the fields named defaults that nothing applied. A zero `Transport` matched no branch of `WriteToken` or `ExtractToken`, so no token was delivered or accepted. A zero `ExpiresIn` or `PendingExpiresIn` made a session expire the moment it was created. `CookieName` was not read.
 

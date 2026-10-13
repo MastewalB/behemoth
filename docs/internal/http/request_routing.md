@@ -187,6 +187,7 @@ adapter: build RequestContext (Request, Params, empty Response, Values)
   ├─ withMetrics              counts and times the request, by route pattern    (Build)
   ├─ wrapWithErrorMapping     returned error → mapped JSON response             (Build)
   ├─ origin check             OriginCheck.Middleware, cookie transports only    (Build)
+  ├─ form content types       RefuseFormContentTypes, cookie transports only    (Build)
   ├─ global middleware[0]                                                      (Build)
   ├─ …
   ├─ global middleware[n]     every plugin's Middlewares(), dependency order    (Build)
@@ -221,7 +222,7 @@ How each step builds it:
 - **Tracing inside the request scope.** `withTracing` needs the request ID for the span, and replaces `rctx.Ctx` with the span's context so middleware and the handler nest under it. See `docs/internal/telemetry/tracing.md`.
 - **Metrics outside error mapping.** `withMetrics` reads the status after the mapper has run, so `behemoth.http.requests` reports what the client received. See `docs/internal/telemetry/metrics.md`.
 - **Error mapping inside that, outside everything that can fail.** An error from a global middleware, the rate limiter, a route middleware or the handler all become a response through the same mapper. Before this order, only handler errors were mapped; a rate-limit rejection reached the adapter as a raw error.
-- **The origin check first among the global middleware.** `Boot` passes `OriginCheck.Middleware` to `Build` ahead of the plugins' middleware when the session token travels in a cookie. A cross-site request is refused before any plugin code or rate limit sees it. See [`origin_check.md`](origin_check.md).
+- **The origin check first among the global middleware.** `Boot` passes `OriginCheck.Middleware` to `Build` ahead of the plugins' middleware when the session token travels in a cookie. `RefuseFormContentTypes` follows it. A cross-site request is refused before any plugin code or rate limit sees it. See [`origin_check.md`](origin_check.md).
 - **Global middleware outside route-specific layers.** Cross-cutting concerns (request IDs, security headers) see every request first, including ones the rate limiter is about to reject.
 - **Route middleware innermost.** It is the route's own concern and sees the request last, after everything general has passed.
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -367,6 +368,9 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err := cfg.Session.Validate(); err != nil {
 		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
 	}
+	if err := checkCookieAgainstBaseURL(cfg.Session, cfg.Router.BaseURL); err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+	}
 	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
 
 	// Init before routing, so Routes() and Middlewares() may rely on
@@ -383,10 +387,10 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	router := types.NewRouter(cfg.Router, ac)
 	var globalMiddleware []types.Middleware
 	// A bearer token is never sent by the browser on its own, so only the
-	// cookie transports need the origin check. It runs before the plugins'
-	// middleware.
+	// cookie transports need the origin check and the refusal of form
+	// bodies behind it. Both run before the plugins' middleware.
 	if cfg.Session.WithDefaults().Transport.ReadsCookie() {
-		globalMiddleware = append(globalMiddleware, originCheck.Middleware())
+		globalMiddleware = append(globalMiddleware, originCheck.Middleware(), types.RefuseFormContentTypes())
 	}
 	for _, name := range order {
 		p := lookup(plugins, name)
@@ -411,6 +415,40 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	logBootSummary(ctx, tel.Named("boot").Logger, order, len(router.Routes()), cfg)
 	return ac, nil
+}
+
+// checkCookieAgainstBaseURL reports a session cookie that can't work with
+// the base URL, under the transports that set one. baseURL has been parsed
+// by NewOriginCheck already.
+//
+//   - SameSiteNone needs a base URL. The browser then sends the cookie with
+//     cross-site requests, the origin check is all that refuses a forged
+//     one, and without a base URL the check compares with the Host header.
+//   - CookieDomain has to be the base URL's host or a parent of it. A
+//     browser drops a cookie whose Domain does not cover the host that set
+//     it, and every sign-in would then seem to succeed and leave no session.
+func checkCookieAgainstBaseURL(session types.SessionConfig, baseURL string) error {
+	if !session.WithDefaults().Transport.ReadsCookie() {
+		return nil
+	}
+	if baseURL == "" {
+		if session.CookieSameSite == types.SameSiteNone {
+			return fmt.Errorf("SessionConfig.CookieSameSite %q needs RouterConfig.BaseURL, which the origin check compares requests with", session.CookieSameSite)
+		}
+		return nil
+	}
+	domain := strings.ToLower(strings.TrimPrefix(session.CookieDomain, "."))
+	if domain == "" {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return fmt.Errorf("RouterConfig.BaseURL %q: %w", baseURL, err)
+	}
+	if host := strings.ToLower(u.Hostname()); host != domain && !strings.HasSuffix(host, "."+domain) {
+		return fmt.Errorf("SessionConfig.CookieDomain %q does not cover the host of RouterConfig.BaseURL %q, so a browser would drop the session cookie", session.CookieDomain, baseURL)
+	}
+	return nil
 }
 
 // logBootSummary writes one Info line describing what Boot built, and one

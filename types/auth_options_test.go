@@ -12,7 +12,7 @@ func TestSessionConfigDefaults(t *testing.T) {
 	got := SessionConfig{}.WithDefaults()
 	want := SessionConfig{
 		CookieName: "session_token", ExpiresIn: 7 * 24 * time.Hour, PendingExpiresIn: 10 * time.Minute,
-		FreshAge: 15 * time.Minute, Transport: TransportCookie,
+		FreshAge: 15 * time.Minute, Transport: TransportCookie, CookieSameSite: SameSiteLax,
 		// UpdateAge stays zero: rolling expiration is off unless asked for.
 	}
 	if got != want {
@@ -22,6 +22,7 @@ func TestSessionConfigDefaults(t *testing.T) {
 	set := SessionConfig{
 		CookieName: "sid", ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, UpdateAge: time.Second,
 		FreshAge: 2 * time.Minute, Transport: TransportBody, MaxConcurrent: 3, CaptureIPAndAgent: true,
+		CookieDomain: "example.com", CookieSameSite: SameSiteStrict, CookieInsecure: true,
 	}
 	if got := set.WithDefaults(); got != set {
 		t.Errorf("WithDefaults changed a config that was set: %+v", got)
@@ -35,15 +36,31 @@ func TestSessionConfigValidate(t *testing.T) {
 			t.Errorf("transport %q: %v", transport, err)
 		}
 	}
+	for _, ok := range []SessionConfig{
+		{CookieSameSite: SameSiteLax}, {CookieSameSite: SameSiteStrict}, {CookieSameSite: SameSiteNone},
+		{CookieSameSite: SameSiteLax, CookieInsecure: true},
+		{CookieDomain: "example.com"}, {CookieDomain: ".example.com"}, {CookieDomain: "localhost"},
+	} {
+		if err := ok.Validate(); err != nil {
+			t.Errorf("%+v: %v", ok, err)
+		}
+	}
 	for name, tc := range map[string]struct {
 		cfg  SessionConfig
 		want string
 	}{
-		"a misspelled transport":      {SessionConfig{Transport: "Header"}, "Transport"},
-		"a negative lifetime":         {SessionConfig{ExpiresIn: -time.Hour}, "ExpiresIn"},
-		"a negative pending lifetime": {SessionConfig{PendingExpiresIn: -time.Hour}, "PendingExpiresIn"},
-		"a negative update age":       {SessionConfig{UpdateAge: -time.Hour}, "UpdateAge"},
-		"a negative fresh age":        {SessionConfig{FreshAge: -time.Hour}, "FreshAge"},
+		"a misspelled SameSite mode":          {SessionConfig{CookieSameSite: "None"}, "CookieSameSite"},
+		"SameSite none without Secure":        {SessionConfig{CookieSameSite: SameSiteNone, CookieInsecure: true}, "CookieInsecure"},
+		"a cookie domain with a scheme":       {SessionConfig{CookieDomain: "https://example.com"}, "CookieDomain"},
+		"a cookie domain with a port":         {SessionConfig{CookieDomain: "example.com:8080"}, "CookieDomain"},
+		"a cookie domain with a path":         {SessionConfig{CookieDomain: "example.com/app"}, "CookieDomain"},
+		"a cookie domain that is only a dot":  {SessionConfig{CookieDomain: "."}, "CookieDomain"},
+		"a cookie domain with a trailing dot": {SessionConfig{CookieDomain: "example.com."}, "CookieDomain"},
+		"a misspelled transport":              {SessionConfig{Transport: "Header"}, "Transport"},
+		"a negative lifetime":                 {SessionConfig{ExpiresIn: -time.Hour}, "ExpiresIn"},
+		"a negative pending lifetime":         {SessionConfig{PendingExpiresIn: -time.Hour}, "PendingExpiresIn"},
+		"a negative update age":               {SessionConfig{UpdateAge: -time.Hour}, "UpdateAge"},
+		"a negative fresh age":                {SessionConfig{FreshAge: -time.Hour}, "FreshAge"},
 	} {
 		err := tc.cfg.Validate()
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

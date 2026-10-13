@@ -24,6 +24,7 @@ A client never sees hooks, the store, migrations or the router adapters. Those c
 | Request body keys | `email`, `password`, `redirect_url` | the input type's `FromMap` |
 | Response body | `{"user": {...}}`, `{"status": "ok"}` | the handler, `WriteSignIn`, `PublicView` |
 | Error status and code | `401` with `invalid_credentials` | the `DomainError`'s category and code, the error mapper |
+| The request's `Content-Type` | `application/json`; a form type is refused under the cookie transports | `types.RefuseFormContentTypes` |
 | Response headers | `Set-Cookie`, `Set-Auth-Token`, `Retry-After`, `X-Request-ID` | the session manager, the router |
 | Where the session token travels | a cookie, a bearer token | `SessionConfig.Transport` |
 
@@ -118,7 +119,6 @@ Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted titl
 - An application's `RouterConfig.ErrorMapper` returns the whole error body and can leave `code` out. "An application's error mapper decides the error body".
 - Two sign-ups racing for one email answer with the store's code and not `email_taken`. "Two sign-ups racing for one email answer with the store's code".
 - A route does not describe its input, its output or its codes, so no contract file can be generated or tested. "Routes do not describe their input and output".
-- The session cookie's attributes are fixed, which limits where a front end can be hosted. "The session cookie's attributes are fixed".
 - The email/password plugin's sign-up, sign-in and sign-out paths are string literals, repeated in core's rate-limit rules. No entry.
 
 ## Design decisions

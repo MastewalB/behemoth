@@ -3,6 +3,7 @@ package types
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
@@ -154,5 +155,65 @@ func TestOriginCheckMiddlewareInThePipeline(t *testing.T) {
 	}
 	if w := send("https://auth.example.com"); w.Code != http.StatusOK || len(reached) != 2 {
 		t.Errorf("own origin = %d, reached %v", w.Code, reached)
+	}
+}
+
+// A state-changing request with one of the three types a form can send is
+// refused with a 415. Every other type, and no type, passes.
+func TestRefuseFormContentTypes(t *testing.T) {
+	router := NewRouter(RouterConfig{}, nil)
+	handler := func(rctx *RequestContext) error {
+		return rctx.Response.JSON(http.StatusOK, map[string]any{"status": "ok"})
+	}
+	if err := router.Mount("test", "", []Route{
+		{Method: http.MethodPost, Path: "/act", Handler: handler},
+		{Method: http.MethodGet, Path: "/read", Handler: handler},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	driver := &recordingDriver{}
+	if err := router.Build(driver, RefuseFormContentTypes()); err != nil {
+		t.Fatal(err)
+	}
+	send := func(method, path, contentType string) *httptest.ResponseRecorder {
+		for _, rt := range driver.routes {
+			if rt.Method != method || rt.Path != path {
+				continue
+			}
+			rctx := &RequestContext{
+				Request:  httptest.NewRequest(method, path, strings.NewReader(`{"a":1}`)),
+				Response: NewResponseRecorder(),
+				Values:   map[string]any{},
+			}
+			if contentType != "" {
+				rctx.Request.Header.Set("Content-Type", contentType)
+			}
+			if err := rt.Handler(rctx); err != nil {
+				t.Fatalf("handler returned %v; errors should already be mapped", err)
+			}
+			w := httptest.NewRecorder()
+			rctx.Response.Flush(w)
+			return w
+		}
+		t.Fatalf("no route %s %s", method, path)
+		return nil
+	}
+
+	for _, refused := range []string{
+		"text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x",
+		"TEXT/PLAIN; charset=UTF-8", " text/plain ;charset=UTF-8",
+	} {
+		w := send(http.MethodPost, "/api/auth/act", refused)
+		if w.Code != http.StatusUnsupportedMediaType || !strings.Contains(w.Body.String(), `"code":"unsupported_content_type"`) {
+			t.Errorf("Content-Type %q = %d %s, want a 415", refused, w.Code, w.Body.String())
+		}
+	}
+	for _, passed := range []string{"", "application/json", "application/json; charset=utf-8", "application/octet-stream", "text/plainer"} {
+		if w := send(http.MethodPost, "/api/auth/act", passed); w.Code != http.StatusOK {
+			t.Errorf("Content-Type %q = %d %s, want it to pass", passed, w.Code, w.Body.String())
+		}
+	}
+	if w := send(http.MethodGet, "/api/auth/read", "text/plain"); w.Code != http.StatusOK {
+		t.Errorf("a GET with a form type = %d, want it to pass", w.Code)
 	}
 }

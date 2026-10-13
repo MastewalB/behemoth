@@ -1,15 +1,16 @@
 # The origin check
 
-This document explains how behemoth protects cookie-authenticated routes from cross-site request forgery: what the check compares, where it sits in the request pipeline, when `Boot` installs it, and what it leaves out.
+This document explains how behemoth protects cookie-authenticated routes from cross-site request forgery: what the origin check compares, the refusal of form content types behind it, where both sit in the request pipeline, when `Boot` installs them, and what they leave out.
 
 The code lives in:
 
-- `types/origin_check.go`: `OriginCheck`, `NewOriginCheck`, the refusal reasons
+- `types/origin_check.go`: `OriginCheck`, `NewOriginCheck`, the refusal reasons, `RefuseFormContentTypes`
 - `types/origins.go`: `TrustedOrigins`, `parseOrigin`, `originOf`
 - `types/router.go`: `RouterConfig.BaseURL`, `RouterConfig.TrustedOrigins`
 - `types/session.go`: `TokenTransport.ReadsCookie`
 - `types/init/init.go`: `Boot`, which builds the check and decides whether it runs
-- `errors/origin.go`: `ErrorCodeUntrustedOrigin`
+- `types/init/init.go`: `checkCookieAgainstBaseURL`, which ties the cookie's attributes to the base URL
+- `errors/origin.go`: `ErrorCodeUntrustedOrigin`, `ErrorCodeUnsupportedContentType`
 
 [`request_routing.md`](request_routing.md) describes the pipeline the check is a stage of. [`../plugins/magiclink.md`](../plugins/magiclink.md) describes `TrustedOrigins`, which the check shares with the redirect check.
 
@@ -47,25 +48,44 @@ Every refusal is one error for a client: a `CategoryForbidden` error with the co
 
 With `BaseURL` empty, the check builds the own origin for each request from the request's `Host` header and the scheme the `Origin` header named. Only the host and the port are compared this way. `logBootSummary` writes a Warn line when `BaseURL` is empty, a cookie transport is on and `BootConfig.HTTP` is set. A process that mounts no routes gets no warning.
 
+## The refusal of form content types
+
+Handlers decode their body as JSON whatever its `Content-Type` says. A page of another origin can post a body that decodes as JSON without a CORS preflight, with a form (`enctype="text/plain"`) or a `no-cors` `fetch`. The only types it can name that way are `text/plain`, `application/x-www-form-urlencoded` and `multipart/form-data`.
+
+`RefuseFormContentTypes` refuses a state-changing request that names one of the three, parameters ignored, with a `CategoryUnsupportedMedia` error: `415 {"error": "unsupported content type, send application/json", "code": "unsupported_content_type"}`. Every other type passes, and so does a request without the header, such as a sign-out with an empty body.
+
+It is a second layer. The origin check already refuses those requests from another origin. This one holds when the check passed a browser it should not have: one that sent no `Origin` and no `Sec-Fetch-Site`.
+
+Invariant: no route of behemoth reads a form body. A route that has to, such as an OAuth callback a provider posts, is refused under the cookie transports until the middleware gets an exemption per route. See "No route can accept a form body under the cookie transports" in `docs/ongoing.md`.
+
+## The cookie and the base URL
+
+`SessionConfig.CookieSameSite` and `CookieDomain` decide when a browser sends the session cookie, so `Boot` checks them against the base URL (`checkCookieAgainstBaseURL`), under the cookie transports only:
+
+- **`SameSiteNone` needs `BaseURL`.** The browser then sends the cookie with cross-site requests, and the origin check is all that refuses a forged one. Without a base URL the check compares with the `Host` header and ignores the scheme.
+- **`CookieDomain` has to cover the host of `BaseURL`.** A browser drops a cookie whose `Domain` is neither the host that set it nor a parent of it. Sign-in would answer `200` and leave no session.
+
+A `CookieDomain` widens who receives the cookie to every subdomain, and one of them may be hostile. The origin check still compares exact origins, so that subdomain's requests are refused.
+
 ## Where it runs
 
-`Boot` passes `OriginCheck.Middleware` to `Router.Build` as the first global middleware, ahead of every plugin's:
+`Boot` passes `OriginCheck.Middleware` and then `RefuseFormContentTypes` to `Router.Build` as the first global middlewares, ahead of every plugin's:
 
 ```
-request scope -> tracing -> metrics -> error mapping -> origin check -> plugin middlewares -> route rate limit -> route middlewares -> handler
+request scope -> tracing -> metrics -> error mapping -> origin check -> form content types -> plugin middlewares -> route rate limit -> route middlewares -> handler
 ```
 
 - **Inside error mapping.** A refusal is mapped, logged once at Debug and counted in `behemoth.http.requests` like any other rejection.
 - **Outside the plugins' middleware and the rate limit.** A forged request runs no plugin code. It also does not count against the per-address limit of the user whose browser sent it.
 
-`Boot` adds the middleware when `SessionConfig.Transport` is `cookie` or `both` (`TokenTransport.ReadsCookie`). Under `header` and `body` no request is authenticated by something the browser sends on its own, so the check would refuse requests and protect nothing.
+`Boot` adds both middlewares when `SessionConfig.Transport` is `cookie` or `both` (`TokenTransport.ReadsCookie`). Under `header` and `body` no request is authenticated by something the browser sends on its own, so the check would refuse requests and protect nothing.
 
 Invariant: the check is the only thing that stands between a cross-origin page and a sign-in under the cookie transports. A route mounted outside `Router.Build`, or a `Build` call that leaves the middleware out, has no protection.
 
 ## What is not built
 
-- **A CSRF token.** `CSRFProtector` in `types/cryptotypes` is an interface without an implementation.
-- **A `Content-Type` check.** Handlers decode JSON from a body of any type. Deferred: see "Handlers accept a JSON body under any `Content-Type`" in `docs/ongoing.md`.
+- **A CSRF token.** `CSRFProtector` in `types/cryptotypes` is an interface without an implementation. `docs/plans.md` has what a token would take, under "A CSRF token".
+- **A requirement of `application/json`.** A request with no `Content-Type`, or with one that is not a form type, is decoded as JSON.
 - **`X-Forwarded-Host`.** An application behind a proxy that rewrites `Host` sets `BaseURL`. Deferred: see "The origin check does not read `X-Forwarded-Host`" in `docs/ongoing.md`.
 - **A `Referer` fallback and wildcard origins.**
 - **An audit event for a refusal.** The counter and the Debug line are the record.
@@ -119,6 +139,24 @@ Invariant: the check is the only thing that stands between a cross-origin page a
 
 **Decision:** `cookie` and `both`. Under `both` a request that carries a bearer token is checked as well, because the stage runs before anything reads the token.
 
+### Form types are refused, and JSON is not required
+**Context:** A second layer against a forged body should not depend on the `Origin` header. It changes what a client may send, which is part of the HTTP contract.
+**Options considered:**
+- *Require `application/json` on every route that reads a body.* The strictest, and it forces a preflight for every cross-origin request. It refuses every client that sends no `Content-Type` today.
+- *Refuse the three types a form can send.* Those are the only ones that reach behemoth from another origin without a preflight. A client that sends JSON under one of them is refused, which in practice is `curl -d` without a header.
+- *Leave it to the origin check.* Nothing breaks, and there is one layer.
+
+**Decision:** refuse the three, under the cookie transports only. A bearer-only API gains nothing from it, and its `curl -d` callers would break.
+**Revisit if:** a route has to accept a form, or a contract file makes each route's content type explicit and the check can move there.
+
+### A status of its own for the refused content type
+**Context:** The refusal needs a category, and the router maps a category to one status.
+**Options considered:**
+- *`CategoryValidation`, a `400`.* No new category. A client sees the status of a missing field for a request whose fields were never read.
+- *A new category mapped to `415`.* One more entry in `categoryToStatus`. The status says what is wrong before the client reads the code.
+
+**Decision:** `CategoryUnsupportedMedia`. It is not in `Category.IsRejection`: the list there is the subject of "Which error categories count as a rejection" in `docs/ongoing.md`, and no hook point fires for this refusal.
+
 ## Tests
 
 | Test | File | Covers |
@@ -126,5 +164,7 @@ Invariant: the check is the only thing that stands between a cross-origin page a
 | `TestOriginCheck` | `types/origin_check_test.go` | every row of the table above, with and without a base URL |
 | `TestNewOriginCheckRefusesABadBaseURL` | `types/origin_check_test.go` | the values `NewOriginCheck` refuses |
 | `TestOriginCheckMiddlewareInThePipeline` | `types/origin_check_test.go` | the `403` body, and that a refused request reaches no later stage |
-| `TestBootInstallsTheOriginCheckForCookieTransports` | `tests/plugins/origin_check_test.go` | the check per transport, on the sign-in route |
+| `TestRefuseFormContentTypes` | `types/origin_check_test.go` | the three refused types, the types that pass, and a `GET` |
+| `TestBootInstallsTheOriginCheckForCookieTransports` | `tests/plugins/origin_check_test.go` | both middlewares per transport, on the sign-in route |
+| `TestBootChecksTheSessionCookieAgainstTheBaseURL` | `tests/plugins/origin_check_test.go` | `SameSiteNone` without a base URL, and a domain that does not cover the host |
 | `TestBootRefusesAMalformedBaseURL` | `tests/plugins/origin_check_test.go` | the configuration error |

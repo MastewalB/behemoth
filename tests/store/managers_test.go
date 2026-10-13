@@ -903,6 +903,49 @@ func TestSessionManagerWithAZeroConfig(t *testing.T) {
 	assert.Contains(t, rctx.Response.Headers.Get("Set-Cookie"), "session_token="+raw, "the default transport is the cookie")
 }
 
+// The session cookie carries the attributes SessionConfig names, and the
+// cookie that removes it carries the same ones: a browser replaces a cookie
+// only with one of the same name, path and domain.
+func TestSessionCookieAttributes(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		cfg      types.SessionConfig
+		domain   string
+		sameSite http.SameSite
+		secure   bool
+	}{
+		"the defaults":      {types.SessionConfig{}, "", http.SameSiteLaxMode, true},
+		"a domain":          {types.SessionConfig{CookieDomain: "example.com"}, "example.com", http.SameSiteLaxMode, true},
+		"a domain as .host": {types.SessionConfig{CookieDomain: ".example.com"}, "example.com", http.SameSiteLaxMode, true},
+		"strict":            {types.SessionConfig{CookieSameSite: types.SameSiteStrict}, "", http.SameSiteStrictMode, true},
+		"none":              {types.SessionConfig{CookieSameSite: types.SameSiteNone}, "", http.SameSiteNoneMode, true},
+		"without Secure":    {types.SessionConfig{CookieInsecure: true}, "", http.SameSiteLaxMode, false},
+	} {
+		require.NoError(t, tc.cfg.Validate(), name)
+		sm := transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
+		session, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionActive})
+		require.NoError(t, err, name)
+
+		rctx := &types.RequestContext{Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		sm.WriteToken(rctx, raw, session)
+		req := httptest.NewRequest(http.MethodPost, "/x", nil)
+		req.AddCookie(&http.Cookie{Name: "session_token", Value: raw})
+		cleared := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		sm.ClearToken(cleared)
+
+		for step, headers := range map[string]http.Header{"written": rctx.Response.Headers, "removed": cleared.Response.Headers} {
+			cookies := (&http.Response{Header: headers}).Cookies()
+			require.Len(t, cookies, 1, "%s, %s", name, step)
+			c := cookies[0]
+			assert.Equal(t, tc.domain, c.Domain, "%s, %s: Domain", name, step)
+			assert.Equal(t, tc.sameSite, c.SameSite, "%s, %s: SameSite", name, step)
+			assert.Equal(t, tc.secure, c.Secure, "%s, %s: Secure", name, step)
+			assert.True(t, c.HttpOnly, "%s, %s: HttpOnly is fixed", name, step)
+			assert.Equal(t, "/", c.Path, "%s, %s: the path is fixed", name, step)
+		}
+	}
+}
+
 // Each transport hands the token over in its own place, and reads it back
 // from where its client sends it.
 func TestSessionTokenTransports(t *testing.T) {

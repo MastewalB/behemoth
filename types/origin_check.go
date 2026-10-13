@@ -31,9 +31,11 @@ const (
 // It looks at the request's headers only. It reads no cookie and no session,
 // so it covers sign-in and sign-up like the routes behind a session.
 //
+// RefuseFormContentTypes is the second layer Boot installs next to it.
+//
 // Not built: a CSRF token (CSRFProtector has no implementation), a Referer
-// fallback, a check of the request's Content-Type, and X-Forwarded-Host for
-// an application that leaves BaseURL unset behind a proxy.
+// fallback, and X-Forwarded-Host for an application that leaves BaseURL
+// unset behind a proxy.
 type OriginCheck struct {
 	own     string // behemoth's origin as originOf writes it; "" compares with the request's Host
 	trusted OriginValidator
@@ -145,4 +147,46 @@ func (c *OriginCheck) Middleware() Middleware {
 			return behemotherr.NewUntrustedOrigin("OriginCheck", reason)
 		}
 	}
+}
+
+// RefuseFormContentTypes returns a middleware that refuses a state-changing
+// request whose Content-Type is text/plain,
+// application/x-www-form-urlencoded or multipart/form-data, with the code
+// behemotherr.ErrorCodeUnsupportedContentType. Those are the types an HTML
+// form, or a script without a CORS preflight, can send to another origin,
+// and behemoth's handlers would decode such a body as JSON. A request with
+// another Content-Type, or with none, passes.
+//
+// Boot passes it to Router.Build after OriginCheck.Middleware, under the
+// same condition: a session token that travels in a cookie. It is a second
+// layer behind the origin check, for a browser the check lets through.
+//
+// Not built: an exemption for one route. A route that has to receive a form,
+// such as an OAuth callback posted by a provider, needs one.
+func RefuseFormContentTypes() Middleware {
+	return func(next HandlerFunc) HandlerFunc {
+		return func(rctx *RequestContext) error {
+			if contentType, form := formContentType(rctx.Request); form {
+				return behemotherr.NewUnsupportedContentType("RefuseFormContentTypes", contentType)
+			}
+			return next(rctx)
+		}
+	}
+}
+
+// formContentType reports whether r changes state and names one of the
+// three form types as its Content-Type, and returns that type. Parameters
+// are ignored, so "text/plain; charset=UTF-8" is a form type.
+func formContentType(r *http.Request) (contentType string, form bool) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return "", false
+	}
+	contentType, _, _ = strings.Cut(r.Header.Get("Content-Type"), ";")
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	switch contentType {
+	case "text/plain", "application/x-www-form-urlencoded", "multipart/form-data":
+		return contentType, true
+	}
+	return contentType, false
 }

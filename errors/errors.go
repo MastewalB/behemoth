@@ -19,17 +19,20 @@ const (
 	CategoryUnauthorized   Category = "unauthorized" // not authenticated
 	CategoryForbidden      Category = "forbidden"    // authenticated, not permitted
 	CategoryRateLimited    Category = "rate_limited"
-	CategorySession        Category = "session"
-	CategoryToken          Category = "token"
-	CategoryTransaction    Category = "transaction"
-	CategoryDatabase       Category = "database"        // infra failure, connection lost, timeout
-	CategoryMigration      Category = "migration"       // migration errors
-	CategoryInvalidKey     Category = "invalid_key"     // key is empty, malformed, or otherwise invalid for the operation
-	CategoryKeyNotFound    Category = "key_not_found"   // key is valid but not present in the store
-	CategoryNotImplemented Category = "not_implemented" // interface not implemented
-	CategoryConfiguration  Category = "configuration"   // boot and initialization problems
-	CategorySecurity       Category = "security"        // runtime crypto/key failures. unknown version, decode failure, etc.
-	CategoryInternal       Category = "internal"        // catch-all, should shrink over time as gaps get classified
+	// CategoryUnsupportedMedia is a request whose body is of a type the
+	// operation does not accept. Over HTTP it is a 415.
+	CategoryUnsupportedMedia Category = "unsupported_media_type"
+	CategorySession          Category = "session"
+	CategoryToken            Category = "token"
+	CategoryTransaction      Category = "transaction"
+	CategoryDatabase         Category = "database"        // infra failure, connection lost, timeout
+	CategoryMigration        Category = "migration"       // migration errors
+	CategoryInvalidKey       Category = "invalid_key"     // key is empty, malformed, or otherwise invalid for the operation
+	CategoryKeyNotFound      Category = "key_not_found"   // key is valid but not present in the store
+	CategoryNotImplemented   Category = "not_implemented" // interface not implemented
+	CategoryConfiguration    Category = "configuration"   // boot and initialization problems
+	CategorySecurity         Category = "security"        // runtime crypto/key failures. unknown version, decode failure, etc.
+	CategoryInternal         Category = "internal"        // catch-all, should shrink over time as gaps get classified
 )
 
 // IsRejection reports whether an error of the category refuses the request,
@@ -158,17 +161,18 @@ func NewMigrationError(op, code string, original error) *DomainError {
 }
 
 var categoryToStatus = map[Category]int{
-	CategoryValidation:     http.StatusBadRequest,
-	CategoryNotFound:       http.StatusNotFound,
-	CategoryDuplicateKey:   http.StatusConflict,
-	CategoryForeignKey:     http.StatusConflict,
-	CategoryConflict:       http.StatusConflict,
-	CategoryUnauthorized:   http.StatusUnauthorized,
-	CategoryForbidden:      http.StatusForbidden,
-	CategoryRateLimited:    http.StatusTooManyRequests,
-	CategorySession:        http.StatusUnauthorized,
-	CategoryToken:          http.StatusUnauthorized,
-	CategoryTransaction:    http.StatusInternalServerError,
-	CategoryDatabase:       http.StatusInternalServerError,
-	CategoryUndefinedTable: http.StatusInternalServerError,
+	CategoryValidation:       http.StatusBadRequest,
+	CategoryNotFound:         http.StatusNotFound,
+	CategoryDuplicateKey:     http.StatusConflict,
+	CategoryForeignKey:       http.StatusConflict,
+	CategoryConflict:         http.StatusConflict,
+	CategoryUnauthorized:     http.StatusUnauthorized,
+	CategoryForbidden:        http.StatusForbidden,
+	CategoryRateLimited:      http.StatusTooManyRequests,
+	CategoryUnsupportedMedia: http.StatusUnsupportedMediaType,
+	CategorySession:          http.StatusUnauthorized,
+	CategoryToken:            http.StatusUnauthorized,
+	CategoryTransaction:      http.StatusInternalServerError,
+	CategoryDatabase:         http.StatusInternalServerError,
+	CategoryUndefinedTable:   http.StatusInternalServerError,
 }

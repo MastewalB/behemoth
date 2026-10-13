@@ -20,6 +20,9 @@ ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
 | --- | --- | --- |
 | `Transport` | `types.TransportCookie` | Where the token travels. See [Transports](#transports). |
 | `CookieName` | `session_token` | The cookie's name, for the transports that use one. |
+| `CookieDomain` | empty | The cookie's `Domain` attribute, a host name such as `example.com`. Empty sends the cookie only to the host that set it. See [Cookie attributes](#cookie-attributes). |
+| `CookieSameSite` | `types.SameSiteLax` | The cookie's `SameSite` attribute: `types.SameSiteLax`, `types.SameSiteStrict`, or `types.SameSiteNone`. |
+| `CookieInsecure` | false | Leaves `Secure` off the cookie, for development over plain HTTP. |
 | `ExpiresIn` | 7 days | How long a session lasts. |
 | `PendingExpiresIn` | 10 minutes | How long a session lasts while it waits for a second factor. |
 | `UpdateAge` | 0, off | Rolling expiration: a session in use is extended by `ExpiresIn` once less than `UpdateAge` is left of it. At zero a session ends `ExpiresIn` after its sign-in, however much it is used. Keep it well below `ExpiresIn`: a value that is not smaller extends the session, with a database write, on every request. See [Rolling expiration](#rolling-expiration). |
@@ -28,7 +31,7 @@ ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
 | `EvictOldestOnLimit` | false | At the limit, end the oldest session to make room. When false, the new sign-in is refused. |
 | `CaptureIPAndAgent` | false | Record the client's IP address and user agent on the session. |
 
-A `Transport` that is not one of the four values, and a negative duration, are configuration errors from `Boot`.
+A `Transport` that is not one of the four values, a negative duration, and a cookie setting that can't work are configuration errors from `Boot`. See [Cookie attributes](#cookie-attributes) for the cookie settings `Boot` refuses.
 
 ## Transports
 
@@ -41,12 +44,13 @@ The transport names where the token travels in both directions: how a sign-in ha
 | `types.TransportBody` | the JSON body, under `token` | `Authorization: Bearer <token>` |
 | `types.TransportBoth` | the cookie and `Set-Auth-Token` | either |
 
-**Cookie.** The browser stores the token and sends it by itself. The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, with the path `/`, and expires with the session. When [rolling expiration](#rolling-expiration) extends the session, the cookie is set again with the new date. Scripts on the page can't read it, and can't delete it either: the sign-out response removes it. See [Sign out](#sign-out). This is the choice for a browser application served from the same site as the API. Behemoth checks where each state-changing request comes from under this transport. See [Cross-site requests](#cross-site-requests).
+**Cookie.** The browser stores the token and sends it by itself. By default the cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, with the path `/` and no `Domain`, and expires with the session. See [Cookie attributes](#cookie-attributes) to change the domain, `SameSite`, or `Secure`. When [rolling expiration](#rolling-expiration) extends the session, the cookie is set again with the new date. Scripts on the page can't read it, and can't delete it either: the sign-out response removes it. See [Sign out](#sign-out). This is the choice for a browser application served from the same site as the API. Behemoth checks where each state-changing request comes from under this transport. See [Cross-site requests](#cross-site-requests).
 
 **Header.** The client reads the token from `Set-Auth-Token`, keeps it, and sends it as a bearer token. This suits mobile apps, command-line tools, and other servers.
 
 ```bash
-curl -i -X POST localhost:8080/api/auth/sign-in/email -d '{"email":"ada@example.com","password":"correct horse"}'
+curl -i -X POST localhost:8080/api/auth/sign-in/email -H 'Content-Type: application/json' \
+  -d '{"email":"ada@example.com","password":"correct horse"}'
 # HTTP/1.1 200 OK
 # Set-Auth-Token: r8_x6fau4053kWPOukmnuUFxoY8iz...
 # {"user":{"id":"8b41...","email":"ada@example.com", ...}}
@@ -65,6 +69,40 @@ A browser script on another origin can read a response header only when your COR
 **Both.** A sign-in sets the cookie and the header, and a request may carry either. It is for an application with browser and non-browser clients, or one moving from one to the other.
 
 There is no combination with the body. A token is never read from a request's body.
+
+### Cookie attributes
+
+`HttpOnly` and the path `/` are fixed. Three fields of `SessionConfig` set the rest:
+
+| Your setup | Set |
+| --- | --- |
+| The front end and Behemoth share one host | nothing |
+| A server-rendered front end on a sibling subdomain, such as `app.example.com` next to `auth.example.com`, has to receive the cookie | `CookieDomain: "example.com"` |
+| The front end is on another site, such as `app.example.org` | `CookieSameSite: types.SameSiteNone`, with `RouterConfig.BaseURL` set and the front end in `RouterConfig.TrustedOrigins` |
+| Development over plain HTTP on a host other than `localhost` | `CookieInsecure: true` |
+
+```go
+ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+	Session: types.SessionConfig{
+		CookieDomain:   "example.com",
+		CookieSameSite: types.SameSiteStrict,
+	},
+	Router: types.RouterConfig{BaseURL: "https://auth.example.com"},
+	// ...
+})
+```
+
+`Boot` returns a configuration error for these settings:
+
+- A `CookieSameSite` that is not one of the three values.
+- A `CookieDomain` that is not a host name. A leading dot is accepted and ignored.
+- `types.SameSiteNone` with `CookieInsecure`. Browsers accept `SameSite=None` on a `Secure` cookie only.
+- `types.SameSiteNone` under a cookie transport without `RouterConfig.BaseURL`. The browser then sends the cookie with cross-site requests, and the [origin check](#cross-site-requests) is what refuses a forged one.
+- A `CookieDomain` that is neither the host of `RouterConfig.BaseURL` nor a parent of it. A browser drops such a cookie.
+
+With `types.SameSiteStrict`, a user who follows a link from another site to your application arrives without the cookie, and appears signed out until the next navigation.
+
+Changing `CookieDomain` on a running deployment does not replace the cookies browsers already hold. A browser keeps the old cookie next to the new one until it expires, and users may have to sign in again.
 
 ## The sign-in response
 
@@ -198,6 +236,19 @@ curl -i -X POST https://auth.example.com/api/auth/sign-in/email \
 # HTTP/1.1 403 Forbidden
 # {"code":"untrusted_origin","error":"request from an untrusted origin"}
 ```
+
+### Form content types
+
+Under the same two transports, Behemoth also refuses a state-changing request whose `Content-Type` is `text/plain`, `application/x-www-form-urlencoded`, or `multipart/form-data`. These are the types an HTML form can send to another origin. The answer is `415` with the code `unsupported_content_type`. A request with another `Content-Type`, or with none, passes.
+
+Send JSON bodies as `application/json`. `curl -d` sends `application/x-www-form-urlencoded` unless you name the type:
+
+```bash
+curl -i -X POST https://auth.example.com/api/auth/sign-in/email \
+  -H 'Content-Type: application/json' -d '{"email":"ada@example.com","password":"correct horse"}'
+```
+
+### The base URL
 
 Set `BaseURL` in production. When it is empty and `Boot` mounts routes, `Boot` logs a warning, and Behemoth compares the host and port of `Origin` with the request's `Host` header. The scheme is not compared. Behind a reverse proxy that replaces `Host` with an internal name, that comparison fails and every request from a browser is refused.
 

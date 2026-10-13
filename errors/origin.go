@@ -18,3 +18,22 @@ func NewUntrustedOrigin(op, reason string) *DomainError {
 		InternalMessage: op + ": " + reason,
 	}
 }
+
+// ErrorCodeUnsupportedContentType is the code of the error (415) for a
+// state-changing request whose Content-Type is one an HTML form can send:
+// text/plain, application/x-www-form-urlencoded or multipart/form-data. The
+// client sends its JSON body as application/json.
+const ErrorCodeUnsupportedContentType = "unsupported_content_type"
+
+// NewUnsupportedContentType returns the error for a request refused for its
+// Content-Type. contentType is the refused type, for logs; it is not sent
+// to a client.
+func NewUnsupportedContentType(op, contentType string) *DomainError {
+	return &DomainError{
+		Category:        CategoryUnsupportedMedia,
+		Op:              op,
+		Code:            ErrorCodeUnsupportedContentType,
+		PublicMessage:   "unsupported content type, send application/json",
+		InternalMessage: op + ": " + contentType,
+	}
+}

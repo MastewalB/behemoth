@@ -473,11 +473,20 @@ func (sm *DefaultSessionManager) SupportsRevocation() bool { return true }
 
 // sessionCookie is the cookie the session token travels in. WriteToken,
 // ExtendToken and ClearToken build it here, because a browser replaces a
-// cookie only with one of the same name and path.
+// cookie only with one of the same name, path and domain. HttpOnly and the
+// path are fixed; the domain, SameSite and Secure come from SessionConfig.
 func (sm *DefaultSessionManager) sessionCookie(value string, expires time.Time) *http.Cookie {
+	sameSite := http.SameSiteLaxMode
+	switch sm.cfg.CookieSameSite {
+	case types.SameSiteStrict:
+		sameSite = http.SameSiteStrictMode
+	case types.SameSiteNone:
+		sameSite = http.SameSiteNoneMode
+	}
 	return &http.Cookie{
 		Name: sm.cfg.CookieName, Value: value, Expires: expires,
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/",
+		HttpOnly: true, Secure: !sm.cfg.CookieInsecure, SameSite: sameSite,
+		Path: "/", Domain: strings.TrimPrefix(sm.cfg.CookieDomain, "."),
 	}
 }
 
