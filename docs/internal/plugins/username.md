@@ -126,7 +126,7 @@ The tests run on SQLite, with `_txlock=immediate`: the data handlers read in the
 - *Keep the core column for display and add a unique lookup column.* No change to core, and the casing is kept. Two columns have to stay in step, and the core one still has no rules without the plugin.
 - *Remove the column from core and let the plugin contribute it.* One column with one owner. A contributed column that is not set is left out of the insert, so "no username" is `NULL` without special handling. It changes `models.User`, which no application depended on yet.
 
-**Decision:** The third. `models.User` lost `Username`, `GetUsername` and `UserUsername`, sign-up stopped copying the field, and `FromUserInfo` stopped setting it to the email.
+**Decision:** The third. `models.User` lost `Username`, `GetUsername` and `UserUsername`, sign-up stopped copying the field, and `FromUserInfo` (removed later with the OAuth provider code) stopped setting it to the email.
 **Revisit if:** core needs a username without the email/password plugin, for a sign-in plugin that has no passwords.
 
 ### Sign-in goes through the email/password plugin

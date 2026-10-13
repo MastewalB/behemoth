@@ -120,7 +120,7 @@ The logger is opt-in per adapter and separate from `BootConfig.Telemetry`, becau
 
 ## Removed prints
 
-- `providers/google.go` and `providers/facebook.go` printed the provider's user-info response body with `log.Println`. The calls are removed and not replaced: the body is personal data.
+- `providers/google.go` and `providers/facebook.go` printed the provider's user-info response body with `log.Println`. The calls are removed and not replaced: the body is personal data. The `providers` package was removed later, ahead of the OAuth redesign.
 - `storage/utils.go` printed unmatched columns and scan errors. The scan error is returned to the caller with the same detail, so the prints are removed.
 
 ## Boot summary

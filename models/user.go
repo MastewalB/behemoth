@@ -238,9 +238,3 @@ func GenerateColumnValuePairsWithSelectFilter(m behemoth.Model, selected []strin
 	}
 	return columns, values, valuePtrs
 }
-
-func (u *User) FromUserInfo(userInfo behemoth.UserInfo) {
-	u.Email = userInfo.Email
-	u.Firstname = userInfo.FirstName
-	u.Lastname = userInfo.LastName
-}

@@ -13,7 +13,6 @@ type Config struct {
 	JWT                     *JWTConfig
 	Session                 *SessionConfig
 	Password                *PasswordConfig
-	OAuthProviders          []Provider
 	UseSessions             bool
 	UseEmailAndPasswordAuth bool
 }

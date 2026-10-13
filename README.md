@@ -143,7 +143,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 Not built yet:
 
 - Password change for a signed-in user
-- OAuth 2.0 providers (the `providers/` package predates the plugin system and is likely to move)
+- Sign-in with an OAuth 2.0 or OpenID Connect provider
 
 ## Benchmarks
 
