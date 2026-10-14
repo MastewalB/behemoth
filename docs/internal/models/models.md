@@ -22,7 +22,6 @@ The rate limiter that writes `rate_limits` is described in [`../ratelimit/rate_l
 | `sessions` | `models.Session` | `models/session.go` | yes | `store/sessions.go` |
 | `tokens` | `models.Token` | `models/token.go` | yes | `store/tokens.go` |
 | `rate_limits` | `models.RateLimit` | `models/rate_limit.go` | yes | `store/rate_limits.go` |
-| `jwk_keypairs` | `cryptotypes.JWKKeyPair` | `types/cryptotypes/cryptotypes.go` | **no** | none (`crypto/jwks_store.go` uses the raw `Database`) |
 
 What each one is for:
 
@@ -31,7 +30,6 @@ What each one is for:
 - **`sessions`** — one row per issued session, looked up by the hash of its token.
 - **`tokens`** — the verification table. It is generic by `Kind` (email verification, password reset, magic link, API key), so there is no separate `verifications` table.
 - **`rate_limits`** — fixed-window counters, used only when rate limiting has no key-value store to count in.
-- **`jwk_keypairs`** — asymmetric keypairs for externally verifiable JWTs. It is still outside `models` and is not declared by `CoreDeclareSchema`, so migrations do not create it yet. `types.JWKKeyPair` is an alias for it.
 
 `sessions` and `accounts` each declare a cascading foreign key to `users`, so deleting a user removes both.
 

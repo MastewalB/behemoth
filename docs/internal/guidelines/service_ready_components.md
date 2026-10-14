@@ -127,7 +127,6 @@ Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted titl
 - `emailpassword.Options.ValidatePassword` and `ValidateEmail` are functions. `BootConfig.Hooks` and `PrepareConfig.Schema` are functions too. The application's `MailSender` is the only way to send, and it writes the message. `StaticSecretSource` is the only secret source. "An application configures behemoth with Go values only".
 - Nothing schedules the purges, and no method removes old sessions or tokens. "Nothing removes old sessions, tokens or rate-limit counters".
 - The mail queue is in memory, and `Boot` returns no handle that stops everything it started. "The background mail queue is in memory and does not retry".
-- A service in another process can't check a session. "Another service has no way to check a session".
 - No call reports whether the database and the key-value store answer. No entry.
 
 ## Design decisions

@@ -28,6 +28,15 @@ type AuthContext struct {
 	// changing it changes nothing.
 	SessionConfig SessionConfig
 	TokenManager  TokenManager
+	// JWT signs and verifies JWTs: internal ones with the key manager's
+	// HMAC key, external ones with keys derived from the master secret
+	// (ADR-0002). Never nil on an AuthContext Boot returns. External tokens
+	// are on when BootConfig.JWT names an external audience.
+	JWT JWTProvider
+	// SessionTokens exchanges a session for a session token, a short-lived
+	// external JWT for other services. Never nil on an AuthContext Boot
+	// returns; with external tokens off, Issue is a configuration error.
+	SessionTokens SessionTokens
 	Dispatcher    Dispatcher
 	RateLimiter   RateLimiter
 	// Origins answers whether an origin is one of RouterConfig.TrustedOrigins.

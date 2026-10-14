@@ -26,6 +26,11 @@ const (
 	HookSessionBeforeRevoke       types.HookPoint = "auth.session.beforeRevoke"
 	HookSessionAfterRevoke        types.HookPoint = "auth.session.afterRevoke"
 
+	// fired by the session token flow (types.SessionTokens)
+	HookSessionTokenBeforeIssue = types.HookPoint("auth.sessionToken.beforeIssue")
+	HookSessionTokenAfterIssue  = types.HookPoint("auth.sessionToken.afterIssue")
+	HookSessionTokenIssueFailed = types.HookPoint("auth.sessionToken.issueFailed")
+
 	HookTokenBeforeIssue = types.HookPoint("token.beforeIssue")
 	HookTokenAfterIssue  = types.HookPoint("token.afterIssue") // Phase: After
 	HookTokenConsumed    = types.HookPoint("token.consumed")   // Phase: After

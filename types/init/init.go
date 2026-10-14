@@ -203,6 +203,12 @@ type BootConfig struct {
 	Session   types.SessionConfig
 	Token     types.TokenConfig
 
+	// JWT configures the JWTs behemoth issues. Naming an external audience
+	// (Audiences[JWTExternal]) turns session tokens on: POST /session/token
+	// and the key set route at JWKSPath are mounted. An empty Issuer is
+	// RouterConfig.BaseURL. Zero value = session tokens off.
+	JWT types.JWTConfig
+
 	// Mail gives behemoth the application's mail sender, which plugins
 	// that send messages need (magic link, email verification). Zero value
 	// = no sender; such a plugin then fails Boot.
@@ -375,6 +381,25 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
 
+	// JWTs: internal ones always, external ones and session tokens when an
+	// external audience is named. The external keys are derived from the
+	// master secret, so there is nothing to create first (ADR-0002).
+	jwtCfg := cfg.JWT.WithDefaults()
+	if jwtCfg.Issuer == "" {
+		jwtCfg.Issuer = cfg.Router.BaseURL
+	}
+	if err := jwtCfg.Validate(); err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+	}
+	var externalKeys types.ExternalKeySet
+	if jwtCfg.ExternalEnabled() {
+		externalKeys = crypto.NewDerivedKeySet(cryptoSuite.Keys)
+	}
+	jwtProvider := crypto.NewJWTProvider(cryptoSuite.JWTSign, externalKeys, jwtCfg)
+	ac.JWT = jwtProvider
+	sessionTokens := transport.NewSessionTokens(jwtProvider, dispatcher, ac, ac.SessionManager, jwtCfg)
+	ac.SessionTokens = sessionTokens
+
 	// Init before routing, so Routes() and Middlewares() may rely on
 	// anything a plugin sets up in Init.
 	for _, name := range order {
@@ -402,10 +427,14 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		globalMiddleware = append(globalMiddleware, p.Middlewares()...)
 	}
 
-	// // --- JWKS, if external JWT is configured (Crypto round) ---
-	// if jwks := crypto.JWTRoutes(); jwks != nil {
-	// 	router.MountAbsolute("core", jwks...)
-	// }
+	// Session tokens, when on: the exchange below the base path, and the
+	// key set at its well-known path outside it.
+	if err := router.Mount(coreOwner, "", sessionTokens.Routes()); err != nil {
+		return nil, err
+	}
+	if err := router.MountAbsolute(coreOwner, jwtProvider.Routes()...); err != nil {
+		return nil, err
+	}
 
 	// Route-scoped rate limiting is baked in once, before any driver sees the routes.
 	router.ApplyRateLimiting(rateLimiter, app.RateLimits, ipCfg)
@@ -1115,6 +1144,12 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 		{Point: hooks.HookSessionBeforeRevoke, Owner: coreOwner, Phase: types.BeforeHookPhase},
 		{Point: hooks.HookSessionAfterRevoke, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
 
+		// fired by the session token flow; not audited: a client asks for a
+		// token every few minutes, and its session is audited when created
+		{Point: hooks.HookSessionTokenBeforeIssue, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSessionTokenAfterIssue, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookSessionTokenIssueFailed, Owner: coreOwner, Phase: types.FailedHookPhase},
+
 		// fired by the token manager
 		{Point: hooks.HookTokenBeforeIssue, Owner: coreOwner, Phase: types.BeforeHookPhase},
 		{Point: hooks.HookTokenAfterIssue, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
@@ -1175,6 +1210,10 @@ func CoreDeclareSchema(ic *types.PluginInitContext) error {
 const (
 	RuleSignInRoute = "core.signin.route"
 	RuleSignUpRoute = "core.signup.route"
+	// RuleSessionTokenRoute limits POST /session/token per client address.
+	// A client asks again every few minutes, and a page with several tabs
+	// asks once per tab, so the limit is higher than sign-in's.
+	RuleSessionTokenRoute = "core.session_token.route"
 )
 
 // CoreDeclareRateLimitRules declares the limits core applies without being
@@ -1196,6 +1235,16 @@ func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
 			Path:      "/sign-in/email",
 			KeyFunc:   byAddress,
 			Limit:     types.Limit{Max: 10, Window: time.Minute},
+			Algorithm: types.AlgorithmFixedWindow,
+			Action:    types.ActionReject,
+			Owner:     "core",
+		},
+		{
+			Name:      RuleSessionTokenRoute,
+			Method:    http.MethodPost,
+			Path:      types.PathSessionToken,
+			KeyFunc:   byAddress,
+			Limit:     types.Limit{Max: 30, Window: time.Minute},
 			Algorithm: types.AlgorithmFixedWindow,
 			Action:    types.ActionReject,
 			Owner:     "core",

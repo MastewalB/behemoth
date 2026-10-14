@@ -148,3 +148,4 @@ Keep this list current, newest last.
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-reporting-a-hook-refusal.md) | Report a hook chain's error through one helper, with one code | Proposed |
+| [0002](0002-deriving-external-jwt-keys.md) | Derive the signing keys of external JWTs from the master secret | Proposed |

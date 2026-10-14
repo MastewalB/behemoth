@@ -291,6 +291,8 @@ Middlewares: []types.Middleware{types.RequireFreshSession(ac.SessionManager)},
 
 Nothing refreshes a session in place. Signing in again is how a user gets a fresh one.
 
+To tell another service who a request is from, exchange the session for a short-lived JWT. See [Session tokens](session-tokens.md).
+
 ## Write a sign-in route
 
 A plugin that signs users in builds a `types.SignInResult` and hands it to `types.WriteSignIn`:

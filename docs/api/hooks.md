@@ -627,6 +627,9 @@ Core declares these, so a handler can be registered on any of them.
 | `auth.signIn.failed` | failed | email/password sign-in | codes `user_not_found`, `no_credential_account`, `invalid_credentials`, `rejected_by_hook` |
 | `auth.signOut.before` | before | sign-out | `sessionID`. Veto only. |
 | `auth.signOut.after` | after | sign-out | nil |
+| `auth.sessionToken.beforeIssue` | before | session token flow | `userID`, `sessionID`, `audience`, and `claims`, an empty object. Only `claims` is read back; its keys go into the token under `custom`. See [Session tokens](session-tokens.md#hooks). |
+| `auth.sessionToken.afterIssue` | after | session token flow | a `*types.SessionToken` without the token |
+| `auth.sessionToken.issueFailed` | failed | session token flow | code `rejected_by_hook` |
 | `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent. The last two come from the request being handled unless the caller of `SessionManager.Create` set them, and are empty when `CaptureIPAndAgent` is off or there is no request. A handler can rewrite the IP address and the user agent (`HookValueIPAddress`, `HookValueUserAgent`), for example to mask the address. The rewrite is stored only when `CaptureIPAndAgent` is on. The user id and state are not read back. |
 | `auth.session.afterCreate` | after | session manager | the created `*models.Session` |
 | `auth.session.beforeRevoke` | before | session manager | session id, reason. Veto only. |

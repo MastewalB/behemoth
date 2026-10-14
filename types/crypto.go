@@ -21,8 +21,11 @@ type (
 	JWTConfig   = cryptotypes.JWTConfig
 	Claims      = cryptotypes.Claims
 	JWTProvider = cryptotypes.JWTProvider
-	JWKKeyPair  = cryptotypes.JWKKeyPair
-	JWKSStore   = cryptotypes.JWKSStore
+	JWTRequest  = cryptotypes.JWTRequest
+
+	ExternalKeySet     = cryptotypes.ExternalKeySet
+	ExternalSigningKey = cryptotypes.ExternalSigningKey
+	PublishedKey       = cryptotypes.PublishedKey
 
 	CSRFProtector   = cryptotypes.CSRFProtector
 	OriginValidator = cryptotypes.OriginValidator
@@ -37,6 +40,7 @@ const (
 	KeyPurposeCookieSign    = cryptotypes.KeyPurposeCookieSign
 	KeyPurposeEncryptAtRest = cryptotypes.KeyPurposeEncryptAtRest
 	KeyPurposeJWTSign       = cryptotypes.KeyPurposeJWTSign
+	KeyPurposeJWTExternal   = cryptotypes.KeyPurposeJWTExternal
 
 	JWTInternal = cryptotypes.JWTInternal
 	JWTExternal = cryptotypes.JWTExternal

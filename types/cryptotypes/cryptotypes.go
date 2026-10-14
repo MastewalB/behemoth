@@ -9,7 +9,10 @@ package cryptotypes
 
 import (
 	"context"
-	"crypto/ed25519"
+	"crypto"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MastewalB/behemoth"
@@ -33,6 +36,11 @@ const (
 	KeyPurposeCookieSign    KeyPurpose = "cookie_sign"     // HMAC over cookie payloads
 	KeyPurposeEncryptAtRest KeyPurpose = "encrypt_at_rest" // TOTP secrets, OAuth tokens
 	KeyPurposeJWTSign       KeyPurpose = "jwt_sign"
+	// KeyPurposeJWTExternal derives the Ed25519 seed of the key that signs
+	// external JWTs, one per secret version. It must never change: every
+	// external key, and every token issued with one, depends on it
+	// (ADR-0002).
+	KeyPurposeJWTExternal KeyPurpose = "jwt_external"
 )
 
 // KeyManager is the interface for managing various cryptographic keys used by the system.
@@ -47,6 +55,11 @@ type KeyManager interface {
 	GetByVersion(purpose KeyPurpose, version int) (key []byte, err error)
 
 	CurrentVersion() int
+
+	// Versions returns the versions of the secrets the manager holds, in
+	// ascending order. Every one of them can still verify or decrypt what
+	// it signed or encrypted.
+	Versions() []int
 
 	// RemoveVersion removes a key version.
 	RemoveVersion(version int) error
@@ -106,16 +119,21 @@ const (
 	// Rotation compatible via KeyManager.
 	JWTInternal JWTKind = "internal"
 
-	// JWTExternal: Asymmetric (EdDSA/ES256), standard claims served via JWKS endpoints,
-	// Intended for for third parties ( API consumers, downstream services) to verify tokens without hitting session db
+	// JWTExternal: EdDSA-signed with a key of an ExternalKeySet, for other
+	// services to verify with the published keys, without a call to
+	// behemoth.
 	JWTExternal JWTKind = "external"
 )
 
 type JWTConfig struct {
-	Issuer          string
-	Audience        map[JWTKind]string
-	TTL             map[JWTKind]time.Duration
-	ExternalKeyType string
+	// Issuer is the iss of every token, and what Verify expects.
+	Issuer string
+	// Audiences are, per kind, the audiences a token may be issued for. The
+	// first is the one a token gets when its request names none. Verify
+	// accepts a token whose aud names any of them.
+	Audiences map[JWTKind][]string
+	// TTL is, per kind, how long a token is valid.
+	TTL map[JWTKind]time.Duration
 
 	// JWKSPath is where the public keyset is served. Defaults to the
 	// standards convention (RFC 8615 well-known URI) so external verifiers
@@ -123,63 +141,131 @@ type JWTConfig struct {
 	JWKSPath string // default "/.well-known/jwks.json"
 }
 
-// JWT Claims according to the official JWT specification.
-//
-// Custom is used for caller-supplied payloads to avoid possible collisions with the registered claims.
+// DefaultJWTTTL is how long a token is valid when JWTConfig.TTL names no
+// lifetime for its kind. It is also the longest a session token stays valid
+// after its session ended.
+const DefaultJWTTTL = 15 * time.Minute
+
+// DefaultJWKSPath is where the key set is served when JWTConfig.JWKSPath is
+// empty: the well-known URI of RFC 8615.
+const DefaultJWKSPath = "/.well-known/jwks.json"
+
+// WithDefaults returns c with every field left at zero set to its default:
+// DefaultJWTTTL for each kind, and DefaultJWKSPath.
+func (c JWTConfig) WithDefaults() JWTConfig {
+	ttl := make(map[JWTKind]time.Duration, 2)
+	for kind, d := range c.TTL {
+		ttl[kind] = d
+	}
+	for _, kind := range []JWTKind{JWTInternal, JWTExternal} {
+		if ttl[kind] == 0 {
+			ttl[kind] = DefaultJWTTTL
+		}
+	}
+	c.TTL = ttl
+	if c.JWKSPath == "" {
+		c.JWKSPath = DefaultJWKSPath
+	}
+	return c
+}
+
+// ExternalEnabled reports whether external tokens are on: c names at least
+// one external audience.
+func (c JWTConfig) ExternalEnabled() bool { return len(c.Audiences[JWTExternal]) > 0 }
+
+// Validate reports what in c can't work: a negative lifetime, an empty
+// audience, external tokens without an issuer, and a key set path that is
+// not absolute.
+func (c JWTConfig) Validate() error {
+	for kind, d := range c.TTL {
+		if d < 0 {
+			return fmt.Errorf("JWTConfig.TTL[%s] is negative: %s", kind, d)
+		}
+	}
+	for kind, audiences := range c.Audiences {
+		for i, a := range audiences {
+			if a == "" {
+				return fmt.Errorf("JWTConfig.Audiences[%s][%d] is empty", kind, i)
+			}
+		}
+	}
+	if c.ExternalEnabled() && c.Issuer == "" {
+		return errors.New("JWTConfig.Issuer is empty; external tokens need an issuer, which verifiers check")
+	}
+	if c.JWKSPath != "" && !strings.HasPrefix(c.JWKSPath, "/") {
+		return fmt.Errorf("JWTConfig.JWKSPath %q is not an absolute path", c.JWKSPath)
+	}
+	return nil
+}
+
+// JWTRequest is what a token is issued for.
+type JWTRequest struct {
+	// Subject is the sub claim: who the token is about. Required.
+	Subject string
+	// Audience is the aud claim. It is one of JWTConfig.Audiences of the
+	// kind, and empty means the first of them.
+	Audience string
+	// SessionID is the sid claim, the session the token was issued for.
+	// Empty means none.
+	SessionID string
+	// Custom holds claims of the caller's own. They travel under "custom",
+	// so that none can stand in for a registered claim.
+	Custom behemoth.M
+}
+
+// Claims are the claims of a verified token.
 type Claims struct {
-	Issuer    string     `json:"iss,omitempty"`
-	Audience  string     `json:"aud,omitempty"`
-	Subject   string     `json:"sub,omitempty"`
-	ExpiresAt time.Time  `json:"exp"`
-	IssuedAt  time.Time  `json:"iat"`
-	NotBefore time.Time  `json:"nbf"`
-	Custom    behemoth.M `json:"custom,omitempty"`
+	Issuer    string
+	Audience  string // the configured audience the token named
+	Subject   string
+	SessionID string // sid
+	ID        string // jti, a random id of the token
+	ExpiresAt time.Time
+	IssuedAt  time.Time
+	NotBefore time.Time
+	Custom    behemoth.M
 }
 
 type JWTProvider interface {
-	Sign(ctx context.Context, kind JWTKind, subject string, custom behemoth.M) (token string, err error)
+	// Sign issues a token of kind for req.
+	Sign(ctx context.Context, kind JWTKind, req JWTRequest) (token string, err error)
 
 	// Verify: Verifies a given token and returns the claim data.
 	// Algorithm must not be taken from the token header.
 	Verify(ctx context.Context, kind JWTKind, token string) (claims *Claims, err error)
 }
 
-// JWKKeyPair is persisted model
-// asymmetric keypairs don't derive from a
-// master secret via HKDF, so they must be generated once and stored.
-type JWKKeyPair struct {
-	// ID is the "kid", exposed publicly in JWKS and in every token's header
-	ID        string            `json:"id"`
-	Algorithm string            `json:"alg"` // "EdDSA"
-	PublicKey ed25519.PublicKey `json:"public_key"`
-
-	// The PrivateKey encrypted via Encryptor (AES-256-GCM, KeyPurposeAtRest)
-	EncryptedPrivateKey []byte `json:"encrypted_pk"`
-
-	// Encryptor's key version, for decrypting EncryptedPrivateKey even after key rotation
-	// PrivateKeyVersion identifies which KeyManager-derived
-	// encryption key protects it at rest.
-	PrivateKeyVersion int `json:"pk_version"`
-
-	// Active: Only one true at a time. Rotate() flips the old one to
-	// false without deleting it; a token signed under the previous key
-	// must keep verifying until it naturally expires.
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
+// ExternalKeySet holds the keys of external JWTs: the one new tokens are
+// signed with, and every one a verifier may still need. It signs, and never
+// hands out a private key, so that a key held by a KMS or an HSM can
+// implement it (ADR-0002).
+type ExternalKeySet interface {
+	// CurrentKey returns the key new tokens are signed with, fixed for one
+	// token: its id and algorithm go into the header, which is signed with
+	// the claims.
+	CurrentKey(ctx context.Context) (ExternalSigningKey, error)
+	// PublicKey returns the key kid names, to verify a token with. An
+	// unknown kid is a refused token: a CategoryToken error with
+	// ErrorCodeJWTUnknownKey.
+	PublicKey(ctx context.Context, kid string) (PublishedKey, error)
+	// PublicKeys returns every key a verifier may still need, to publish.
+	PublicKeys(ctx context.Context) ([]PublishedKey, error)
 }
 
-func (k *JWKKeyPair) SchemaName() string     { return "jwk_keypairs" }
-func (k *JWKKeyPair) PrimaryKeyName() string { return "id" }
-func (k *JWKKeyPair) PrimaryKeyField() any   { return k.ID }
-func (k *JWKKeyPair) New() behemoth.Model    { return &JWKKeyPair{} }
+// ExternalSigningKey is one key of an ExternalKeySet, ready to sign.
+type ExternalSigningKey interface {
+	KID() string
+	// Algorithm is the JWS algorithm the key signs with, such as "EdDSA".
+	Algorithm() string
+	Sign(ctx context.Context, payload []byte) ([]byte, error)
+}
 
-type JWKSStore interface {
-	Current(ctx context.Context) (*JWKKeyPair, error)
-	ByKid(ctx context.Context, kid string) (*JWKKeyPair, error)
-	All(ctx context.Context) ([]*JWKKeyPair, error) // for serving the JWKS endpoint; public keys only
-
-	// Rotate generates a fresh keypair, marks it Active, demoting the previous one
-	Rotate(ctx context.Context) (*JWKKeyPair, error)
+// PublishedKey is the public half of a key of an ExternalKeySet.
+type PublishedKey struct {
+	KID       string
+	Algorithm string
+	// Key is an ed25519.PublicKey for EdDSA.
+	Key crypto.PublicKey
 }
 
 type Randomizer interface {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 
 	"github.com/MastewalB/behemoth"
@@ -85,6 +86,18 @@ func (km *DefaultKeyManager) GetByVersion(purpose types.KeyPurpose, version int)
 
 func (km *DefaultKeyManager) CurrentVersion() int {
 	return km.current
+}
+
+// Versions implements [types.KeyManager].
+func (km *DefaultKeyManager) Versions() []int {
+	km.mu.RLock()
+	defer km.mu.RUnlock()
+	versions := make([]int, 0, len(km.secrets))
+	for v := range km.secrets {
+		versions = append(versions, v)
+	}
+	slices.Sort(versions)
+	return versions
 }
 
 func decodeAndValidate(raw map[int]string, current int, cfg KeyManagerConfig) (map[int][]byte, error) {
