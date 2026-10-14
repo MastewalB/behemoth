@@ -1,25 +1,118 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+# Runs the tests of every Go module in the repository.
+#
+# The root module, each storage, router and telemetry adapter, the examples
+# and tests/ each have a go.mod of their own, so `go test ./...` at the root
+# covers the root module only. This workflow has three jobs:
+#
+#   modules           finds every go.mod outside tests/, so that a module
+#                     added later is tested without a change here.
+#   test-modules      builds, vets and tests each of those modules. Their
+#                     tests need no service.
+#   test-integration  runs tests/, whose suites start database containers
+#                     (Postgres, MySQL, SQL Server, MongoDB) through
+#                     testcontainers, on the runner's Docker. The slow
+#                     container suites run on runners of their own.
 
 name: Go - Behemoth Test
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "dev" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "dev" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run of the previous one. Runs on
+# main are never cancelled, so every commit there gets a result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
 
-  build:
+  modules:
+    name: Find modules
     runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.find.outputs.list }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: List the directories with a go.mod, except tests/
+      id: find
+      run: |
+        list=$(find . -name go.mod -not -path './tests/*' -printf '%h\n' | sort | jq -R . | jq -cs .)
+        echo "$list"
+        echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  test-modules:
+    name: Module ${{ matrix.module }}
+    needs: modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # Report every module that fails, not only the first one.
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.modules.outputs.list) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
     steps:
     - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
-        go-version: '1.26.x'
+        go-version-file: go.mod
+        cache-dependency-path: "**/go.sum"
+
+    - name: Build
+      run: go build ./...
+
+    - name: Vet
+      run: go vet ./...
+
+    # -count=1: the Go cache is restored between runs, and it holds test
+    # results. Without it a test could be reported from the cache.
+    - name: Test
+      run: go test -count=1 ./...
+
+  test-integration:
+    name: Integration ${{ matrix.group }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # store and storage start the database containers. "other" is every
+        # other package of tests/, found with go list, so a package added
+        # later runs there.
+        group: [ store, storage, other ]
+    defaults:
+      run:
+        working-directory: tests
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache-dependency-path: "**/go.sum"
+
+    - name: Vet
+      if: matrix.group == 'other'
+      run: go vet ./...
 
     - name: Test
-      run: go test -v ./...
+      run: |
+        case "${{ matrix.group }}" in
+          store)   packages="./store/..." ;;
+          storage) packages="./storage/..." ;;
+          other)   packages=$(go list ./... | grep -v -E '/tests/(store|storage)(/|$)') ;;
+        esac
+        go test -count=1 -timeout 25m $packages
