@@ -45,6 +45,9 @@ WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBo
 | --- | --- |
 | `POST /sign-in/email` | `types.WriteSignIn(rctx, result, nil)` |
 | `POST /magic-link/verify` | `types.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
+| `POST /oauth/complete` | `types.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
+
+A route that hands the client a value of its own reads `AuthContext.SessionConfig`, the session settings with their defaults, to deliver it the same way. The OAuth plugin's binding value is the one case ([`../plugins/oauth.md`](../plugins/oauth.md)).
 
 A pending session's token is delivered like an active one's. The client needs it to present the second factor, and `SessionManager.Get` resolves a pending session by its token.
 

@@ -47,6 +47,22 @@ func (s *Store) open(op, sealed string) (string, error) {
 	return string(plaintext), nil
 }
 
+// Seal encrypts a secret the way the store seals an account's OAuth tokens
+// and returns the sealed form described above. It is for a secret a plugin
+// keeps outside the accounts table: a column of its own table, or a value in
+// a token's metadata. Open reads it back. It is a configuration error when
+// the store has no encryptor (WithEncryptor).
+func (s *Store) Seal(plaintext string) (string, error) {
+	return s.seal("Store.Seal", plaintext)
+}
+
+// Open returns the plaintext of a value Seal produced. A value that is not
+// in the sealed form is a security error, and so is one the encryptor can't
+// decrypt.
+func (s *Store) Open(sealed string) (string, error) {
+	return s.open("Store.Open", sealed)
+}
+
 func parseSealed(sealed string) (version int, ciphertext []byte, err error) {
 	head, body, ok := strings.Cut(sealed, ":")
 	if !ok || !strings.HasPrefix(head, sealPrefix) {

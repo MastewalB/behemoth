@@ -345,9 +345,11 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		Crypto:      cryptoSuite,
 		Telemetry:   tel,
 		Origins:     origins,
-		Mailer:      NewMailer(cfg.Mail, tel),
-		SMS:         NewSMS(cfg.SMS, tel),
-		Public:      types.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
+		// The session manager applies the same defaults to the same value.
+		SessionConfig: cfg.Session.WithDefaults(),
+		Mailer:        NewMailer(cfg.Mail, tel),
+		SMS:           NewSMS(cfg.SMS, tel),
+		Public:        types.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
 	}
 	if err := checkDataHookPoints(app.Hooks, coreDataHookPoints); err != nil {
 		return nil, err

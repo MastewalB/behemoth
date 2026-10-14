@@ -20,9 +20,16 @@ type AuthContext struct {
 	Store          *store.Store
 	Crypto         Crypto
 	SessionManager SessionManager
-	TokenManager   TokenManager
-	Dispatcher     Dispatcher
-	RateLimiter    RateLimiter
+	// SessionConfig is BootConfig.Session with its defaults applied: the
+	// settings the session manager runs with. A route that hands the client
+	// a value of its own reads it to deliver the value the way the session
+	// token travels (Transport), in a cookie that a browser treats like the
+	// session cookie (CookieSameSite, CookieInsecure). It is a copy:
+	// changing it changes nothing.
+	SessionConfig SessionConfig
+	TokenManager  TokenManager
+	Dispatcher    Dispatcher
+	RateLimiter   RateLimiter
 	// Origins answers whether an origin is one of RouterConfig.TrustedOrigins.
 	// A plugin that takes a redirect URL from a request checks it with
 	// TrustedRedirect(Origins, url) before it stores or returns it. Never

@@ -94,7 +94,8 @@ The other core tables declare no public column. `Public.Of` on a session, an acc
 Two more points:
 
 - `password_hash` is not sealed. It is a one-way hash and is stored as given in both paths. Hash it with `ac.Crypto.Passwords` before you store it.
-- If you need to write tokens directly, there is no public function to seal them. Use `UpdateAccount` for the token columns and the adapter for the rest.
+- If you need to write tokens directly, use `UpdateAccount` for the token columns and the adapter for the rest.
+- `Store.Seal` returns the sealed form of a value, and `Store.Open` reads it back. Use them for a secret your plugin keeps in a table of its own or in a token's metadata.
 
 ## Sessions
 

@@ -146,6 +146,7 @@ v<key version>:<base64 ciphertext>
 - `Store.open` splits the string, parses the version, and calls `Encryptor.Decrypt(ciphertext, version)`.
 - The ciphertext itself is the AES-256-GCM output of `crypto.AESGCMEncryptor`, with the nonce prepended. The key comes from the `KeyManager` under purpose `encrypt_at_rest`.
 - `store.SealedKeyVersion(sealed)` reads the version without decrypting.
+- `Store.Seal` and `Store.Open` are the exported pair, for a secret a plugin keeps outside `accounts`. The OAuth plugin seals the PKCE verifier of a started sign-in with them ([`../plugins/oauth.md`](../plugins/oauth.md)).
 
 `[Decision]` The key version travels inside the value instead of in a `key_version` column. An account has three secrets written at different times: an access token refreshed after a key rotation sits next to a refresh token sealed under the previous key. One version column would be wrong for one of them; three columns, or re-encrypting every token on every write, would be the alternative. The cost is that key version cannot be indexed. A re-encryption sweep after a rotation selects with a starts-with match on `v<old>:` (`clause.OpStartsWith`).
 

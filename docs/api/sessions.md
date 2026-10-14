@@ -308,6 +308,8 @@ return types.WriteSignIn(rctx, result, nil) // the body above, and the token by 
 
 A flow called from code, such as `emailpassword.Plugin.SignIn`, returns the raw token in its result and delivers nothing. The caller decides what to do with it.
 
+A route that gives the client a value of its own, to be sent back later, can deliver it the way the session token travels. `ac.SessionConfig` holds the session settings with their defaults applied: `Transport`, and the cookie's `CookieSameSite` and `CookieInsecure`. The OAuth plugin does this with its binding value. See [OAuth](oauth.md#build-the-callback-page).
+
 ## Write a route that ends the session
 
 A route that ends its caller's own session takes the token back afterwards with `ClearToken`, the counterpart of `WriteToken`. With a cookie transport it removes the cookie the request presented its token in, and it does nothing for the other transports.
