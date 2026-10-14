@@ -142,12 +142,18 @@ func NewConfigurationError(op, detail string, original error) *DomainError {
 	}
 }
 
+// NewSecurityError's original is optional: without one, the internal message
+// is op and code.
 func NewSecurityError(op, code string, original error) *DomainError {
+	internal := fmt.Sprintf("%s: %s", op, code)
+	if original != nil {
+		internal = original.Error()
+	}
 	return &DomainError{
 		Category: CategorySecurity, Op: op,
 		Code:            code,
 		PublicMessage:   "invalid or expired credential", // generic message for the client
-		InternalMessage: original.Error(),
+		InternalMessage: internal,
 		Original:        original,
 		Retryable:       false, // a missing key version won't fix itself by retrying the same request
 	}

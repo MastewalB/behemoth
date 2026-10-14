@@ -1,0 +1,10 @@
+# Build context is the repository root; send only what the example needs.
+.git
+.github
+docs
+tests
+**/*.db
+**/migrations
+examples/*
+!examples/init
+examples/init/Dockerfile*

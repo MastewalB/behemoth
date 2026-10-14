@@ -5,15 +5,22 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
+	mysqlAdapter "github.com/MastewalB/behemoth/storage/adapters/mysql"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
+	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	sqlserverAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/mongodb"
 	"github.com/uptrace/bun"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -107,7 +114,7 @@ func TestSQLiteAdapter(t *testing.T) {
 		if _, err := fkDB.Exec(testutils.TestUserSchema); err != nil {
 			t.Fatal(err)
 		}
-		assertConstraintClassification(t, adapters.NewSQLiteAdapter(fkDB, nil), fkDB,
+		assertConstraintClassification(t, sqliteAdapter.NewSQLiteAdapter(fkDB, nil), fkDB,
 			`CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id))`)
 	})
 
@@ -132,7 +139,7 @@ func TestSQLiteAdapterWithPhysicalNames(t *testing.T) {
 		);`)
 
 	manager := &SQLiteAdapterTestManager{t: t, db: db, table: "app_users"}
-	suite := NewDatabaseTestSuite(t, adapters.NewSQLiteAdapter(db, physicalNamesResolver(t)), manager)
+	suite := NewDatabaseTestSuite(t, sqliteAdapter.NewSQLiteAdapter(db, physicalNamesResolver(t)), manager)
 	suite.Run()
 }
 
@@ -141,13 +148,13 @@ func TestSQLiteAdapterWithPhysicalNames(t *testing.T) {
 // PhysicalNames -> BuildSchemaResolverTable -> DefaultSchemaResolver.
 func physicalNamesResolver(t *testing.T) behemoth.SchemaResolver {
 	t.Helper()
-	registry := core.NewSchemaRegistry()
-	err := registry.Declare(&testutils.TestUser{}, core.TableSchema{
+	registry := schema.NewRegistry()
+	err := registry.Declare(&testutils.TestUser{}, schema.Table{
 		Name: "users", PhysicalName: "app_users",
-		Columns: []core.Column{
-			{Name: "id", PhysicalName: "user_id", Type: core.ColTypeText, PrimaryKey: true},
-			{Name: "email", PhysicalName: "email_address", Type: core.ColTypeText},
-			{Name: "username", PhysicalName: "handle", Type: core.ColTypeText, Unique: true},
+		Columns: []schema.Column{
+			{Name: "id", PhysicalName: "user_id", Type: schema.ColTypeText, PrimaryKey: true},
+			{Name: "email", PhysicalName: "email_address", Type: schema.ColTypeText},
+			{Name: "username", PhysicalName: "handle", Type: schema.ColTypeText, Unique: true},
 		},
 	})
 	if err != nil {
@@ -235,11 +242,17 @@ func TestMongoAdapter(t *testing.T) {
 
 	dropAll := func() { testutils.CleanupMongoTestDB(ctx, t, mongoClient, testutils.MongoDBName) }
 
+	t.Run("CheckTransactions passes on a replica set", func(t *testing.T) {
+		if err := adapter.CheckTransactions(ctx); err != nil {
+			t.Fatalf("CheckTransactions on a replica set = %v", err)
+		}
+	})
+
 	// The whole suite again, with every name physical-only. Runs first: the
 	// standard suite's CleanupDatabase disconnects the client.
 	t.Run("PhysicalNames", func(t *testing.T) {
 		defer dropAll()
-		mapped := adapters.NewMongoAdapter(mongoClient, testutils.MongoDBName, physicalNamesResolver(t))
+		mapped := mongoAdapter.NewMongoAdapter(mongoClient, testutils.MongoDBName, physicalNamesResolver(t))
 		manager := &MongoAdapterTestManager{t: t, client: mongoClient, cleanupTables: dropAll, cleanupDatabase: func() {}}
 		NewDatabaseTestSuite(t, mapped, manager).Run()
 	})
@@ -247,7 +260,7 @@ func TestMongoAdapter(t *testing.T) {
 	// Documents are stored under physical names and read back as canonical ones.
 	t.Run("StoresPhysicalNames", func(t *testing.T) {
 		defer dropAll()
-		mapped := adapters.NewMongoAdapter(mongoClient, testutils.MongoDBName, physicalNamesResolver(t))
+		mapped := mongoAdapter.NewMongoAdapter(mongoClient, testutils.MongoDBName, physicalNamesResolver(t))
 		user := testutils.NewTestUser("u-1")
 		if err := mapped.Create(ctx, user); err != nil {
 			t.Fatal(err)
@@ -364,7 +377,7 @@ func TestMySQLAdapter(t *testing.T) {
 			t.Fatal(err)
 		}
 		manager := &MySQLAdapterTestManager{t: t, db: db, cleanup: func() {}, table: "app_users"}
-		NewDatabaseTestSuite(t, adapters.NewMySQLAdapter(db, physicalNamesResolver(t)), manager).Run()
+		NewDatabaseTestSuite(t, mysqlAdapter.NewMySQLAdapter(db, physicalNamesResolver(t)), manager).Run()
 	})
 
 	manager := &MySQLAdapterTestManager{
@@ -380,7 +393,7 @@ func TestMySQLAdapter(t *testing.T) {
 func TestMSSQLAdapter(t *testing.T) {
 	ctx := t.Context()
 	db, cleanupDatabase := testutils.SetupMSSQLTestDBWithSchema(t, ctx, testutils.TestMSSQLServerUserSchema)
-	adapter := adapters.NewSQLServerAdapter(db, nil)
+	adapter := sqlserverAdapter.NewSQLServerAdapter(db, nil)
 
 	t.Run("UndefinedTable", func(t *testing.T) { assertUndefinedTable(t, adapter) })
 	t.Run("ConstraintErrors", func(t *testing.T) {
@@ -399,7 +412,7 @@ func TestMSSQLAdapter(t *testing.T) {
 			t.Fatal(err)
 		}
 		manager := &MSSQLAdapterTestManager{t: t, db: db, cleanup: func() {}, table: "app_users"}
-		NewDatabaseTestSuite(t, adapters.NewSQLServerAdapter(db, physicalNamesResolver(t)), manager).Run()
+		NewDatabaseTestSuite(t, sqlserverAdapter.NewSQLServerAdapter(db, physicalNamesResolver(t)), manager).Run()
 	})
 
 	manager := &MSSQLAdapterTestManager{
@@ -414,7 +427,7 @@ func TestMSSQLAdapter(t *testing.T) {
 }
 
 func TestGormAdapter(t *testing.T) {
-	db, cleanup := testutils.SetupGORMDBWithSchema(t, &testutils.GormTestUser{})
+	db, cleanup := testutils.SetupGORMDBWithSchema(t, testutils.TestUserSchema)
 	adapter := testutils.SetupGormAdapter(t, db)
 
 	manager := &GormAdapterTestManager{
@@ -428,7 +441,7 @@ func TestGormAdapter(t *testing.T) {
 }
 
 func TestBunAdapter(t *testing.T) {
-	db, cleanup := testutils.SetupBunTestDBWithSchema(t, &testutils.GormTestUser{})
+	db, cleanup := testutils.SetupBunTestDBWithSchema(t, testutils.TestUserSchema)
 	adapter := testutils.SetupBunAdapter(t, db)
 
 	manager := &BunAdapterTestManager{
@@ -727,5 +740,33 @@ func (m *BunAdapterTestManager) CleanupTables() {
 func (m *BunAdapterTestManager) CleanupDatabase() {
 	if m.cleanup != nil {
 		m.cleanup()
+	}
+}
+
+// A standalone MongoDB server has no transactions. The adapter says so
+// before any write is attempted.
+func TestMongoAdapterRejectsAStandaloneServer(t *testing.T) {
+	ctx := context.Background()
+	container, err := mongodb.Run(ctx, "mongo:6") // no replica set
+	if err != nil {
+		t.Fatalf("failed to start container: %s", err)
+	}
+	t.Cleanup(func() { _ = testcontainers.TerminateContainer(container) })
+	uri, err := container.ConnectionString(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Disconnect(ctx) })
+
+	err = mongoAdapter.NewMongoAdapter(client, testutils.MongoDBName, nil).CheckTransactions(ctx)
+	if !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		t.Fatalf("CheckTransactions on a standalone server = %v, want a configuration error", err)
+	}
+	if !strings.Contains(err.Error(), "replica set") {
+		t.Errorf("the error should say what to do: %v", err)
 	}
 }

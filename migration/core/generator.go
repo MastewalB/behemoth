@@ -13,6 +13,7 @@ import (
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 type DefaultMigrationGenerator struct{}
@@ -25,6 +26,12 @@ func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, p
 
 	// Defensive check for possible circular dependency between foreign key and referenced table.
 	if err := checkNoInlineForeignKeys(resolvedPlan); err != nil {
+		return nil, err
+	}
+	if err := checkNoInlineIndexes(resolvedPlan); err != nil {
+		return nil, err
+	}
+	if err := checkCustomCollisions(resolvedPlan); err != nil {
 		return nil, err
 	}
 
@@ -53,7 +60,15 @@ func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, p
 	down, _ := computeDown(sortedIDs, nodeByID) // nil Down is valid (irreversible migration)
 
 	id := nextMigrationID(previousMigrationID)
-	return &Migration{ID: id, Name: id, Up: up, Down: down, DependsOn: dependsOnList(previousMigrationID), CreatedAt: time.Now()}, nil
+	return &Migration{
+		ID:        id,
+		Name:      migrationName(resolvedPlan, id),
+		Up:        up,
+		Down:      down,
+		DependsOn: dependsOnList(previousMigrationID),
+		CreatedAt: time.Now(),
+		Custom:    customNames(resolvedPlan),
+	}, nil
 
 }
 
@@ -188,7 +203,7 @@ func computeDown(sortedIDs []string, nodeByID map[string]planNode) ([]SchemaOper
 	var down []SchemaOperation
 	for i := len(sortedIDs) - 1; i >= 0; i-- {
 		node := nodeByID[sortedIDs[i]]
-		if node.id == customOp {
+		if node.kind == customOp {
 			if len(node.custom.Up) > 0 && len(node.custom.Down) == 0 {
 				return nil, false
 			}
@@ -309,6 +324,35 @@ func checkNoInlineForeignKeys(resolved *ResolvedOperationSet) error {
 	return nil
 }
 
+// checkNoInlineIndexes is checkNoInlineForeignKeys for indexes. No driver
+// creates a table's indexes in its CREATE TABLE, so an index left on the
+// table of an OpCreateTable would be missing from the database without an
+// error, and on the managed path the snapshot would list it all the same.
+// Each index has to arrive as its own OpAddIndex.
+func checkNoInlineIndexes(resolved *ResolvedOperationSet) error {
+	check := func(ops []SchemaOperation, source string) error {
+		for _, op := range ops {
+			if op.Kind == OpCreateTable && op.NewTable != nil && len(op.NewTable.Indexes) > 0 {
+				return behemotherr.NewInternalError("MigrationGenerator.checkNoInlineIndexes",
+					fmt.Errorf("%s: operation %q (CreateTable %q) carries inline Indexes. Planning must emit these as separate AddIndex operations",
+						source, op.ID, op.Table))
+			}
+		}
+		return nil
+	}
+
+	if err := check(resolved.Operations, "resolved.Operations"); err != nil {
+		return err
+	}
+
+	for _, c := range resolved.Custom {
+		if err := check(c.Up, "custom migration "+c.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func nextMigrationID(previous string) string {
 	n := 1
 	if previous != "" {
@@ -369,7 +413,7 @@ func LatestMigrationID(cfg MigrationConfig) (string, error) {
 // correction: PathManaged diffs its own canonical snapshot (no live DB
 // call, standing behavior after onboarding); PathGenerateOnly always
 // introspects live, since it owns no snapshot of its own to trust.
-func buildReport(ctx context.Context, cfg MigrationConfig, current SchemaRegistry, deps GenerateDeps) (*IntrospectionReport, error) {
+func buildReport(ctx context.Context, cfg MigrationConfig, current schema.Registry, deps GenerateDeps) (*IntrospectionReport, error) {
 	switch cfg.Path {
 	case PathManaged:
 		snapshot, err := deps.Runner.LoadSnapshot(ctx)
@@ -512,7 +556,7 @@ func RejectAmbiguousTypes(report *IntrospectionReport) error {
 func buildMigrationPlan(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current SchemaRegistry,
+	declared Declared,
 	deps GenerateDeps,
 	interactive bool,
 ) (*Migration, error) {
@@ -523,12 +567,15 @@ func buildMigrationPlan(
 	if err != nil {
 		return nil, err
 	}
-	report, err := buildReport(ctx, cfg, current, deps)
+	report, err := buildReport(ctx, cfg, declared.Schemas, deps)
 	if err != nil {
 		return nil, err
 	}
-	plan, issues, err := BuildPlan(report, current)
+	plan, issues, err := BuildPlan(report, declared.Schemas)
 	if err != nil {
+		return nil, err
+	}
+	if plan.Custom, err = pendingCustomMigrations(cfg, declared.Custom); err != nil {
 		return nil, err
 	}
 	resolved, err := ResolveIssues(ctx, plan, issues, deps.Presenter, interactive)
@@ -544,12 +591,12 @@ func buildMigrationPlan(
 func RunGenerate(
 	ctx context.Context,
 	cfg MigrationConfig,
-	current SchemaRegistry,
+	declared Declared,
 	deps GenerateDeps,
 	interactive bool,
 ) (*Migration, error) {
 
-	m, err := buildMigrationPlan(ctx, cfg, current, deps, interactive)
+	m, err := buildMigrationPlan(ctx, cfg, declared, deps, interactive)
 	if err != nil {
 		return nil, err
 	}

@@ -9,18 +9,20 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 type DefaultMigrationRunner struct {
 	db     behemoth.Database
 	driver SchemaDriver
 	cfg    MigrationConfig
-	tel    *types.Telemetry
+	tel    *telemetry.Telemetry
 }
 
-func NewMigrationRunner(db behemoth.Database, driver SchemaDriver, cfg MigrationConfig, tel *types.Telemetry) *DefaultMigrationRunner {
-	return &DefaultMigrationRunner{db: db, driver: driver, cfg: cfg, tel: tel}
+func NewMigrationRunner(db behemoth.Database, driver SchemaDriver, cfg MigrationConfig, tel *telemetry.Telemetry) *DefaultMigrationRunner {
+	return &DefaultMigrationRunner{db: db, driver: driver, cfg: cfg, tel: telemetry.OrDefault(tel).Named("migration")}
 }
 
 // Apply implements [MigrationRunner].
@@ -36,12 +38,20 @@ func (r *DefaultMigrationRunner) Apply(ctx context.Context, migrations []Migrati
 	}
 
 	for _, m := range migrations {
-		if err := r.applyOne(ctx, m, &currentSnapshot); err != nil {
+		if err := r.applyTraced(ctx, m, &currentSnapshot); err != nil {
 			return behemotherr.WrapOp("MigrationRunner.Apply", "migration:"+m.ID, err)
 		}
 	}
 	return nil
 
+}
+
+// applyTraced is applyOne inside a span, one per migration.
+func (r *DefaultMigrationRunner) applyTraced(ctx context.Context, m Migration, snapshot *SchemaSnapshot) error {
+	ctx, span := r.tel.StartSpan(ctx, telemetry.SpanMigrationApply, behemoth.M{"id": m.ID, "baseline": m.IsBaseline})
+	err := r.applyOne(ctx, m, snapshot)
+	telemetry.FinishSpan(span, err)
+	return err
 }
 
 func (r *DefaultMigrationRunner) applyOne(ctx context.Context, m Migration, snapshot *SchemaSnapshot) error {
@@ -69,11 +79,17 @@ func (r *DefaultMigrationRunner) applyOne(ctx context.Context, m Migration, snap
 	}
 
 	snapshot.Version, snapshot.Tables = m.ID, nextTables
-	r.tel.Audit.Record(ctx, types.AuditEvent{Type: "migration.applied", SubjectID: m.ID, Metadata: behemoth.M{"baseline": m.IsBaseline}, Timestamp: time.Now()})
+	// Best effort: the migration is applied whether or not the event is
+	// stored. RecordAudit logs a failed write.
+	r.tel.RecordAudit(ctx, telemetry.AuditEvent{
+		Type: telemetry.AuditMigrationApplied, ActorType: telemetry.ActorSystem,
+		SubjectType: "migration", SubjectID: m.ID,
+		Metadata: behemoth.M{"baseline": m.IsBaseline},
+	})
 	return nil
 }
 
-func applyOperationsToSnapshot(tables map[string]TableSchema, ops []SchemaOperation) (map[string]TableSchema, error) {
+func applyOperationsToSnapshot(tables map[string]schema.Table, ops []SchemaOperation) (map[string]schema.Table, error) {
 	next := deepCopyTables(tables) // never mutate the caller's map in place — a failure partway through must not corrupt what's still the last-good snapshot
 	for _, op := range ops {
 		if err := applyOneToSnapshot(next, op); err != nil {
@@ -83,7 +99,7 @@ func applyOperationsToSnapshot(tables map[string]TableSchema, ops []SchemaOperat
 	return next, nil
 }
 
-func applyOneToSnapshot(tables map[string]TableSchema, op SchemaOperation) error {
+func applyOneToSnapshot(tables map[string]schema.Table, op SchemaOperation) error {
 	switch op.Kind {
 	case OpCreateTable:
 		if op.NewTable == nil {
@@ -215,7 +231,7 @@ func (r *DefaultMigrationRunner) LoadSnapshot(ctx context.Context) (SchemaSnapsh
 		// No snapshot row, or no snapshot table at all (the driver creates it
 		// with the first migration it records): nothing applied yet.
 		if behemotherr.IsNotFound(err) || behemotherr.IsUndefinedTable(err) {
-			return SchemaSnapshot{Tables: map[string]TableSchema{}}, nil
+			return SchemaSnapshot{Tables: map[string]schema.Table{}}, nil
 		}
 		return SchemaSnapshot{}, behemotherr.WrapOp("MigrationRunner.LoadSnapshot", "schema_snapshot", err)
 	}
@@ -240,34 +256,34 @@ func removeFn[T any](l []T, fn func(T) bool) []T {
 	return l
 }
 
-func removeIndex(l []Index, indexName string) []Index {
-	return removeFn(l, func(i Index) bool {
+func removeIndex(l []schema.Index, indexName string) []schema.Index {
+	return removeFn(l, func(i schema.Index) bool {
 		return i.Name == indexName
 	})
 }
 
-func removeFK(l []ForeignKey, fkName string) []ForeignKey {
-	return removeFn(l, func(fk ForeignKey) bool {
+func removeFK(l []schema.ForeignKey, fkName string) []schema.ForeignKey {
+	return removeFn(l, func(fk schema.ForeignKey) bool {
 		return fk.Name == fkName
 	})
 }
 
-func removeColumn(l []Column, colName string) []Column {
-	return removeFn(l, func(fk Column) bool {
+func removeColumn(l []schema.Column, colName string) []schema.Column {
+	return removeFn(l, func(fk schema.Column) bool {
 		return fk.Name == colName
 	})
 }
 
-func deepCopyTables(tables map[string]TableSchema) map[string]TableSchema {
-	copy := make(map[string]TableSchema)
+func deepCopyTables(tables map[string]schema.Table) map[string]schema.Table {
+	copy := make(map[string]schema.Table)
 
 	for k, v := range tables {
-		copy[k] = TableSchema{
+		copy[k] = schema.Table{
 			Name:         v.Name,
 			PhysicalName: v.PhysicalName,
-			Columns:      append([]Column(nil), v.Columns...),
-			Indexes:      append([]Index(nil), v.Indexes...),
-			ForeignKeys:  append([]ForeignKey(nil), v.ForeignKeys...),
+			Columns:      append([]schema.Column(nil), v.Columns...),
+			Indexes:      append([]schema.Index(nil), v.Indexes...),
+			ForeignKeys:  append([]schema.ForeignKey(nil), v.ForeignKeys...),
 			Owner:        v.Owner,
 		}
 	}

@@ -9,6 +9,12 @@ import (
 
 type hmacSecretHasher struct{ km types.KeyManager }
 
+// NewSecretHasher returns an HMAC-SHA256 SecretHasher keyed by km's
+// KeyPurposeTokenHash key.
+func NewSecretHasher(km types.KeyManager) types.SecretHasher {
+	return &hmacSecretHasher{km: km}
+}
+
 func (h *hmacSecretHasher) Hash(secret string) (string, int, error) {
 	key, version, err := h.km.Current(types.KeyPurposeTokenHash)
 	if err != nil {

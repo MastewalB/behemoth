@@ -1,33 +1,63 @@
 package types
 
 import (
-	"context"
-
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 )
 
-type InternalAdapter interface {
-	CreateUser(ctx context.Context, modelType behemoth.Model, user behemoth.M) (behemoth.User, error)
-	FindUserByID(ctx context.Context, model behemoth.Model, id any) (behemoth.User, error)
-	FindUserByEmail(ctx context.Context, model behemoth.Model, email string) (behemoth.User, error)
-	UpdateUser(ctx context.Context, model behemoth.Model, updates behemoth.M) (behemoth.User, error)
-	CreateSession(ctx context.Context, sessionData behemoth.M) (*models.Session, error)
-	FindSession(ctx context.Context, tokenStr string) (*models.Session, error)
-	DeleteSession(ctx context.Context, tokenStr string) error
-}
-
 type AuthContext struct {
-	DB              behemoth.Database
-	KV              behemoth.KeyValueStorage
-	InternalAdapter InternalAdapter
-	Crypto          Crypto
-	User            behemoth.User
-	PasswordOptions PasswordOptions
-	SessionManager  SessionManager
-	TokenManager    TokenManager
-	Dispatcher      Dispatcher
-	RateLimiter     RateLimiter
-	Telemetry       Telemetry
-	Validator       Validator
+	// DB is the root database adapter, for a plugin's or the application's
+	// own tables. By convention behemoth's tables are written through Store
+	// (and sessions and tokens through their managers): the adapter skips
+	// the hooks, ids, timestamps, normalization and token sealing they add.
+	// See Store.DB and docs/api/core-tables.md.
+	DB behemoth.Database
+	KV behemoth.KeyValueStorage
+	// Store is the data layer plugins use instead of DB. It is a concrete
+	// type: store never imports types, so no interface is needed to break
+	// an import cycle.
+	Store          *store.Store
+	Crypto         Crypto
+	SessionManager SessionManager
+	// SessionConfig is BootConfig.Session with its defaults applied: the
+	// settings the session manager runs with. A route that hands the client
+	// a value of its own reads it to deliver the value the way the session
+	// token travels (Transport), in a cookie that a browser treats like the
+	// session cookie (CookieSameSite, CookieInsecure). It is a copy:
+	// changing it changes nothing.
+	SessionConfig SessionConfig
+	TokenManager  TokenManager
+	Dispatcher    Dispatcher
+	RateLimiter   RateLimiter
+	// Origins answers whether an origin is one of RouterConfig.TrustedOrigins.
+	// A plugin that takes a redirect URL from a request checks it with
+	// TrustedRedirect(Origins, url) before it stores or returns it. Never
+	// nil on an AuthContext Boot returns; with no origins configured it
+	// trusts none, and only paths on the application's own site pass.
+	Origins OriginValidator
+	// Public builds what a client is sent of a row: the columns its table
+	// declares Public, and no others. A route that returns a user answers
+	// with Public.Of(user) and not with the model, which as JSON carries
+	// every column a plugin contributed to users. Never nil on an
+	// AuthContext Boot returns.
+	Public PublicView
+	// Mailer sends the messages plugins produce (a sign-in link, an email
+	// verification) through the application's MailSender. Never nil on an
+	// AuthContext Boot returns; Mailer.Configured says whether a sender was
+	// given. The application calls Mailer.Close at shutdown to let
+	// background sends finish.
+	Mailer Mailer
+	// SMS sends the text messages plugins produce (a one-time code) through
+	// the application's SMSSender. Never nil on an AuthContext Boot returns;
+	// SMS.Configured says whether a sender was given. The application calls
+	// SMS.Close at shutdown, as for Mailer.
+	SMS SMS
+	// Codes issues and checks one-time codes: short numeric secrets sent by
+	// text message. See CodeManager for how they differ from tokens.
+	Codes CodeManager
+	// Telemetry is never nil on an AuthContext Boot returns, and neither are
+	// its fields. Plugins take their logger from here, usually through
+	// telemetry.Named.
+	Telemetry *telemetry.Telemetry
 }

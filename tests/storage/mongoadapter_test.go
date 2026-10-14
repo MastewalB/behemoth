@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/bson"
@@ -299,7 +299,7 @@ func TestBuildMongoFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := adapters.BuildMongoFilter(tt.expr)
+			result := mongoAdapter.BuildMongoFilter(tt.expr)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -314,7 +314,7 @@ func TestBuildMongoFilterEdgeCases(t *testing.T) {
 				{Field: "age", Operator: clause.OpEqual, Value: 0},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{
 			"$and": []bson.M{
 				{"name": ""},
@@ -330,7 +330,7 @@ func TestBuildMongoFilterEdgeCases(t *testing.T) {
 				{Field: "deleted_at", Operator: clause.OpIsNull, Value: nil},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{"deleted_at": nil}
 		assert.Equal(t, expected, result)
 	})
@@ -341,7 +341,7 @@ func TestBuildMongoFilterEdgeCases(t *testing.T) {
 				{Field: "ids", Operator: clause.OpIn, Value: []string{}},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{"ids": bson.M{"$in": []any{}}}
 		assert.Equal(t, expected, result)
 	})
@@ -351,7 +351,7 @@ func TestBuildMongoFilterEdgeCases(t *testing.T) {
 				{Field: "ids", Operator: clause.OpIn, Value: 1},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{"ids": bson.M{"$in": []any{1}}}
 		assert.Equal(t, expected, result)
 	})
@@ -361,7 +361,7 @@ func TestBuildMongoFilterEdgeCases(t *testing.T) {
 				{Field: "ids", Operator: clause.OpNotIn, Value: 1},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{"ids": bson.M{"$nin": []any{1}}}
 		assert.Equal(t, expected, result)
 	})
@@ -386,7 +386,7 @@ func TestBuildMongoFilterEdgeCases(t *testing.T) {
 				},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{
 			"$or": []bson.M{
 				{"a": 1},
@@ -411,7 +411,7 @@ func TestBuildMongoFilterEdgeCases(t *testing.T) {
 				},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{
 			"$and": []bson.M{
 				{"score": bson.M{"$gt": 50}},
@@ -429,7 +429,7 @@ func TestBuildMongoFilterUnsupportedOperator(t *testing.T) {
 				{Field: "test", Operator: "unsupported", Value: "value"},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{}
 		assert.Equal(t, expected, result)
 	})
@@ -442,7 +442,7 @@ func TestBuildMongoFilterNilValueHandling(t *testing.T) {
 				{Field: "field", Operator: clause.OpEqual, Value: nil},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{"field": nil}
 		assert.Equal(t, expected, result)
 	})
@@ -453,7 +453,7 @@ func TestBuildMongoFilterNilValueHandling(t *testing.T) {
 				{Field: "field", Operator: clause.OpNotEqual, Value: nil},
 			},
 		}
-		result := adapters.BuildMongoFilter(expr)
+		result := mongoAdapter.BuildMongoFilter(expr)
 		expected := bson.M{"field": bson.M{"$ne": nil}}
 		assert.Equal(t, expected, result)
 	})

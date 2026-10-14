@@ -17,8 +17,15 @@ const StatusGenerated RunStatus = "generated" // Path II's terminal state - file
 // no such permanence: re-running it always reflects current live/canonical
 // truth fresh, so a drift between the preview call and the confirm call
 // self-corrects automatically rather than needing to be detected.
-func RunGenerateCLI(ctx context.Context, cfg MigrationConfig, current SchemaRegistry, deps GenerateDeps, confirmWrite bool) (*RunResult, error) {
-	m, err := buildMigrationPlan(ctx, cfg, current, deps, true)
+//
+// It serves PathGenerateOnly alone and returns a configuration error for any
+// other path. Generate picks between this and RunManagedGenerate by cfg.Path
+// and builds deps from a Backend.
+func RunGenerateCLI(ctx context.Context, cfg MigrationConfig, declared Declared, deps GenerateDeps, confirmWrite bool) (*RunResult, error) {
+	if err := checkPath("Migration.RunGenerateCLI", cfg, PathGenerateOnly); err != nil {
+		return nil, err
+	}
+	m, err := buildMigrationPlan(ctx, cfg, declared, deps, true)
 	if err != nil {
 		if behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationNothingToGenerate) {
 			return &RunResult{Status: StatusNoChanges, Message: "No schema changes detected."}, nil

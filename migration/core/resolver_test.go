@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 func TestIsStale(t *testing.T) {
@@ -105,7 +106,7 @@ func TestStaleDecisionRequiresReview(t *testing.T) {
 	rename := ResolutionOption{Label: "Rename", Operations: []SchemaOperation{{ID: id, Kind: OpRenameColumn, Table: "users", ColumnName: "mail", NewColumnName: "email"}}}
 	dropAdd := ResolutionOption{Label: "Drop and add", Operations: []SchemaOperation{
 		{ID: id + "_drop", Kind: OpDropColumn, Table: "users", ColumnName: "mail"},
-		{ID: id + "_add", Kind: OpAddColumn, Table: "users", Column: &Column{Name: "email"}},
+		{ID: id + "_add", Kind: OpAddColumn, Table: "users", Column: &schema.Column{Name: "email"}},
 	}}
 	leave := ResolutionOption{Label: "Leave as-is"}
 	issueWith := func(opts ...ResolutionOption) []PlanIssue {

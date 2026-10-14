@@ -8,33 +8,58 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 )
 
+// Canonical names of the users table and its columns — the single source for
+// ToMap/FromMap, schema declarations, query conditions and update maps. They
+// are canonical names: the SchemaResolver maps them to physical ones.
+const (
+	UserTable = "users"
+
+	UserID            = "id"
+	UserEmail         = "email"
+	UserFirstname     = "firstname"
+	UserLastname      = "lastname"
+	UserEmailVerified = "email_verified"
+	UserImageURL      = "image_url"
+	UserCreatedAt     = "created_at"
+	UserUpdatedAt     = "updated_at"
+)
+
+// userColumns are User's own columns; any other column FromMap receives is
+// a contribution, kept in the Extension.
+var userColumns = columnSet(UserID, UserEmail, UserFirstname, UserLastname,
+	UserEmailVerified, UserImageURL, UserCreatedAt, UserUpdatedAt)
+
+// User is who signs in. How they sign in — a password, an OAuth provider —
+// is an Account; the user row holds no credential.
+//
+// As JSON a user is keyed by its column names, the names a request uses for
+// the same fields: "email_verified", "image_url". Columns a plugin added are
+// under "extra", all of them, so a route does not encode a user directly: it
+// answers with types.PublicView, which has the public columns only.
 type User struct {
-	ID            string    `db:"id"`
-	Email         string    `db:"email"`
-	Username      string    `db:"username"`
-	Firstname     string    `db:"firstname"`
-	Lastname      string    `db:"lastname"`
-	PasswordHash  string    `db:"password_hash"`
-	EmailVerified bool      `db:"email_verified"`
-	ImageUrl      string    `db:"image_url"`
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
+	Extension
+	ID            string    `db:"id" json:"id"`
+	Email         string    `db:"email" json:"email"`
+	Firstname     string    `db:"firstname" json:"firstname"`
+	Lastname      string    `db:"lastname" json:"lastname"`
+	EmailVerified bool      `db:"email_verified" json:"email_verified"`
+	ImageUrl      string    `db:"image_url" json:"image_url"`
+	CreatedAt     time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
 }
 
-func (u *User) GetID() string           { return u.ID }
-func (u *User) GetPasswordHash() string { return u.PasswordHash }
-func (u *User) GetEmail() string        { return u.Email }
-func (u *User) GetUsername() string     { return u.Username }
-func (u *User) GetFirstname() string    { return u.Firstname }
-func (u *User) GetLastname() string     { return u.Lastname }
-func (u *User) GetName() string         { return fmt.Sprintf("%s %s", u.Firstname, u.Lastname) }
+func (u *User) GetID() string        { return u.ID }
+func (u *User) GetEmail() string     { return u.Email }
+func (u *User) GetFirstname() string { return u.Firstname }
+func (u *User) GetLastname() string  { return u.Lastname }
+func (u *User) GetName() string      { return fmt.Sprintf("%s %s", u.Firstname, u.Lastname) }
 
 func (u *User) SchemaName() string {
-	return "users"
+	return UserTable
 }
 
 func (u *User) PrimaryKeyName() string {
-	return "id"
+	return UserID
 }
 
 func (u *User) PrimaryKeyField() any {
@@ -46,72 +71,61 @@ func (u *User) New() behemoth.Model {
 }
 
 func (u *User) ToMap() (map[string]any, error) {
-	return map[string]any{
-		"id":             u.ID,
-		"email":          u.Email,
-		"username":       u.Username,
-		"firstname":      u.Firstname,
-		"lastname":       u.Lastname,
-		"password_hash":  u.PasswordHash,
-		"email_verified": u.EmailVerified,
-		"image_url":      u.ImageUrl,
-		"created_at":     u.CreatedAt,
-		"updated_at":     u.UpdatedAt,
-	}, nil
+	return u.mergeExtras(map[string]any{
+		UserID:            u.ID,
+		UserEmail:         u.Email,
+		UserFirstname:     u.Firstname,
+		UserLastname:      u.Lastname,
+		UserEmailVerified: u.EmailVerified,
+		UserImageURL:      u.ImageUrl,
+		UserCreatedAt:     u.CreatedAt,
+		UserUpdatedAt:     u.UpdatedAt,
+	}), nil
 }
 
 func (u *User) FromMap(data map[string]any) error {
-	id, ok := data["id"].(string)
+	id, ok := data[UserID].(string)
 	if !ok {
 		id = ""
 	}
-	email, ok := data["email"].(string)
+	email, ok := data[UserEmail].(string)
 	if !ok {
 		email = ""
 	}
-	username, ok := data["username"].(string)
-	if !ok {
-		username = ""
-	}
-	firstname, ok := data["firstname"].(string)
+	firstname, ok := data[UserFirstname].(string)
 	if !ok {
 		firstname = ""
 	}
-	lastname, ok := data["lastname"].(string)
+	lastname, ok := data[UserLastname].(string)
 	if !ok {
 		lastname = ""
 	}
-	passwordHash, ok := data["password_hash"].(string)
-	if !ok {
-		passwordHash = ""
-	}
-	emailVerified, ok := data["email_verified"].(bool)
+	emailVerified, ok := data[UserEmailVerified].(bool)
 	if !ok {
 		emailVerified = false
 	}
-	imageUrl, ok := data["image_url"].(string)
+	imageUrl, ok := data[UserImageURL].(string)
 	if !ok {
 		imageUrl = ""
 	}
-	createdAt, ok := data["created_at"].(time.Time)
+	createdAt, ok := data[UserCreatedAt].(time.Time)
 	if !ok {
 		createdAt = time.Time{}
 	}
-	updatedAt, ok := data["updated_at"].(time.Time)
+	updatedAt, ok := data[UserUpdatedAt].(time.Time)
 	if !ok {
 		updatedAt = time.Time{}
 	}
 
 	u.ID = id
 	u.Email = email
-	u.Username = username
 	u.Firstname = firstname
 	u.Lastname = lastname
-	u.PasswordHash = passwordHash
 	u.EmailVerified = emailVerified
 	u.ImageUrl = imageUrl
 	u.CreatedAt = createdAt
 	u.UpdatedAt = updatedAt
+	u.collectExtras(data, userColumns)
 	return nil
 }
 
@@ -223,72 +237,4 @@ func GenerateColumnValuePairsWithSelectFilter(m behemoth.Model, selected []strin
 
 	}
 	return columns, values, valuePtrs
-}
-
-func UserFactory(data map[string]any) behemoth.User {
-	return &User{
-		ID:            data["id"].(string),
-		Email:         data["email"].(string),
-		Username:      data["username"].(string),
-		Firstname:     data["firstname"].(string),
-		Lastname:      data["lastname"].(string),
-		PasswordHash:  data["password_hash"].(string),
-		ImageUrl:      data["image_url"].(string),
-		EmailVerified: data["email_verified"].(bool),
-	}
-}
-
-func (u *User) FromUserInfo(userInfo UserInfo) {
-	u.Email = userInfo.Email
-	u.Username = userInfo.Email
-	u.Firstname = userInfo.FirstName
-	u.Lastname = userInfo.LastName
-}
-
-type UserInfo struct {
-	Provider          string
-	Email             string
-	Name              string
-	FirstName         string
-	LastName          string
-	ID                string
-	AvatarURL         string
-	Location          string
-	AccessToken       string
-	AccessTokenSecret string
-	RefreshToken      string
-	ExpiresAt         time.Time
-	IDToken           string
-}
-
-func (ui *UserInfo) GetID() string {
-	return ui.ID
-}
-
-func (ui *UserInfo) GetPasswordHash() string {
-	return ""
-}
-
-func (ui *UserInfo) New() behemoth.Model {
-	return &UserInfo{}
-}
-
-func (ui *UserInfo) TableName() string {
-	return "user_info"
-}
-
-func (ui *UserInfo) PrimaryKey() string {
-	return "id"
-}
-
-func (ui *UserInfo) SchemaName() string {
-	return "user_info"
-}
-
-func (ui *UserInfo) PrimaryKeyName() string {
-	return "id"
-}
-
-func (ui *UserInfo) PrimaryKeyField() any {
-	return ui.ID
 }

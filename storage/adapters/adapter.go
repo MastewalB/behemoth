@@ -20,7 +20,7 @@ const (
 	OpUpdateOne  = "UpdateOne"
 	OpUpdateMany = "UpdateMany"
 	OpDelete     = "Delete"
-	OpDeleteOne  = "Delete"
+	OpDeleteOne  = "DeleteOne"
 	OpDeleteMany = "DeleteMany"
 	OpDeleteAll  = "DeleteAll"
 

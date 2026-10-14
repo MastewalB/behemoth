@@ -7,6 +7,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 const (
@@ -60,8 +61,8 @@ func (m *MigrationLedgerEntry) FromMap(data map[string]any) error {
 // The snapshot table holds exactly one row (id = snapshotRowID); Tables is
 // stored as JSON (a JSON/JSONB column where the database has one).
 type SchemaSnapshot struct {
-	Version string                 `db:"version"` // last applied Migration ID
-	Tables  map[string]TableSchema `db:"tables"`  // marshaled JSON, same idiom as Token.MetadataJSON
+	Version string                  `db:"version"` // last applied Migration ID
+	Tables  map[string]schema.Table `db:"tables"`  // marshaled JSON, same idiom as Token.MetadataJSON
 }
 
 func (s *SchemaSnapshot) SchemaName() string     { return SnapshotCanonicalName }
@@ -74,7 +75,7 @@ func (s *SchemaSnapshot) New() behemoth.Model    { return &SchemaSnapshot{} }
 func (s *SchemaSnapshot) ToMap() (map[string]any, error) {
 	tables := s.Tables
 	if tables == nil {
-		tables = map[string]TableSchema{}
+		tables = map[string]schema.Table{}
 	}
 	data, err := json.Marshal(tables)
 	if err != nil {
@@ -109,18 +110,18 @@ func (s *SchemaSnapshot) FromMap(data map[string]any) error {
 		raw = v
 	default:
 		// Already decoded (map[string]any, bson.M, ...): re-encode so the
-		// TableSchema field mapping stays json's, in one place.
+		// schema.Table field mapping stays json's, in one place.
 		if raw, err = json.Marshal(v); err != nil {
 			return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("tables (%T): %w", v, err))
 		}
 	}
 
-	var tables map[string]TableSchema
+	var tables map[string]schema.Table
 	if err := json.Unmarshal(raw, &tables); err != nil {
 		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("tables: %w", err))
 	}
 	if tables == nil {
-		tables = map[string]TableSchema{} // stored "null"
+		tables = map[string]schema.Table{} // stored "null"
 	}
 	s.Version, s.Tables = version, tables
 	return nil

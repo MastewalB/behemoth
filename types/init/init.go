@@ -4,38 +4,97 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/crypto"
 	behemotherr "github.com/MastewalB/behemoth/errors"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/hooks"
+	"github.com/MastewalB/behemoth/types/ratelimit"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
+// PrepareConfig is everything Prepare needs beyond the plugin list. None of
+// it touches a live connection: Prepare must stay runnable from a migration
+// CLI that never boots the application.
+type PrepareConfig struct {
+	Migration core.MigrationConfig
+
+	// AppName is the owner name of everything the application itself
+	// declares or registers: its tables (Schema) and its hook handlers
+	// (BootConfig.Hooks). It is what HookOptions.Before/After and error
+	// messages call the application. Empty = "app". It can't be "core" or a
+	// plugin's name.
+	AppName string
+
+	// Schema declares the application's own tables under owner AppName. It
+	// runs after every plugin has declared, so it can also extend plugin
+	// tables (e.g. a column on "users"). nil = no application tables.
+	Schema func(reg schema.Registry) error
+
+	// Migrations are hand-authored migrations, ordered among generated
+	// operations by their DependsOn. Each is emitted into exactly one
+	// generated migration, recorded there by Name; names are therefore
+	// permanent and must never be reused.
+	Migrations []core.CustomMigration
+}
+
+// Owner names that are not plugins. coreOwner owns what behemoth itself
+// declares. defaultAppOwner owns what the application declares or registers
+// when PrepareConfig.AppName is empty.
+const (
+	coreOwner       = "core"
+	defaultAppOwner = "app"
+)
+
+// PreparedApp is the connection-free result of Prepare: every catalog and
+// the schema registry, frozen, plus the SchemaResolver derived from them.
+// Build storage adapters and migration drivers with Resolver, then hand the
+// adapter to Boot.
 type PreparedApp struct {
-	Order      []string
+	Order []string
+	// AppName is the application's owner name: PrepareConfig.AppName, or
+	// "app" when that was empty.
+	AppName    string
 	Hooks      types.HookCatalog
 	Tokens     types.TokenCatalog
 	RateLimits types.RateLimitCatalog
+	Schemas    schema.Registry
+	Resolver   behemoth.SchemaResolver
+	Migration  core.MigrationConfig
+	Custom     []core.CustomMigration
+
+	plugins []types.Plugin // kept so Boot runs exactly the set that was prepared
 }
 
-func Boot(
-	plugins []types.Plugin,
-	db behemoth.Database,
-	kv behemoth.KeyValueStorage,
-	crypto types.Crypto,
-	tel *types.Telemetry,
-	rateLimitCfg types.RateLimitConfig,
-	sessionCfg types.SessionConfig,
-	tokenCfg types.TokenConfig,
-
-) (*types.AuthContext, error) {
+// Prepare runs every declaration step of initialization — plugin ordering,
+// hook/token/rate-limit catalogs and the schema registry — and freezes them.
+// It is the whole of Boot that needs no database, so migration tooling calls
+// it alone, and Boot calls nothing else to get there.
+func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	if err := DetectPluginNameConflicts(plugins); err != nil {
+		return nil, err
+	}
+	appName := cfg.AppName
+	if appName == "" {
+		appName = defaultAppOwner
+	}
+	if err := checkOwnerNames(plugins, appName); err != nil {
+		return nil, err
+	}
+	if err := core.ValidateCustomMigrations(cfg.Migrations); err != nil {
 		return nil, err
 	}
 
@@ -44,22 +103,22 @@ func Boot(
 		return nil, err
 	}
 
-	if tel == nil {
-		tel = types.NewTelemetry(nil, nil, nil)
-	}
-
 	// Initialize Catalogs
 	hookCatalog := NewDefaultHookCatalog()
 	tokenCatalog := NewDefaultTokenCatalog()
 	rateLimitCatalog := NewRateLimitCatalog(hookCatalog)
+	schemaRegistry := schema.NewRegistry()
 
 	// Core declares first, under owner "core" via the scoped
 	// wrappers all plugins get, to enforce uniform validation process
-	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, "core")
+	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, coreOwner)
 	if err := CoreDeclareHookPoints(coreIC); err != nil {
 		return nil, err
 	}
 	if err := CoreDeclareRateLimitRules(coreIC); err != nil {
+		return nil, err
+	}
+	if err := CoreDeclareSchema(coreIC); err != nil {
 		return nil, err
 	}
 
@@ -67,21 +126,173 @@ func Boot(
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if p == nil {
-			return nil, behemotherr.NewConfigurationError("Boot", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
+			return nil, behemotherr.NewConfigurationError("Prepare", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
 		}
-		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, name)
+		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, name)
 		if err := p.Declare(ic); err != nil {
 			return nil, fmt.Errorf("plugin %q Declare failed: %w", name, err)
 		}
 	}
 
-	// Freeze all three catalogs
+	// Application tables last, so they can extend anything declared above
+	if cfg.Schema != nil {
+		if err := cfg.Schema(&scopedSchemaRegistry{inner: schemaRegistry, owner: appName}); err != nil {
+			return nil, fmt.Errorf("application schema declaration failed: %w", err)
+		}
+	}
+
+	// Freeze all catalogs and the schema registry
 	hookCatalog.Freeze()
 	tokenCatalog.Freeze()
 	rateLimitCatalog.Freeze()
+	if err := schemaRegistry.Freeze(); err != nil {
+		return nil, err
+	}
+
+	// The resolver is derived from the frozen registry, never authored
+	// separately, so it is complete before any adapter or driver exists.
+	migrationCfg := core.NewMigrationConfig(cfg.Migration)
+	resolver := core.NewSchemaResolver()
+	resolver.Freeze(core.BuildSchemaResolverTable(schemaRegistry, migrationCfg))
+
+	return &PreparedApp{
+		Order:      order,
+		AppName:    appName,
+		Hooks:      hookCatalog,
+		Tokens:     tokenCatalog,
+		RateLimits: rateLimitCatalog,
+		Schemas:    schemaRegistry,
+		Resolver:   resolver,
+		Migration:  migrationCfg,
+		Custom:     cfg.Migrations,
+		plugins:    plugins,
+	}, nil
+}
+
+// Declared is what migration tooling converges the database on: every
+// declared table plus the application's custom migrations.
+func (a *PreparedApp) Declared() core.Declared {
+	return core.Declared{Schemas: a.Schemas, Custom: a.Custom}
+}
+
+// BootConfig is everything Boot needs beyond the prepared app and the
+// database. Only Crypto.Secrets is required; every other zero value means
+// the documented default.
+type BootConfig struct {
+	Crypto crypto.Config
+
+	// KV is optional. nil = sessions and rate-limit counters use the database.
+	KV behemoth.KeyValueStorage
+
+	// Telemetry is optional. nil = no-op logger, audit recorder and metrics.
+	// Build it with telemetry.New; a nil field of a struct literal also
+	// becomes a no-op.
+	Telemetry *telemetry.Telemetry
+
+	// Hooks registers the application's own hook handlers, under the owner
+	// name PreparedApp.AppName ("app" by default). It runs after every
+	// plugin's Register, so the application can hook any declared point
+	// without writing a plugin. Among handlers of equal priority with no
+	// Before/After constraint between them, the application's run last.
+	// HookOptions.Before/After may name the application like a plugin. Like
+	// a plugin, it may register one handler per point. nil = the application
+	// registers no handlers.
+	Hooks func(reg types.HookRegistry) error
+
+	RateLimit types.RateLimitConfig
+	Session   types.SessionConfig
+	Token     types.TokenConfig
+
+	// Mail gives behemoth the application's mail sender, which plugins
+	// that send messages need (magic link, email verification). Zero value
+	// = no sender; such a plugin then fails Boot.
+	Mail types.MailConfig
+
+	// SMS gives behemoth the application's SMS sender, which plugins that
+	// send text messages need (phone number). Zero value = no sender; such
+	// a plugin then fails Boot.
+	SMS types.SMSConfig
+
+	// Router configures behemoth's routes: base path, error mapping and
+	// client-IP resolution. Zero value = documented defaults.
+	Router types.RouterConfig
+
+	// HTTP mounts behemoth's routes onto the application's framework
+	// instance, e.g. ginadapter.New(engine). nil = routes are built and
+	// checked but not served (workers, CLIs).
+	HTTP types.FrameworkDriver
+}
+
+// IndexChecker is an optional interface of a Database on which a missing
+// index goes unnoticed. Boot calls CheckIndexes once with every declared
+// table, before anything is written, and fails when it returns an error.
+//
+// The MongoDB adapter implements it. MongoDB has no migration driver, so
+// nothing creates the indexes a schema declares unless the application calls
+// the adapter's EnsureIndexes, and without a unique index MongoDB stores the
+// duplicates it was declared to refuse. The SQL adapters don't implement it:
+// their indexes come with the tables their migration drivers create, and a
+// missing table fails the first query.
+//
+// It is declared here and not next to behemoth.TransactionChecker because it
+// names schema.Table, and the schema package imports behemoth.
+type IndexChecker interface {
+	// CheckIndexes returns an error when an index that enforces uniqueness
+	// is missing. A missing index that only speeds reads up is returned as
+	// a warning, one line per index, which Boot logs.
+	CheckIndexes(ctx context.Context, tables []schema.Table) (warnings []string, err error)
+}
+
+// Boot turns a PreparedApp into a running AuthContext. db must have been
+// built with app.Resolver, otherwise application queries and migrations
+// disagree on physical table and column names.
+//
+// ctx bounds long-lived background work Boot starts (e.g. the KeyManager's
+// secret watch), so it should live as long as the application.
+func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootConfig) (*types.AuthContext, error) {
+	if app == nil {
+		return nil, behemotherr.NewConfigurationError("Boot", "Boot requires the result of Prepare", nil)
+	}
+	if db == nil {
+		return nil, behemotherr.NewConfigurationError("Boot", "a Database is required", nil)
+	}
+	// Fail here instead of on the first hooked write (a sign-up) when the
+	// database is deployed without transactions, e.g. a standalone MongoDB.
+	if checker, ok := db.(behemoth.TransactionChecker); ok {
+		if err := checker.CheckTransactions(ctx); err != nil {
+			return nil, fmt.Errorf("database transaction check failed: %w", err)
+		}
+	}
+	plugins, order := app.plugins, app.Order
+	kv := cfg.KV
+
+	tel := telemetry.OrDefault(cfg.Telemetry)
+	// Fail here instead of storing duplicates when the database has no way
+	// to refuse them: on MongoDB a missing unique index is silent.
+	if checker, ok := db.(IndexChecker); ok {
+		warnings, err := checker.CheckIndexes(ctx, app.Schemas.All())
+		if err != nil {
+			return nil, fmt.Errorf("database index check failed: %w", err)
+		}
+		for _, w := range warnings {
+			tel.Named("boot").Logger.Warn(ctx, "a declared index is missing; reads that use it scan the collection", behemoth.M{"index": w})
+		}
+	}
+	if !tel.AuditConfigured() {
+		// Auditing is on unless the application says otherwise: events go
+		// to the audit_log table. The recorder gets a store of its own,
+		// without data hooks or an encryptor, because it is needed before
+		// either exists and the table uses neither.
+		tel.Audit = store.NewAuditRecorder(store.New(db, store.WithSchema(app.Resolver), store.WithTelemetry(tel)))
+	}
+
+	cryptoSuite, err := crypto.New(ctx, cfg.Crypto, tel)
+	if err != nil {
+		return nil, err
+	}
 
 	// Registration phase
-	hookRegistry := NewHookRegistry(hookCatalog)
+	hookRegistry := NewHookRegistry(app.Hooks)
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if p == nil {
@@ -93,120 +304,173 @@ func Boot(
 		}
 	}
 
-	frozenChains, err := freezeAllHookChains(hookCatalog, hookRegistry, order)
-	if err != nil {
-		return nil, err
-	}
-
-	store, err := resolveRateLimitStore(kv, db) // backend selection, below
-	if err != nil {
-		return nil, err
-	}
-	rateLimiter := &DefaultRateLimiter{catalog: rateLimitCatalog, store: store, cfg: rateLimitCfg, tel: tel}
-	dispatcher := &DefaultDispatcher{catalog: hookCatalog, frozenChains: frozenChains, rateLimiter: rateLimiter, tel: tel}
-	idb := adapters.NewInternalAdapter(db, kv)
-
-	ac := &types.AuthContext{
-		Dispatcher:     dispatcher,
-		TokenManager:   transport.NewDefaultTokenManager(db, kv, idb, tokenCatalog, crypto, dispatcher, tokenCfg),
-		SessionManager: transport.NewSessionManager(db, kv, idb, crypto, sessionCfg, dispatcher, tel),
-		RateLimiter:    rateLimiter,
-		Crypto:         crypto,
-		Telemetry:      *tel,
-	}
-	cfg := struct {
-		BasePath    string
-		ErrorMapper types.ErrorMapper
-	}{
-		BasePath:    "api/auth",
-		ErrorMapper: nil,
-	}
-	// Mount every plugin's endpoints, now that ac is fully populated —
-	// any handler closure built inside Endpoints() (or earlier, inside New())
-	// that reads ac.SessionManager/ac.TokenManager now sees real values.
-	router := types.NewRouter(types.RouterConfig{BasePath: cfg.BasePath, ErrorMapper: cfg.ErrorMapper})
-	for _, name := range order {
-		p := lookup(plugins, name)
-		if err := router.Mount(name, p.Meta().MountPath, p.Routes()); err != nil {
-			return nil, err
+	// The application registers last, like its schema is declared last. Its
+	// handlers are ordered as if it were the last plugin to boot.
+	hookOrder := order
+	if cfg.Hooks != nil {
+		if err := cfg.Hooks(&scopedHookRegistry{inner: hookRegistry, owner: app.AppName}); err != nil {
+			return nil, fmt.Errorf("application hook registration failed: %w", err)
 		}
+		hookOrder = append(append([]string{}, order...), app.AppName)
 	}
 
-	// // --- JWKS, if external JWT is configured (Crypto round) ---
-	// if jwks := crypto.JWTRoutes(); jwks != nil {
-	// 	router.MountAbsolute(jwks...)
-	// }
+	frozenChains, err := freezeAllHookChains(app.Hooks, hookRegistry, hookOrder)
+	if err != nil {
+		return nil, err
+	}
 
-	// // --- Bake in route-scoped rate limiting, once, before any driver sees the routes ---
-	// ipCfg, err := ratelimit.NewClientIPConfig(cfg.TrustedProxies, cfg.ClientIPHeader)
-	// if err != nil {
-	// 	return nil, nil, err
-	// }
-	// router.ApplyRateLimiting(rateLimiter, rateLimitCatalog, ipCfg)
+	// Counters fire no data hooks, so they get a store of their own: the
+	// one plugins use is built later, from the dispatcher this feeds.
+	counterStore, err := resolveRateLimitStore(kv, store.New(db, store.WithSchema(app.Resolver), store.WithTelemetry(tel))) // backend selection, below
+	if err != nil {
+		return nil, err
+	}
+	rateLimiter := &DefaultRateLimiter{catalog: app.RateLimits, limiters: newLimiters(counterStore), cfg: cfg.RateLimit, tel: tel.Named("ratelimit")}
+	dispatcher := NewDefaultDispatcher(app.Hooks, frozenChains, rateLimiter, tel)
 
-	// return ac, router, nil
+	origins, err := types.NewTrustedOrigins(cfg.Router.TrustedOrigins)
+	if err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", "RouterConfig.TrustedOrigins", err)
+	}
+	// Built whatever the transport, so a malformed BaseURL fails here.
+	originCheck, err := types.NewOriginCheck(cfg.Router.BaseURL, origins)
+	if err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", "RouterConfig.BaseURL", err)
+	}
+	ac := &types.AuthContext{
+		DB:          db,
+		KV:          kv,
+		Dispatcher:  dispatcher,
+		RateLimiter: rateLimiter,
+		Crypto:      cryptoSuite,
+		Telemetry:   tel,
+		Origins:     origins,
+		// The session manager applies the same defaults to the same value.
+		SessionConfig: cfg.Session.WithDefaults(),
+		Mailer:        NewMailer(cfg.Mail, tel),
+		SMS:           NewSMS(cfg.SMS, tel),
+		Public:        types.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
+	}
+	if err := checkDataHookPoints(app.Hooks, coreDataHookPoints); err != nil {
+		return nil, err
+	}
+	// The store's data hooks dispatch with ac, and the managers persist
+	// through the store, so they are built in that order.
+	ac.Store = store.New(db, store.WithHooks(dataHooks{ac: ac, points: coreDataHookPoints}), store.WithSchema(app.Resolver),
+		store.WithEncryptor(cryptoSuite.AtRest), store.WithTelemetry(tel))
+	ac.Codes = transport.NewCodeManager(ac.Store, cryptoSuite)
+	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token, ac)
+	// One client-IP configuration for sessions and route rate limiting, so
+	// both see the same address for a request.
+	ipCfg, err := types.NewClientConfig(cfg.Router.TrustedProxies, cfg.Router.ClientIPHeader)
+	if err != nil {
+		return nil, err
+	}
+	dispatcher.ipCfg = ipCfg // audit events record the same client address
+	if err := cfg.Session.Validate(); err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+	}
+	if err := checkCookieAgainstBaseURL(cfg.Session, cfg.Router.BaseURL); err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+	}
+	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
 
+	// Init before routing, so Routes() and Middlewares() may rely on
+	// anything a plugin sets up in Init.
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if err := p.Init(ac); err != nil {
 			return nil, fmt.Errorf("plugin %q Init failed: %w", name, err)
 		}
 	}
+
+	// The route table is built and conflict-checked even without an HTTP
+	// driver, so a misconfiguration surfaces the same way in every process.
+	router := types.NewRouter(cfg.Router, ac)
+	var globalMiddleware []types.Middleware
+	// A bearer token is never sent by the browser on its own, so only the
+	// cookie transports need the origin check and the refusal of form
+	// bodies behind it. Both run before the plugins' middleware.
+	if cfg.Session.WithDefaults().Transport.ReadsCookie() {
+		globalMiddleware = append(globalMiddleware, originCheck.Middleware(), types.RefuseFormContentTypes())
+	}
+	for _, name := range order {
+		p := lookup(plugins, name)
+		if err := router.Mount(name, p.Meta().MountPath, p.Routes()); err != nil {
+			return nil, err
+		}
+		globalMiddleware = append(globalMiddleware, p.Middlewares()...)
+	}
+
+	// // --- JWKS, if external JWT is configured (Crypto round) ---
+	// if jwks := crypto.JWTRoutes(); jwks != nil {
+	// 	router.MountAbsolute("core", jwks...)
+	// }
+
+	// Route-scoped rate limiting is baked in once, before any driver sees the routes.
+	router.ApplyRateLimiting(rateLimiter, app.RateLimits, ipCfg)
+
+	if cfg.HTTP != nil {
+		if err := router.Build(cfg.HTTP, globalMiddleware...); err != nil {
+			return nil, err
+		}
+	}
+	logBootSummary(ctx, tel.Named("boot").Logger, order, len(router.Routes()), cfg)
 	return ac, nil
 }
 
-func Prepare(plugins []types.Plugin) (*PreparedApp, error) {
-	if err := DetectPluginNameConflicts(plugins); err != nil {
-		return nil, err
+// checkCookieAgainstBaseURL reports a session cookie that can't work with
+// the base URL, under the transports that set one. baseURL has been parsed
+// by NewOriginCheck already.
+//
+//   - SameSiteNone needs a base URL. The browser then sends the cookie with
+//     cross-site requests, the origin check is all that refuses a forged
+//     one, and without a base URL the check compares with the Host header.
+//   - CookieDomain has to be the base URL's host or a parent of it. A
+//     browser drops a cookie whose Domain does not cover the host that set
+//     it, and every sign-in would then seem to succeed and leave no session.
+func checkCookieAgainstBaseURL(session types.SessionConfig, baseURL string) error {
+	if !session.WithDefaults().Transport.ReadsCookie() {
+		return nil
 	}
-
-	order, err := ResolvePluginOrder(plugins)
+	if baseURL == "" {
+		if session.CookieSameSite == types.SameSiteNone {
+			return fmt.Errorf("SessionConfig.CookieSameSite %q needs RouterConfig.BaseURL, which the origin check compares requests with", session.CookieSameSite)
+		}
+		return nil
+	}
+	domain := strings.ToLower(strings.TrimPrefix(session.CookieDomain, "."))
+	if domain == "" {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("RouterConfig.BaseURL %q: %w", baseURL, err)
 	}
-
-	// if tel == nil {
-	// 	tel = types.NewTelemetry(nil, nil, nil)
-	// }
-
-	// Initialize Catalogs
-	hookCatalog := NewDefaultHookCatalog()
-	tokenCatalog := NewDefaultTokenCatalog()
-	rateLimitCatalog := NewRateLimitCatalog(hookCatalog)
-
-	// Core declares first, under owner "core" via the scoped
-	// wrappers all plugins get, to enforce uniform validation process
-	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, "core")
-	if err := CoreDeclareHookPoints(coreIC); err != nil {
-		return nil, err
+	if host := strings.ToLower(u.Hostname()); host != domain && !strings.HasSuffix(host, "."+domain) {
+		return fmt.Errorf("SessionConfig.CookieDomain %q does not cover the host of RouterConfig.BaseURL %q, so a browser would drop the session cookie", session.CookieDomain, baseURL)
 	}
-	if err := CoreDeclareRateLimitRules(coreIC); err != nil {
-		return nil, err
+	return nil
+}
+
+// logBootSummary writes one Info line describing what Boot built, and one
+// Warn line per configuration that is valid but probably not intended. It
+// runs last, so a line means Boot succeeded.
+func logBootSummary(ctx context.Context, log telemetry.Logger, order []string, routes int, cfg BootConfig) {
+	log.Info(ctx, "behemoth booted", behemoth.M{
+		"plugins":        order,
+		"routes":         routes,
+		"routes_mounted": cfg.HTTP != nil, // false: built and checked, not served (a worker, a CLI)
+		"kv":             cfg.KV != nil,   // false: sessions and rate-limit counters use the database only
+	})
+	if cfg.Router.ClientIPHeader != "" && len(cfg.Router.TrustedProxies) == 0 {
+		log.Warn(ctx, "RouterConfig.ClientIPHeader is set but TrustedProxies is empty; the header is ignored and every request is attributed to its direct peer",
+			behemoth.M{"header": cfg.Router.ClientIPHeader})
 	}
-
-	// Declare phase: every plugin, in dependency order
-	for _, name := range order {
-		p := lookup(plugins, name)
-		if p == nil {
-			return nil, behemotherr.NewConfigurationError("Boot", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
-		}
-		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, name)
-		if err := p.Declare(ic); err != nil {
-			return nil, fmt.Errorf("plugin %q Declare failed: %w", name, err)
-		}
+	// Only where routes are served: a worker or a CLI answers no request.
+	if cfg.HTTP != nil && cfg.Router.BaseURL == "" && cfg.Session.WithDefaults().Transport.ReadsCookie() {
+		log.Warn(ctx, "RouterConfig.BaseURL is not set; the origin check compares each request's Origin with its Host header, which refuses browser requests behind a proxy that rewrites Host", nil)
 	}
-
-	// Freeze all three catalogs
-	hookCatalog.Freeze()
-	tokenCatalog.Freeze()
-	rateLimitCatalog.Freeze()
-
-	return &PreparedApp{
-		Order:      order,
-		Hooks:      hookCatalog,
-		Tokens:     tokenCatalog,
-		RateLimits: rateLimitCatalog,
-	}, nil
 }
 
 // ResolvePluginOrder builds a dependency DAG from every plugin's declared
@@ -327,15 +591,55 @@ func (s *scopedRateLimitCatalog) RulesForRoute() []types.RouteRateLimitRule {
 	return s.inner.RulesForRoute()
 }
 
+// scopedSchemaRegistry injects the declaring owner into every table and
+// contribution, the same way the catalog wrappers above do.
+type scopedSchemaRegistry struct {
+	inner schema.Registry
+	owner string
+}
+
+func (s *scopedSchemaRegistry) Declare(model behemoth.Model, table schema.Table) error {
+	table.Owner = s.owner
+	return s.inner.Declare(model, table)
+}
+func (s *scopedSchemaRegistry) ExtendColumn(c schema.ColumnContribution) error {
+	c.Owner = s.owner
+	return s.inner.ExtendColumn(c)
+}
+func (s *scopedSchemaRegistry) ExtendIndex(c schema.IndexContribution) error {
+	c.Owner = s.owner
+	return s.inner.ExtendIndex(c)
+}
+func (s *scopedSchemaRegistry) ExtendForeignKey(c schema.ForeignKeyContribution) error {
+	c.Owner = s.owner
+	return s.inner.ExtendForeignKey(c)
+}
+func (s *scopedSchemaRegistry) Lookup(name string) (schema.Table, bool) {
+	return s.inner.Lookup(name)
+}
+func (s *scopedSchemaRegistry) LookupModel(name string) (behemoth.Model, bool) {
+	return s.inner.LookupModel(name)
+}
+func (s *scopedSchemaRegistry) All() []schema.Table { return s.inner.All() }
+
+// Freeze is Prepare's alone; a declarer freezing the registry early would
+// lock out every declarer after it.
+func (s *scopedSchemaRegistry) Freeze() error {
+	return behemotherr.NewConfigurationError("SchemaRegistry.Freeze", fmt.Sprintf("%q cannot freeze the schema registry", s.owner), nil)
+}
+
 func newScopedInitContext(
 	hooks *DefaultHookCatalog,
 	tokens *DefaultTokenCatalog,
-	rl *DefaultRateLimitCatalog, owner string,
+	rl *DefaultRateLimitCatalog,
+	schemas schema.Registry,
+	owner string,
 ) *types.PluginInitContext {
 	return &types.PluginInitContext{
 		Hooks:      &scopedHookCatalog{inner: hooks, owner: owner},
 		Tokens:     &scopedTokenCatalog{inner: tokens, owner: owner},
 		RateLimits: &scopedRateLimitCatalog{inner: rl, owner: owner},
+		Schemas:    &scopedSchemaRegistry{inner: schemas, owner: owner},
 	}
 }
 
@@ -365,6 +669,17 @@ func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPh
 			fmt.Sprintf("point %q is phase %q, cannot register a %q handler on it", point, def.Phase, phase), nil)
 	}
 
+	// One handler per owner on a point: chain ordering (Before/After,
+	// tie-breaks) identifies a handler by its owner's name, so a second one
+	// could not be placed. An owner that needs two steps combines them in
+	// one handler.
+	for _, existing := range r.pending[point] {
+		if existing.plugin == plugin {
+			return behemotherr.NewConfigurationError("HookRegistry.register",
+				fmt.Sprintf("%q already registered a handler on point %q; an owner may register one handler per point", plugin, point), nil)
+		}
+	}
+
 	rh := registeredHandler{plugin: plugin, handler: fn, priority: types.PriorityNormal}
 	if opts != nil {
 		rh.priority, rh.before, rh.after = opts.Priority, opts.Before, opts.After
@@ -372,18 +687,12 @@ func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPh
 	r.pending[point] = append(r.pending[point], rh)
 	return nil
 }
-func (r *DefaultHookRegistry) OnBefore(point types.HookPoint, fn types.BeforeHookFunc, opts *types.HookOptions) error {
-	return r.register(point, types.BeforeHookPhase, "", fn, opts) // owner filled in by scopedHookRegistry below, never left blank in practice
-}
-func (r *DefaultHookRegistry) OnAfter(point types.HookPoint, fn types.AfterHookFunc, opts *types.HookOptions) error {
-	return r.register(point, types.AfterHookPhase, "", fn, opts)
-}
-func (r *DefaultHookRegistry) OnFailed(point types.HookPoint, fn types.FailedHookFunc, opts *types.HookOptions) error {
-	return r.register(point, types.FailedHookPhase, "", fn, opts)
-}
 
-// scopedHookRegistry injects the registering plugin's identity. A plugin's Register(reg HookRegistry) call receives one
-// of these, typed as the interface, and can't override `owner`.
+// scopedHookRegistry is the types.HookRegistry an owner registers through. It
+// injects the owner's name: a plugin's Register(reg HookRegistry) call
+// receives one of these, typed as the interface, and can't override `owner`.
+// DefaultHookRegistry has no registering methods of its own, so a handler
+// can't be registered without an owner.
 type scopedHookRegistry struct {
 	inner *DefaultHookRegistry
 	owner string
@@ -469,12 +778,13 @@ func resolvePointOrder(point types.HookPoint, handlers []registeredHandler, plug
 
 }
 
-// topoSortBucket resolves handler order within one priority bucket, reusing
-// KahnSort exactly as specified. Ties (no Before/After edge between
-// two handlers) resolve alphabetically by the plugin name
-// KahnSort's fixed signature has no room for a registration-
-// order comparator, so this deliberately matches plugin-level ordering's
-// tie-break rather than inventing a second mechanism.
+// topoSortBucket resolves handler order within one priority bucket with
+// KahnSort, the sort plugin ordering uses. An edge comes from a Before or
+// After that names an owner with a handler in the same bucket; a constraint
+// naming any other owner adds none. Handlers the edges leave unordered run
+// in plugin boot order (pluginOrder, the application last), so a plugin's
+// handler runs after those of the plugins it depends on. A cycle is a
+// configuration error.
 func topoSortBucket(point types.HookPoint, bucket []registeredHandler, pluginOrder []string) ([]registeredHandler, error) {
 	byPlugin := make(map[string]registeredHandler, len(bucket))
 	for _, h := range bucket {
@@ -544,6 +854,28 @@ func DetectPluginNameConflicts(plugins []types.Plugin) error {
 	return nil
 }
 
+// checkOwnerNames rejects names that would make two owners indistinguishable:
+// an application named like core, or a plugin named like core or the
+// application. Owner names attribute tables and hook points and order hook
+// handlers, so each must mean one thing.
+func checkOwnerNames(plugins []types.Plugin, appName string) error {
+	if appName == coreOwner {
+		return behemotherr.NewConfigurationError("Prepare",
+			fmt.Sprintf("AppName %q is reserved for behemoth's own declarations", coreOwner), nil)
+	}
+	for _, p := range plugins {
+		switch name := p.Meta().Name; name {
+		case coreOwner:
+			return behemotherr.NewConfigurationError("Prepare",
+				fmt.Sprintf("plugin name %q is reserved for behemoth's own declarations", name), nil)
+		case appName:
+			return behemotherr.NewConfigurationError("Prepare",
+				fmt.Sprintf("plugin name %q is the application's name (PrepareConfig.AppName); rename one of them", name), nil)
+		}
+	}
+	return nil
+}
+
 // lookup finds the Plugin matching name. O(n) scan at boot-time plugin
 // counts (dozens at most), called a handful of times total, not per-request.
 // A nil return should never happen for a name that came out of
@@ -558,24 +890,77 @@ func lookup(plugins []types.Plugin, name string) types.Plugin {
 	return nil
 }
 
-type dbCounterStore struct{ db behemoth.Database }
+// dbCounterStore counts in the rate_limits table: the AtomicIncrementer used
+// when no KeyValueStorage provides one.
+type dbCounterStore struct{ store *store.Store }
 
-func (s *dbCounterStore) Increment(ctx context.Context, key string, ttl time.Duration) (int64, error) {
-	var count int64
-	err := s.db.Transaction(ctx, func(ctx context.Context, tx behemoth.Database) (any, error) {
-		// UPSERT-style: increment if row exists and unexpired, else reset to 1
-		// with a fresh window; actual SQL varies by adapter, semantics fixed here.
-		// return nil, tx.UpdateOne(ctx, &models.RateCounter{}, byKeyAndUnexpired(key), behemoth.M{"count": clause.Raw("count + 1")})
-		return nil, nil
-	})
-	return count, err
+func (s *dbCounterStore) Increment(ctx context.Context, key string, ttl time.Duration) (int64, time.Time, error) {
+	return s.store.IncrementRateLimit(ctx, key, ttl)
 }
 
+// DefaultRateLimiter evaluates the declared rules. limiters holds the Limiter
+// Boot built for each algorithm, over the counter storage it resolved
+// (newLimiters); a rule's own Limiter takes its place.
 type DefaultRateLimiter struct {
-	catalog types.RateLimitCatalog
-	store   types.AtomicIncrementer
-	cfg     types.RateLimitConfig
-	tel     *types.Telemetry
+	catalog  types.RateLimitCatalog
+	limiters map[types.RateLimitAlgorithm]types.Limiter
+	cfg      types.RateLimitConfig
+	tel      *telemetry.Telemetry
+}
+
+// knownAlgorithms are the algorithms a rule may name; newLimiters builds a
+// Limiter for each. The catalog rejects any other name at Prepare.
+var knownAlgorithms = map[types.RateLimitAlgorithm]bool{types.AlgorithmFixedWindow: true}
+
+// newLimiters builds the Limiter of every known algorithm over counter.
+func newLimiters(counter types.AtomicIncrementer) map[types.RateLimitAlgorithm]types.Limiter {
+	return map[types.RateLimitAlgorithm]types.Limiter{
+		types.AlgorithmFixedWindow: ratelimit.NewFixedWindow(counter),
+	}
+}
+
+// limiterFor returns the Limiter a rule is evaluated with: its own, or the
+// one built for its algorithm, where an empty name means the fixed window.
+func (rl *DefaultRateLimiter) limiterFor(rule string, algorithm types.RateLimitAlgorithm, own types.Limiter) (types.Limiter, error) {
+	if own != nil {
+		return own, nil
+	}
+	if algorithm == "" {
+		algorithm = types.AlgorithmFixedWindow
+	}
+	if l, ok := rl.limiters[algorithm]; ok {
+		return l, nil
+	}
+	return nil, behemotherr.NewConfigurationError("RateLimiter", fmt.Sprintf("rule %q names the algorithm %q, which has no limiter", rule, algorithm), nil)
+}
+
+// checkRateLimitRule is what the catalog requires of a rule's strategy: an
+// action that is built, and a known algorithm with a limit that can be
+// counted, or a Limiter of its own, whose limit is its own business.
+//
+// ActionLockout is refused here, at Prepare, and not at request time: a rule
+// that asked for a lockout would otherwise get an ordinary rejection and its
+// author would not find out. The check comes before the rule's own Limiter
+// is accepted, because the lockout is the rate limiter's to enforce, not the
+// Limiter's.
+func checkRateLimitRule(name string, action types.RateLimitAction, algorithm types.RateLimitAlgorithm, own types.Limiter, limit types.Limit) error {
+	switch action {
+	case "", types.ActionReject:
+	case types.ActionLockout:
+		return fmt.Errorf("ratelimit: rule %q uses ActionLockout, which is not built; use ActionReject", name)
+	default:
+		return fmt.Errorf("ratelimit: rule %q names an unknown Action %q", name, action)
+	}
+	if own != nil {
+		return nil
+	}
+	if algorithm != "" && !knownAlgorithms[algorithm] {
+		return fmt.Errorf("ratelimit: rule %q names an unknown Algorithm %q", name, algorithm)
+	}
+	if limit.Max <= 0 || limit.Window <= 0 {
+		return fmt.Errorf("ratelimit: rule %q needs a Limit with a positive Max and Window", name)
+	}
+	return nil
 }
 
 func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.HookPoint, hctx *types.HookContext) error {
@@ -591,9 +976,20 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.Ho
 
 	rules := rl.catalog.RulesForHook(point)
 	for _, rule := range rules {
-		key := rule.Name + ":" + rule.KeyFunc(hctx)
-
-		if err := rl.evaluate(ctx, rule.Name, key, rule.Algorithm, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
+		// A rule that has nothing to count this call per (no request for a
+		// rule per address, no email on the sign-in) is skipped, not counted
+		// under an empty key that every such caller would share.
+		ruleKey, ok := rule.KeyFunc(hctx)
+		if !ok {
+			rl.countCheck(ctx, rule.Name, "skipped")
+			continue
+		}
+		key := rule.Name + ":" + ruleKey
+		limiter, err := rl.limiterFor(rule.Name, rule.Algorithm, rule.Limiter)
+		if err != nil {
+			return err
+		}
+		if err := rl.evaluate(ctx, rule.Name, key, "", limiter, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
 			return err
 		}
 	}
@@ -604,8 +1000,11 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.Ho
 func (rl *DefaultRateLimiter) CheckRouteLimit(ctx context.Context, rule types.RouteRateLimitRule, r *http.Request, ipCfg *types.ClientIPConfig) error {
 	ip := types.ClientIP(r, ipCfg)
 	key := rule.Name + ":" + rule.KeyFunc(r, ip)
-
-	if err := rl.evaluate(ctx, rule.Name, key, rule.Algorithm, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
+	limiter, err := rl.limiterFor(rule.Name, rule.Algorithm, rule.Limiter)
+	if err != nil {
+		return err
+	}
+	if err := rl.evaluate(ctx, rule.Name, key, ip, limiter, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
 		return err // *behemotherr.DomainError, CategoryRateLimited; ErrorMapper already maps this to 429 + Retry-After, no body parsing or session lookup ever ran
 	}
 
@@ -617,29 +1016,52 @@ func (rl *DefaultRateLimiter) GetBestMatchforRoute(ctx context.Context, method, 
 	return types.BestRouteMatch(rules, method, path)
 }
 
-// evaluate is the shared core that touches the
-// AtomicIncrementer store and compares against Limit.Max. Both the
-// point-scoped path and route-scoped path call through here, so there is exactly one
-// increment/compare/lockout implementation in the whole pillar.
+// evaluate is the shared core: it asks the rule's limiter and turns a
+// refusal into an audit event and a rate-limited error. Both the
+// point-scoped path and route-scoped path call through here, so there is
+// exactly one place that handles a refusal and a failing counter.
+//
+// Deferred: ActionLockout. No rule reaches here with it, because the catalog
+// rejects it at declaration. When it is built it belongs here, around the
+// call to the limiter: check a lockout key before counting and set it on the
+// first refusal. action and lockoutFor are passed for that and not read.
 func (rl *DefaultRateLimiter) evaluate(
 	ctx context.Context,
 	name, key string,
+	ip string, // the client address, when the caller resolved one; recorded in the audit event
 	algo types.Limiter,
 	limit types.Limit,
 	action types.RateLimitAction,
 	lockoutFor time.Duration,
 ) error {
-	allowed, retryAfter, err := algo.Allow(ctx, key, limit)
+	var spanAttrs behemoth.M
+	if rl.tel.TracingEnabled() {
+		spanAttrs = behemoth.M{telemetry.AttrRule: name}
+	}
+	spanCtx, span := rl.tel.StartSpan(ctx, telemetry.SpanRateLimitCheck, spanAttrs)
+	allowed, retryAfter, err := algo.Allow(spanCtx, key, limit)
+	result := "allowed"
+	switch {
+	case err != nil:
+		result = "error"
+	case !allowed:
+		result = "limited"
+	}
+	if rl.tel.TracingEnabled() {
+		span.SetAttributes(behemoth.M{telemetry.AttrResult: result})
+	}
+	telemetry.FinishSpan(span, err)
+	rl.countCheck(ctx, name, result)
 	if err != nil {
 		return rl.handleStoreFailure(ctx, name, err)
 	}
 
 	if !allowed {
 		if rl.tel != nil {
-			rl.tel.Audit.Record(ctx, types.AuditEvent{Type: "ratelimit.exceeded", Metadata: behemoth.M{"rule": name, "key": key}, Timestamp: time.Now()})
-		}
-		if action == types.ActionLockout && lockoutFor > 0 {
-			retryAfter = lockoutFor
+			rl.tel.RecordAudit(ctx, telemetry.AuditEvent{
+				Type: telemetry.AuditRateLimitExceeded, Outcome: telemetry.OutcomeDenied,
+				IPAddress: ip, Metadata: behemoth.M{"rule": name, "key": key},
+			})
 		}
 		return behemotherr.NewRateLimited(name, name, retryAfter)
 	}
@@ -647,9 +1069,19 @@ func (rl *DefaultRateLimiter) evaluate(
 	return nil
 }
 
+// countCheck counts one evaluation of rule: "allowed", "limited", "error"
+// when the counter store could not be reached (what happens to the request
+// then is RateLimitConfig.FailureMode's decision), or "skipped" when a hook
+// rule's KeyFunc said the rule does not apply to the call.
+func (rl *DefaultRateLimiter) countCheck(ctx context.Context, rule, result string) {
+	if rl.tel.MetricsEnabled() {
+		rl.tel.Count(ctx, telemetry.MetricRateLimitChecks, behemoth.M{telemetry.AttrRule: rule, telemetry.AttrResult: result})
+	}
+}
+
 func (rl *DefaultRateLimiter) handleStoreFailure(ctx context.Context, rule string, err error) error {
 	if rl.tel != nil {
-		rl.tel.Logger.Warn(ctx, "rate limit store unavailable", behemoth.M{"rule": rule, "error": err.Error()})
+		rl.tel.Logger.Warn(ctx, "rate limit store unavailable", telemetry.ErrorFields(err, behemoth.M{"rule": rule}))
 	}
 	if rl.cfg.FailureMode == types.FailClosed {
 		return behemotherr.NewRateLimited(rule, rule, 0)
@@ -657,15 +1089,50 @@ func (rl *DefaultRateLimiter) handleStoreFailure(ctx context.Context, rule strin
 	return nil // FailOpen request proceeds
 }
 
+// CoreDeclareHookPoints declares every hook point behemoth's own code fires:
+// the flow points of sign-up, sign-in and sign-out, the session and token
+// manager points, and the data points the store fires (coreDataHookPoints).
+// A point has one phase, so an operation with a before and an after side is
+// two points. Dispatching a point missing from this list is a configuration
+// error (DefaultDispatcher.checkPhase).
 func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 	points := []types.HookPointDef{
-		// {Point: hooks.HookSignInBefore, Owner: "core", Phase: BeforeHookPhase},
-		// {Point: hooks.HookSignInCredentialsVerified, Owner: "core", Phase: BeforeHookPhase}, // also Before; a distinct checkpoint, not signIn's "after"
-		// {Point: hooks.HookSignInAfter, Owner: "core", Phase: AfterHookPhase},
-		// {Point: hooks.HookSignInFailed, Owner: "core", Phase: FailedHookPhase, Audit: &AuditSpec{}},
-		// {Point: hooks.HookUserBeforeCreate, Owner: "core", Phase: BeforeHookPhase},
-		// {Point: hooks.HookUserAfterCreate, Owner: "core", Phase: AfterHookPhase},
-		// ...
+		{Point: hooks.HookSignUpBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSignUpAfter, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookSignUpFailed, Owner: coreOwner, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+
+		{Point: hooks.HookSignInBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSignInCredentialsVerified, Owner: coreOwner, Phase: types.BeforeHookPhase}, // also Before; a distinct checkpoint, not signIn's "after"
+		{Point: hooks.HookSignInAfter, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookSignInFailed, Owner: coreOwner, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+
+		{Point: hooks.HookSignOutBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSignOutAfter, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+
+		// fired by the session manager
+		{Point: hooks.HookSessionBeforeCreate, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSessionAfterCreate, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookSessionBeforeRevoke, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookSessionAfterRevoke, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+
+		// fired by the token manager
+		{Point: hooks.HookTokenBeforeIssue, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookTokenAfterIssue, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookTokenConsumed, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookTokenFailed, Owner: coreOwner, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+
+		// data hooks the store fires (see coreDataHookPoints)
+		{Point: hooks.HookUserBeforeCreate, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookUserAfterCreate, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{Type: telemetry.AuditUserCreated}}, // written in the write's transaction
+		{Point: hooks.HookUserBeforeUpdate, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookUserAfterUpdate, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{Type: telemetry.AuditUserUpdated}}, // written in the write's transaction
+		// fired once the write's transaction has committed
+		{Point: hooks.HookUserCreated, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookUserUpdated, Owner: coreOwner, Phase: types.AfterHookPhase},
+		// a delete: Store.DeleteUser, with the user's sessions, accounts and tokens
+		{Point: hooks.HookUserBeforeDelete, Owner: coreOwner, Phase: types.BeforeHookPhase},
+		{Point: hooks.HookUserAfterDelete, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{Type: telemetry.AuditUserDeleted}}, // written in the delete's transaction
+		{Point: hooks.HookUserDeleted, Owner: coreOwner, Phase: types.AfterHookPhase},
 	}
 	for _, p := range points {
 		if err := ic.Hooks.Declare(p); err != nil {
@@ -675,21 +1142,71 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 	return nil
 }
 
+// CoreDeclareSchema declares the tables core itself owns. Plugins and the
+// application may extend them (ExtendColumn); the models carry those
+// columns in their Extension.
+func CoreDeclareSchema(ic *types.PluginInitContext) error {
+	for _, d := range []struct {
+		model behemoth.Model
+		table schema.Table
+	}{
+		{&models.User{}, models.UserTableSchema()},
+		{&models.Session{}, models.SessionTableSchema()},
+		{&models.Token{}, models.TokenTableSchema()},
+		{&models.Account{}, models.AccountTableSchema()},
+		{&models.RateLimit{}, models.RateLimitTableSchema()},
+		{&models.AuditLog{}, models.AuditLogTableSchema()},
+		{&models.VerificationCode{}, models.VerificationCodeTableSchema()},
+	} {
+		if err := ic.Schemas.Declare(d.model, d.table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RuleSignInRoute and RuleSignUpRoute are the names of core's rate-limit
+// rules on the email sign-in and sign-up routes. An application or plugin
+// that wants another limit on one of them declares a rule for the same method
+// and path with a more specific match, or the same one with Disabled set.
+const (
+	RuleSignInRoute = "core.signin.route"
+	RuleSignUpRoute = "core.signup.route"
+)
+
+// CoreDeclareRateLimitRules declares the limits core applies without being
+// asked: ten attempts a minute per client address on sign-in, and the same
+// on sign-up. The two count separately.
+//
+// The limits are per address and not per account. On sign-in that slows one
+// client guessing passwords and does not let anyone lock a user out by
+// failing on purpose. On sign-up it bounds how fast one client can create
+// accounts and make the server hash passwords.
+//
+// There is no password-reset route yet, and so no rule for one.
 func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
-	//Declare HookPointRateLimitRules
-	// Declare RouteRateLimitRules
+	byAddress := func(r *http.Request, ip string) string { return ip }
 	coreRules := []types.RouteRateLimitRule{
 		{
-			Name:      "core.signin.route",
+			Name:      RuleSignInRoute,
 			Method:    http.MethodPost,
 			Path:      "/sign-in/email",
-			KeyFunc:   func(r *http.Request, ip string) string { return ip },
+			KeyFunc:   byAddress,
 			Limit:     types.Limit{Max: 10, Window: time.Minute},
-			Algorithm: nil,
+			Algorithm: types.AlgorithmFixedWindow,
 			Action:    types.ActionReject,
 			Owner:     "core",
 		},
-		// analogous baseline declared for /sign-up/email, /forgot-password
+		{
+			Name:      RuleSignUpRoute,
+			Method:    http.MethodPost,
+			Path:      "/sign-up/email",
+			KeyFunc:   byAddress,
+			Limit:     types.Limit{Max: 10, Window: time.Minute},
+			Algorithm: types.AlgorithmFixedWindow,
+			Action:    types.ActionReject,
+			Owner:     "core",
+		},
 	}
 	for _, r := range coreRules {
 		if err := ic.RateLimits.DeclareRouteRateLimitRule(r); err != nil {
@@ -699,13 +1216,16 @@ func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
 	return nil
 }
 
-func resolveRateLimitStore(kv behemoth.KeyValueStorage, db behemoth.Database) (types.AtomicIncrementer, error) {
+// resolveRateLimitStore picks where counters are kept: the key-value storage
+// when it can count atomically (the Redis adapter), otherwise the
+// rate_limits table.
+func resolveRateLimitStore(kv behemoth.KeyValueStorage, st *store.Store) (types.AtomicIncrementer, error) {
 	if kv != nil {
 		if inc, ok := kv.(types.AtomicIncrementer); ok {
-			return inc, nil // Redis-backed path — atomic, fast
+			return inc, nil
 		}
 	}
-	return &dbCounterStore{db: db}, nil // KV absent, or lacks native INCR — DB-transactional fallback, still correct
+	return &dbCounterStore{store: st}, nil
 }
 
 type DefaultRateLimitCatalog struct {
@@ -743,8 +1263,8 @@ func (c *DefaultRateLimitCatalog) DeclareHookRateLimitRule(rule types.HookRateLi
 	if c.names[rule.Name] {
 		return fmt.Errorf("ratelimit: rule %q already declared", rule.Name)
 	}
-	if rule.Algorithm == nil {
-		return fmt.Errorf("ratelimit: rule %q missing Algorithm", rule.Name)
+	if err := checkRateLimitRule(rule.Name, rule.Action, rule.Algorithm, rule.Limiter, rule.Limit); err != nil {
+		return err
 	}
 
 	// cross-validation: the point must already exist (declared by core, or by an earlier-in-dependency-order plugin, or by
@@ -786,8 +1306,10 @@ func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule types.RouteRate
 	if c.names[rule.Name] {
 		return fmt.Errorf("ratelimitcatalog: rule name %q already declared", rule.Name)
 	}
-	if !rule.Disabled && rule.Algorithm == nil {
-		return fmt.Errorf("ratelimitcatalog: route rule %q missing Algorithm", rule.Name)
+	if !rule.Disabled {
+		if err := checkRateLimitRule(rule.Name, rule.Action, rule.Algorithm, rule.Limiter, rule.Limit); err != nil {
+			return err
+		}
 	}
 	if rule.Path == "" {
 		return fmt.Errorf("ratelimitcatalog: route rule %q missing Path", rule.Name)
@@ -871,58 +1393,87 @@ type registeredHandler struct {
 	handler  any // BeforeHookFunc | AfterHookFunc | FailedHookFunc, resolved by the point's declared Phase
 }
 
-var frozenChains map[types.HookPoint][]registeredHandler
-
 type DefaultDispatcher struct {
 	catalog      types.HookCatalog
 	frozenChains map[types.HookPoint][]registeredHandler
 	rateLimiter  types.RateLimiter // nil-safe; a deployment with no declared point rules simply skips this
-	tel          *types.Telemetry
+	tel          *telemetry.Telemetry
+	// ipCfg resolves the client address recorded in audit events, the same
+	// way sessions and route rate limits resolve it. Boot sets it.
+	ipCfg *types.ClientIPConfig
 }
 
 func NewDefaultDispatcher(
 	catalog types.HookCatalog,
 	frozenChains map[types.HookPoint][]registeredHandler,
 	rateLimiter types.RateLimiter,
-	tel *types.Telemetry,
+	tel *telemetry.Telemetry,
 ) *DefaultDispatcher {
-	return &DefaultDispatcher{catalog: catalog, frozenChains: frozenChains, rateLimiter: rateLimiter, tel: tel}
+	return &DefaultDispatcher{catalog: catalog, frozenChains: frozenChains, rateLimiter: rateLimiter, tel: telemetry.OrDefault(tel).Named("hooks")}
 }
 
-// checkPhase is a single check point for point validity (existing & matching phase)
-func (d *DefaultDispatcher) checkPhase(point types.HookPoint, expected types.HookPhase) types.HookPointDef {
+// checkPhase is the single check that point exists and is declared with the
+// expected phase. Either failure is a mistake in the code that fires the
+// point, not in a handler, and is returned as a configuration error like the
+// ones Prepare and Boot return. op names the dispatching method.
+func (d *DefaultDispatcher) checkPhase(op string, point types.HookPoint, expected types.HookPhase) (types.HookPointDef, error) {
 	def, ok := d.catalog.Lookup(point)
 	if !ok {
-		panic(fmt.Sprintf("dispatcher: point %q was never declared", point))
+		return types.HookPointDef{}, behemotherr.NewConfigurationError(op, fmt.Sprintf("point %q was never declared", point), nil)
 	}
 	if def.Phase != expected {
-		panic(fmt.Sprintf("dispatcher: point %q is phase %q, cannot dispatch as %q", point, def.Phase, expected))
+		return types.HookPointDef{}, behemotherr.NewConfigurationError(op,
+			fmt.Sprintf("point %q is phase %q, cannot dispatch as %q", point, def.Phase, expected), nil)
 	}
-	return def
+	return def, nil
+}
+
+// forPoint returns the context the handlers of point receive: a shallow copy
+// of the firing site's with Point and Phase set, so a site can't dispatch one
+// point with a context that names another, and a site that leaves them empty
+// (a flow reusing one context for all its points) still gives handlers the
+// right ones. The copy shares the Values map. A nil map is replaced, so a
+// handler's write can't panic; such notes last for this dispatch only.
+func forPoint(hctx *types.HookContext, point types.HookPoint, phase types.HookPhase) *types.HookContext {
+	c := *hctx
+	c.Point, c.Phase = point, phase
+	if c.Values == nil {
+		c.Values = behemoth.M{}
+	}
+	return &c
 }
 
 func (d *DefaultDispatcher) safeInvokeBefore(hctx *types.HookContext, fn types.BeforeHookFunc, payload behemoth.M, point types.HookPoint, plugin string) (m behemoth.M, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = behemotherr.NewInternalError("Dispatcher.RunBefore", fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
-			d.logError(hctx.Ctx, "before-hook panicked", err, behemoth.M{"point": string(point), "plugin": plugin})
+			d.logError(hctx.Ctx, "before-hook panicked", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: plugin})
 		}
 	}()
 	return fn(hctx, payload)
 }
 
-func (d *DefaultDispatcher) safeInvokeAfter(hctx *types.HookContext, fn types.AfterHookFunc, result any, point types.HookPoint, plugin string) (err error) {
+// safeInvokeAfter calls an after handler and turns a panic into an internal
+// error. It does not log: the caller decides what an error means. RunAfter
+// logs it and goes on, RunAfterTx returns it. op names the calling method.
+func (d *DefaultDispatcher) safeInvokeAfter(op string, hctx *types.HookContext, fn types.AfterHookFunc, result any, point types.HookPoint, plugin string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = behemotherr.NewInternalError("Dispatcher.RunAfter", fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
+			err = behemotherr.NewInternalError(op, fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
 		}
 	}()
 	return fn(hctx, result)
 }
 
-// RunBefore implements [Dispatcher].
+// RunBefore implements [Dispatcher]. A handler never receives a nil payload
+// and the caller never gets one back: a nil input starts the chain as an empty
+// map, and a handler that returns a nil map leaves the payload as it was.
 func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookPoint, payload behemoth.M) (behemoth.M, error) {
-	d.checkPhase(point, types.BeforeHookPhase)
+	if _, err := d.checkPhase("Dispatcher.RunBefore", point, types.BeforeHookPhase); err != nil {
+		return nil, err
+	}
+	hctx = forPoint(hctx, point, types.BeforeHookPhase)
+	defer d.chainSpan(hctx, point, types.BeforeHookPhase).End()
 
 	// rate-limiting, evaluated before any registered before-hook handler runs
 	// rate limiter will handle auditing
@@ -932,8 +1483,10 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 		}
 	}
 
-	// Existing before-hook chain, unchanged.
 	mutated := payload
+	if mutated == nil {
+		mutated = behemoth.M{}
+	}
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.BeforeHookFunc)
 		if !ok {
@@ -943,63 +1496,124 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 			err := behemotherr.NewInternalError("Dispatcher.RunBefore",
 				fmt.Errorf("point %q: handler from %q has wrong type for phase Before", point, h.plugin))
 
-			d.logError(hctx.Ctx, "before-hook type assertion failed", err, behemoth.M{"point": string(point), "plugin": h.plugin})
+			d.logError(hctx.Ctx, "before-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			return nil, err
 		}
 
-		result, err := d.safeInvokeBefore(hctx, fn, mutated, point, h.plugin)
+		start := time.Now()
+		handlerCtx, span := d.handlerSpan(hctx, point, h.plugin)
+		result, err := d.safeInvokeBefore(handlerCtx, fn, mutated, point, h.plugin)
+		d.observeHandler(hctx, point, types.BeforeHookPhase, h.plugin, start, span, err)
 		if err != nil {
 			return nil, err // abort and propagate error (caller decides whether/how to Fail)
 		}
-		mutated = result
-
+		// A nil map means "no change", so a handler that only validates can
+		// return nil, nil. Changes it made to the map in place are kept.
+		if result != nil {
+			mutated = result
+		}
 	}
 	return mutated, nil
 }
 
-// RunAfter implements [Dispatcher].
-func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPoint, result any) {
-	def := d.checkPhase(point, types.AfterHookPhase)
+// RunAfter implements [Dispatcher]. The only error it returns is checkPhase's;
+// handler errors are logged.
+func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPoint, result any) error {
+	def, err := d.checkPhase("Dispatcher.RunAfter", point, types.AfterHookPhase)
+	if err != nil {
+		return err
+	}
+	hctx = forPoint(hctx, point, types.AfterHookPhase)
+	defer d.chainSpan(hctx, point, types.AfterHookPhase).End()
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.AfterHookFunc)
 		if !ok {
 			err := behemotherr.NewInternalError("Dispatcher.RunAfter",
 				fmt.Errorf("point %q: handler from %q has wrong type for phase After", point, h.plugin))
-			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{"point": string(point), "plugin": h.plugin})
+			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			continue // execution continues since one bad registration must not stop the rest
 		}
-		if err := d.safeInvokeAfter(hctx, fn, result, point, h.plugin); err != nil {
+		start := time.Now()
+		handlerCtx, span := d.handlerSpan(hctx, point, h.plugin)
+		err := d.safeInvokeAfter("Dispatcher.RunAfter", handlerCtx, fn, result, point, h.plugin)
+		d.observeHandler(hctx, point, types.AfterHookPhase, h.plugin, start, span, err)
+		if err != nil {
 			// Errors in AfterHookPhase are not propagated
-			d.logError(hctx.Ctx, "after-hook failed", err, behemoth.M{"point": string(point), "plugin": h.plugin})
+			d.logError(hctx.Ctx, "after-hook failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 		}
 	}
 
+	d.countPoint(hctx, point, result, nil)
 	d.recordAudit(hctx, point, def, result, nil)
+	return nil
 }
 
-// Fail implements [Dispatcher].
-func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint, reason types.FailureReason) {
-	if point == "" {
-		return // Tier 1 CRUD paths have no Failed-phase point to cascade to (hook taxonomy round)
+// RunAfterTx implements [Dispatcher]. It mirrors RunBefore rather than
+// RunAfter: the first failing handler ends the chain and its error is
+// returned as-is, because the caller (the store) rolls the write back on it.
+func (d *DefaultDispatcher) RunAfterTx(hctx *types.HookContext, point types.HookPoint, result any) error {
+	def, err := d.checkPhase("Dispatcher.RunAfterTx", point, types.AfterHookPhase)
+	if err != nil {
+		return err
 	}
-	def := d.checkPhase(point, types.FailedHookPhase)
+	hctx = forPoint(hctx, point, types.AfterHookPhase)
+	defer d.chainSpan(hctx, point, types.AfterHookPhase).End()
+
+	for _, h := range d.frozenChains[point] {
+		fn, ok := h.handler.(types.AfterHookFunc)
+		if !ok {
+			err := behemotherr.NewInternalError("Dispatcher.RunAfterTx",
+				fmt.Errorf("point %q: handler from %q has wrong type for phase After", point, h.plugin))
+			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
+			return err
+		}
+		start := time.Now()
+		handlerCtx, span := d.handlerSpan(hctx, point, h.plugin)
+		err := d.safeInvokeAfter("Dispatcher.RunAfterTx", handlerCtx, fn, result, point, h.plugin)
+		d.observeHandler(hctx, point, types.AfterHookPhase, h.plugin, start, span, err)
+		if err != nil {
+			return err // abort and propagate; the write is rolled back
+		}
+	}
+	// The event is written through the write's transaction, so it can't
+	// describe a row that was rolled back.
+	return d.recordAuditTx(hctx, point, def, result)
+}
+
+// Fail implements [Dispatcher]. The only error it returns is checkPhase's;
+// handler errors are logged.
+func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint, reason types.FailureReason) error {
+	if point == "" {
+		return nil // Tier 1 CRUD paths have no Failed-phase point to cascade to (hook taxonomy round)
+	}
+	def, err := d.checkPhase("Dispatcher.Fail", point, types.FailedHookPhase)
+	if err != nil {
+		return err
+	}
+	hctx = forPoint(hctx, point, types.FailedHookPhase)
+	defer d.chainSpan(hctx, point, types.FailedHookPhase).End()
 
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.FailedHookFunc)
 		if !ok {
 			err := behemotherr.NewInternalError("Dispatcher.Fail",
 				fmt.Errorf("point %q: handler from %q has wrong type for phase Failed", point, h.plugin))
-			d.logError(hctx.Ctx, "failed-hook type assertion failed", err, behemoth.M{"point": string(point), "plugin": h.plugin})
+			d.logError(hctx.Ctx, "failed-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			continue
 		}
-		if err := d.safeInvokeFailed(hctx, fn, reason, point, h.plugin); err != nil {
-			d.logError(hctx.Ctx, "failed-hook handler errored", err, behemoth.M{"point": string(point), "plugin": h.plugin})
+		start := time.Now()
+		handlerCtx, span := d.handlerSpan(hctx, point, h.plugin)
+		err := d.safeInvokeFailed(handlerCtx, fn, reason, point, h.plugin)
+		d.observeHandler(hctx, point, types.FailedHookPhase, h.plugin, start, span, err)
+		if err != nil {
+			d.logError(hctx.Ctx, "failed-hook handler errored", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 		}
 	}
 
+	d.countPoint(hctx, point, nil, &reason)
 	d.recordAudit(hctx, point, def, nil, &reason)
-
+	return nil
 }
 
 func (d *DefaultDispatcher) safeInvokeFailed(hctx *types.HookContext, fn types.FailedHookFunc, reason types.FailureReason, point types.HookPoint, plugin string) (err error) {
@@ -1011,34 +1625,237 @@ func (d *DefaultDispatcher) safeInvokeFailed(hctx *types.HookContext, fn types.F
 	return fn(hctx, reason)
 }
 
-func (d *DefaultDispatcher) logError(ctx context.Context, msg string, err error, fields behemoth.M) {
-	fields["error"] = err
-	d.tel.Logger.Error(ctx, msg, fields)
+// chainSpan starts the span of one dispatch and makes hctx, the dispatch's
+// own copy of the hook context (forPoint), carry it, so that the handlers,
+// the rate-limit check and the audit record nest under it. A point without
+// handlers gets no span: most dispatches have none, and an empty span per
+// point would bury a trace. The caller ends the span.
+func (d *DefaultDispatcher) chainSpan(hctx *types.HookContext, point types.HookPoint, phase types.HookPhase) telemetry.Span {
+	if len(d.frozenChains[point]) == 0 || !d.tel.TracingEnabled() {
+		return telemetry.SpanFrom(context.Background()) // records nothing
+	}
+	ctx, span := d.tel.StartSpan(hctx.Ctx, telemetry.SpanHookChain,
+		behemoth.M{telemetry.AttrPoint: string(point), telemetry.AttrPhase: string(phase)})
+	hctx.Ctx = ctx
+	return span
 }
 
+// handlerSpan starts the span of one handler call and returns the hook
+// context the handler receives: a copy of hctx carrying the span, so what
+// the handler does with HookContext.Ctx nests under it. The copy shares
+// hctx's Values. observeHandler ends the span.
+func (d *DefaultDispatcher) handlerSpan(hctx *types.HookContext, point types.HookPoint, plugin string) (*types.HookContext, telemetry.Span) {
+	if !d.tel.TracingEnabled() {
+		return hctx, telemetry.SpanFrom(context.Background())
+	}
+	ctx, span := d.tel.StartSpan(hctx.Ctx, telemetry.SpanHookHandler,
+		behemoth.M{telemetry.AttrPoint: string(point), telemetry.AttrPlugin: plugin})
+	c := *hctx
+	c.Ctx = ctx
+	return &c, span
+}
+
+// observeHandler measures one handler call: its duration, and an error
+// count when it returned an error or panicked. On a before point a returned
+// error is a veto, which is how a handler refuses an operation; the phase
+// attribute tells those apart from the failures of after and failed
+// handlers.
+func (d *DefaultDispatcher) observeHandler(hctx *types.HookContext, point types.HookPoint, phase types.HookPhase, plugin string, start time.Time, span telemetry.Span, err error) {
+	telemetry.FinishSpan(span, err) // a veto is not marked as a failed span; see FinishSpan
+	if !d.tel.MetricsEnabled() {
+		return
+	}
+	attrs := behemoth.M{telemetry.AttrPoint: string(point), telemetry.AttrPhase: string(phase), telemetry.AttrPlugin: plugin}
+	d.tel.ObserveSince(hctx.Ctx, telemetry.MetricHookDuration, start, attrs)
+	if err != nil {
+		d.tel.Count(hctx.Ctx, telemetry.MetricHookErrors, attrs)
+	}
+}
+
+// pointMetric is the counter a core point increments when it is dispatched,
+// with the outcome it stands for.
+type pointMetric struct {
+	name    string
+	outcome telemetry.AuditOutcome // "" for a counter that has no outcome attribute
+}
+
+// corePointMetrics maps core's after and failed points to the counters of
+// the metric catalog, so that the flows and managers firing them are counted
+// without reporting anything themselves. A point declared by a plugin has no
+// entry: the plugin counts what it needs through AuthContext.Telemetry.
+var corePointMetrics = map[types.HookPoint]pointMetric{
+	hooks.HookSignInAfter:  {telemetry.MetricSignIn, telemetry.OutcomeSuccess},
+	hooks.HookSignInFailed: {telemetry.MetricSignIn, telemetry.OutcomeFailure},
+	hooks.HookSignUpAfter:  {telemetry.MetricSignUp, telemetry.OutcomeSuccess},
+	hooks.HookSignUpFailed: {telemetry.MetricSignUp, telemetry.OutcomeFailure},
+
+	hooks.HookSessionAfterCreate: {name: telemetry.MetricSessionCreated},
+	hooks.HookSessionAfterRevoke: {name: telemetry.MetricSessionRevoked},
+
+	hooks.HookTokenAfterIssue: {name: telemetry.MetricTokenIssued},
+	hooks.HookTokenConsumed:   {name: telemetry.MetricTokenConsumed},
+	hooks.HookTokenFailed:     {name: telemetry.MetricTokenFailed},
+}
+
+// countPoint increments the counter of a core point, if it has one. A
+// failure adds its code as the reason, and a token result its kind.
+func (d *DefaultDispatcher) countPoint(hctx *types.HookContext, point types.HookPoint, result any, reason *types.FailureReason) {
+	metric, ok := corePointMetrics[point]
+	if !ok || !d.tel.MetricsEnabled() {
+		return
+	}
+	attrs := behemoth.M{}
+	if metric.outcome != "" {
+		attrs[telemetry.AttrOutcome] = string(metric.outcome)
+	}
+	if reason != nil {
+		attrs[telemetry.AttrReason] = reason.Code
+	}
+	if tok, ok := result.(*models.Token); ok {
+		attrs[telemetry.AttrKind] = string(tok.Kind)
+	}
+	d.tel.Count(hctx.Ctx, metric.name, attrs)
+}
+
+func (d *DefaultDispatcher) logError(ctx context.Context, msg string, err error, fields behemoth.M) {
+	d.tel.Logger.Error(ctx, msg, telemetry.ErrorFields(err, fields))
+}
+
+// recordAudit records the audit event of a point dispatched with RunAfter or
+// Fail, best effort: the operation is over, so a failed write is logged
+// (Telemetry.RecordAudit) and changes nothing.
 func (d *DefaultDispatcher) recordAudit(hctx *types.HookContext, point types.HookPoint, def types.HookPointDef, result any, reason *types.FailureReason) {
 	if def.Audit == nil {
 		return
 	}
-	meta := behemoth.M{}
-	if reason != nil {
-		meta["code"] = reason.Code
-		if reason.Cause != nil {
-			meta["cause"] = reason.Cause.Error() // AuditRecorder's own write path applies redaction (Telemetry round) — nothing extra needed here
+	d.tel.RecordAudit(hctx.Ctx, d.auditEvent(hctx, point, def, result, reason))
+}
+
+// recordAuditTx records the audit event of a data point dispatched with
+// RunAfterTx. A recorder that can write through a transaction
+// (telemetry.TxAuditRecorder, the database recorder) gets the write's own,
+// so the event commits or rolls back with the row, and its error is
+// returned to fail the write. Any other recorder can't take part in the
+// transaction: it is called once the transaction has committed, best
+// effort.
+func (d *DefaultDispatcher) recordAuditTx(hctx *types.HookContext, point types.HookPoint, def types.HookPointDef, result any) error {
+	if def.Audit == nil {
+		return nil
+	}
+	event := d.auditEvent(hctx, point, def, result, nil)
+	if hctx.Tx == nil {
+		// Not fired by the store: there is no transaction to join.
+		d.tel.RecordAudit(hctx.Ctx, event)
+		return nil
+	}
+	event = telemetry.NormalizeAuditEvent(hctx.Ctx, event)
+	inTx, rest := telemetry.SplitAuditRecorders(d.tel.Audit)
+	for _, rec := range inTx {
+		if err := rec.RecordTx(hctx.Ctx, hctx.Tx.DB(), event); err != nil {
+			d.tel.AuditFailed(hctx.Ctx, event.Type, err)
+			return fmt.Errorf("audit event %q could not be recorded with the write: %w", event.Type, err)
 		}
 	}
-	event := types.AuditEvent{
-		Type:      coalesce(def.Audit.Type, string(point)),
-		ActorID:   actorFrom(hctx),
-		SubjectID: subjectFrom(result),
-		Metadata:  meta,
-		// RequestID: RequestIDFrom(hctx.Ctx),
-		Timestamp: time.Now(),
+	if len(rest) > 0 {
+		hctx.Tx.AfterCommit(hctx.Ctx, func(ctx context.Context) {
+			for _, rec := range rest {
+				if err := rec.Record(ctx, event); err != nil {
+					d.tel.AuditFailed(ctx, event.Type, err)
+				}
+			}
+		})
 	}
-	if err := d.tel.Audit.Record(hctx.Ctx, event); err != nil {
-		d.tel.Logger.Warn(hctx.Ctx, "audit record failed", behemoth.M{"point": string(point), "error": err.Error()})
-	}
+	return nil
 }
+
+// auditEvent builds the event of one dispatch from what the dispatcher can
+// see: the point, its result or failure reason, the operation's Values and
+// the request.
+//
+// Metadata of a failure: the reason's Metadata, its Code as "code", and for
+// a reason with a Cause the error's text as "cause" and, when it is a typed
+// error with a code, that code as "causeCode".
+//
+// Subject, first match: the failure reason's, the result's (auditSubject),
+// the operation's user (Values[HookValueUserID]).
+//
+// Actor, first match: the user of the session the request was authenticated
+// with (RequireSession); for a successful operation inside a request, the
+// user the subject belongs to, which covers sign-up and sign-in, where no
+// session exists yet. Otherwise the actor is anonymous inside a request and
+// the system outside one. A failed operation is never attributed to its
+// subject: a wrong password for an account was not typed by its owner as far
+// as behemoth knows.
+func (d *DefaultDispatcher) auditEvent(hctx *types.HookContext, point types.HookPoint, def types.HookPointDef, result any, reason *types.FailureReason) telemetry.AuditEvent {
+	event := telemetry.AuditEvent{Type: coalesce(def.Audit.Type, string(point)), Metadata: behemoth.M{}}
+
+	subjectType, subjectID, subjectUser, sessionID := auditSubject(result)
+	if reason != nil {
+		event.Outcome = telemetry.OutcomeFailure
+		maps.Copy(event.Metadata, reason.Metadata)
+		event.Metadata["code"] = reason.Code
+		if reason.Cause != nil {
+			event.Metadata["cause"] = reason.Cause.Error()
+			// The cause's own code says why, where the reason's code only
+			// says that a hook refused (types.FailureRejectedByHook). It is
+			// not a metric attribute: any plugin can define one. See ADR-0001.
+			if de, ok := errors.AsType[*behemotherr.DomainError](reason.Cause); ok && de.Code != "" {
+				event.Metadata["causeCode"] = de.Code
+			}
+		}
+		if reason.SubjectID != "" {
+			subjectType, subjectID, subjectUser = reason.SubjectType, reason.SubjectID, ""
+			if subjectType == models.UserTable {
+				subjectUser = subjectID
+			}
+		}
+	}
+	if subjectID == "" {
+		if id := valueString(hctx.Values, hooks.HookValueUserID); id != "" {
+			subjectType, subjectID, subjectUser = models.UserTable, id, id
+		}
+	}
+	event.SubjectType, event.SubjectID = subjectType, subjectID
+
+	if tok, ok := result.(*models.Token); ok {
+		event.Metadata[hooks.HookValueTokenKind] = string(tok.Kind)
+	}
+
+	if req := hctx.Request; req != nil {
+		if req.Request != nil {
+			event.IPAddress = types.ClientIP(req.Request, d.clientIPConfig())
+			event.UserAgent = req.Request.UserAgent()
+		}
+		if sess, ok := req.Values["session"].(*models.Session); ok && sess != nil {
+			event.ActorID, event.SessionID = sess.UserID, sess.ID
+		}
+	}
+	if event.SessionID == "" {
+		event.SessionID = coalesce(sessionID, valueString(hctx.Values, hooks.HookValueSessionID))
+	}
+	if event.ActorID == "" && reason == nil && hctx.Request != nil {
+		event.ActorID = subjectUser
+	}
+	switch {
+	case event.ActorID != "":
+		event.ActorType = telemetry.ActorUser
+	case hctx.Request != nil:
+		event.ActorType = telemetry.ActorAnonymous
+	default:
+		event.ActorType = telemetry.ActorSystem
+	}
+	return event
+}
+
+// clientIPConfig returns how the client address is resolved. Boot sets the
+// router's configuration; a dispatcher built without one trusts no proxy.
+func (d *DefaultDispatcher) clientIPConfig() *types.ClientIPConfig {
+	if d.ipCfg == nil {
+		return &types.ClientIPConfig{}
+	}
+	return d.ipCfg
+}
+
 func coalesce(s, fallback string) string {
 	if s == "" {
 		return fallback
@@ -1046,28 +1863,40 @@ func coalesce(s, fallback string) string {
 	return s
 }
 
-func actorFrom(hctx *types.HookContext) any {
-	if hctx == nil {
-		return nil
+// valueString reads a string from an operation's Values. Ids are stored as
+// strings; any other non-nil value is formatted.
+func valueString(values behemoth.M, key string) string {
+	switch v := values[key].(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	default:
+		return fmt.Sprint(v)
 	}
-	return ""
-	// return hctx.Values[HookValueUserID] // nil if absent
 }
 
-// subjectFrom recognizes the concrete result types hook points actually
-// carry today — extend this switch as new result-carrying points are added,
-// rather than requiring every AfterHookFunc caller to pre-extract an ID.
-func subjectFrom(result any) any {
+// auditSubject reads the subject of an audit event from a hook result:
+// its type and id, the user it belongs to (userID, "" when unknown), and
+// the session it is or carries (sessionID).
+//
+// A result that is not a Model says what it is about by implementing
+// types.AuditSubject, as the email/password plugin's SignInResult does.
+func auditSubject(result any) (subjectType, subjectID, userID, sessionID string) {
 	switch r := result.(type) {
-	case behemoth.User:
-		return r.GetID()
-	// case *behemoth.Session:
-	// 	return r.ID
-	// case *behemoth.Token:
-	// 	return r.ID
-	default:
-		return nil
+	case nil:
+		return "", "", "", ""
+	case *models.Session:
+		return models.SessionTable, r.ID, r.UserID, r.ID
+	case types.AuditSubject:
+		subjectType, subjectID = r.AuditSubject()
+	case behemoth.Model:
+		subjectType, subjectID = r.SchemaName(), fmt.Sprint(r.PrimaryKeyField())
 	}
+	if subjectType == models.UserTable {
+		userID = subjectID
+	}
+	return subjectType, subjectID, userID, ""
 }
 
 type DefaultTokenCatalog struct {

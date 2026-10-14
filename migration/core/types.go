@@ -6,88 +6,9 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/types/schema"
 )
-
-type ColumnType string
-
-const (
-	ColTypeString    ColumnType = "string"
-	ColTypeInteger   ColumnType = "int"
-	ColTypeReal      ColumnType = "real"
-	ColTypeNumeric   ColumnType = "numeric"
-	ColTypeBigInt    ColumnType = "bigint"
-	ColTypeText      ColumnType = "text"
-	ColTypeUuid      ColumnType = "uuid"
-	ColTypeBlob      ColumnType = "blob"
-	ColTypeJson      ColumnType = "json"
-	ColTypeDateTime  ColumnType = "datetime"
-	ColTypeTimestamp ColumnType = "timestamp"
-	ColTypeBoolean   ColumnType = "bool"
-	ColTypeBytes     ColumnType = "bytes"
-)
-
-type TableSchema struct {
-	Name         string
-	PhysicalName string
-	Columns      []Column
-	Indexes      []Index
-	ForeignKeys  []ForeignKey
-	Owner        string // plugin name: injected by scopedSchemaRegistry
-}
-
-type Column struct {
-	Name         string
-	PhysicalName string
-	Type         ColumnType
-	Length       int
-	Nullable     bool
-	Unique       bool
-	PrimaryKey   bool
-
-	Default any
-	Check   string
-	AutoInc bool
-
-	// optional per-db overrides
-	Overrides map[string]ColumnOverride
-}
-
-type Index struct {
-	Name    string
-	Columns []string
-	Unique  bool
-}
-
-type ForeignKeyAction string
-
-const (
-	FKCascade  ForeignKeyAction = "cascade"
-	FKRestrict ForeignKeyAction = "restrict"
-	FKSetNull  ForeignKeyAction = "set_null"
-)
-
-type ForeignKey struct {
-	Name       string
-	Columns    []string
-	RefTable   string
-	RefColumns []string
-	OnDelete   ForeignKeyAction
-}
-
-// ColumnOverride is used to override the default column property interpretations for a specific database.
-//
-// For eg. If a column has UUID type, the SQLite interpretation can be overriden to have type Text instead of the default BLOB,
-//
-//	ColumnOverride{
-//		Type: Text,
-//	}
-type ColumnOverride struct {
-	Type    ColumnType
-	Default string
-	Check   string
-	AutoInc *bool
-}
 
 type OperationKind string
 
@@ -110,15 +31,20 @@ type SchemaOperation struct {
 	Table string // table this operation targets; Also the primary signal auto-dependency-inference reads
 
 	// Only the field(s) relevant to Kind are populated. documented per Kind
-	NewTable       *TableSchema // OpCreateTable
-	Column         *Column      // OpAddColumn, OpAlterColumn
-	ColumnName     string       // OpDropColumn, OpRenameColumn (old name)
-	NewColumnName  string       // OpRenameColumn
-	PrevColumn     *Column      // OpAlterColumn: the old column definition being replaced, needed to invert the change for Down
-	Index          *Index       // OpAddIndex
-	IndexName      string       // OpDropIndex
-	ForeignKey     *ForeignKey  // OpAddForeignKey
-	ForeignKeyName string       // OpDropForeignKey
+	//
+	// NewTable is created from its columns alone. Its Indexes and
+	// ForeignKeys have to be empty: each travels as an OpAddIndex or an
+	// OpAddForeignKey of its own, and MigrationGenerator rejects a table
+	// that still carries one.
+	NewTable       *schema.Table      // OpCreateTable
+	Column         *schema.Column     // OpAddColumn, OpAlterColumn
+	ColumnName     string             // OpDropColumn, OpRenameColumn (old name)
+	NewColumnName  string             // OpRenameColumn
+	PrevColumn     *schema.Column     // OpAlterColumn: the old column definition being replaced, needed to invert the change for Down
+	Index          *schema.Index      // OpAddIndex
+	IndexName      string             // OpDropIndex
+	ForeignKey     *schema.ForeignKey // OpAddForeignKey
+	ForeignKeyName string             // OpDropForeignKey
 
 	// DependsOn: explicit operation IDs. an escape hatch layered on top of
 	// automatic same-table inference
@@ -131,24 +57,6 @@ type SchemaOperation struct {
 	Confirmed bool
 }
 
-type ColumnContribution struct {
-	Table  string
-	Column Column
-	Owner  string // injected
-}
-
-type IndexContribution struct {
-	Table string
-	Index Index
-	Owner string
-}
-
-type ForeignKeyContribution struct {
-	Table      string
-	ForeignKey ForeignKey
-	Owner      string
-}
-
 type ColumnDivergenceKind string
 
 const (
@@ -159,16 +67,22 @@ const (
 )
 
 type ColumnFinding struct {
-	Name          string
-	Kind          ColumnDivergenceKind
-	Declared      *Column
-	Live          *Column
+	Name     string
+	Kind     ColumnDivergenceKind
+	Declared *schema.Column
+	// Normalized is Declared as the driver reports it once created (see
+	// ColumnNormalizer) — what Live was compared against. Set whenever both
+	// Declared and Live are; equal to Declared when the driver doesn't
+	// normalize. Judging a change (e.g. narrowing) uses it; operations are
+	// always built from Declared.
+	Normalized    *schema.Column
+	Live          *schema.Column
 	TypeAmbiguity *ColumnAmbiguity // set only when Kind != ColMissingLive and the reverse type mapping was a guess
 }
 
 type RenameCandidate struct {
-	From      Column // live-only column
-	To        Column // declared-only column
+	From      schema.Column // live-only column
+	To        schema.Column // declared-only column
 	Ambiguous bool
 	GroupID   string // shared by every column involved in one ambiguous group; "" when Ambiguous is false
 }
@@ -185,8 +99,8 @@ const (
 type IndexFinding struct {
 	Name     string
 	Kind     IndexDivergenceKind
-	Declared *Index
-	Live     *Index
+	Declared *schema.Index
+	Live     *schema.Index
 }
 
 type ForeignKeyDivergenceKind string
@@ -201,8 +115,8 @@ const (
 type ForeignKeyFinding struct {
 	Name     string
 	Kind     ForeignKeyDivergenceKind
-	Declared *ForeignKey
-	Live     *ForeignKey
+	Declared *schema.ForeignKey
+	Live     *schema.ForeignKey
 }
 
 type TableIntrospection struct {
@@ -228,7 +142,7 @@ type IntrospectionReport struct {
 // any canonical form until this decision produces one.
 type BaselineFieldOption struct {
 	Label  string
-	Column *Column // for a column-ambiguity issue
+	Column *schema.Column // for a column-ambiguity issue
 	// Table is left for a future table-level issue kind (see Step 3, table
 	// existing-as-incompatible-object case) — not populated by anything in
 	// this round, since that case is already a hard failure in BuildPlan's
@@ -249,7 +163,7 @@ type BaselineIssue struct {
 
 type BaselineCandidate struct {
 	Table   string
-	Current TableSchema // from SchemaRegistry(current) — what the app DECLARES this table should look like
+	Current schema.Table // from the schema.Registry (current) — what the app DECLARES this table should look like
 }
 
 // ResolvedBaseline is what Step 3 hands to Step 4 — every introspected
@@ -257,7 +171,7 @@ type BaselineCandidate struct {
 // This is the baseline-flow analogue of ResolvedOperationSet: a type that,
 // by construction, cannot carry an unresolved decision.
 type ResolvedBaseline struct {
-	Tables map[string]TableSchema
+	Tables map[string]schema.Table
 }
 
 type MigrationGenerator interface {
@@ -292,9 +206,9 @@ type GenerateDeps struct {
 type MigrationDeps struct {
 	Introspector SchemaIntrospector
 	Runner       MigrationRunner
-	GenerateDeps GenerateDeps        // reused as-is from the Path I/II round. Presenter/Generator live here
-	Presenter    ResolutionPresenter // duplicated reference for baseline's own resolve call — same underlying FilePresenter instance as GenerateDeps.Presenter, not a second one
-	Telemetry    *types.Telemetry    // optional; used for non-fatal warnings (e.g. a script file that couldn't be written after Apply)
+	GenerateDeps GenerateDeps         // reused as-is from the Path I/II round. Presenter/Generator live here
+	Presenter    ResolutionPresenter  // duplicated reference for baseline's own resolve call — same underlying FilePresenter instance as GenerateDeps.Presenter, not a second one
+	Telemetry    *telemetry.Telemetry // optional; used for non-fatal warnings (e.g. a script file that couldn't be written after Apply)
 }
 
 type MigrationConfig struct {
@@ -355,6 +269,10 @@ type Migration struct {
 	CreatedAt time.Time
 
 	IsBaseline bool // true = record-only; MigrationRunner must not execute Up as DDL
+
+	// Custom names the CustomMigrations frozen into Up. A name listed in any
+	// migration on disk is never emitted again.
+	Custom []string `json:",omitempty"`
 }
 
 type ColumnAmbiguity struct {
@@ -375,7 +293,7 @@ const (
 )
 
 type IntrospectedTable struct {
-	Schema      TableSchema // best-effort reverse mapping, never auto-trusted
+	Schema      schema.Table // best-effort reverse mapping, never auto-trusted
 	Ambiguities []ColumnAmbiguity
 	Kind        ObjectKind
 	Exists      bool // false if the table wasn't found live

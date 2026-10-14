@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/types/schema"
 )
 
 type MigrationPlan struct {
@@ -26,7 +27,7 @@ type PlanIssue struct {
 	Default     int
 }
 
-func BuildPlan(report *IntrospectionReport, current SchemaRegistry) (*MigrationPlan, []PlanIssue, error) {
+func BuildPlan(report *IntrospectionReport, current schema.Registry) (*MigrationPlan, []PlanIssue, error) {
 	plan := &MigrationPlan{}
 	var issues []PlanIssue
 
@@ -34,8 +35,14 @@ func BuildPlan(report *IntrospectionReport, current SchemaRegistry) (*MigrationP
 		if !ti.ExistsLive {
 			declared, _ := current.Lookup(table)
 
-			// separate foreign key creation from table create operation
+			// The table is created from its columns alone. Its indexes and
+			// foreign keys are operations of their own, and the table in the
+			// create operation carries neither: no driver creates them in
+			// its CREATE TABLE, and on the managed path the snapshot is
+			// built from these operations, so an index left on the table
+			// would be recorded without ever being created.
 			bare := declared
+			bare.Indexes = nil
 			bare.ForeignKeys = nil
 			plan.Operations = append(plan.Operations, PlannedOperation{
 				Operation: SchemaOperation{
@@ -47,6 +54,12 @@ func BuildPlan(report *IntrospectionReport, current SchemaRegistry) (*MigrationP
 				Source: "generated",
 			})
 
+			// On a table that does not exist every declared index is missing,
+			// so they are planned as a missing index of an existing table is.
+			plan.Operations = append(plan.Operations, planIndexes(table, diffIndexes(declared.Indexes, nil, false))...)
+
+			// A foreign key apart from its table also lets two new tables
+			// reference each other.
 			for _, fk := range declared.ForeignKeys {
 				plan.Operations = append(plan.Operations, PlannedOperation{
 					Operation: SchemaOperation{
@@ -131,7 +144,11 @@ func planColumns(table string, findings []ColumnFinding) ([]PlannedOperation, []
 			})
 
 		case ColDiffers:
-			isNarrowing := isNarrowingChange(*f.Declared, *f.Live)
+			declared := f.Normalized
+			if declared == nil {
+				declared = f.Declared
+			}
+			isNarrowing := isNarrowingChange(*f.Live, *declared)
 			opID := alterColumnID(table, f.Name)
 			if !isNarrowing {
 				ops = append(ops, PlannedOperation{
@@ -475,8 +492,8 @@ func buildFallbackOps(table string, members []RenameCandidate) []SchemaOperation
 // 	return tableMap
 // }
 
-func indexColumnsByName(columns []Column) map[string]Column {
-	columnMap := make(map[string]Column)
+func indexColumnsByName(columns []schema.Column) map[string]schema.Column {
+	columnMap := make(map[string]schema.Column)
 	for _, col := range columns {
 		columnMap[col.Name] = col
 	}
@@ -484,8 +501,8 @@ func indexColumnsByName(columns []Column) map[string]Column {
 	return columnMap
 }
 
-func indexIndexesByName(indexes []Index) map[string]Index {
-	indMap := make(map[string]Index)
+func indexIndexesByName(indexes []schema.Index) map[string]schema.Index {
+	indMap := make(map[string]schema.Index)
 	for _, ind := range indexes {
 		indMap[ind.Name] = ind
 	}
@@ -493,8 +510,8 @@ func indexIndexesByName(indexes []Index) map[string]Index {
 	return indMap
 }
 
-func indexFKsByName(indexes []ForeignKey) map[string]ForeignKey {
-	fkMap := make(map[string]ForeignKey)
+func indexFKsByName(indexes []schema.ForeignKey) map[string]schema.ForeignKey {
+	fkMap := make(map[string]schema.ForeignKey)
 	for _, fk := range indexes {
 		fkMap[fk.Name] = fk
 	}
@@ -502,28 +519,30 @@ func indexFKsByName(indexes []ForeignKey) map[string]ForeignKey {
 	return fkMap
 }
 
-type renamePair struct{ From, To Column }
+type renamePair struct{ From, To schema.Column }
 type ambiguousGroup struct {
 	ID       string
-	Declared []Column
-	Other    []Column
+	Declared []schema.Column
+	Other    []schema.Column
 }
 
 // matchRenameCandidates proposes rename pairs by structural signature
 // (Type, Length, Nullable, PrimaryKey, Unique all equal
 // For columns more than 2, with possible rename match, the function groups them into
 // ambiguousGroup
-func matchRenameCandidates(declared, other []Column) (pairs []renamePair, groups []ambiguousGroup, unmatchedDeclared, unmatchedOther []Column) {
+// matchRenameCandidates pairs declared-only with other-only columns by
+// structural signature, comparing normalize(declared) — see diffColumns.
+func matchRenameCandidates(declared, other []schema.Column, normalize func(schema.Column) schema.Column) (pairs []renamePair, groups []ambiguousGroup, unmatchedDeclared, unmatchedOther []schema.Column) {
 	usedOther := make(map[string]bool)
 	groupSeq := 0
 
 	for _, d := range declared {
-		var candidates []Column
+		var candidates []schema.Column
 		for _, a := range other {
 			if usedOther[a.Name] {
 				continue
 			}
-			if sameStructuralSignature(d, a) {
+			if sameStructuralSignature(normalize(d), a) {
 				candidates = append(candidates, a)
 			}
 		}
@@ -537,7 +556,7 @@ func matchRenameCandidates(declared, other []Column) (pairs []renamePair, groups
 			// AMBIGUOUS: e.g. two dropped columns and two added columns all
 			// share the same type/nullable signature.
 			groupSeq++
-			groups = append(groups, ambiguousGroup{ID: fmt.Sprintf("group_%d", groupSeq), Declared: []Column{d}, Other: candidates})
+			groups = append(groups, ambiguousGroup{ID: fmt.Sprintf("group_%d", groupSeq), Declared: []schema.Column{d}, Other: candidates})
 			for _, c := range candidates {
 				usedOther[c.Name] = true
 			}
@@ -551,7 +570,7 @@ func matchRenameCandidates(declared, other []Column) (pairs []renamePair, groups
 	return pairs, groups, unmatchedDeclared, unmatchedOther
 }
 
-func sameStructuralSignature(a, b Column) bool {
+func sameStructuralSignature(a, b schema.Column) bool {
 	return a.Type == b.Type &&
 		a.Length == b.Length &&
 		a.Nullable == b.Nullable &&
@@ -559,21 +578,23 @@ func sameStructuralSignature(a, b Column) bool {
 		a.Unique == b.Unique
 }
 
-func columnsEqual(a, b Column) bool {
+func columnsEqual(a, b schema.Column) bool {
 	return a.Name == b.Name &&
 		a.Type == b.Type &&
 		a.Length == b.Length &&
 		a.Nullable == b.Nullable &&
 		a.PrimaryKey == b.PrimaryKey &&
-		a.Unique == b.Unique
+		a.Unique == b.Unique &&
+		a.AutoInc == b.AutoInc &&
+		defaultsEqual(a, b)
 }
 
-func indexesEqual(a, b Index) bool {
+func indexesEqual(a, b schema.Index) bool {
 	return a.Name == b.Name && a.Unique == b.Unique && slices.Equal(a.Columns, b.Columns)
 
 }
 
-func fkEqual(a, b ForeignKey) bool {
+func fkEqual(a, b schema.ForeignKey) bool {
 	return a.Name == b.Name &&
 		a.RefTable == b.RefTable &&
 		slices.Equal(a.RefColumns, b.RefColumns) &&
@@ -581,11 +602,31 @@ func fkEqual(a, b ForeignKey) bool {
 		slices.Equal(a.Columns, b.Columns)
 }
 
-func isNarrowingChange(a, b Column) bool {
-	return (a.Nullable && !b.Nullable) ||
-		(a.AutoInc && !b.AutoInc) ||
-		a.Length > b.Length
-	// return (a.Nullable == true && b.Nullable == false) ||
-	// 	(a.AutoInc == true && b.AutoInc == false) ||
-	// 	a.Length > b.Length
+// isNarrowingChange reports whether altering live into declared may reject
+// or truncate existing data, or break existing writers: changing the type,
+// adding NOT NULL, changing auto-increment, shrinking the length, or
+// removing the default.
+//
+// Auto-increment counts in both directions. Removing it breaks every insert
+// that leaves the column out; adding it to a populated column hands out
+// values that may already exist, unless the driver starts it past them.
+//
+// Removing a default narrows too: inserts that relied on it start failing (or
+// storing NULL). Adding or changing one doesn't — a default only applies to
+// future inserts, never to existing rows.
+//
+// Every type change counts, including ones that are usually safe (integer to
+// bigint, string to text): whether existing values convert depends on the
+// data, which planning never reads, so the developer confirms it.
+//
+// declared should be the normalized declaration (ColumnFinding.Normalized),
+// so both sides speak the database's terms — a string declared without a
+// length is VARCHAR(255), not 0, and a type the driver stores the same way as
+// the live one (a uuid in SQLite's BLOB) is not a type change.
+func isNarrowingChange(live, declared schema.Column) bool {
+	return live.Type != declared.Type ||
+		(live.Nullable && !declared.Nullable) ||
+		live.AutoInc != declared.AutoInc ||
+		(hasDefault(live) && !hasDefault(declared)) ||
+		declared.Length < live.Length
 }

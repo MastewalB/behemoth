@@ -5,52 +5,102 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/store"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
 type DefaultSessionManager struct {
-	db     behemoth.Database
+	st     *store.Store
 	kv     behemoth.KeyValueStorage
-	idb    types.InternalAdapter
 	crypto types.Crypto
 	cfg    types.SessionConfig
 	disp   types.Dispatcher
-	tel    *types.Telemetry
+	tel    *telemetry.Telemetry
+	auth   *types.AuthContext
+	ipCfg  *types.ClientIPConfig // how the client's address is resolved from a request; see requestMeta
 }
 
 func cacheKey(lookupHash string) string { return "session:" + lookupHash }
 
+// NewSessionManager builds the default SessionManager. auth is the
+// AuthContext the manager belongs to; it is only handed to hook handlers as
+// HookContext.Auth and is not read during construction, so Boot may pass it
+// before all of its fields are set.
+//
+// ipCfg is the client-IP configuration the router uses (trusted proxies and
+// the forwarding header), so a session records the same address rate limiting
+// sees. nil means no proxy is trusted: the address is the direct peer's.
 func NewSessionManager(
-	db behemoth.Database,
+	st *store.Store,
 	kv behemoth.KeyValueStorage,
-	idb types.InternalAdapter,
 	crypto types.Crypto,
 	cfg types.SessionConfig,
 	disp types.Dispatcher,
-	tel *types.Telemetry,
+	tel *telemetry.Telemetry,
+	auth *types.AuthContext,
+	ipCfg *types.ClientIPConfig,
 ) types.SessionManager {
+	if ipCfg == nil {
+		ipCfg = &types.ClientIPConfig{}
+	}
 	return &DefaultSessionManager{
-		db:     db,
+		st:     st,
 		kv:     kv,
-		idb:    idb,
 		crypto: crypto,
-		cfg:    cfg,
+		cfg:    cfg.WithDefaults(), // a zero field means its default, here and nowhere else
 		disp:   disp,
-		tel:    tel,
+		tel:    telemetry.OrDefault(tel).Named("session"),
+		auth:   auth,
+		ipCfg:  ipCfg,
 	}
 }
 
+// requestMeta returns the IP address and user agent a new session records.
+// A value the caller set in meta is used as it is. An empty one is taken from
+// the request being handled (types.RequestFrom), and stays empty when ctx
+// carries none: a CLI, a job, or a caller that did not pass on the request's
+// context.
+func (sm *DefaultSessionManager) requestMeta(ctx context.Context, meta types.SessionMeta) (ip, ua string) {
+	ip, ua = meta.IPAddress, meta.UserAgent
+	rc := types.RequestFrom(ctx)
+	if rc == nil || rc.Request == nil {
+		return ip, ua
+	}
+	if ip == "" {
+		ip = types.ClientIP(rc.Request, sm.ipCfg)
+	}
+	if ua == "" {
+		ua = rc.Request.UserAgent()
+	}
+	return ip, ua
+}
+
 func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta types.SessionMeta) (*models.Session, string, error) {
+	ctx, span := sm.tel.StartSpan(ctx, telemetry.SpanSessionCreate, nil)
+	session, rawToken, err := sm.create(ctx, userID, meta)
+	telemetry.FinishSpan(span, err)
+	return session, rawToken, err
+}
+
+// create is Create without its span.
+func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta types.SessionMeta) (*models.Session, string, error) {
 	const op = "SessionManager.Create"
+	ctx = types.BeginOperation(ctx) // beforeCreate and afterCreate share Values
+
+	// The user is also published in Values, where a rate-limit rule on
+	// auth.session.beforeCreate keys on it: HookRateLimitRule.KeyFunc gets
+	// the HookContext and not the payload.
+	types.HookValuesFrom(ctx)[hooks.HookValueUserID] = fmt.Sprint(userID)
 
 	if meta.State != types.SessionActive && meta.State != types.SessionPending {
 		return nil, "", behemotherr.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
@@ -58,7 +108,7 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 
 	// MaxConcurrent enforcement (SessionConfig)
 	if sm.cfg.MaxConcurrent > 0 {
-		count, err := sm.db.Count(ctx, &models.Session{}, notRevokedForUser(userID, ""))
+		count, err := sm.st.CountLiveSessions(ctx, fmt.Sprint(userID))
 		if err != nil {
 			return nil, "", behemotherr.WrapOp(op, "session", err)
 		}
@@ -91,28 +141,35 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 	if meta.State == types.SessionPending {
 		ttl = sm.cfg.PendingExpiresIn
 	}
-	ip, ua := meta.IPAddress, meta.UserAgent
+	ip, ua := sm.requestMeta(ctx, meta)
 	if !sm.cfg.CaptureIPAndAgent {
 		ip, ua = "", ""
 	}
 
 	now := time.Now()
-	hctx := &types.HookContext{Ctx: ctx}
-	payload, err := sm.disp.RunBefore(hctx, hooks.HookSessionCreate, behemoth.M{
-		"userID": fmt.Sprint(userID), "state": string(meta.State), "ipAddress": ip, "userAgent": ua,
+	payload, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeCreate, types.BeforeHookPhase), hooks.HookSessionBeforeCreate, behemoth.M{
+		hooks.HookValueUserID: fmt.Sprint(userID), hooks.HookValueState: string(meta.State),
+		hooks.HookValueIPAddress: ip, hooks.HookValueUserAgent: ua,
 	})
 	if err != nil {
 		return nil, "", err
 	}
 
-	// A before-hook may have annotated ip/userAgent (e.g. a geo-lookup plugin)
-	// pull any such enrichment back out; unknown keys are simply absent, no error.
-	if v, ok := payload["userAgent"].(string); ok {
-		ua = v
+	// A before-hook may have rewritten the IP address or user agent (a
+	// plugin that masks the address, for example). Only these two keys are
+	// read back: the user and the state are the caller's decision. With
+	// CaptureIPAndAgent off the config wins and a handler's values are not
+	// stored either.
+	if sm.cfg.CaptureIPAndAgent {
+		if v, ok := payload[hooks.HookValueIPAddress].(string); ok {
+			ip = v
+		}
+		if v, ok := payload[hooks.HookValueUserAgent].(string); ok {
+			ua = v
+		}
 	}
 
 	m := &models.Session{
-		ID:           utils.GenerateUUID(),
 		UserID:       fmt.Sprint(userID),
 		LookupHash:   lookupHash,
 		TokenHash:    tokenHash,
@@ -123,69 +180,81 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 		FreshAt:      now,
 		IPAddress:    ip,
 		UserAgent:    ua,
-		CreatedAt:    now,
-		UpdatedAt:    now,
 	}
-
-	err = sm.db.Transaction(ctx, func(ctx context.Context, tx behemoth.Database) (any, error) {
-		return nil, tx.Create(ctx, m)
-	})
-	if err != nil {
+	if err := sm.st.CreateSession(ctx, m); err != nil {
 		return nil, "", behemotherr.WrapOp(op, "session", err)
 	}
 
 	sm.cacheSet(ctx, m)
-	sm.disp.RunAfter(hctx, hooks.HookSessionCreate, m)
+	if err := sm.disp.RunAfter(hookContext(ctx, sm.auth, hooks.HookSessionAfterCreate, types.AfterHookPhase), hooks.HookSessionAfterCreate, m); err != nil {
+		return nil, "", err
+	}
 
 	return m, rawToken, nil
 
 }
 
 func (sm *DefaultSessionManager) evictOldest(ctx context.Context, userID any) error {
-	found, err := sm.db.FindMany(ctx, &models.Session{}, notRevokedForUser(userID, ""),
-		&behemoth.QueryOptions{OrderBy: behemoth.Order{Field: "created_at", Direction: behemoth.Asc}, Limit: 1})
-
-	if err != nil || len(found) == 0 {
+	oldest, err := sm.st.ListLiveSessions(ctx, fmt.Sprint(userID), "", 1)
+	if err != nil || len(oldest) == 0 {
 		return err
 	}
-	oldest := found[0].(*models.Session)
-	return sm.revokeModel(ctx, oldest, "evicted_over_limit")
+	return sm.revokeModel(ctx, oldest[0], "evicted_over_limit")
 }
 
 func (sm *DefaultSessionManager) Get(ctx context.Context, rawToken string) (*models.Session, error) {
+	ctx, span := sm.tel.StartSpan(ctx, telemetry.SpanSessionValidate, nil)
+	session, err := sm.get(ctx, rawToken)
+	telemetry.FinishSpan(span, err)
+	return session, err
+}
+
+// get is Get without its span.
+func (sm *DefaultSessionManager) get(ctx context.Context, rawToken string) (*models.Session, error) {
 	const op = "SessionManager.Get"
 	lookupHash := utils.LookupHashOf(rawToken)
 
 	m, fromCache, err := sm.fetchByLookupHash(ctx, lookupHash)
 	if err != nil {
-		return nil, behemotherr.WrapOp(op, "session", err)
+		err = behemotherr.WrapOp(op, "session", err)
+		sm.countValidated(ctx, false, err)
+		return nil, err
 	}
 
 	ok, err := sm.crypto.Secrets.Verify(rawToken, m.TokenHash, m.KeyVersion)
 	if err != nil {
+		sm.countValidated(ctx, fromCache, err)
 		return nil, err
 	}
 
 	if !ok {
 		// LookupHash matched but the keyed HMAC didn't; collapse into the
 		// same NotFound response
-		return nil, behemotherr.NewNotFound(op, "session", nil)
+		err := behemotherr.NewNotFound(op, "session", nil)
+		sm.countValidated(ctx, fromCache, err)
+		return nil, err
 	}
 
 	if m.State == models.SessionRevoked {
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionRevoked, nil)
+		err := behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionRevoked, nil)
+		sm.countValidated(ctx, fromCache, err)
+		return nil, err
 	}
 	if time.Now().After(m.ExpiresAt) {
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionExpired, nil)
+		err := behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionExpired, nil)
+		sm.countValidated(ctx, fromCache, err)
+		return nil, err
 	}
+	sm.countValidated(ctx, fromCache, nil)
 
 	// Rotate key on-use: migrate to the current key version transparently
 	if m.KeyVersion != sm.crypto.Keys.CurrentVersion() {
 		newHash, newVersion, err := sm.crypto.Secrets.Hash(rawToken)
 		if err == nil {
-			_ = sm.db.UpdateOne(ctx, &models.Session{}, byID(m.ID),
-				behemoth.M{"token_hash": newHash, "key_version": newVersion})
-			m.TokenHash, m.KeyVersion = newHash, newVersion
+			if _, err := sm.st.UpdateSession(ctx, m.ID,
+				behemoth.M{models.SessionTokenHash: newHash, models.SessionKeyVersion: newVersion}); err == nil {
+				m.TokenHash, m.KeyVersion = newHash, newVersion
+			}
 		}
 	}
 
@@ -194,6 +263,24 @@ func (sm *DefaultSessionManager) Get(ctx context.Context, rawToken string) (*mod
 	}
 
 	return m, nil
+}
+
+// countValidated counts one session lookup by token: whether the session
+// came from the cache, and how the lookup ended. A refused lookup carries the
+// error's code as its reason (session_expired, session_revoked, ...).
+func (sm *DefaultSessionManager) countValidated(ctx context.Context, fromCache bool, err error) {
+	if !sm.tel.MetricsEnabled() {
+		return
+	}
+	attrs := behemoth.M{telemetry.AttrCache: "miss", telemetry.AttrOutcome: string(telemetry.OutcomeSuccess)}
+	if fromCache {
+		attrs[telemetry.AttrCache] = "hit"
+	}
+	if err != nil {
+		attrs[telemetry.AttrOutcome] = string(telemetry.OutcomeFailure)
+		attrs[telemetry.AttrReason] = behemotherr.ClassifyCode(err)
+	}
+	sm.tel.Count(ctx, telemetry.MetricSessionValidated, attrs)
 }
 
 func (sm *DefaultSessionManager) Validate(ctx context.Context, rawToken string) (*models.Session, error) {
@@ -210,11 +297,10 @@ func (sm *DefaultSessionManager) Validate(ctx context.Context, rawToken string) 
 
 func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) (*models.Session, error) {
 	const op = "SessionManager.Promote"
-	found, err := sm.db.FindOne(ctx, &models.Session{}, byID(sessionID))
+	m, err := sm.st.FindSessionByID(ctx, sessionID)
 	if err != nil {
 		return nil, behemotherr.WrapOp(op, "session", err)
 	}
-	m := found.(*models.Session)
 
 	// Transition rule enforcement
 	if m.State == models.SessionRevoked {
@@ -232,37 +318,43 @@ func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) 
 
 	now := time.Now()
 	// Promotion resets to the FULL Active expiry window.
-	updates := behemoth.M{
-		"state":    string(models.SessionActive),
-		"fresh_at": now, "expires_at": now.Add(sm.cfg.ExpiresIn), "updated_at": now,
-	}
-	if err := sm.db.UpdateOne(ctx, &models.Session{}, byID(sessionID), updates); err != nil {
+	promoted, err := sm.st.UpdateSession(ctx, sessionID, behemoth.M{
+		models.SessionStateColumn: string(models.SessionActive),
+		models.SessionFreshAt:     now,
+		models.SessionExpiresAt:   now.Add(sm.cfg.ExpiresIn),
+	})
+	if err != nil {
 		return nil, behemotherr.WrapOp(op, "session", err)
 	}
-
-	m.State, m.FreshAt, m.ExpiresAt, m.UpdatedAt = models.SessionActive, now, now.Add(sm.cfg.ExpiresIn), now
-	sm.cacheSet(ctx, m)
-	return m, nil
+	sm.cacheSet(ctx, promoted)
+	return promoted, nil
 }
 
-func (sm *DefaultSessionManager) Touch(ctx context.Context, sessionID string) error {
+// Touch implements [types.SessionManager]. It returns the session only when
+// it extended it, so the caller knows to extend the client's cookie too.
+//
+// It runs on every authenticated request, so the usual case has to cost
+// nothing: whether an extension is due is read off session, the copy the
+// caller validated, and a session that is not due is neither read nor
+// written. When that copy says an extension is due, the row decides. The
+// copy may come from the cache, and another request may have extended or
+// revoked the session since.
+func (sm *DefaultSessionManager) Touch(ctx context.Context, session *models.Session) (*models.Session, error) {
 	const op = "SessionManager.Touch"
 
-	found, err := sm.db.FindOne(ctx, &models.Session{}, byID(sessionID))
-	if err != nil {
-		return behemotherr.WrapOp(op, "session", err)
-	}
-	m := found.(*models.Session)
-	if m.State == models.SessionRevoked {
-		return nil // silently no-op; a revoked session being "used" isn't an error worth surfacing to request middleware
+	if session == nil || !sm.extensionDue(session) {
+		return nil, nil
 	}
 
-	// Throttle: only actually write if we've crossed (ExpiresAt - UpdateAge).
-	// Extending on every request would mean a write per authenticated
-	// request at scale.
-	threshold := m.ExpiresAt.Add(-sm.cfg.UpdateAge)
-	if time.Now().Before(threshold) {
-		return nil // not due yet
+	m, err := sm.st.FindSessionByID(ctx, session.ID)
+	if err != nil {
+		return nil, behemotherr.WrapOp(op, "session", err)
+	}
+	// A revoked session being "used" isn't an error worth surfacing to
+	// request middleware, and one another request has just extended needs
+	// nothing more.
+	if m.State == models.SessionRevoked || !sm.extensionDue(m) {
+		return nil, nil
 	}
 
 	now := time.Now()
@@ -270,39 +362,54 @@ func (sm *DefaultSessionManager) Touch(ctx context.Context, sessionID string) er
 	if m.State == models.SessionPending {
 		ttl = sm.cfg.PendingExpiresIn
 	}
-	updates := behemoth.M{"last_active_at": now, "expires_at": now.Add(ttl), "updated_at": now}
-	if err := sm.db.UpdateOne(ctx, &models.Session{}, byID(sessionID), updates); err != nil {
-		return behemotherr.WrapOp(op, "session", err)
+	touched, err := sm.st.UpdateSession(ctx, m.ID, behemoth.M{
+		models.SessionLastActiveAt: now,
+		models.SessionExpiresAt:    now.Add(ttl),
+	})
+	if err != nil {
+		return nil, behemotherr.WrapOp(op, "session", err)
 	}
+	sm.cacheSet(ctx, touched)
+	return touched, nil
+}
 
-	m.LastActiveAt, m.ExpiresAt, m.UpdatedAt = now, now.Add(ttl), now
-	sm.cacheSet(ctx, m)
-	return nil
+// extensionDue reports whether m is in the last UpdateAge of its life, which
+// is when the rolling expiration extends it. Extending on every request
+// would mean a write per authenticated request. With UpdateAge at zero the
+// rolling expiration is off, and no session is ever due.
+func (sm *DefaultSessionManager) extensionDue(m *models.Session) bool {
+	if sm.cfg.UpdateAge <= 0 {
+		return false
+	}
+	return !time.Now().Before(m.ExpiresAt.Add(-sm.cfg.UpdateAge))
 }
 
 // ListForUser implements [types.SessionManager].
 func (sm *DefaultSessionManager) ListForUser(ctx context.Context, userID any) ([]*models.Session, error) {
-	found, err := sm.db.FindMany(ctx, &models.Session{}, byUserID(userID),
-		&behemoth.QueryOptions{OrderBy: behemoth.Order{Field: "created_at", Direction: behemoth.Desc}})
+	sessions, err := sm.st.ListSessionsForUser(ctx, fmt.Sprint(userID))
 	if err != nil {
 		return nil, behemotherr.WrapOp("SessionManager.ListForUser", "session", err)
 	}
-	out := make([]*models.Session, len(found))
-	for i, f := range found {
-		out[i] = f.(*models.Session)
-	}
-	return out, nil
+	return sessions, nil
 }
 
 // Revoke implements [types.SessionManager].
 func (sm *DefaultSessionManager) Revoke(ctx context.Context, sessionID string, reason string) error {
+	ctx, span := sm.tel.StartSpan(ctx, telemetry.SpanSessionRevoke, nil)
+	err := sm.revoke(ctx, sessionID, reason)
+	telemetry.FinishSpan(span, err)
+	return err
+}
+
+// revoke is Revoke without its span.
+func (sm *DefaultSessionManager) revoke(ctx context.Context, sessionID string, reason string) error {
 	const op = "SessionManager.Revoke"
 
-	found, err := sm.db.FindOne(ctx, &models.Session{}, byID(sessionID))
+	m, err := sm.st.FindSessionByID(ctx, sessionID)
 	if err != nil {
 		return behemotherr.WrapOp(op, "session", err)
 	}
-	err = sm.revokeModel(ctx, found.(*models.Session), reason)
+	err = sm.revokeModel(ctx, m, reason)
 	if err != nil {
 		return behemotherr.WrapOp(op, "session", err)
 	}
@@ -313,13 +420,49 @@ func (sm *DefaultSessionManager) Revoke(ctx context.Context, sessionID string, r
 func (sm *DefaultSessionManager) RevokeAllForUser(ctx context.Context, userID any, reason string, except string) error {
 	const op = "SessionManager.RevokeAllForUser"
 
-	found, err := sm.db.FindMany(ctx, &models.Session{}, notRevokedForUser(userID, except), nil)
+	live, err := sm.st.ListLiveSessions(ctx, fmt.Sprint(userID), except, 0)
 	if err != nil {
 		return behemotherr.WrapOp(op, "session", err)
 	}
-	for _, f := range found {
-		if err := sm.revokeModel(ctx, f.(*models.Session), reason); err != nil {
+	for _, m := range live {
+		if err := sm.revokeModel(ctx, m, reason); err != nil {
 			return behemotherr.WrapOp(op, "session", err)
+		}
+	}
+	return nil
+}
+
+// IsFresh implements [types.SessionManager].
+func (sm *DefaultSessionManager) IsFresh(session *models.Session) bool {
+	if session == nil || session.State != models.SessionActive || session.FreshAt.IsZero() {
+		return false
+	}
+	return time.Since(session.FreshAt) <= sm.cfg.FreshAge
+}
+
+// Evict implements [types.SessionManager].
+func (sm *DefaultSessionManager) Evict(ctx context.Context, sessions []*models.Session) {
+	for _, m := range sessions {
+		sm.cacheDelete(ctx, m.LookupHash)
+	}
+}
+
+// Discard implements [types.SessionManager]. Each session that was live is
+// handed to the handlers as a revoked one, with the time and the reason,
+// although no row holds that state: the row is gone. sessions is not
+// modified.
+func (sm *DefaultSessionManager) Discard(ctx context.Context, sessions []*models.Session, reason string) error {
+	now := time.Now()
+	for _, m := range sessions {
+		sm.cacheDelete(ctx, m.LookupHash)
+		if m.State == models.SessionRevoked {
+			continue // its revoke was reported when it happened
+		}
+		ended := *m
+		ended.State, ended.RevokedAt, ended.RevokedReason = models.SessionRevoked, &now, reason
+		opCtx := types.BeginOperation(ctx)
+		if err := sm.disp.RunAfter(hookContext(opCtx, sm.auth, hooks.HookSessionAfterRevoke, types.AfterHookPhase), hooks.HookSessionAfterRevoke, &ended); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -328,26 +471,109 @@ func (sm *DefaultSessionManager) RevokeAllForUser(ctx context.Context, userID an
 // SupportsRevocation implements [types.SessionManager].
 func (sm *DefaultSessionManager) SupportsRevocation() bool { return true }
 
-func (sm *DefaultSessionManager) WriteToken(rctx *types.RequestContext, rawToken string, session *models.Session) {
-	if sm.cfg.Transport == types.TransportCookie || sm.cfg.Transport == types.TransportBoth {
-		rctx.Response.Cookie(&http.Cookie{
-			Name: "session_token", Value: rawToken, Expires: session.ExpiresAt,
-			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/",
-		})
+// sessionCookie is the cookie the session token travels in. WriteToken,
+// ExtendToken and ClearToken build it here, because a browser replaces a
+// cookie only with one of the same name, path and domain. HttpOnly and the
+// path are fixed; the domain, SameSite and Secure come from SessionConfig.
+func (sm *DefaultSessionManager) sessionCookie(value string, expires time.Time) *http.Cookie {
+	sameSite := http.SameSiteLaxMode
+	switch sm.cfg.CookieSameSite {
+	case types.SameSiteStrict:
+		sameSite = http.SameSiteStrictMode
+	case types.SameSiteNone:
+		sameSite = http.SameSiteNoneMode
 	}
-	if sm.cfg.Transport == types.TransportHeader || sm.cfg.Transport == types.TransportBoth {
-		rctx.Values["token"] = rawToken // included in the JSON response body
+	return &http.Cookie{
+		Name: sm.cfg.CookieName, Value: value, Expires: expires,
+		HttpOnly: true, Secure: !sm.cfg.CookieInsecure, SameSite: sameSite,
+		Path: "/", Domain: strings.TrimPrefix(sm.cfg.CookieDomain, "."),
 	}
 }
 
-func (sm *DefaultSessionManager) ExtractToken(r *http.Request) (string, bool) {
-	if sm.cfg.Transport == types.TransportHeader || sm.cfg.Transport == types.TransportBoth {
-		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-			return strings.TrimPrefix(auth, "Bearer "), true
+// setCookie queues the session cookie on the response, in place of one an
+// earlier step of the same request queued. One request can write it twice:
+// RequireSession extends the cookie, and the sign-out route behind it then
+// removes it. A response should not set a cookie twice (RFC 6265, section
+// 4.1.1), so the last write is the only one sent.
+func (sm *DefaultSessionManager) setCookie(rctx *types.RequestContext, cookie *http.Cookie) {
+	headers := rctx.Response.Headers
+	headers["Set-Cookie"] = slices.DeleteFunc(headers["Set-Cookie"], func(queued string) bool {
+		return strings.HasPrefix(queued, cookie.Name+"=")
+	})
+	rctx.Response.Cookie(cookie)
+}
+
+// WriteToken implements [types.SessionManager].
+func (sm *DefaultSessionManager) WriteToken(rctx *types.RequestContext, rawToken string, session *models.Session) (inBody bool) {
+	switch sm.cfg.Transport {
+	case types.TransportCookie, types.TransportBoth:
+		sm.setCookie(rctx, sm.sessionCookie(rawToken, session.ExpiresAt))
+	}
+	switch sm.cfg.Transport {
+	case types.TransportHeader, types.TransportBoth:
+		rctx.Response.SetHeader(types.SessionTokenHeader, rawToken)
+	}
+	// The body is the route's to write, so for TransportBody the caller is
+	// told to put the token there.
+	return sm.cfg.Transport == types.TransportBody
+}
+
+// cookieCarries reports whether r sent rawToken in the session cookie. It
+// is how ExtendToken and ClearToken know that the cookie on the client is
+// the one they are about. Under TransportBoth a request may present its
+// token as a bearer token, and its cookie, if it has one, may be another
+// session's.
+func (sm *DefaultSessionManager) cookieCarries(r *http.Request, rawToken string) bool {
+	sent, err := r.Cookie(sm.cfg.CookieName)
+	return err == nil && sent.Value == rawToken
+}
+
+// ClearToken implements [types.SessionManager].
+func (sm *DefaultSessionManager) ClearToken(rctx *types.RequestContext) {
+	switch sm.cfg.Transport {
+	case types.TransportCookie, types.TransportBoth:
+		// The cookie is removed for the request that presented its token
+		// in it. Another cookie is left alone: its session is still live.
+		token, ok := sm.ExtractToken(rctx.Request)
+		if !ok || !sm.cookieCarries(rctx.Request, token) {
+			return
+		}
+		// An empty cookie that has already expired makes the browser drop
+		// the one it holds. Max-Age says so to current browsers, and the
+		// date to those that only read Expires.
+		expired := sm.sessionCookie("", time.Unix(0, 0))
+		expired.MaxAge = -1
+		sm.setCookie(rctx, expired)
+	}
+}
+
+// ExtendToken implements [types.SessionManager].
+func (sm *DefaultSessionManager) ExtendToken(rctx *types.RequestContext, rawToken string, session *models.Session) (written bool) {
+	switch sm.cfg.Transport {
+	case types.TransportCookie, types.TransportBoth:
+		// Only a client that sent the token in the cookie depends on the
+		// cookie's date.
+		if sm.cookieCarries(rctx.Request, rawToken) {
+			sm.setCookie(rctx, sm.sessionCookie(rawToken, session.ExpiresAt))
+			return true
 		}
 	}
-	if sm.cfg.Transport == types.TransportCookie || sm.cfg.Transport == types.TransportBoth {
-		if c, err := r.Cookie("session_token"); err == nil {
+	return false
+}
+
+// ExtractToken implements [types.SessionManager]. A client of
+// TransportHeader and of TransportBody sends the token the same way, as a
+// bearer token; the two differ only in how the sign-in delivered it.
+func (sm *DefaultSessionManager) ExtractToken(r *http.Request) (string, bool) {
+	switch sm.cfg.Transport {
+	case types.TransportHeader, types.TransportBody, types.TransportBoth:
+		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && token != "" {
+			return token, true
+		}
+	}
+	switch sm.cfg.Transport {
+	case types.TransportCookie, types.TransportBoth:
+		if c, err := r.Cookie(sm.cfg.CookieName); err == nil && c.Value != "" {
 			return c.Value, true
 		}
 	}
@@ -361,19 +587,25 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	if m.State == models.SessionRevoked {
 		return nil // already revoked
 	}
+	ctx = types.BeginOperation(ctx) // beforeRevoke and afterRevoke share Values
 
-	hctx := &types.HookContext{Ctx: ctx}
-	if _, err := sm.disp.RunBefore(hctx, hooks.HookSessionRevoke,
-		behemoth.M{"sessionID": m.ID, "reason": reason}); err != nil {
+	// The returned payload is not read: a handler can stop the revoke, but
+	// it can't point it at another session or change the reason.
+	if _, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeRevoke, types.BeforeHookPhase), hooks.HookSessionBeforeRevoke,
+		behemoth.M{hooks.HookValueSessionID: m.ID, hooks.HookValueReason: reason}); err != nil {
 		return err
 	}
 
 	now := time.Now()
-	updates := behemoth.M{"state": models.SessionRevoked, "revoked_at": now, "revoked_reason": reason, "updated_at": now}
-	if err := sm.db.UpdateOne(ctx, &models.Session{}, byID(m.ID), updates); err != nil {
+	revoked, err := sm.st.UpdateSession(ctx, m.ID, behemoth.M{
+		models.SessionStateColumn:   string(models.SessionRevoked),
+		models.SessionRevokedAt:     now,
+		models.SessionRevokedReason: reason,
+	})
+	if err != nil {
 		return err
 	}
-	m.State, m.RevokedAt, m.RevokedReason = models.SessionRevoked, &now, reason
+	*m = *revoked
 
 	// Active invalidation without relying on the KV entry's TTL to lapse
 	// naturally, which would leave a revoked session validatable from cache
@@ -381,8 +613,7 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	// and an explicit Delete is required instead.
 	sm.cacheDelete(ctx, m.LookupHash)
 
-	sm.disp.RunAfter(hctx, hooks.HookSessionRevoke, m)
-	return nil
+	return sm.disp.RunAfter(hookContext(ctx, sm.auth, hooks.HookSessionAfterRevoke, types.AfterHookPhase), hooks.HookSessionAfterRevoke, m)
 }
 
 func (sm *DefaultSessionManager) fetchByLookupHash(ctx context.Context, lookupHash string) (*models.Session, bool, error) {
@@ -397,11 +628,11 @@ func (sm *DefaultSessionManager) fetchByLookupHash(ctx context.Context, lookupHa
 		// KV must never turn into a hard failure here; it's an optimization,
 		// never a correctness dependency (same fail-open posture as Rate Limiting).
 	}
-	found, err := sm.db.FindOne(ctx, &models.Session{}, byLookupHash(lookupHash))
+	m, err := sm.st.FindSessionByLookupHash(ctx, lookupHash)
 	if err != nil {
 		return nil, false, err
 	}
-	return found.(*models.Session), false, nil
+	return m, false, nil
 }
 
 func (sm *DefaultSessionManager) cacheSet(ctx context.Context, m *models.Session) {
@@ -417,8 +648,8 @@ func (sm *DefaultSessionManager) cacheSet(ctx context.Context, m *models.Session
 	if ttl <= 0 {
 		return
 	}
-	if err := sm.kv.Set(ctx, cacheKey(m.LookupHash), string(data), ttl); err != nil && sm.tel != nil {
-		sm.tel.Logger.Warn(ctx, "session cache write failed", behemoth.M{"error": err.Error()}) // logged, never propagated
+	if err := sm.kv.Set(ctx, cacheKey(m.LookupHash), string(data), ttl); err != nil {
+		sm.tel.Logger.Warn(ctx, "session cache write failed", telemetry.ErrorFields(err)) // logged, never propagated
 	}
 }
 
@@ -426,36 +657,30 @@ func (sm *DefaultSessionManager) cacheDelete(ctx context.Context, lookupHash str
 	if sm.kv == nil {
 		return
 	}
-	if err := sm.kv.Delete(ctx, cacheKey(lookupHash)); err != nil && sm.tel != nil {
-		sm.tel.Logger.Warn(ctx, "session cache invalidation failed", behemoth.M{"error": err.Error()})
+	if err := sm.kv.Delete(ctx, cacheKey(lookupHash)); err != nil {
+		sm.tel.Logger.Warn(ctx, "session cache invalidation failed", telemetry.ErrorFields(err))
 	}
 }
 
-func byID(id string) clause.Expression {
-	return clause.Expression{Conditions: []clause.Condition{{Field: "id", Operator: clause.OpEqual, Value: id}}}
-}
-
-func byLookupHash(hash string) clause.Expression {
-	return clause.Expression{Conditions: []clause.Condition{{Field: "lookup_hash", Operator: clause.OpEqual, Value: hash}}}
-}
-
-func byUserID(userID any) clause.Expression {
-	return clause.Expression{Conditions: []clause.Condition{{Field: "user_id", Operator: clause.OpEqual, Value: fmt.Sprint(userID)}}}
-}
-
-// notRevokedForUser: used for both the MaxConcurrent count and RevokeAllForUser —
-// "not revoked" rather than "active only" deliberately includes Pending sessions,
-// since an abandoned half-completed login still occupies a concurrency slot and
-// still needs revoking on a full logout-everywhere.
-func notRevokedForUser(userID any, exceptID string) clause.Expression {
-	conds := []clause.Condition{
-		{Field: "user_id", Operator: clause.OpEqual, Value: fmt.Sprint(userID)},
-		{Field: "state", Operator: clause.OpNotEqual, Value: string(types.SessionRevoked)},
+// hookContext builds the context the session and token managers dispatch
+// one hook point with, the way dataHooks.hookContext does for data points.
+//
+// The managers' points are Tier 2, so Tx stays nil. Values are the
+// operation's: each manager method that fires points calls
+// types.BeginOperation first, so its before and after points share one map,
+// which starts as a copy of the caller's operation (a sign-in's). Request is
+// the request being handled, or nil outside one (a CLI, a job).
+func hookContext(ctx context.Context, auth *types.AuthContext, point types.HookPoint, phase types.HookPhase) *types.HookContext {
+	values := types.HookValuesFrom(ctx)
+	if values == nil {
+		values = behemoth.M{}
 	}
-	if exceptID != "" {
-		conds = append(conds, clause.Condition{Field: "id", Operator: clause.OpNotEqual, Value: exceptID})
+	return &types.HookContext{
+		Ctx: ctx, Point: point, Phase: phase,
+		Auth:    auth,
+		Values:  values,
+		Request: types.RequestFrom(ctx),
 	}
-	return clause.Expression{Conditions: conds, Logic: clause.OpAnd}
 }
 
 var _ types.SessionManager = (*DefaultSessionManager)(nil)

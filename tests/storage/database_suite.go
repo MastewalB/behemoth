@@ -3,11 +3,14 @@ package models
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ModelManager interface provides control over the concrete type for testing.
@@ -60,6 +63,7 @@ func (s *DatabaseTestSuite) Run() {
 	s.t.Run("DeleteAll", s.TestDeleteAll)
 	s.t.Run("DeleteMany", s.TestDeleteMany)
 	s.t.Run("Transaction", s.TestTransaction)
+	s.t.Run("NestedTransaction", s.TestNestedTransaction)
 	s.t.Run("QueryOptions", s.TestQueryOptions)
 	s.t.Run("Count", s.TestCount)
 
@@ -165,6 +169,18 @@ func (s *DatabaseTestSuite) TestUpdate(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, found)
 
+	// Drivers that report changed rather than matched rows (MySQL) must
+	// still treat a row already holding the values as matched.
+	err = s.adapter.Update(s.ctx, updatedModel)
+	assert.NoError(t, err, "updating with unchanged values is not NotFound")
+
+	// The convention: NotFound for a missing row, and never an insert.
+	ghost := s.modelManager.Create("ghost")
+	err = s.adapter.Update(s.ctx, ghost)
+	assert.True(t, behemotherr.IsNotFound(err), "updating a missing row: expected NotFound, got %v", err)
+	count, err := s.adapter.Count(s.ctx, ghost, getWhereExpr("id", clause.OpEqual, "ghost"))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), count, "Update must not insert a missing row")
 }
 
 func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
@@ -201,6 +217,51 @@ func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
 		found, err := s.adapter.FindMany(s.ctx, model, getWhereExpr("username", clause.OpEqual, "singleUpdatedUsername"), nil)
 		assert.NoError(t, err)
 		assert.Len(t, found, 1, "Only one record should be updated even if multiple match the condition")
+	})
+
+	// The UpdateOne convention (behemoth.Database): NotFound when no row
+	// matches, checked against the row as written.
+	t.Run("UpdateOneNoMatchIsNotFound", func(t *testing.T) {
+		defer s.modelManager.CleanupTables()
+		models := s.PopulateTableWithTestData(t)
+
+		err := s.adapter.UpdateOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, "no-such-id"), behemoth.M{"email": "x@example.com"})
+		assert.True(t, behemotherr.IsNotFound(err), "expected NotFound, got %v", err)
+	})
+
+	// Drivers that report changed rather than matched rows (MySQL) must
+	// still treat a row already holding the new values as matched.
+	t.Run("UpdateOneUnchangedValuesStillMatch", func(t *testing.T) {
+		defer s.modelManager.CleanupTables()
+		models := s.PopulateTableWithTestData(t)
+		id := getModelID(models[0])
+		found, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+		require.NoError(t, err)
+
+		err = s.adapter.UpdateOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id), behemoth.M{"email": getModelEmail(found)})
+		assert.NoError(t, err, "a matched row that already holds the values is not NotFound")
+	})
+
+	// A guarded update applies once: the second identical call no longer
+	// matches its own guard.
+	t.Run("UpdateOneGuardIsCheckedOnWrite", func(t *testing.T) {
+		defer s.modelManager.CleanupTables()
+		models := s.PopulateTableWithTestData(t)
+		id := getModelID(models[0])
+		found, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+		require.NoError(t, err)
+
+		guarded := clause.Expression{Logic: clause.OpAnd, Conditions: []clause.Condition{
+			{Field: "id", Operator: clause.OpEqual, Value: id},
+			{Field: "email", Operator: clause.OpEqual, Value: getModelEmail(found)},
+		}}
+		require.NoError(t, s.adapter.UpdateOne(s.ctx, models[0], guarded, behemoth.M{"email": "claimed@example.com"}))
+		err = s.adapter.UpdateOne(s.ctx, models[0], guarded, behemoth.M{"email": "again@example.com"})
+		assert.True(t, behemotherr.IsNotFound(err), "the guard no longer holds; expected NotFound, got %v", err)
+
+		after, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
+		require.NoError(t, err)
+		assert.Equal(t, "claimed@example.com", getModelEmail(after), "the second update did not apply")
 	})
 }
 
@@ -310,6 +371,9 @@ func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 	found, err := s.adapter.FindOne(s.ctx, model, getWhereExpr("id", clause.OpEqual, "1"))
 	assert.Error(t, err)
 	assert.Nil(t, found)
+
+	err = s.adapter.Delete(s.ctx, model)
+	assert.True(t, behemotherr.IsNotFound(err), "deleting a missing row: expected NotFound, got %v", err)
 }
 
 func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
@@ -375,7 +439,7 @@ func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
 		expr := getWhereExpr("id", clause.OpEqual, "nonexistent")
 
 		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
-		// assert.Error(t, err, "DeleteOne should return error when no records match")
+		assert.True(t, behemotherr.IsNotFound(err), "DeleteOne with no match: expected NotFound, got %v", err)
 
 		// Verify all records still exist
 		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})
@@ -585,6 +649,64 @@ func (s *DatabaseTestSuite) TestTransaction(t *testing.T) {
 	assert.NotNil(t, found)
 	assert.True(t, s.modelManager.Compare(commitModel, found))
 
+}
+
+// TestNestedTransaction covers Transaction called on the adapter a
+// transaction hands out, as a hook handler given that adapter may do. The
+// inner call must not panic or commit on its own: its writes share the outer
+// transaction's fate.
+func (s *DatabaseTestSuite) TestNestedTransaction(t *testing.T) {
+	defer s.modelManager.CleanupTables()
+
+	exists := func(id string) bool {
+		found, err := s.adapter.FindOne(s.ctx, s.modelManager.Create(id), getWhereExpr("id", clause.OpEqual, id))
+		return err == nil && found != nil
+	}
+	// nested creates outerID in a transaction and innerID in a Transaction
+	// called on that transaction's adapter. innerErr is returned by the inner
+	// fn and passed on by the outer one; outerErr is returned by the outer fn
+	// after a successful inner call.
+	nested := func(outerID, innerID string, innerErr, outerErr error) error {
+		return s.adapter.Transaction(context.Background(), func(ctx context.Context, tx behemoth.Database) (any, error) {
+			if err := tx.Create(ctx, s.modelManager.Create(outerID)); err != nil {
+				return nil, err
+			}
+			err := tx.Transaction(ctx, func(ctx context.Context, inner behemoth.Database) (any, error) {
+				if err := inner.Create(ctx, s.modelManager.Create(innerID)); err != nil {
+					return nil, err
+				}
+				// The inner call sees the outer transaction's uncommitted row.
+				if _, err := inner.FindOne(ctx, s.modelManager.Create(outerID), getWhereExpr("id", clause.OpEqual, outerID)); err != nil {
+					return nil, fmt.Errorf("inner transaction can't see the outer row: %w", err)
+				}
+				return nil, innerErr
+			})
+			if err != nil {
+				return nil, err
+			}
+			return nil, outerErr
+		})
+	}
+
+	t.Run("Commit", func(t *testing.T) {
+		assert.NoError(t, nested("nest_outer_ok", "nest_inner_ok", nil, nil))
+		assert.True(t, exists("nest_outer_ok"), "the outer write was committed")
+		assert.True(t, exists("nest_inner_ok"), "the inner write was committed with it")
+	})
+
+	t.Run("OuterRollbackUndoesInner", func(t *testing.T) {
+		fail := errors.New("outer failed after the inner call returned")
+		assert.ErrorIs(t, nested("nest_outer_rb", "nest_inner_rb", nil, fail), fail)
+		assert.False(t, exists("nest_outer_rb"))
+		assert.False(t, exists("nest_inner_rb"), "the inner call did not commit on its own")
+	})
+
+	t.Run("InnerErrorRollsBackBoth", func(t *testing.T) {
+		fail := errors.New("inner failed")
+		assert.ErrorIs(t, nested("nest_outer_err", "nest_inner_err", fail, nil), fail)
+		assert.False(t, exists("nest_outer_err"))
+		assert.False(t, exists("nest_inner_err"))
+	})
 }
 
 func (s *DatabaseTestSuite) TestQueryOptions(t *testing.T) {

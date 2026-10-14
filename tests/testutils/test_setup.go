@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/MastewalB/behemoth"
-	_ "github.com/MastewalB/behemoth/migration/plugins/sqlite"
-	"github.com/MastewalB/behemoth/storage/adapters"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
+	gormAdapter "github.com/MastewalB/behemoth/storage/adapters/gorm"
+	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
+	mysqlAdapter "github.com/MastewalB/behemoth/storage/adapters/mysql"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
+	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	sqlserverAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/sqliteshim"
 
@@ -274,10 +276,17 @@ func SetupGormTestDB(t *testing.T) (*gorm.DB, func()) {
 	return db, cleanup
 }
 
-func SetupGORMDBWithSchema(t *testing.T, model behemoth.Model) (db *gorm.DB, cleanup func()) {
+// SetupGORMDBWithSchema opens a GORM database and runs schema (DDL) on it.
+// The tables come from the DDL, not from AutoMigrate: the adapter never
+// hands GORM a struct, so the test models need no gorm tags or TableName.
+func SetupGORMDBWithSchema(t *testing.T, schema string) (db *gorm.DB, cleanup func()) {
 	db, cleanup = SetupGormTestDB(t)
-	db.Exec("PRAGMA foreign_keys = ON;")
-	db.AutoMigrate(model)
+	if err := db.Exec("PRAGMA foreign_keys = ON;").Error; err != nil {
+		t.Fatalf("failed to enable foreign keys: %v", err)
+	}
+	if err := db.Exec(schema).Error; err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
 
 	return db, cleanup
 }
@@ -299,13 +308,13 @@ func SetupBunTestDB(t *testing.T) (db *bun.DB, cleanup func()) {
 	return db, cleanup
 }
 
-func SetupBunTestDBWithSchema(t *testing.T, model behemoth.Model) (db *bun.DB, cleanup func()) {
-	ctx := context.Background()
+// SetupBunTestDBWithSchema opens a bun database and runs schema (DDL) on it.
+// The tables come from the DDL, not from NewCreateTable().Model: the adapter
+// never hands bun a struct, so the test models need no bun.BaseModel or tags.
+func SetupBunTestDBWithSchema(t *testing.T, schema string) (db *bun.DB, cleanup func()) {
 	db, cleanup = SetupBunTestDB(t)
-
-	_, err := db.NewCreateTable().Model(model).IfNotExists().Exec(ctx)
-	if err != nil {
-		t.Fatal("failed to create table, %w", err)
+	if _, err := db.ExecContext(context.Background(), schema); err != nil {
+		t.Fatalf("failed to create table: %v", err)
 	}
 
 	return db, cleanup
@@ -330,37 +339,31 @@ func SetupRedisClient(t *testing.T, ctx context.Context) (*goredis.Client, func(
 
 // Adapter Setups
 
-func SetupSQLiteAdapter(t *testing.T, db *sql.DB) *adapters.SQLiteAdapter {
-	adapter := &adapters.SQLiteAdapter{DB: db}
+func SetupSQLiteAdapter(t *testing.T, db *sql.DB) *sqliteAdapter.SQLiteAdapter {
+	adapter := &sqliteAdapter.SQLiteAdapter{DB: db}
 	return adapter
 }
 
-func SetupInternalAdapter(t *testing.T, db behemoth.Database) *adapters.InternalAdapter {
-	return &adapters.InternalAdapter{
-		DB: db,
-	}
-}
-
-func SetupGormAdapter(t *testing.T, db *gorm.DB) *adapters.GormAdapter {
-	return adapters.NewGormAdapter(db)
+func SetupGormAdapter(t *testing.T, db *gorm.DB) *gormAdapter.GormAdapter {
+	return gormAdapter.NewGormAdapter(db, nil)
 }
 
 func SetupBunAdapter(t *testing.T, db *bun.DB) *bunAdapter.BunAdapter {
-	return bunAdapter.NewBunAdapter(db)
+	return bunAdapter.NewBunAdapter(db, nil)
 }
 
-func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *adapters.MongoAdapter {
-	return adapters.NewMongoAdapter(client, dbName, nil)
+func SetupMongoAdapter(t *testing.T, client *mongo.Client, dbName string) *mongoAdapter.MongoAdapter {
+	return mongoAdapter.NewMongoAdapter(client, dbName, nil)
 }
 
 func SetupPostgresAdapter(db *sql.DB) *pgAdapter.PostgresAdapter {
 	return pgAdapter.NewPostgresAdapter(db, nil)
 }
 
-func SetupMySQLAdapter(db *sql.DB) *adapters.MySQLAdapter {
-	return adapters.NewMySQLAdapter(db, nil)
+func SetupMySQLAdapter(db *sql.DB) *mysqlAdapter.MySQLAdapter {
+	return mysqlAdapter.NewMySQLAdapter(db, nil)
 }
 
-func SetupMSSQLAdapter(db *sql.DB) *adapters.SQLServerAdapter {
-	return adapters.NewSQLServerAdapter(db, nil)
+func SetupMSSQLAdapter(db *sql.DB) *sqlserverAdapter.SQLServerAdapter {
+	return sqlserverAdapter.NewSQLServerAdapter(db, nil)
 }

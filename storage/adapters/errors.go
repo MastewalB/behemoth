@@ -3,6 +3,7 @@ package adapters
 import (
 	"database/sql"
 	"errors"
+	"strings"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 )
@@ -54,4 +55,49 @@ func MapStdSQLErrors(op, entity string, err error) (classified error, ok bool) {
 	default:
 		return nil, false
 	}
+}
+
+// ConstraintKind classifies a constraint violation without knowing the
+// driver — for adapters over an application's connection (bun), whose driver
+// is the application's choice. It reads the SQLSTATE where the driver exposes
+// one (lib/pq, pgx, bun's pgdriver) and otherwise the engines' own codes in
+// the message (SQLite, MySQL, SQL Server). SentinelUnknown: not a constraint
+// violation it recognizes.
+func ConstraintKind(err error) SentinelKind {
+	if err == nil {
+		return SentinelUnknown
+	}
+	var state string
+	var withState interface{ SQLState() string }
+	var withField interface{ Field(byte) string }
+	switch {
+	case errors.As(err, &withState):
+		state = withState.SQLState()
+	case errors.As(err, &withField):
+		state = withField.Field('C')
+	}
+	switch state {
+	case "23505":
+		return SentinelDuplicateKey
+	case "23503":
+		return SentinelForeignKey
+	}
+
+	msg := err.Error()
+	for _, m := range []struct {
+		substr string
+		kind   SentinelKind
+	}{
+		{"UNIQUE constraint failed", SentinelDuplicateKey},      // SQLite
+		{"FOREIGN KEY constraint failed", SentinelForeignKey},   // SQLite
+		{"Error 1062", SentinelDuplicateKey},                    // MySQL ER_DUP_ENTRY
+		{"Error 1452", SentinelForeignKey},                      // MySQL ER_NO_REFERENCED_ROW_2
+		{"Cannot insert duplicate key", SentinelDuplicateKey},   // SQL Server 2601 / 2627
+		{"conflicted with the FOREIGN KEY", SentinelForeignKey}, // SQL Server 547
+	} {
+		if strings.Contains(msg, m.substr) {
+			return m.kind
+		}
+	}
+	return SentinelUnknown
 }

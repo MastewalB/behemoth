@@ -9,10 +9,10 @@ import (
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
-	"github.com/MastewalB/behemoth/migration/plugins/sqlite"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/tests/testutils"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,8 +65,8 @@ func TestLedgerEntrySerializable(t *testing.T) {
 
 func TestSchemaSnapshotSerializable(t *testing.T) {
 	users := usersTable()
-	users.Columns[0].Overrides = map[string]core.ColumnOverride{"postgres": {Default: "now()"}}
-	snap := &core.SchemaSnapshot{Version: "0002_posts", Tables: map[string]core.TableSchema{"users": users, "posts": postsTable()}}
+	users.Columns[0].Overrides = map[string]schema.ColumnOverride{"postgres": {Default: "now()"}}
+	snap := &core.SchemaSnapshot{Version: "0002_posts", Tables: map[string]schema.Table{"users": users, "posts": postsTable()}}
 
 	m, err := snap.ToMap()
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestSchemaSnapshotSerializable(t *testing.T) {
 	require.NoError(t, fromDoc.FromMap(map[string]any{"version": "v", "tables": map[string]any{
 		"users": map[string]any{"Name": "users", "Columns": []any{map[string]any{"Name": "id", "Type": "int", "PrimaryKey": true}}},
 	}}))
-	assert.Equal(t, core.ColTypeInteger, fromDoc.Tables["users"].Columns[0].Type)
+	assert.Equal(t, schema.ColTypeInteger, fromDoc.Tables["users"].Columns[0].Type)
 
 	// A zero value still lists every column, with "{}" rather than "null".
 	zero, err := (&core.SchemaSnapshot{}).ToMap()
@@ -131,7 +131,7 @@ func readBackThroughAdapter(t *testing.T, driver core.SchemaDriver, database beh
 	ctx := context.Background()
 	users := usersTable()
 	for i, id := range []string{"0001_users", "0002_posts"} {
-		tables := map[string]core.TableSchema{"users": users}
+		tables := map[string]schema.Table{"users": users}
 		up := []core.SchemaOperation{createTableOp(users)}
 		if i == 1 {
 			tables["posts"] = postsTable()
@@ -183,7 +183,7 @@ func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
 	db := openSQLite(t)
 	runnerUsesConfiguredTables(t,
 		func(r behemoth.SchemaResolver) core.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
-		func(r behemoth.SchemaResolver) behemoth.Database { return adapters.NewSQLiteAdapter(db, r) },
+		func(r behemoth.SchemaResolver) behemoth.Database { return sqlite.NewSQLiteAdapter(db, r) },
 		NewSQLiteTestManager(db),
 	)
 }
@@ -202,8 +202,8 @@ func runnerUsesConfiguredTables(
 	require.NotEqual(t, core.LedgerCanonicalName, cfg.TableName, "the test needs physical names that differ")
 
 	resolver := core.NewSchemaResolver()
-	resolver.Freeze(core.BuildSchemaResolverTable(core.NewSchemaRegistry(), cfg))
-	runner := core.NewMigrationRunner(newAdapter(resolver), newDriver(resolver), cfg, types.NewTelemetry(nil, nil, nil))
+	resolver.Freeze(core.BuildSchemaResolverTable(schema.NewRegistry(), cfg))
+	runner := core.NewMigrationRunner(newAdapter(resolver), newDriver(resolver), cfg, telemetry.New(nil, nil, nil))
 
 	users, posts := usersTable(), postsTable()
 	first := core.Migration{ID: "0001_users", Up: []core.SchemaOperation{createTableOp(users)}}
@@ -265,7 +265,7 @@ func keysOf[V any](m map[string]V) []string {
 // the runner's bookkeeping reads may treat it as "nothing applied yet".
 func TestSQLiteAdapterClassifiesMissingTable(t *testing.T) {
 	ctx := context.Background()
-	adapter := adapters.NewSQLiteAdapter(openSQLite(t), nil)
+	adapter := sqlite.NewSQLiteAdapter(openSQLite(t), nil)
 
 	_, err := adapter.FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
 	assert.True(t, behemotherr.IsUndefinedTable(err), "FindOne: %v", err)
@@ -281,7 +281,7 @@ func TestSQLiteAdapterClassifiesMissingTable(t *testing.T) {
 	db := openSQLite(t)
 	_, err = db.ExecContext(ctx, `CREATE TABLE behemoth_schema_snapshot (id INTEGER PRIMARY KEY, version TEXT, tables TEXT)`)
 	require.NoError(t, err)
-	_, err = adapters.NewSQLiteAdapter(db, nil).FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
+	_, err = sqlite.NewSQLiteAdapter(db, nil).FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
 	assert.True(t, behemotherr.IsNotFound(err), "empty table: %v", err)
 	assert.False(t, behemotherr.IsUndefinedTable(err))
 }

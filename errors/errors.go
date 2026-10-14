@@ -19,18 +19,39 @@ const (
 	CategoryUnauthorized   Category = "unauthorized" // not authenticated
 	CategoryForbidden      Category = "forbidden"    // authenticated, not permitted
 	CategoryRateLimited    Category = "rate_limited"
-	CategorySession        Category = "session"
-	CategoryToken          Category = "token"
-	CategoryTransaction    Category = "transaction"
-	CategoryDatabase       Category = "database"        // infra failure, connection lost, timeout
-	CategoryMigration      Category = "migration"       // migration errors
-	CategoryInvalidKey     Category = "invalid_key"     // key is empty, malformed, or otherwise invalid for the operation
-	CategoryKeyNotFound    Category = "key_not_found"   // key is valid but not present in the store
-	CategoryNotImplemented Category = "not_implemented" // interface not implemented
-	CategoryConfiguration  Category = "configuration"   // boot and initialization problems
-	CategorySecurity       Category = "security"        // runtime crypto/key failures. unknown version, decode failure, etc.
-	CategoryInternal       Category = "internal"        // catch-all, should shrink over time as gaps get classified
+	// CategoryUnsupportedMedia is a request whose body is of a type the
+	// operation does not accept. Over HTTP it is a 415.
+	CategoryUnsupportedMedia Category = "unsupported_media_type"
+	CategorySession          Category = "session"
+	CategoryToken            Category = "token"
+	CategoryTransaction      Category = "transaction"
+	CategoryDatabase         Category = "database"        // infra failure, connection lost, timeout
+	CategoryMigration        Category = "migration"       // migration errors
+	CategoryInvalidKey       Category = "invalid_key"     // key is empty, malformed, or otherwise invalid for the operation
+	CategoryKeyNotFound      Category = "key_not_found"   // key is valid but not present in the store
+	CategoryNotImplemented   Category = "not_implemented" // interface not implemented
+	CategoryConfiguration    Category = "configuration"   // boot and initialization problems
+	CategorySecurity         Category = "security"        // runtime crypto/key failures. unknown version, decode failure, etc.
+	CategoryInternal         Category = "internal"        // catch-all, should shrink over time as gaps get classified
 )
+
+// IsRejection reports whether an error of the category refuses the request,
+// as opposed to reporting a failure of the system. A rejection is what a hook
+// handler or a rate limit answers with to stop an operation: the caller did
+// something that is not allowed, and the system worked. Every other category
+// counts as a failure of the system, such as a database that is down.
+//
+// This is the one place that draws the line. Code that fires a failed hook
+// point asks it, so that an outage is not counted or audited as a refused
+// request.
+func (c Category) IsRejection() bool {
+	switch c {
+	case CategoryValidation, CategoryConflict, CategoryUnauthorized,
+		CategoryForbidden, CategoryRateLimited:
+		return true
+	}
+	return false
+}
 
 const (
 	ErrorCodeUnknown = "unknown_error"
@@ -66,6 +87,17 @@ func Is(err error, category Category) bool {
 	return false
 }
 
+// IsRejection reports whether err is a typed refusal of the request (see
+// [Category.IsRejection]). An error that is not a [DomainError] is not one:
+// it is taken as a failure of the system, so a hook handler that means to
+// refuse a request returns a typed error.
+func IsRejection(err error) bool {
+	if de, ok := errors.AsType[*DomainError](err); ok {
+		return de.Category.IsRejection()
+	}
+	return false
+}
+
 func IsCode(err error, code string) bool {
 	if de, ok := errors.AsType[*DomainError](err); ok {
 		return de.Code == code
@@ -93,6 +125,20 @@ func NewRateLimited(op, ruleName string, retryAfter time.Duration) *DomainError 
 	}
 }
 
+// NewUnauthorized reports that the caller could not be authenticated: wrong
+// credentials at sign-in, for example. message is sent to the client, so it
+// should not say which part was wrong. It maps to 401. A request that is
+// authenticated but not allowed is CategoryForbidden instead.
+func NewUnauthorized(op, code, message string) error {
+	return &DomainError{
+		Category:        CategoryUnauthorized,
+		Op:              op,
+		Code:            code,
+		PublicMessage:   message,
+		InternalMessage: fmt.Sprintf("%s: %s", op, message),
+	}
+}
+
 // NewInternalError classifies an unexpected failure inside the system
 func NewInternalError(op string, original error) *DomainError {
 	return &DomainError{
@@ -115,17 +161,18 @@ func NewMigrationError(op, code string, original error) *DomainError {
 }
 
 var categoryToStatus = map[Category]int{
-	CategoryValidation:     http.StatusBadRequest,
-	CategoryNotFound:       http.StatusNotFound,
-	CategoryDuplicateKey:   http.StatusConflict,
-	CategoryForeignKey:     http.StatusConflict,
-	CategoryConflict:       http.StatusConflict,
-	CategoryUnauthorized:   http.StatusUnauthorized,
-	CategoryForbidden:      http.StatusForbidden,
-	CategoryRateLimited:    http.StatusTooManyRequests,
-	CategorySession:        http.StatusUnauthorized,
-	CategoryToken:          http.StatusUnauthorized,
-	CategoryTransaction:    http.StatusInternalServerError,
-	CategoryDatabase:       http.StatusInternalServerError,
-	CategoryUndefinedTable: http.StatusInternalServerError,
+	CategoryValidation:       http.StatusBadRequest,
+	CategoryNotFound:         http.StatusNotFound,
+	CategoryDuplicateKey:     http.StatusConflict,
+	CategoryForeignKey:       http.StatusConflict,
+	CategoryConflict:         http.StatusConflict,
+	CategoryUnauthorized:     http.StatusUnauthorized,
+	CategoryForbidden:        http.StatusForbidden,
+	CategoryRateLimited:      http.StatusTooManyRequests,
+	CategoryUnsupportedMedia: http.StatusUnsupportedMediaType,
+	CategorySession:          http.StatusUnauthorized,
+	CategoryToken:            http.StatusUnauthorized,
+	CategoryTransaction:      http.StatusInternalServerError,
+	CategoryDatabase:         http.StatusInternalServerError,
+	CategoryUndefinedTable:   http.StatusInternalServerError,
 }

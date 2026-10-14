@@ -1,6 +1,8 @@
 package adapters
 
 import (
+	"sort"
+
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 )
@@ -78,20 +80,12 @@ func PhysicalDocument(r behemoth.SchemaResolver, m behemoth.Model, doc map[strin
 // CanonicalFields maps m's physical field names back to canonical ones.
 //
 // The resolver only maps canonical -> physical, so the canonical side comes
-// from the model itself: the keys of an empty model's ToMap(), the same
-// source the SQL adapters derive their column lists from. Only renamed fields
-// are included.
+// from the columns ReadColumns lists: the table's declared columns,
+// contributions included, or m's own ToMap keys. Only renamed fields are
+// included.
 func CanonicalFields(r behemoth.SchemaResolver, m behemoth.Model) map[string]string {
 	out := map[string]string{}
-	ser, ok := m.New().(behemoth.Serializable)
-	if !ok {
-		return out
-	}
-	fields, err := ser.ToMap()
-	if err != nil {
-		return out
-	}
-	for canonical := range fields {
+	for _, canonical := range ReadColumns(r, m, nil) {
 		if physical := PhysicalColumn(r, m, canonical); physical != canonical {
 			out[physical] = canonical
 		}
@@ -114,4 +108,48 @@ func CanonicalDocument(canonical map[string]string, raw map[string]any) map[stri
 		out[k] = v
 	}
 	return out
+}
+
+// ReadColumns lists the canonical columns to read for m's table: the
+// resolver's declared columns when it knows the table — including columns
+// other declarers contributed, which m's own fields don't cover — or m's own
+// ToMap keys otherwise, sorted so the query text is stable. With selected
+// (QueryOptions.Select), only those of them, in that order.
+func ReadColumns(r behemoth.SchemaResolver, m behemoth.Model, selected []string) []string {
+	columns := r.Columns(m.SchemaName())
+	if len(columns) == 0 {
+		if ser, ok := m.New().(behemoth.Serializable); ok {
+			if row, err := ser.ToMap(); err == nil {
+				for k := range row {
+					columns = append(columns, k)
+				}
+				sort.Strings(columns)
+			}
+		}
+	}
+	if len(selected) == 0 {
+		return columns
+	}
+	known := make(map[string]bool, len(columns))
+	for _, c := range columns {
+		known[c] = true
+	}
+	var out []string
+	for _, c := range selected {
+		if known[c] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ScanTargets allocates n scan destinations: values, and pointers to them to
+// pass to Scan.
+func ScanTargets(n int) (values []any, ptrs []any) {
+	values = make([]any, n)
+	ptrs = make([]any, n)
+	for i := range values {
+		ptrs[i] = &values[i]
+	}
+	return values, ptrs
 }
