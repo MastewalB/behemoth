@@ -1145,6 +1145,9 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 // CoreDeclareSchema declares the tables core itself owns. Plugins and the
 // application may extend them (ExtendColumn); the models carry those
 // columns in their Extension.
+//
+// A table added here or removed changes the name of an application's first
+// migration, which TestLauncherRunsAnApplication checks: update it too.
 func CoreDeclareSchema(ic *types.PluginInitContext) error {
 	for _, d := range []struct {
 		model behemoth.Model

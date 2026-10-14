@@ -249,8 +249,13 @@ func (empty) Introspect(context.Context, string) (core.IntrospectedTable, error)
 		t.Errorf("stdout lacks the plan:\n%s", stdout.String())
 	}
 	// Written by the application's process, in the directory the launcher ran in.
-	if _, err := os.Stat(filepath.Join(module, "migrations", "0001_create_accounts_and_5_more.json")); err != nil {
-		t.Errorf("the migration was not written: %v", err)
+	// The name counts core's tables beyond the first: update it when
+	// CoreDeclareSchema gains or loses a table (docs/internal/models/models.md,
+	// "Declaration").
+	const migrationName = "0001_create_accounts_and_6_more.json"
+	if _, err := os.Stat(filepath.Join(module, "migrations", migrationName)); err != nil {
+		written, _ := filepath.Glob(filepath.Join(module, "migrations", "*.json"))
+		t.Errorf("the migration was not written: %v\nwritten: %v\nIf a core table was added or removed, update migrationName.", err, written)
 	}
 
 	// Nothing of the build is left in the application's tree.

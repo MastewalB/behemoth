@@ -87,6 +87,8 @@ The routes that return a user (`WriteSignIn`, sign-up, the two verify routes, th
 
 `CoreDeclareSchema` declares core's tables (`users`, `sessions`, `tokens`, `accounts`, `rate_limits`, `audit_log` and `verification_codes`) under owner `"core"` during `Prepare`, before any plugin declares. `rate_limits` is declared whether or not a key-value store is configured, because `Prepare` runs without a live connection and cannot know. With a key-value store that counts natively, the table exists and stays empty.
 
+`[Reminder]` Adding a table to `CoreDeclareSchema`, or removing one, changes the name of the first migration of an application without plugins. `TestLauncherRunsAnApplication` (`cmd/behemoth/main_test.go`) checks that name, `0001_create_accounts_and_6_more.json` for the seven tables above: the first table and the count of the others. Update its `migrationName` and the list above in the same change.
+
 ### **NULL versus empty**
 
 `Account.ToMap` writes an empty string or a nil time as `NULL` (`nullIfEmpty`, `nullIfNil`). `User` and `Session` write empty strings as empty strings. For `Account` the distinction matters: a missing token must be `NULL`, not an encrypted empty string.
