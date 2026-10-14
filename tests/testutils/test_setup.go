@@ -60,6 +60,27 @@ func SetupSQLiteTestDBWithSchema(t *testing.T, schema string) *sql.DB {
 	return db
 }
 
+// waitForLogin pings db until the server accepts a login, for up to a
+// minute. A container's wait strategy can pass a moment before that: the
+// port is open, or the "ready" line is logged, and the first login is still
+// reset, more often on a busy CI runner. On failure it calls cleanup, so the
+// container does not outlive the test.
+func waitForLogin(t *testing.T, ctx context.Context, db *sql.DB, cleanup func(), name string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
+		err := db.PingContext(ctx)
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			cleanup()
+			t.Fatalf("%s did not accept a login within a minute: %v", name, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // SetupPostgresTestDB creates Postgres Container and returns *sql.DB opened from the container instance
 // and a cleanup function to be called afterwards
 func SetupPostgresTestDB(t *testing.T, ctx context.Context) (db *sql.DB, cleanup func()) {
@@ -68,7 +89,13 @@ func SetupPostgresTestDB(t *testing.T, ctx context.Context) (db *sql.DB, cleanup
 		Image:        "postgres:15",
 		Env:          map[string]string{"POSTGRES_PASSWORD": "secret", "POSTGRES_DB": "testdb"},
 		ExposedPorts: []string{"5432/tcp"},
-		WaitingFor:   wait.ForListeningPort("5432/tcp"),
+		// The image starts a server for its setup and then restarts it, and
+		// Docker's port proxy accepts connections before either is up. The
+		// second "ready" line is the server the tests use.
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("5432/tcp"),
+			wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2*time.Minute),
+		),
 	}
 
 	pgContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -92,6 +119,7 @@ func SetupPostgresTestDB(t *testing.T, ctx context.Context) (db *sql.DB, cleanup
 		db.Close()
 		pgContainer.Terminate(ctx)
 	}
+	waitForLogin(t, ctx, db, cleanup, "Postgres")
 
 	return db, cleanup
 }
@@ -129,15 +157,11 @@ func SetupMySQLTestDB(t *testing.T, ctx context.Context) (db *sql.DB, cleanup fu
 		t.Fatal(err)
 	}
 
-	// Wait until MySQL is actually ready for connections.
-	if err := db.Ping(); err != nil {
-		t.Fatal(err)
-	}
-
 	cleanup = func() {
 		_ = db.Close()
 		_ = mysqlContainer.Terminate(ctx)
 	}
+	waitForLogin(t, ctx, db, cleanup, "MySQL")
 
 	return db, cleanup
 }
@@ -241,26 +265,11 @@ func SetupMSSQLTestDB(t *testing.T) (db *sql.DB, cleanup func()) {
 		t.Fatal(err)
 	}
 
-	// The log line can still come a moment before the first login works,
-	// and a login then fails with a reset connection. Retry for a minute.
-	deadline := time.Now().Add(time.Minute)
-	for {
-		err := db.PingContext(ctx)
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			_ = db.Close()
-			_ = mssqlContainer.Terminate(ctx)
-			t.Fatalf("SQL Server did not accept a login within a minute: %v", err)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-
 	cleanup = func() {
 		_ = db.Close()
 		_ = mssqlContainer.Terminate(ctx)
 	}
+	waitForLogin(t, ctx, db, cleanup, "SQL Server")
 
 	return db, cleanup
 
