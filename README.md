@@ -155,7 +155,7 @@ Contributions are welcome. Open an issue to discuss a change before sending a la
 
 1. Fork the repository and create a branch.
 2. Format the code with `gofmt` and follow the Go Code Review Comments.
-3. Add tests for your change and run `go test ./...`. The `tests` module and each adapter module have their own `go.mod`, so run their tests from their directories.
+3. Add tests for your change and run `go test ./...`. The `tests` module and each adapter module have their own `go.mod`, so run their tests from their directories. CI runs every module, and the `tests` module's container suites need Docker.
 4. Update the docs in `docs/` together with the code.
 
 ## License

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
 	gormAdapter "github.com/MastewalB/behemoth/storage/adapters/gorm"
@@ -206,9 +207,12 @@ func SetupMSSQLTestDB(t *testing.T) (db *sql.DB, cleanup func()) {
 			"SA_PASSWORD": password,
 		}),
 		testcontainers.WithExposedPorts("1433/tcp"),
-		testcontainers.WithWaitStrategy(
+		// SQL Server opens its port before it accepts logins, so the
+		// port alone is not enough. The log line comes once it does.
+		testcontainers.WithWaitStrategy(wait.ForAll(
 			wait.ForListeningPort("1433/tcp"),
-		),
+			wait.ForLog("SQL Server is now ready for client connections").WithStartupTimeout(2*time.Minute),
+		)),
 	)
 
 	if err != nil {
@@ -237,8 +241,20 @@ func SetupMSSQLTestDB(t *testing.T) (db *sql.DB, cleanup func()) {
 		t.Fatal(err)
 	}
 
-	if err := db.Ping(); err != nil {
-		t.Fatal(err)
+	// The log line can still come a moment before the first login works,
+	// and a login then fails with a reset connection. Retry for a minute.
+	deadline := time.Now().Add(time.Minute)
+	for {
+		err := db.PingContext(ctx)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = db.Close()
+			_ = mssqlContainer.Terminate(ctx)
+			t.Fatalf("SQL Server did not accept a login within a minute: %v", err)
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	cleanup = func() {
