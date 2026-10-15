@@ -33,5 +33,6 @@ go.work
 go.work.sum
 
 CLAUDE.md
+release_plan.md
 docs/ongoing.md
 docs/plans.md
