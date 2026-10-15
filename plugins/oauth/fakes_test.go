@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MastewalB/behemoth/outbound"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +56,7 @@ type testIssuer struct {
 	mu       sync.Mutex
 	doc      map[string]any
 	keys     []map[string]any
+	jwksDown bool // the key set answers 503
 	token    func(form url.Values) (int, any)
 	userinfo func(r *http.Request) (int, any)
 	requests []recorded
@@ -91,7 +93,12 @@ func (iss *testIssuer) serve(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/.well-known/openid-configuration":
 		answer(http.StatusOK, iss.doc)
-	case "/jwks":
+	case "/jwks", "/jwks2":
+		// The keys are at the jwks_uri of the document, and nowhere else.
+		if iss.jwksDown || iss.doc["jwks_uri"] != iss.srv.URL+r.URL.Path {
+			answer(http.StatusServiceUnavailable, map[string]any{})
+			return
+		}
 		answer(http.StatusOK, map[string]any{"keys": iss.keys})
 	case "/token":
 		if iss.token == nil {
@@ -160,7 +167,8 @@ func (iss *testIssuer) provider(clock *testClock) *oidcProvider {
 	return &oidcProvider{
 		id: "acme", issuer: iss.srv.URL, issuers: []string{iss.srv.URL},
 		auth:   clientAuth{clientID: "client-1", secret: staticSecret("s3cret")},
-		scopes: defaultScopes[KindOIDC], http: providerHTTP{client: iss.srv.Client()}, now: clock.now,
+		scopes: defaultScopes[KindOIDC], http: providerHTTP{client: outbound.NewClient(outbound.Options{Transport: iss.srv.Client().Transport}, nil)},
+		now: clock.now,
 	}
 }
 
@@ -226,5 +234,5 @@ func (rw *rewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 func clientFor(srv *httptest.Server) (*http.Client, *rewrite) {
 	target, _ := url.Parse(srv.URL)
 	rw := &rewrite{target: target, base: srv.Client().Transport}
-	return &http.Client{Transport: rw, CheckRedirect: defaultHTTPClient().CheckRedirect}, rw
+	return outbound.NewClient(outbound.Options{Transport: rw}, nil), rw
 }

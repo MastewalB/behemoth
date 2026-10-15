@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/types"
 )
 
@@ -120,7 +121,7 @@ func newBuiltinProvider(at string, cfg ProviderConfig, client providerHTTP, now 
 		}, nil
 	}
 
-	if err := checkEndpoint(cfg.Issuer); err != nil {
+	if err := outbound.CheckURL(cfg.Issuer); err != nil {
 		return nil, fmt.Errorf("%s.Issuer: %w", at, err)
 	}
 	if u, _ := url.Parse(cfg.Issuer); u.RawQuery != "" || u.ForceQuery {

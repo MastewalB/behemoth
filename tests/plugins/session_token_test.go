@@ -17,7 +17,9 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/keysource"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
@@ -152,6 +154,48 @@ func (app *tokenApp) verifyElsewhere(t *testing.T, token, audience string) (jwt.
 			return key, nil
 		})
 	return claims, err
+}
+
+// A Go service checks session tokens with package crypto: the key set
+// fetched from the route over HTTP by keysource.JWKSet, kept by a
+// CachedKeySet, and the token checked by VerifyJWT. A token for another
+// service, or from another issuer, is refused.
+func TestSessionTokenIsVerifiedWithVerifyJWT(t *testing.T) {
+	ctx := context.Background()
+	mux := http.NewServeMux()
+	app, err := bootSessionTokens(t, sessionTokenConfig(), nil, func(cfg *bmth.BootConfig) { cfg.HTTP = nethttp.New(mux) })
+	require.NoError(t, err)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	issued, err := app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: app.session, Audience: reportsAudience})
+	require.NoError(t, err)
+
+	source, err := keysource.NewJWKSet(nil, srv.URL+"/.well-known/jwks.json")
+	require.NoError(t, err)
+	keys, err := crypto.NewCachedKeySet(source, crypto.CacheOptions{})
+	require.NoError(t, err)
+	opts := crypto.VerifyOptions{Issuers: []string{tokenIssuer}, Audiences: []string{reportsAudience}}
+
+	verified, err := crypto.VerifyJWT(ctx, issued.Token, keys, opts)
+	require.NoError(t, err)
+	assert.Equal(t, app.user.ID, verified.Subject)
+	assert.Equal(t, "EdDSA", verified.Algorithm)
+	assert.Equal(t, issued.ID, verified.ID)
+	var claims struct {
+		SessionID string `json:"sid"`
+	}
+	require.NoError(t, verified.Claims(&claims))
+	assert.Equal(t, app.session.ID, claims.SessionID)
+
+	elsewhere := opts
+	elsewhere.Audiences = []string{apiAudience}
+	_, err = crypto.VerifyJWT(ctx, issued.Token, keys, elsewhere)
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryToken), "a token for another service: %v", err)
+	forged := opts
+	forged.Issuers = []string{"https://evil.example.com"}
+	_, err = crypto.VerifyJWT(ctx, issued.Token, keys, forged)
+	assert.True(t, behemotherr.Is(err, behemotherr.CategoryToken), "another issuer: %v", err)
 }
 
 // A signed-in client exchanges its session for a token, and another service

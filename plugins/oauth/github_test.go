@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/MastewalB/behemoth/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,7 +119,7 @@ func TestGitHubExchange(t *testing.T) {
 	assert.Equal(t, "application/json", token.header.Get("Accept"), "or GitHub answers with a form")
 	user := g.last(t, "/user")
 	assert.Equal(t, "Bearer gho_1", user.header.Get("Authorization"))
-	assert.Equal(t, userAgent, user.header.Get("User-Agent"))
+	assert.Equal(t, outbound.DefaultUserAgent, user.header.Get("User-Agent"))
 }
 
 // Without a primary address GitHub verified, or without the scope to read

@@ -185,7 +185,7 @@ Behemoth would issue tokens to other applications, with client registration, con
 | --- | --- |
 | the contract: `SessionTokens`, `SessionTokenRequest`, `SessionToken`, `PathSessionToken` | `types/session_tokens.go` |
 | the flow and the route | `transport/session_tokens.go` (`DefaultSessionTokens`) |
-| the JWT provider and the key set route | `crypto/jwt.go` (`JWTProviderImpl`, `HandleJWKS`) |
+| the JWT provider and the key set route | `crypto/jwt.go` (`JWTProviderImpl`, `HandleJWKS`), with the set written by `crypto/jwk.go` (`MarshalJWKSet`) and external tokens checked by `crypto/verify.go` (`VerifyJWT`) |
 | the derived keys | `crypto/external_keys.go` (`NewDerivedKeySet`) |
 | `JWTConfig`, its defaults and its checks, `ExternalKeySet` | `types/cryptotypes/cryptotypes.go` |
 | the wiring, the hook points, and `core.session_token.route` (30 a minute per address) | `types/init/init.go` (`Boot`, `CoreDeclareHookPoints`, `CoreDeclareRateLimitRules`) |

@@ -37,6 +37,7 @@ import (
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
@@ -84,11 +85,12 @@ type Options struct {
 	CustomProviders []Provider
 
 	// HTTPClient makes the calls of the built-in providers: discovery, keys,
-	// the code exchange, and GitHub's API. Nil means a client with a
-	// 10-second timeout that follows no redirect. Set it for an outbound
-	// proxy, or to point the providers at a test server. A client of your
-	// own should not follow redirects either: the code exchange sends the
-	// client secret.
+	// the code exchange, and GitHub's API. Nil means AuthContext.HTTPClient,
+	// the client Boot builds from BootConfig.Outbound for every plugin. Set
+	// it to give the providers a client of their own, such as one that
+	// sends them to a test server. Build it with outbound.NewClient, or make
+	// sure it follows no redirect: the code exchange sends the client
+	// secret.
 	HTTPClient *http.Client
 
 	// CallbackURL is the page of the application a provider sends the
@@ -227,7 +229,10 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	}
 	client := providerHTTP{client: p.opts.HTTPClient}
 	if client.client == nil {
-		client.client = defaultHTTPClient()
+		client.client = ac.HTTPClient
+	}
+	if client.client == nil { // an AuthContext Boot did not build
+		client.client = outbound.NewClient(outbound.Options{}, ac.Telemetry)
 	}
 	type placed struct {
 		at       string

@@ -17,6 +17,7 @@ import (
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/transport"
@@ -219,6 +220,14 @@ type BootConfig struct {
 	// a plugin then fails Boot.
 	SMS types.SMSConfig
 
+	// Outbound configures the client behemoth calls other services with,
+	// AuthContext.HTTPClient: a timeout, whether redirects are followed, a
+	// user agent, and a transport for a proxy of the application's own.
+	// Every call is a span on Telemetry. Zero value = outbound's defaults:
+	// a 10-second timeout, no redirects, and the proxy from the
+	// environment.
+	Outbound outbound.Options
+
 	// Router configures behemoth's routes: base path, error mapping and
 	// client-IP resolution. Zero value = documented defaults.
 	Router types.RouterConfig
@@ -343,6 +352,9 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err != nil {
 		return nil, behemotherr.NewConfigurationError("Boot", "RouterConfig.BaseURL", err)
 	}
+	if err := cfg.Outbound.Validate(); err != nil {
+		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+	}
 	ac := &types.AuthContext{
 		DB:          db,
 		KV:          kv,
@@ -351,6 +363,9 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		Crypto:      cryptoSuite,
 		Telemetry:   tel,
 		Origins:     origins,
+		// One client for every outbound call, so each gets the same rules
+		// (ADR-0003).
+		HTTPClient: outbound.NewClient(cfg.Outbound, tel),
 		// The session manager applies the same defaults to the same value.
 		SessionConfig: cfg.Session.WithDefaults(),
 		Mailer:        NewMailer(cfg.Mail, tel),

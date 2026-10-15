@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -10,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/keysource"
+	"github.com/MastewalB/behemoth/outbound"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,7 +70,7 @@ func TestOIDCExchange(t *testing.T) {
 		"redirect_uri": {"https://app.example.com/cb/acme"}, "code_verifier": {"verifier-1"},
 	}, token.form, "the secret is not in the form")
 	assert.Equal(t, "Basic "+base64.StdEncoding.EncodeToString([]byte("client-1:s3cret")), token.header.Get("Authorization"))
-	assert.Equal(t, userAgent, token.header.Get("User-Agent"))
+	assert.Equal(t, outbound.DefaultUserAgent, token.header.Get("User-Agent"))
 
 	_, err = exchange(p, testNonce)
 	require.NoError(t, err)
@@ -309,8 +313,8 @@ func TestOIDCClientAuthentication(t *testing.T) {
 	assert.Equal(t, authSecretBasic, authMethod([]string{"private_key_jwt"}, true))
 }
 
-// The default client follows no redirect and reads no more than
-// maxResponseBytes of an answer.
+// The calls of a provider follow outbound's rules: no redirect, and no more
+// than outbound.DefaultMaxBody of an answer read.
 func TestProviderHTTPLimits(t *testing.T) {
 	iss := newTestIssuer(t)
 	mux := http.NewServeMux()
@@ -324,10 +328,10 @@ func TestProviderHTTPLimits(t *testing.T) {
 		_, _ = w.Write([]byte(`{"access_token":"a"}`))
 	})
 	mux.HandleFunc("/huge", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"keys":"` + strings.Repeat("a", maxResponseBytes) + `"}`))
+		_, _ = w.Write([]byte(`{"keys":"` + strings.Repeat("a", int(outbound.DefaultMaxBody)) + `"}`))
 	})
 	iss.srv.Config.Handler = mux
-	client := providerHTTP{client: &http.Client{Transport: iss.srv.Client().Transport, CheckRedirect: defaultHTTPClient().CheckRedirect}}
+	client := providerHTTP{client: outbound.NewClient(outbound.Options{Transport: iss.srv.Client().Transport}, nil)}
 
 	_, err := client.redeemCode(context.Background(), iss.srv.URL+"/moved", clientAuth{clientID: "c", secret: staticSecret("s")}, authSecretBasic, ExchangeRequest{})
 	require.Error(t, err, "a redirect is not followed with the secret")
@@ -337,42 +341,95 @@ func TestProviderHTTPLimits(t *testing.T) {
 
 	var into map[string]any
 	_, err = client.getJSON(context.Background(), iss.srv.URL+"/huge", nil, &into)
-	assert.ErrorContains(t, err, "longer than")
+	assert.ErrorIs(t, err, outbound.ErrTooLarge)
 }
 
-// A key set may hold keys the plugin can't use. They are left out, and the
-// others still work.
-func TestJSONWebKeys(t *testing.T) {
-	rsaPub := &rsaKey(t, 2048).PublicKey
-	ecPub := &ecKey(t).PublicKey
-	for name, jwk := range map[string]map[string]any{
-		"RSA": rsaJWK("a", rsaPub),
-		"EC":  ecJWK("b", ecPub),
-	} {
-		key, err := decodeJWK(t, jwk).publicKey()
-		require.NoError(t, err, name)
-		assert.True(t, keyFits(key, map[string]string{"RSA": "RS256", "EC": "ES256"}[name]))
+// While the issuer's key set can't be fetched, the keys of the last fetch
+// keep checking ID tokens for crypto.DefaultKeySetMaxStale past keysTTL.
+// Then sign-ins fail as the system does, and no token is refused for it.
+func TestOIDCKeepsTheKeysWhileTheKeySetIsDown(t *testing.T) {
+	clock := &testClock{at: time.Now()}
+	iss := newTestIssuer(t)
+	p := iss.provider(clock)
+	signed := func() string {
+		return sign(t, jwt.SigningMethodRS256, iss.key, "k1", iss.claims(testNonce, clock.now()))
 	}
+	iss.answerWith(signed())
+	_, err := exchange(p, testNonce)
+	require.NoError(t, err)
 
-	offCurve := ecJWK("c", ecPub)
-	offCurve["y"] = offCurve["x"]
-	small := rsaJWK("d", &rsaKey(t, 1024).PublicKey)
-	for name, jwk := range map[string]map[string]any{
-		"a point off its curve": offCurve,
-		"a small RSA key":       small,
-		"an unknown curve":      {"kty": "EC", "crv": "P-192", "x": "AA", "y": "AA"},
-		"a symmetric key":       {"kty": "oct", "k": "c2VjcmV0"},
-		"an OKP key":            {"kty": "OKP", "crv": "Ed25519", "x": "AA"},
-	} {
-		_, err := decodeJWK(t, jwk).publicKey()
-		assert.Error(t, err, name)
-	}
+	iss.set(func(iss *testIssuer) { iss.jwksDown = true })
+	clock.add(keysTTL)
+	iss.answerWith(signed())
+	_, err = exchange(p, testNonce)
+	require.NoError(t, err, "the keys of the last fetch")
+	assert.Equal(t, 2, iss.count("/jwks"), "the set was asked")
+
+	clock.add(crypto.DefaultKeySetMaxStale)
+	iss.answerWith(signed())
+	_, err = exchange(p, testNonce)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrExchangeRefused, "a failure of the system")
 }
 
-func decodeJWK(t *testing.T, m map[string]any) jsonWebKey {
-	t.Helper()
-	str := func(k string) string { s, _ := m[k].(string); return s }
-	return jsonWebKey{Kty: str("kty"), Kid: str("kid"), Use: str("use"), Alg: str("alg"), N: str("n"), E: str("e"), Crv: str("crv"), X: str("x"), Y: str("y")}
+// A discovery document fetched again that names another jwks_uri gets a
+// key set of its own.
+func TestOIDCFollowsANewKeySetURI(t *testing.T) {
+	clock := &testClock{at: time.Now()}
+	iss := newTestIssuer(t)
+	p := iss.provider(clock)
+	iss.answerWith(sign(t, jwt.SigningMethodRS256, iss.key, "k1", iss.claims(testNonce, clock.now())))
+	_, err := exchange(p, testNonce)
+	require.NoError(t, err)
+
+	next := ecKey(t)
+	iss.set(func(iss *testIssuer) {
+		iss.doc["jwks_uri"] = iss.srv.URL + "/jwks2"
+		iss.keys = []map[string]any{ecJWK("k2", &next.PublicKey)}
+	})
+	clock.add(discoveryTTL)
+	iss.answerWith(sign(t, jwt.SigningMethodES256, next, "k2", iss.claims(testNonce, clock.now())))
+	_, err = exchange(p, testNonce)
+	require.NoError(t, err)
+	assert.Equal(t, 1, iss.count("/jwks2"))
+	assert.Equal(t, 1, iss.count("/jwks"), "the old URI is not asked again")
+}
+
+// An ID token without a kid is checked against every key of the set that
+// fits its algorithm, so a provider with two keys of one type during a
+// rotation is fine.
+func TestOIDCAcceptsIDTokensWithoutKID(t *testing.T) {
+	clock := &testClock{at: time.Now()}
+	iss := newTestIssuer(t)
+	second := rsaKey(t, 2048)
+	iss.set(func(iss *testIssuer) { iss.keys = append(iss.keys, rsaJWK("k2", &second.PublicKey)) })
+
+	for name, key := range map[string]*rsa.PrivateKey{"the first key": iss.key, "the second key": second} {
+		iss.answerWith(sign(t, jwt.SigningMethodRS256, key, "", iss.claims(testNonce, clock.now())))
+		_, err := exchange(iss.provider(clock), testNonce)
+		assert.NoError(t, err, name)
+	}
+	iss.answerWith(sign(t, jwt.SigningMethodES256, ecKey(t), "", iss.claims(testNonce, clock.now())))
+	_, err := exchange(iss.provider(clock), testNonce)
+	assert.ErrorIs(t, err, ErrExchangeRefused, "no key of the set fits")
+}
+
+// A key set without a key that can verify a signature is a failure of the
+// system, and not a token to refuse: no ID token could be checked with it.
+func TestOIDCNeedsAUsableKey(t *testing.T) {
+	clock := &testClock{at: time.Now()}
+	iss := newTestIssuer(t)
+	iss.set(func(iss *testIssuer) {
+		iss.keys = []map[string]any{
+			{"kty": "oct", "kid": "hmac", "k": b64([]byte("shared"))},
+			rsaJWK("small", &rsaKey(t, 1024).PublicKey),
+		}
+	})
+	iss.answerWith(sign(t, jwt.SigningMethodRS256, iss.key, "k1", iss.claims(testNonce, clock.now())))
+	_, err := exchange(iss.provider(clock), testNonce)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrExchangeRefused)
+	assert.ErrorIs(t, err, keysource.ErrNoUsableKey)
 }
 
 // The algorithms an ID token may be signed with are asymmetric ones. An

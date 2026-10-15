@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +18,12 @@ import (
 
 	"github.com/MastewalB/behemoth/crypto"
 	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/plugins/oauth"
+	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/types"
+	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,6 +47,7 @@ type fakeIssuer struct {
 	token   []url.Values
 	auth    []string
 	hosts   []string
+	agents  []string
 }
 
 func newFakeIssuer(t *testing.T, issuer string) *fakeIssuer {
@@ -106,22 +112,26 @@ func (f *fakeIssuer) serve(t *testing.T, w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// client sends every request to the fake, whichever host it names, and
-// records the hosts.
-func (f *fakeIssuer) client() *http.Client {
+// transport sends every request to the fake, whichever host it names, and
+// records the hosts and the user agents.
+func (f *fakeIssuer) transport() http.RoundTripper {
 	target, _ := url.Parse(f.srv.URL)
 	base := f.srv.Client().Transport
-	return &http.Client{
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport: roundTripper(func(req *http.Request) (*http.Response, error) {
-			f.mu.Lock()
-			f.hosts = append(f.hosts, req.URL.Host)
-			f.mu.Unlock()
-			out := req.Clone(req.Context())
-			out.URL.Scheme, out.URL.Host = target.Scheme, target.Host
-			return base.RoundTrip(out)
-		}),
-	}
+	return roundTripper(func(req *http.Request) (*http.Response, error) {
+		f.mu.Lock()
+		f.hosts = append(f.hosts, req.URL.Host)
+		f.agents = append(f.agents, req.Header.Get("User-Agent"))
+		f.mu.Unlock()
+		out := req.Clone(req.Context())
+		out.URL.Scheme, out.URL.Host = target.Scheme, target.Host
+		return base.RoundTrip(out)
+	})
+}
+
+// client is a client of the plugin's own, Options.HTTPClient, that sends
+// everything to the fake.
+func (f *fakeIssuer) client() *http.Client {
+	return outbound.NewClient(outbound.Options{Transport: f.transport()}, nil)
 }
 
 type roundTripper func(*http.Request) (*http.Response, error)
@@ -263,6 +273,62 @@ func TestOAuthWithGitHub(t *testing.T) {
 	assert.Equal(t, 1, app.count(t, "accounts", "provider_id = 'github' AND account_id = '583231'"))
 	assert.Equal(t, "gh-secret", fake.token[len(fake.token)-1].Get("client_secret"))
 	assert.Subset(t, fake.hosts, []string{"github.com", "api.github.com"})
+}
+
+// Without a client of its own, the plugin calls out with the one Boot
+// builds from BootConfig.Outbound: its transport and its user agent, with a
+// span per call on the application's telemetry. A client of its own wins.
+func TestOAuthUsesTheSharedClient(t *testing.T) {
+	signIn := func(t *testing.T, fake *fakeIssuer, opts oauth.Options, configure func(*bmth.BootConfig)) {
+		t.Helper()
+		fake.github = []map[string]any{{"email": "octocat@example.com", "primary": true, "verified": true}}
+		opts.Providers = []oauth.ProviderConfig{{Kind: oauth.KindGitHub, ClientID: "gh-client", ClientSecret: secretOf("gh-secret")}}
+		app, err := bootOAuth(t, opts, nil, configure)
+		require.NoError(t, err)
+		begun, err := app.plugin.Begin(context.Background(), oauth.BeginRequest{Provider: "github"})
+		require.NoError(t, err)
+		_, err = app.plugin.Complete(context.Background(), oauth.CompleteRequest{
+			Provider: "github", Code: "code-1", State: begun.State, Binding: begun.Binding,
+		})
+		require.NoError(t, err)
+	}
+
+	t.Run("the shared client", func(t *testing.T) {
+		fake := newFakeIssuer(t, "")
+		tel, rec := telemetrytest.New()
+		signIn(t, fake, oauth.Options{}, func(cfg *bmth.BootConfig) {
+			cfg.Telemetry = tel
+			cfg.Outbound = outbound.Options{UserAgent: "shop-auth", Transport: fake.transport()}
+		})
+		assert.Equal(t, []string{"github.com", "api.github.com", "api.github.com"}, fake.hosts)
+		assert.Equal(t, []string{"shop-auth", "shop-auth", "shop-auth"}, fake.agents)
+
+		spans := rec.Tracer.Named(telemetry.SpanOutboundRequest)
+		require.Len(t, spans, 3, "a span per call")
+		for i, method := range []string{http.MethodPost, http.MethodGet, http.MethodGet} {
+			assert.Equal(t, method, spans[i].Attrs()[telemetry.AttrMethod])
+			assert.Equal(t, fake.hosts[i], spans[i].Attrs()[telemetry.AttrHost])
+			assert.Equal(t, http.StatusOK, spans[i].Attrs()[telemetry.AttrStatus])
+			assert.Equal(t, 1, spans[i].Ended())
+		}
+	})
+
+	t.Run("a client of the plugin's own", func(t *testing.T) {
+		fake := newFakeIssuer(t, "")
+		signIn(t, fake, oauth.Options{HTTPClient: fake.client()}, func(cfg *bmth.BootConfig) {
+			cfg.Outbound.Transport = roundTripper(func(req *http.Request) (*http.Response, error) {
+				t.Errorf("the shared client called %s", req.URL.Host)
+				return nil, errors.New("not this client")
+			})
+		})
+		assert.Len(t, fake.hosts, 3)
+		assert.Equal(t, outbound.DefaultUserAgent, fake.agents[0])
+	})
+
+	t.Run("a negative timeout fails Boot", func(t *testing.T) {
+		_, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *bmth.BootConfig) { cfg.Outbound.Timeout = -time.Second })
+		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "got %v", err)
+	})
 }
 
 // A configuration the plugin can't work with fails Boot, and one that names

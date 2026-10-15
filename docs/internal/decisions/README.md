@@ -147,5 +147,6 @@ Keep this list current, newest last.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-reporting-a-hook-refusal.md) | Report a hook chain's error through one helper, with one code | Proposed |
-| [0002](0002-deriving-external-jwt-keys.md) | Derive the signing keys of external JWTs from the master secret | Proposed |
+| [0001](0001-reporting-a-hook-refusal.md) | Report a hook chain's error through one helper, with one code | Accepted |
+| [0002](0002-deriving-external-jwt-keys.md) | Derive the signing keys of external JWTs from the master secret | Accepted |
+| [0003](0003-remote-jwt-verification-and-outbound-calls.md) | Verify remote JWTs in `crypto` over a key source, and call other services through one client | Proposed |

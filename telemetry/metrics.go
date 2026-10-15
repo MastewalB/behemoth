@@ -72,6 +72,7 @@ const (
 	AttrMethod        = "method"         // HTTP method
 	AttrRoute         = "route"          // a route's pattern, never the request path
 	AttrStatus        = "status"         // HTTP status code
+	AttrHost          = "host"           // the host an outbound call went to, never its path or query
 	AttrOutcome       = "outcome"        // "success" or "failure"
 	AttrReason        = "reason"         // a failure's code, e.g. "invalid_credentials"
 	AttrKind          = "kind"           // a token kind, or a mail kind

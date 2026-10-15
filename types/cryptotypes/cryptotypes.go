@@ -235,21 +235,31 @@ type JWTProvider interface {
 	Verify(ctx context.Context, kind JWTKind, token string) (claims *Claims, err error)
 }
 
-// ExternalKeySet holds the keys of external JWTs: the one new tokens are
-// signed with, and every one a verifier may still need. It signs, and never
-// hands out a private key, so that a key held by a KMS or an HSM can
-// implement it (ADR-0002).
+// KeySet holds the public keys tokens are verified with: behemoth's own
+// external keys, or the keys another issuer publishes. crypto.VerifyJWT
+// looks a token's key up in it.
+type KeySet interface {
+	// PublicKey returns the key kid names, to verify a token with. A kid
+	// the set lacks is a refused token: a CategoryToken error with
+	// ErrorCodeJWTUnknownKey. A set that gets its keys from elsewhere may
+	// fetch them again first, and a failure to fetch them is a failure of
+	// the system, not a refused token.
+	PublicKey(ctx context.Context, kid string) (PublishedKey, error)
+	// PublicKeys returns every key of the set: to publish them, or to check
+	// a token that names no kid.
+	PublicKeys(ctx context.Context) ([]PublishedKey, error)
+}
+
+// ExternalKeySet holds the keys of external JWTs: a KeySet whose current key
+// also signs new tokens. It signs, and never hands out a private key, so
+// that a key held by a KMS or an HSM can implement it (ADR-0002, refined by
+// ADR-0003). PublicKeys returns every key a verifier may still need.
 type ExternalKeySet interface {
+	KeySet
 	// CurrentKey returns the key new tokens are signed with, fixed for one
 	// token: its id and algorithm go into the header, which is signed with
 	// the claims.
 	CurrentKey(ctx context.Context) (ExternalSigningKey, error)
-	// PublicKey returns the key kid names, to verify a token with. An
-	// unknown kid is a refused token: a CategoryToken error with
-	// ErrorCodeJWTUnknownKey.
-	PublicKey(ctx context.Context, kid string) (PublishedKey, error)
-	// PublicKeys returns every key a verifier may still need, to publish.
-	PublicKeys(ctx context.Context) ([]PublishedKey, error)
 }
 
 // ExternalSigningKey is one key of an ExternalKeySet, ready to sign.
@@ -260,11 +270,19 @@ type ExternalSigningKey interface {
 	Sign(ctx context.Context, payload []byte) ([]byte, error)
 }
 
-// PublishedKey is the public half of a key of an ExternalKeySet.
+// PublishedKey is the public half of a signing key, as a key set publishes
+// it: behemoth's own external keys, or the keys of a JWK set another issuer
+// publishes.
 type PublishedKey struct {
-	KID       string
+	// KID is the key's id, which a token names in its header. It may be
+	// empty for a key of another issuer's set.
+	KID string
+	// Algorithm is the JWS algorithm the key signs with, such as "EdDSA".
+	// It is empty for an RSA key whose set names none: such a key may sign
+	// with any of the RSA algorithms.
 	Algorithm string
-	// Key is an ed25519.PublicKey for EdDSA.
+	// Key is an ed25519.PublicKey, an *ecdsa.PublicKey, or an
+	// *rsa.PublicKey. Behemoth's derived keys are Ed25519.
 	Key crypto.PublicKey
 }
 

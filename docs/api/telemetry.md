@@ -459,6 +459,7 @@ tel := telemetry.New(logger, nil, metrics, telemetry.WithTracer(tracer))
 | `behemoth.password.hash`, `.verify` | | password hashing in the email/password plugin |
 | `behemoth.ratelimit.check` | `rule`, `result` | one rate-limit rule |
 | `behemoth.migration.apply` | `id`, `baseline` | one applied migration |
+| `behemoth.outbound.request` | `method`, `host`, `status` | one call to another service, until its answer is read; see [Outbound calls](outbound.md) |
 
 A span of an operation that returned an error also has `error_code`, and `error_category` when the error is one of Behemoth's.
 

@@ -1,6 +1,6 @@
 # 0001. Report a hook chain's error through one helper, with one code
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-11
 - **Deciders:** MastewalB
 - **Affects:** `errors`, `types`, `types/init`, `plugins/emailpassword`, `plugins/magiclink`, `plugins/phonenumber`, `plugins/emailverification`

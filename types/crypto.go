@@ -23,6 +23,7 @@ type (
 	JWTProvider = cryptotypes.JWTProvider
 	JWTRequest  = cryptotypes.JWTRequest
 
+	KeySet             = cryptotypes.KeySet
 	ExternalKeySet     = cryptotypes.ExternalKeySet
 	ExternalSigningKey = cryptotypes.ExternalSigningKey
 	PublishedKey       = cryptotypes.PublishedKey

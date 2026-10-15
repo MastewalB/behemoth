@@ -81,23 +81,29 @@ A service fetches the key set, caches it, and checks every token against it:
 - `iss` is the issuer, and `aud` names the service itself
 - `exp` has not passed
 
-Every common JWT library does this. In Go, with `github.com/golang-jwt/jwt/v5`:
+Every common JWT library does this. In Go, use `crypto.VerifyJWT` with a cached key set over the route:
 
 ```go
-parser := jwt.NewParser(
-	jwt.WithValidMethods([]string{"EdDSA"}),
-	jwt.WithIssuer("https://auth.example.com"),
-	jwt.WithAudience("https://api.example.com"),
-	jwt.WithExpirationRequired(),
-)
-claims := jwt.MapClaims{}
-_, err := parser.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
-	kid, _ := t.Header["kid"].(string)
-	return KEYS[kid], nil // ed25519.PublicKey from the key set, by kid
+source, err := keysource.NewJWKSet(nil, "https://auth.example.com/.well-known/jwks.json")
+if err != nil {
+	return err
+}
+keys, err := crypto.NewCachedKeySet(source, crypto.CacheOptions{})
+if err != nil {
+	return err
+}
+
+// For each request:
+verified, err := crypto.VerifyJWT(ctx, token, keys, crypto.VerifyOptions{
+	Issuers:    []string{"https://auth.example.com"},
+	Audiences:  []string{"https://api.example.com"},
+	Algorithms: []string{"EdDSA"},
 })
 ```
 
-Replace `KEYS` with the keys of the key set, decoded from each key's `x` member and looked up by `kid`. Fetch the set again when a token names a `kid` you don't have.
+`verified.Subject` is the user's id, and `verified.Claims` decodes `sid` and `custom`. The key set keeps the keys for five minutes, the `max-age` of the route, and fetches them again when a token names a `kid` it lacks. See [JWT verification](jwt-verification.md) for the checks, the errors, and the cache.
+
+With another library, decode each key's `x` member (`OKP`, `Ed25519`), look it up by `kid`, and fetch the set again when a token names a `kid` you don't have.
 
 A service checks that `aud` names itself, so a token issued for one service is refused by the others. Ask for a token per service you call.
 

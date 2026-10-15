@@ -8,17 +8,18 @@ const (
 	// ErrorCodeJWTMalformed: the input is not a JWT, or a segment can't be
 	// decoded.
 	ErrorCodeJWTMalformed = "malformed_token"
-	// ErrorCodeJWTAlgorithmMismatch: the header names another algorithm than
-	// the token's kind is signed with.
+	// ErrorCodeJWTAlgorithmMismatch: the header names an algorithm the
+	// verifier does not allow, or one the key does not sign with.
 	ErrorCodeJWTAlgorithmMismatch = "algorithm_mismatch"
 	// ErrorCodeJWTInvalidSignature: the signature does not match the key the
 	// header names.
 	ErrorCodeJWTInvalidSignature = "invalid_signature"
 	// ErrorCodeJWTNotYetValid: nbf is in the future.
 	ErrorCodeJWTNotYetValid = "token_not_yet_valid"
-	// ErrorCodeJWTIssuerMismatch: iss is not the configured issuer.
+	// ErrorCodeJWTIssuerMismatch: iss is not an issuer the verifier trusts.
 	ErrorCodeJWTIssuerMismatch = "issuer_mismatch"
-	// ErrorCodeJWTAudienceMismatch: aud does not name the kind's audience.
+	// ErrorCodeJWTAudienceMismatch: aud names none of the verifier's
+	// audiences.
 	ErrorCodeJWTAudienceMismatch = "audience_mismatch"
 	// ErrorCodeJWTMissingClaim: a required claim, exp or aud, is absent.
 	ErrorCodeJWTMissingClaim = "missing_claim"
@@ -26,7 +27,7 @@ const (
 	// no code of its own.
 	ErrorCodeJWTInvalidClaims = "invalid_claims"
 	// ErrorCodeJWTUnknownKey: the header names a key the key set does not
-	// have.
+	// have, or names none where a kid is required.
 	ErrorCodeJWTUnknownKey = "unknown_signing_key"
 )
 

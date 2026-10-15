@@ -1,6 +1,6 @@
 # 0002. Derive the signing keys of external JWTs from the master secret
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-14
 - **Deciders:** MastewalB
 - **Affects:** `crypto` (`jwt.go`, `jwks_store.go`, `key_manager.go`), `types/cryptotypes` (`JWKSStore`, `JWKKeyPair`, `KeyPurpose`), `types/init` (`Boot`, `CoreDeclareSchema`)

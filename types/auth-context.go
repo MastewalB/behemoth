@@ -1,6 +1,8 @@
 package types
 
 import (
+	"net/http"
+
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -69,4 +71,10 @@ type AuthContext struct {
 	// its fields. Plugins take their logger from here, usually through
 	// telemetry.Named.
 	Telemetry *telemetry.Telemetry
+	// HTTPClient is the client plugins call other services with, built by
+	// outbound.NewClient from BootConfig.Outbound: a timeout, no redirect
+	// unless the options say so, a user agent, and a span per call. A
+	// plugin uses it unless an option of the plugin names another client.
+	// Never nil on an AuthContext Boot returns.
+	HTTPClient *http.Client
 }

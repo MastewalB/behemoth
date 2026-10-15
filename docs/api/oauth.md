@@ -68,7 +68,7 @@ Serve your callback page at that URI. See [Build the callback page](#build-the-c
 | `CustomProviders` | none | Providers you implement. See [Write a provider](#write-a-provider). |
 | `CallbackURL` | required | The page of your application the providers send the browser back to. Absolute, `http` or `https`, without a query or a fragment. Each provider's redirect URI is below it. |
 | `StateTTL` | 10 minutes | How long a started sign-in can be completed: the time a user has at the provider. `TokenConfig.TTLOverrides[types.TokenKindOAuthState]` takes precedence. |
-| `HTTPClient` | a client with a 10-second timeout that follows no redirect | The client the built-in providers call the provider with. Set it for an outbound proxy. A client of your own should not follow redirects either: the code exchange sends the client secret. |
+| `HTTPClient` | `ac.HTTPClient`, the client of `BootConfig.Outbound` | The client the built-in providers call the provider with. Set it to give the plugin a client of its own, such as one for a test server. Build it with `outbound.NewClient`, or make sure it follows no redirect: the code exchange sends the client secret. See [Outbound calls](outbound.md). |
 
 `Boot` returns a configuration error for no provider at all, a `ProviderConfig` that is incomplete or whose secret can't be read, a nil provider, an id that is used twice, an id that is not 1 to 64 characters of `a-z`, `0-9`, `-`, and `_`, the id `credential`, and a `CallbackURL` that is not usable. `Boot` calls no provider. A provider that is down fails its sign-ins, not the boot.
 
@@ -101,14 +101,14 @@ The plugin calls an OpenID Connect provider's discovery document at the first si
 
 An ID token is accepted only when every one of these checks passes:
 
-- **The signature.** A key of the issuer's key set, with RSA (at least 2048 bits) or ECDSA. `none` and the HMAC algorithms are refused. The key set is kept for an hour. A token signed with a key the set lacks makes the plugin fetch the set again, at most once a minute.
+- **The signature.** A key of the issuer's key set, with RSA (at least 2048 bits) or ECDSA. `none` and the HMAC algorithms are refused. The key set is kept for an hour. A token signed with a key the set lacks makes the plugin fetch the set again, at most once a minute. While the key set can't be fetched, the keys of the last fetch are used for one more hour. A set without a key the plugin can use fails the sign-in as an error of the system, as an unreachable provider does.
 - **The issuer, the audience, and the authorized party.** `iss` is the issuer, `aud` names your client id, and `azp`, when present or when there are several audiences, is your client id.
 - **The time.** `exp` is required, and neither `exp` nor `iat` may be off by more than a minute.
 - **The nonce and the subject.** `nonce` is the one of the sign-in, and `sub` is not empty.
 
 When the provider sends an `iss` parameter with the code (RFC 9207), it has to be the issuer. When the discovery document says the provider sends one, it is required. See [Build the callback page](#build-the-callback-page).
 
-The token request authenticates with HTTP Basic when the provider supports it or does not say, and in the form otherwise. GitHub gets the secret in the form. A provider's answer is read up to 1 MiB.
+The token request authenticates with HTTP Basic when the provider supports it or does not say, and in the form otherwise. GitHub gets the secret in the form. A provider's answer is read up to 1 MiB, and every call follows the rules in [Outbound calls](outbound.md).
 
 ## Write a provider
 

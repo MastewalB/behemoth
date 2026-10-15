@@ -71,6 +71,7 @@ A sign-up looks the email address up and expects to find nothing. If that lookup
 | `behemoth.password.hash`, `.verify` | | the email/password plugin |
 | `behemoth.ratelimit.check` | `rule`, `result` | `DefaultRateLimiter.evaluate` |
 | `behemoth.migration.apply` | `id`, `baseline` | `DefaultMigrationRunner.applyTraced` |
+| `behemoth.outbound.request` | `method`, `host`, `status` | `outbound.roundTripper.RoundTrip`; ends when the answer's body is closed. See [`../http/outbound.md`](../http/outbound.md). |
 
 Names are constants in `telemetry/tracer.go`. Attribute keys are the `Attr` constants of the metrics, plus `AttrRequestID` and `AttrErrorCode`. The same bounded-value rule applies, with one exception: `request_id` is unique per request, which is fine on a span and would not be on a metric.
 

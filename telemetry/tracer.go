@@ -80,6 +80,11 @@ const (
 	SpanRateLimitCheck = "behemoth.ratelimit.check"
 
 	SpanMigrationApply = "behemoth.migration.apply"
+
+	// SpanOutboundRequest is one call behemoth makes to another service,
+	// through a client of package outbound. It ends when the answer's body
+	// is closed.
+	SpanOutboundRequest = "behemoth.outbound.request"
 )
 
 // AttrRequestID is the span attribute holding the request ID, the same

@@ -132,6 +132,8 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | [Router adapters](./docs/api/routers.md) | Mounting the routes on `net/http`, Gin, Echo, chi or Fiber, and what is specific to each |
 | [Sessions](./docs/api/sessions.md) | Session settings, how the token travels (cookie, header, body), the sign-in response, protecting your own routes |
 | [Session tokens](./docs/api/session-tokens.md) | Short-lived JWTs that tell another service who a request is from, and the published keys it checks them with |
+| [JWT verification](./docs/api/jwt-verification.md) | Checking a JWT signed with an asymmetric key, such as a session token in another Go service: the checks, the key set cache, and the errors |
+| [Outbound calls](./docs/api/outbound.md) | The client Behemoth calls other services with: its settings, the rules every call follows, and using it in your code |
 | [Hooks](./docs/api/hooks.md) | Hook points, handlers, ordering and failure behavior |
 | [Telemetry](./docs/api/telemetry.md) | Loggers, audit, metrics, tracing and the OpenTelemetry adapter |
 | [Command line](./docs/api/cli.md) | `behemoth generate`: setup, the launcher, the draft file, running it without the launcher |

@@ -2,8 +2,8 @@ package crypto
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -24,11 +24,12 @@ import (
 // signed with the algorithm of the key its kid names. A token whose header
 // names another is refused before its signature is looked at.
 
-// externalAlgs are the algorithms an external key may sign with:
+// asymmetricAlgs are the algorithms a key of a KeySet may sign with:
 // asymmetric ones only, so that a public key is never used as an HMAC
-// secret. The derived keys are EdDSA. The others are for a key set held by a
-// KMS (ADR-0002).
-var externalAlgs = []string{"EdDSA", "ES256", "ES384", "ES512", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512"}
+// secret. They are the algorithms of the key types the JWK codec knows. The
+// derived keys are EdDSA; the others are for a key set held by a KMS
+// (ADR-0002) and for other issuers' keys (ADR-0003).
+var asymmetricAlgs = []string{"EdDSA", "ES256", "ES384", "ES512", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512"}
 
 // wireClaims is a token's payload as it is parsed and checked.
 type wireClaims struct {
@@ -78,13 +79,14 @@ type parsed struct {
 	kid           string
 	signingString string
 	signature     []byte
-	claims        *wireClaims
+	payload       []byte // the claims as they were signed, decoded from base64url
 }
 
-// parse reads token without verifying anything.
-func parse(op, token string) (*parsed, error) {
+// parse reads token without verifying anything, and decodes its claims
+// into claims. A header with "crit" is refused: no extension is understood
+// here, and RFC 7515 section 4.1.11 then fails the token.
+func parse(op, token string, claims jwt.Claims) (*parsed, error) {
 	p := jwt.NewParser()
-	claims := &wireClaims{}
 	tok, parts, err := p.ParseUnverified(token, claims)
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenUnverifiable) {
@@ -92,13 +94,20 @@ func parse(op, token string) (*parsed, error) {
 		}
 		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
 	}
+	if _, ok := tok.Header["crit"]; ok {
+		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, errors.New("the header names critical extensions"))
+	}
 	signature, err := p.DecodeSegment(parts[2])
+	if err != nil {
+		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
+	}
+	payload, err := p.DecodeSegment(parts[1])
 	if err != nil {
 		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
 	}
 	alg, _ := tok.Header["alg"].(string)
 	kid, _ := tok.Header["kid"].(string)
-	return &parsed{alg: alg, kid: kid, signingString: parts[0] + "." + parts[1], signature: signature, claims: claims}, nil
+	return &parsed{alg: alg, kid: kid, signingString: parts[0] + "." + parts[1], signature: signature, payload: payload}, nil
 }
 
 // signWith encodes claims with a header naming alg and kid, and signs it
@@ -121,8 +130,8 @@ func signWith(op, alg, kid string, claims jwt.MapClaims, sign func([]byte) ([]by
 	return signingString + "." + b64(signature), nil
 }
 
-// validate checks the registered claims of a token whose signature is
-// valid, and returns them as types.Claims.
+// validate checks the registered claims of an internal token whose
+// signature is valid, and returns them as types.Claims.
 func validate(op string, c *wireClaims, issuer string, audiences []string) (*types.Claims, error) {
 	opts := []jwt.ParserOption{jwt.WithExpirationRequired()}
 	if issuer != "" {
@@ -131,23 +140,37 @@ func validate(op string, c *wireClaims, issuer string, audiences []string) (*typ
 	if len(audiences) > 0 {
 		opts = append(opts, jwt.WithAudience(audiences...))
 	}
-	if err := jwt.NewValidator(opts...).Validate(c); err != nil {
-		code := behemotherr.ErrorCodeJWTInvalidClaims
-		switch {
-		case errors.Is(err, jwt.ErrTokenExpired):
-			code = behemotherr.ErrorCodeTokenExpired
-		case errors.Is(err, jwt.ErrTokenNotValidYet):
-			code = behemotherr.ErrorCodeJWTNotYetValid
-		case errors.Is(err, jwt.ErrTokenInvalidIssuer):
-			code = behemotherr.ErrorCodeJWTIssuerMismatch
-		case errors.Is(err, jwt.ErrTokenInvalidAudience):
-			code = behemotherr.ErrorCodeJWTAudienceMismatch
-		case errors.Is(err, jwt.ErrTokenRequiredClaimMissing):
-			code = behemotherr.ErrorCodeJWTMissingClaim
-		}
-		return nil, behemotherr.NewJWTError(op, code, err)
+	if err := checkClaims(op, jwt.NewValidator(opts...), c); err != nil {
+		return nil, err
 	}
+	return claimsOf(c, audiences), nil
+}
 
+// checkClaims runs v over claims, and turns its error into a refused token
+// with the code of the check that failed.
+func checkClaims(op string, v *jwt.Validator, claims jwt.Claims) error {
+	err := v.Validate(claims)
+	if err == nil {
+		return nil
+	}
+	code := behemotherr.ErrorCodeJWTInvalidClaims
+	switch {
+	case errors.Is(err, jwt.ErrTokenExpired):
+		code = behemotherr.ErrorCodeTokenExpired
+	case errors.Is(err, jwt.ErrTokenNotValidYet):
+		code = behemotherr.ErrorCodeJWTNotYetValid
+	case errors.Is(err, jwt.ErrTokenInvalidIssuer):
+		code = behemotherr.ErrorCodeJWTIssuerMismatch
+	case errors.Is(err, jwt.ErrTokenInvalidAudience):
+		code = behemotherr.ErrorCodeJWTAudienceMismatch
+	case errors.Is(err, jwt.ErrTokenRequiredClaimMissing):
+		code = behemotherr.ErrorCodeJWTMissingClaim
+	}
+	return behemotherr.NewJWTError(op, code, err)
+}
+
+// claimsOf returns the claims of a checked token as types.Claims.
+func claimsOf(c *wireClaims, audiences []string) *types.Claims {
 	out := &types.Claims{Issuer: c.Issuer, Subject: c.Subject, SessionID: c.SessionID, ID: c.ID, Custom: c.Custom}
 	// Claims holds one audience: the first configured one the token names.
 	if len(c.Audience) > 0 {
@@ -167,7 +190,7 @@ func validate(op string, c *wireClaims, issuer string, audiences []string) (*typ
 			*d.into = d.from.Time
 		}
 	}
-	return out, nil
+	return out
 }
 
 // internalJWT is an HS256 token signed with the key manager's key of
@@ -197,7 +220,8 @@ func (j *internalJWT) sign(req types.JWTRequest) (string, error) {
 
 func (j *internalJWT) verify(token string) (*types.Claims, error) {
 	const op = "JWT.Verify.Internal"
-	p, err := parse(op, token)
+	var c wireClaims
+	p, err := parse(op, token, &c)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +241,7 @@ func (j *internalJWT) verify(token string) (*types.Claims, error) {
 	if !ok {
 		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTInvalidSignature, nil)
 	}
-	return validate(op, p.claims, j.cfg.Issuer, j.cfg.Audiences[types.JWTInternal])
+	return validate(op, &c, j.cfg.Issuer, j.cfg.Audiences[types.JWTInternal])
 }
 
 // externalJWT is signed with the current key of an ExternalKeySet, for
@@ -241,30 +265,23 @@ func (j *externalJWT) sign(ctx context.Context, req types.JWTRequest) (string, e
 		func(b []byte) ([]byte, error) { return key.Sign(ctx, b) })
 }
 
+// verify checks an external token with VerifyJWT, the verification another
+// service runs with the published keys: the key set holds the current key
+// and the ones rotated out, which still verify the tokens they signed until
+// those expire. An algorithm no key may have, none and the HMAC ones among
+// them, is refused before the key set is asked.
 func (j *externalJWT) verify(ctx context.Context, token string) (*types.Claims, error) {
 	const op = "JWT.Verify.External"
-	p, err := parse(op, token)
+	audiences := j.cfg.Audiences[types.JWTExternal]
+	verified, err := VerifyJWT(ctx, token, j.keys, VerifyOptions{Issuers: []string{j.cfg.Issuer}, Audiences: audiences})
 	if err != nil {
 		return nil, err
 	}
-	// An algorithm no external key may have is refused before the key set
-	// is asked: none, and the HMAC ones.
-	if !slices.Contains(externalAlgs, p.alg) {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTAlgorithmMismatch, nil)
+	var c wireClaims
+	if err := verified.Claims(&c); err != nil {
+		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
 	}
-	// The current key and the ones rotated out, which still verify the
-	// tokens they signed until those expire.
-	key, err := j.keys.PublicKey(ctx, p.kid)
-	if err != nil {
-		return nil, err
-	}
-	if p.alg != key.Algorithm {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTAlgorithmMismatch, nil)
-	}
-	if err := jwt.GetSigningMethod(key.Algorithm).Verify(p.signingString, p.signature, key.Key); err != nil {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTInvalidSignature, err)
-	}
-	return validate(op, p.claims, j.cfg.Issuer, j.cfg.Audiences[types.JWTExternal])
+	return claimsOf(&c, audiences), nil
 }
 
 type JWTProviderImpl struct {
@@ -325,25 +342,19 @@ func (p *JWTProviderImpl) Verify(ctx context.Context, kind types.JWTKind, token 
 const jwksMaxAge = 5 * time.Minute
 
 // HandleJWKS answers with the published keys as a JWK set (RFC 7517), public
-// halves only.
-//
-// Not built: EC and RSA keys, which a key set held by a KMS may have
-// (ADR-0002). A key of another type than Ed25519 is an error.
+// halves only. A key MarshalJWKSet can't write, such as a private key, is a
+// security error, and nothing is published.
 func (p *JWTProviderImpl) HandleJWKS(rctx *types.RequestContext) error {
 	published, err := p.external.keys.PublicKeys(rctx.Ctx)
 	if err != nil {
 		return err
 	}
-	keys := make([]jwkJSON, 0, len(published))
-	for _, k := range published {
-		pub, ok := k.Key.(ed25519.PublicKey)
-		if !ok {
-			return behemotherr.NewSecurityError("JWT.HandleJWKS", behemotherr.ErrorCodeJWKSReadFailed, fmt.Errorf("key %q: %T is not published", k.KID, k.Key))
-		}
-		keys = append(keys, jwkJSON{Kty: "OKP", Crv: "Ed25519", X: b64(pub), Use: "sig", Kid: k.KID, Alg: k.Algorithm})
+	set, err := MarshalJWKSet(published)
+	if err != nil {
+		return behemotherr.NewSecurityError("JWT.HandleJWKS", behemotherr.ErrorCodeJWKSReadFailed, err)
 	}
 	rctx.Response.SetHeader("Cache-Control", fmt.Sprintf("public, max-age=%d", int(jwksMaxAge/time.Second)))
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{"keys": keys})
+	return rctx.Response.JSON(http.StatusOK, json.RawMessage(set))
 }
 
 // Routes exposes the JWKS endpoint as a Route. Returns nil when external

@@ -223,30 +223,35 @@ What `newBuiltinProvider` refuses, each as a configuration error from `Boot`:
 
 ### The calls to a provider
 
-`providerHTTP` makes every call. `Options.HTTPClient` replaces its client.
+`providerHTTP` makes every call, with `Options.HTTPClient`, or else `AuthContext.HTTPClient`, the client `Boot` builds from `BootConfig.Outbound`. The rules are the ones `outbound` gives every outbound call (ADR-0003, [`../http/outbound.md`](../http/outbound.md)):
 
 | Rule | Where | Why |
 | --- | --- | --- |
-| 10-second timeout | `defaultHTTPClient` | a provider that hangs holds a sign-in request |
-| no redirect followed | `defaultHTTPClient` | the code exchange sends the code, the verifier, and the client secret, and they go only to the configured endpoint |
-| at most 1 MiB read of an answer | `providerHTTP.do` | a hostile or broken endpoint can't make the plugin read without end |
-| `User-Agent: behemoth-oauth` | `providerHTTP.do` | GitHub's API refuses a request without one |
+| 10-second timeout, by default | `outbound.NewClient` | a provider that hangs holds a sign-in request |
+| no redirect followed, by default | `outbound.NewClient` | the code exchange sends the code, the verifier, and the client secret, and they go only to the configured endpoint |
+| at most 1 MiB read of an answer | `outbound.GetJSON`, `outbound.PostForm` | a hostile or broken endpoint can't make the plugin read without end |
+| `User-Agent: behemoth`, unless configured | `outbound.NewClient` | GitHub's API refuses a request without one |
+| a span per call, `behemoth.outbound.request` | `outbound.NewClient` | a slow provider shows in the trace of the sign-in |
 | the request's context | every call | a client that disconnects cancels the call |
+
+A client in `Options.HTTPClient` keeps the rules it was built with. The option's comment asks for one built with `outbound.NewClient`, or one that follows no redirect. `Init` builds a client of its own only for an `AuthContext` that `Boot` did not build, which has no `HTTPClient`.
 
 `redeemCode` is the one code exchange. It refuses with `ErrExchangeRefused` an answer that names an OAuth error, whatever its status: GitHub answers a refused code with `200`. Any other answer without an access token is a failure of the system. The client authenticates with HTTP Basic (id and secret form-encoded first, RFC 6749 section 2.3.1), in the form, or with its id alone for a public client. `authMethod` picks Basic unless the discovery document lists only `client_secret_post`. GitHub always gets the form. The client secret is read from its source for every exchange.
 
 ### The OpenID Connect provider
 
-`oidcProvider` keeps two caches on the value, under one mutex:
+`oidcProvider` keeps the discovery document on the value, under its mutex, and a `crypto.CachedKeySet` for the document's `jwks_uri`, which has a mutex of its own:
 
 | Cache | Fetched | Refetched |
 | --- | --- | --- |
 | discovery document | at the first sign-in | after `discoveryTTL`, 24 hours |
-| key set | at the first ID token | after `keysTTL`, one hour, or when a token names a key the set lacks and the last fetch is older than `keyRefetchInterval`, one minute |
+| key set | at the first ID token | after `keysTTL`, one hour, or when a token names a key the set lacks and the last fetch is older than `keyRefetchInterval`, one minute. While the set can't be fetched, its keys are used for `crypto.DefaultKeySetMaxStale`, one hour, past `keysTTL`. |
+
+`document` builds the key set when the document is fetched, and keeps it, with its keys, while a new document names the same `jwks_uri`. The cache rules are those of [`../crypto/key_sets.md`](../crypto/key_sets.md#the-cached-key-set).
 
 A replica keeps its own caches. That is fine: they hold what the issuer publishes, and a replica that fetches later sees the same.
 
-The document is refused when its `issuer` is not exactly the configured one (OpenID Connect Discovery, section 4.3), or when the authorization, token, key set, or userinfo endpoint fails `checkEndpoint`. A failure here is a failure of the system.
+The document is refused when its `issuer` is not exactly the configured one (OpenID Connect Discovery, section 4.3), or when the authorization, token, key set, or userinfo endpoint fails `outbound.CheckURL`. A failure here is a failure of the system.
 
 `Exchange` checks, in this order:
 
@@ -255,10 +260,14 @@ The document is refused when its `issuer` is not exactly the configured one (Ope
 | the `iss` parameter is the issuer, when one was sent; and one was sent, when the document says the issuer sends it (RFC 9207) | `ErrExchangeRefused` |
 | the code is redeemed (`redeemCode`) | `ErrExchangeRefused` for an OAuth error |
 | the answer has an ID token | a failure of the system |
-| `verifyIDToken`: the signature with an algorithm of `signingAlgs` and a key of the set; `aud` has the client id; `exp` is required, and `exp` and `iat` are checked with one minute of leeway; `iss` is one of the provider's issuers; `azp` is the client id when there is one or several audiences; `nonce` is the sign-in's; `sub` is not empty | `ErrExchangeRefused`. A key set that can't be fetched is a failure of the system (`errKeysUnavailable`). |
+| `verifyIDToken`, through `crypto.VerifyJWT`: the signature with an algorithm of `signingAlgs` and a key of the set; `aud` has the client id; `exp` is required, and `exp` and `iat` are checked with one minute of leeway; `iss` is one of the provider's issuers. Then the rules of OpenID Connect: `azp` is the client id when there is one or several audiences; `nonce` is the sign-in's; `sub` is not empty. | `ErrExchangeRefused`, wrapping the `CategoryToken` error of `VerifyJWT`. Any other error of `VerifyJWT`, such as a key set that can't be fetched or has no usable key, is a failure of the system. |
 | without an email in the token: the userinfo endpoint's `sub` is the token's | `ErrExchangeRefused` |
 
-`signingAlgs` holds the RSA, RSA-PSS, and ECDSA algorithms. `keyFits` also refuses a key whose type does not match the algorithm, so an HMAC token would fail twice: no HMAC algorithm is allowed, and no symmetric key is ever in the set. A key of the set is kept only when it is RSA of at least 2048 bits, or EC on P-256, P-384, or P-521 with a point on its curve, and when its `use` is `sig` or absent.
+`signingAlgs` holds the RSA, RSA-PSS, and ECDSA algorithms, and `VerifyJWT` refuses every symmetric one anyway. A key's own algorithm, and its type, have to fit the token's (`fits`), so an HMAC token would fail twice: no HMAC algorithm is allowed, and no symmetric key is ever in the set.
+
+The set comes through a `keysource.JWKSet` on the plugin's client, and `crypto.ParseJWKSet` decides which keys are kept. An Ed25519 key can be in the set, but no ID token is accepted with `EdDSA`, since `signingAlgs` does not list it. A set without a usable key is `keysource.ErrNoUsableKey`, a failure of the system, and not a refused token: no ID token could be checked with it.
+
+An ID token without a `kid` is checked against every key of the set that fits its algorithm (`AllowMissingKID`). The plugin's rule before `VerifyJWT` accepted one only when exactly one key fitted, which refused every such token while a provider published two keys of one type.
 
 `email_verified` counts as true when it is the boolean `true` or the string `"true"`. Some providers send the string.
 
