@@ -102,6 +102,8 @@ The keys are derived from the master secret, one EdDSA key per secret version ([
 
 ### Security rules
 
+The route follows these security rules:
+
 - **The route is a `POST`.** Under the cookie transports, the origin check refuses a request from another site, which a `GET` would not get.
 - **A pending session gets no token.** A session that still waits for a second factor is not a signed-in user.
 - **The token never reaches a cookie or a URL.** It is a bearer credential for another service. A cookie would send it with every request to Behemoth's host, and a URL ends up in logs and in `Referer` headers.
@@ -116,6 +118,8 @@ These are not built. They answer other needs, and any of them can exist next to 
 
 A service posts a session's token to Behemoth and gets back whether it is active, and for whom (RFC 7662).
 
+Introspection has these properties:
+
 - **Revocation:** immediate.
 - **Cost:** one call per request, which a service may cache for a few seconds, and the service has to authenticate to Behemoth, so that the route is not an oracle for stolen tokens.
 - **Fits:** a few services, or an operation that has to see a sign-out at once. With `sid`, a service can use session tokens for most requests and introspect only for the sensitive ones.
@@ -123,6 +127,8 @@ A service posts a session's token to Behemoth and gets back whether it is active
 ### Forward authentication
 
 A gateway in front of the services (nginx `auth_request`, Traefik `forwardAuth`, Envoy `ext_authz`) calls a route of Behemoth for every request. The route reads the session from the request and answers `200` with the user in headers, or `401`.
+
+Forward authentication has these properties:
 
 - **Revocation:** immediate.
 - **Cost:** Behemoth is on the path of every request.
@@ -149,26 +155,36 @@ Behemoth would issue tokens to other applications, with client registration, con
 ## Design decisions
 
 ### A token per audience, from a list
+
 **Context:** Several services may accept session tokens. A token that every service accepts can be replayed from one to the other.
+
 **Options considered:**
+
 - *One audience for every service.* Simple. A service that leaks a token leaks a credential for all of them.
 - *An audience the request names, from a configured list.* A token for service A is refused by B. The client asks for a token per service it calls.
 
 **Decision:** the list, with its first entry as the default, so that a deployment with one service names nothing in its requests.
+
 **Revisit if:** clients need one token for several services in one call. An `aud` array is a standard form, and the request could name several.
 
 ### A hook point adds the claims
+
 **Context:** A service often needs more than the user's id: roles, a tenant, a plan.
+
 **Options considered:**
+
 - *No extra claims.* The service looks them up itself, with a call or a database of its own.
 - *A function in the configuration.* Code in the options, which a configuration file can't carry (`service_ready_components.md`).
 - *A before point whose payload has a `claims` object.* A plugin or the application adds claims, and a handler reachable over HTTP later can do it too, since the payload is data.
 
 **Decision:** the before point, with the claims under `custom` so that they can't stand in for a registered claim.
+
 **Revisit if:** services need claims at the top level, as some libraries read roles. A list of keys a handler may set there could be added.
 
 ### 15 minutes, set per deployment
+
 **Context:** The lifetime is the delay of a revocation, and the rate at which clients come back for a new token.
+
 **Decision:** 15 minutes by default, `JWTConfig.TTL[JWTExternal]` to change it. Shorter makes revocation quicker and costs more requests. A deployment that needs a sign-out to take effect at once adds introspection for the operations that need it.
 
 ## Implementation steps

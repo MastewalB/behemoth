@@ -43,6 +43,8 @@ An update's payload holds only the columns being changed, so the handler on `dat
 
 `data.user.updated` shares the update's `Values`, so its handler sees the note and sends the link once the transaction has committed. The send has to wait for the commit: a link for an address the database then rolls back would confirm nothing.
 
+The trigger follows these rules:
+
 - **The plugin's own update does not trigger it.** `Verify` updates `email_verified` only, so step 1 returns.
 - **The magic link plugin's update does not either**, for the same reason.
 
@@ -52,7 +54,7 @@ Both sends run in after-commit handlers. An error there is logged by the dispatc
 
 ## Sending a link
 
-`sendVerification` resolves a request by user id before the flow, publishes the email in `Values` for the rate-limit rule, and calls the flow wrapped with `auth.emailVerification.beforeSend`, `.afterSend` and `.sendFailed`. `sendBody`:
+`sendVerification` resolves a request by user id before the flow, publishes the email in `Values` for the rate-limit rule, and calls the flow wrapped with `auth.emailVerification.beforeSend`, `.afterSend`, and `.sendFailed`. `sendBody`:
 
 | Step | What | On failure |
 | --- | --- | --- |
@@ -65,11 +67,11 @@ Both sends run in after-commit handlers. An error there is logged by the dispatc
 
 - **Step 5 does not wait.** `afterSend` means the message was queued, not delivered. A send that fails later is logged by the mailer.
 - **A handler can't change who the link goes to.** `SendRequest.FromMap` reads the redirect URL and the metadata back from the payload and ignores `email` once the request is in the flow.
-- **The route hides steps 2 to 5**, as the magic link route does: `ErrNoAccount`, `ErrAlreadyVerified` and an `afterLookupError` all become the `200` of a sent link.
+- **The route hides steps 2 to 5**, as the magic link route does: `ErrNoAccount`, `ErrAlreadyVerified`, and an `afterLookupError` all become the `200` of a sent link.
 
 ## Verifying a link
 
-`Verify` reads the token without consuming it, for the redirect URL and the email in the before payload, then runs `verifyBody` wrapped with `.beforeVerify`, `.afterVerify` and `.verifyFailed`:
+`Verify` reads the token without consuming it, for the redirect URL and the email in the before payload, then runs `verifyBody` wrapped with `.beforeVerify`, `.afterVerify`, and `.verifyFailed`:
 
 1. `Consume` the token. A rejection is `invalid_link`.
 2. Find the user by the token's subject. Gone: `user_not_found`.
@@ -81,39 +83,56 @@ Every refusal answers with one typed unauthorized error, `invalid_verification_l
 ## Design decisions
 
 ### A plugin of its own
+
 **Context:** Email verification could live in the email/password plugin as an option, in core, or in a plugin.
+
 **Options considered:**
+
 - *An option of the email/password plugin.* One plugin to install for the common case. An application that signs users in by OAuth or magic link only would load the password plugin to verify an address.
 - *Core.* Always there. Core has no routes and composes no messages.
 - *A plugin that listens to user writes.* Works with every way of creating a user. One more plugin to pass to `Prepare`.
+
 **Decision:** A plugin. What it verifies is a column of the core `users` table, and nothing about it involves a password.
 
 ### Sends are always in the background
+
 **Context:** The send is triggered by other operations: a sign-up, a profile update. The mailer offers `Send`, which waits, and `SendAsync`.
+
 **Options considered:**
+
 - *Wait.* A failure is known at once. Every sign-up waits for the mail provider, inside an after-commit handler that runs synchronously.
 - *An option, as in the magic link plugin.* Flexible. There is no case here where waiting buys anything.
 - *Never wait.* A failure is only logged.
+
 **Decision:** Never wait. The operation is idempotent: a lost message costs the user a retry, a new link replaces the old one, and a request for a verified address does nothing. The magic link plugin differs because it acts on a failed send by revoking the link.
+
 **Revisit if:** applications want the send to fail a sign-up. That would also need the send to run before the commit.
 
 ### A direct write of a new address takes effect at once
+
 **Context:** When a write changes a user's address without going through the change flow, the handlers have to do something with it.
+
 **Options considered:**
+
 - *Replace and mark unverified.* The flag stays honest. The unconfirmed address is the account's identifier at once.
 - *Refuse the write.* Forces everything through the change flow. An admin screen or an import could no longer set an address.
+
 **Decision:** Replace and mark unverified. The handlers are a net under writes the plugin does not control, and the safe path is `RequestChange`. `docs/ongoing.md` has an entry on refusing such writes when the flow is on.
 
 ### `RequireVerified` hooks `auth.signIn.credentialsVerified`
+
 **Context:** A sign-in of an unverified user has to be refused somewhere.
+
 **Options considered:**
+
 - *`auth.signIn.before`.* Earliest. The payload differs by sign-in method and has no user, and refusing before the password is checked tells anyone whether an address is verified.
 - *`auth.signIn.credentialsVerified`.* It has the user id whatever the method, and runs after the credentials were accepted.
+
 **Decision:** `credentialsVerified`. The sign-in flows report the refusal as `rejected_by_hook` in the audit event, like any handler's refusal, with the plugin's error as the cause.
 
 ## The email change flow
 
-`change.go` adds a flow in which the new address has to confirm before it replaces the old one, and the old address is told and can undo it. It is off unless `Options.ChangeLinkURL` and `RevertLinkURL` are set; `Declare`, `Init` and `Routes` each check `changeEnabled()`.
+`change.go` adds a flow in which the new address has to confirm before it replaces the old one, and the old address is told and can undo it. It is off unless `Options.ChangeLinkURL` and `RevertLinkURL` are set; `Declare`, `Init`, and `Routes` each check `changeEnabled()`.
 
 | Declared when on | Value |
 | --- | --- |
@@ -182,44 +201,66 @@ The same link therefore cancels a change that is pending and undoes one that was
 ### Design decisions
 
 #### The pending change lives in token metadata
+
 **Context:** Between the request and the confirm, the new address has to be kept somewhere.
+
 **Options considered:**
-- *A `pending_email` column on `users`.* Visible in the row, easy to show in a settings page. A schema change for every application, and a second place that has to agree with the token.
+
+- *A `pending_email` column on `users`.* Visible in the row, and a settings page can show it directly. A schema change for every application, and a second place that has to agree with the token.
 - *The token's metadata.* No schema change. The pending address expires with the token and is removed with the user. Showing "a change is pending" needs `ListForSubject`.
+
 **Decision:** The metadata. The token already is the pending change: it has the lifetime, the single use and the revocation.
+
 **Revisit if:** applications need to query pending changes across users.
 
 #### One link at the old address, issued at the request
+
 **Context:** The old address has to be able to stop a change it did not ask for.
+
 **Options considered:**
+
 - *A notice without a link.* The owner learns of it and can do nothing.
 - *A cancel link that works until the confirm.* Someone who took over a session confirms from their own mailbox within seconds, so the link is nearly always too late.
 - *Approval from the old address before the change.* The strongest. A user who lost the old mailbox, which is a common reason to change, can't change at all.
 - *A link that works before and after the confirm, for some days.* It drops a pending change and undoes an applied one. The old mailbox keeps a say over the account for that long.
+
 **Decision:** The fourth, sent when the change is requested and not when it is applied, so the owner hears of an attempt as early as possible. `RevertTTL` is 72 hours by default.
+
 **Revisit if:** the window proves too long for users who change address because the old mailbox is compromised. A shorter default, or an option to send the notice without a link, would cover that.
 
 #### The older revert link wins
+
 **Context:** After two changes, `a@` to `b@` to `c@`, two revert links exist: one at `a@` that restores `a@`, one at `b@` that restores `b@`. If someone took the account over at the first change, `b@` is theirs.
+
 **Options considered:**
+
 - *A new request revokes the earlier revert links.* One live link per user, as for the other tokens. Whoever took the account over makes a second request and the owner's link is dead.
 - *Using a revert link revokes all the others.* The holder of `b@` uses their link first and kills the owner's.
 - *Links never affect each other.* The owner restores `a@`, and the holder of `b@` then uses their link to put `b@` back.
 - *Using a link revokes the links issued after it.* A link can cancel later ones and never earlier ones.
+
 **Decision:** The fourth. The address that held the account earliest has the last word, in whatever order the links are used. It needs to revoke a subset of a subject's tokens, which is what `ListForSubject` was added for. The comparison is "not created before" and not "created after", because some databases store the creation time to the second.
 
 #### The notice waits, the confirmation does not
+
 **Context:** The mailer offers `Send`, which waits and returns the sender's error, and `SendAsync`.
+
 **Decision:** `Send` for the notice: the request fails if the notice can't be handed over, and no confirmation link is issued. The notice is the owner's safeguard, so a change does not start without it. `SendAsync` for the confirmation, like a verification link: if it is lost the user asks again.
+
 **Revisit if:** the wait bothers applications whose sender is slow. They can give a sender that enqueues.
 
 #### The request needs a fresh session
+
 **Context:** The request route acts for the session's user.
+
 **Options considered:**
+
 - *Any valid session.* A session left open on a shared computer, or stolen, is enough to move the account.
 - *The password again in the request.* Certain. It ties the plugin to the password plugin, and a user who signs in by magic link has none.
 - *A fresh session.* Works for every sign-in method. A user whose session is older signs in again.
+
 **Decision:** A fresh session, with `RequireFreshSession`. It is the use `FreshAge` was put in `SessionConfig` for.
+
 **Revisit if:** a way to re-check credentials on an existing session is added. The user would then not have to sign in again.
 
 ## Tests

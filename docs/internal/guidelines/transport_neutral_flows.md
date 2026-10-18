@@ -1,6 +1,6 @@
 # Flows and the transports that reach them
 
-This document explains the split between a flow and the code that exposes it over a transport, and what follows for anyone who adds a flow, a handler, a hook handler, a rate-limit rule or a method on a core interface. HTTP is the only transport today. gRPC, WebSockets or GraphQL may follow where there is a need, and not every flow will get every wrapper.
+This document explains the split between a flow and the code that exposes it over a transport, and what follows for anyone who adds a flow, a handler, a hook handler, a rate-limit rule or a method on a core interface. HTTP is the only transport today. gRPC, WebSockets, or GraphQL may follow where there is a need, and not every flow will get every wrapper.
 
 The guidelines are suggestions for new code and for changes. They do not describe a finished state: *Where the code differs today* lists the places that do not follow them yet.
 
@@ -13,7 +13,7 @@ The code it refers to lives in:
 - `types/router.go`: the pipeline around a handler
 - `errors/errors.go`: `DomainError` and its categories
 
-The other guideline documents are [`http_contract.md`](http_contract.md), about what a client of the HTTP routes depends on, and [`service_ready_components.md`](service_ready_components.md), about options, state and background work in a component that may run in a standalone service.
+The other guideline documents are [`http_contract.md`](http_contract.md), about what a client of the HTTP routes depends on, and [`service_ready_components.md`](service_ready_components.md), about options, state, and background work in a component that may run in a standalone service.
 
 ## Three layers
 
@@ -61,7 +61,7 @@ A second call to the store, a rule, or an `errors.Is` that changes the answer is
 
 ### A flow takes a context and typed input, and returns a result and an error
 
-It takes no `*RequestContext` and no `*http.Request`, and it sets no status, cookie or header. `Plugin.SignIn` returns a `SignInResult` with the raw session token and writes nothing: "the raw session token is in the result and is the caller's to deliver".
+It takes no `*RequestContext` and no `*http.Request`, and it sets no status, cookie, or header. `Plugin.SignIn` returns a `SignInResult` with the raw session token and writes nothing: "the raw session token is in the result and is the caller's to deliver".
 
 A flow is exported and documented as the flow behind its route, so that a job, a CLI or another plugin calls the same code.
 
@@ -106,11 +106,11 @@ Today the address and the user agent are read from the `*http.Request` found wit
 
 ### A result carries data, and the wrapper decides what to do with it
 
-The magic link flow returns a `RedirectURL` in its result. The HTTP wrapper puts it in the JSON body, and another transport is free to do something else with it. Cookies, `Cache-Control` and the shape of a body are the wrapper's, or a helper's that wrappers share, such as `WriteSignIn`.
+The magic link flow returns a `RedirectURL` in its result. The HTTP wrapper puts it in the JSON body, and another transport is free to do something else with it. Cookies, `Cache-Control`, and the shape of a body are the wrapper's, or a helper's that wrappers share, such as `WriteSignIn`.
 
 ### A new method on a core interface takes a context
 
-`SessionManager.Create`, `Validate`, `Revoke` and `Touch` take a `context.Context`, and so do the token manager's and the mailer's methods. A new method that takes a `RequestContext` can't be called by a job or by another transport.
+`SessionManager.Create`, `Validate`, `Revoke`, and `Touch` take a `context.Context`, and so do the token manager's and the mailer's methods. A new method that takes a `RequestContext` can't be called by a job or by another transport.
 
 ### A transport's dependency stays in its own module
 
@@ -122,29 +122,36 @@ A flow's guarantees are tested by calling the flow: the limit that refuses the e
 
 ## Where the code differs today
 
-Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted.
+Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted:
 
 - The limits per client address are route rules, so sign-in and sign-up called from code have no rate limit. "A flow called from code skips the per-address limits of its route".
 - The handlers of the link request, verification send, email change and reset request routes hide whether an account exists. "Hiding whether an account exists is done by the HTTP handlers".
 - The session manager, the audit event builder and hook rules learn about the caller from the `*http.Request`. A flow reached another way is audited as the system, without an address. "The caller of an operation is known only through the HTTP request" and "A hook rule has no direct way to the resolved client address".
 - `SessionManager` has four methods that take HTTP types, and the session check exists only as the `RequireSession` middleware. "The session manager also carries the token over HTTP".
-- `types.Plugin` requires `Routes` and `Middlewares`. The stages around a handler are built in `Router.Build`. `types`, `errors`, `transport` and each plugin's package import `net/http`, so no import rule checks any of this yet. "`Plugin` requires HTTP routes, and the request pipeline lives in the router".
-- The verify, confirm and revert handlers refuse a missing token themselves. No entry.
+- `types.Plugin` requires `Routes` and `Middlewares`. The stages around a handler are built in `Router.Build`. `types`, `errors`, `transport`, and each plugin's package import `net/http`, so no import rule checks any of this yet. "`Plugin` requires HTTP routes, and the request pipeline lives in the router".
+- The verify, confirm, and revert handlers refuse a missing token themselves. No entry.
 
 ## Design decisions
 
 ### Thin wrappers per transport, without a shared transport interface
+
 **Context:** Flows should be reachable over more than HTTP, without every transport repeating a flow's rules.
+
 **Options considered:**
-- *One handler type for every transport.* `RequestContext` would be widened until a gRPC call and a WebSocket message fit it, and a plugin would write each handler once. Unary calls, streams, cookies and metadata differ too much: the shared type would carry fields that mean nothing on most transports, and code that reads them would depend on the transport after all.
+
+- *One handler type for every transport.* `RequestContext` would be widened until a gRPC call and a WebSocket message fit it, and a plugin would write each handler once. Unary calls, streams, cookies, and metadata differ too much: the shared type would carry fields that mean nothing on most transports, and code that reads them would depend on the transport after all.
 - *A wrapper per transport over complete flows.* Each transport keeps its own types, and a wrapper is a few lines. It works only when the flow holds everything that matters, which is what the guidelines above ask for.
 
 **Decision:** wrappers per transport. The effort goes into making a flow complete, not into an abstraction over transports.
+
 **Revisit if:** two transports turn out to share most of their wrapper code for most flows. Generating the wrappers from a description of each operation would then be worth a look.
 
 ### Equal guarantees are the goal, and the import rule is a check
+
 **Context:** "HTTP-agnostic" needs a meaning that a reviewer can apply to a small change.
+
 **Options considered:**
+
 - *No `net/http` import below the wrappers.* A tool can check it. It says nothing about a rate limit that is declared on a path, or an answer that the handler softens: both pass the check and both are missing on a second transport.
 - *The same guarantees however a flow is reached.* It covers those cases. A tool can't check it, so it needs tests that call the flow without HTTP.
 

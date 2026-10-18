@@ -54,7 +54,7 @@ The tracer is the one sink set by an option, `telemetry.WithTracer(t)`, and not 
 | a failure of the system (`IsSystemFailure`) | `error_code`, `error_category`, and `RecordError` |
 | a rejection: not found, expired session, a hook's veto, a rate limit | `error_code` and `error_category` only |
 
-`IsSystemFailure` is true for an error outside the taxonomy and for the categories `database`, `transaction`, `undefined_table`, `internal`, `configuration`, `security`, `not_implemented` and `migration`.
+`IsSystemFailure` is true for an error outside the taxonomy and for the categories `database`, `transaction`, `undefined_table`, `internal`, `configuration`, `security`, `not_implemented`, and `migration`.
 
 A sign-up looks the email address up and expects to find nothing. If that lookup failed its span, every sign-up trace would show an error. A trace view that highlights failed spans should light up for an outage and stay quiet for a wrong password.
 
@@ -80,6 +80,8 @@ The trace of a sign-up through the example application, as Jaeger received it, i
 ### The request
 
 `Router.Build` wraps each route as `withRequestScope(withTracing(withMetrics(wrapWithErrorMapping(...))))`.
+
+The wrapper behaves as follows:
 
 - `withTracing` starts the span from `rctx.Ctx` and stores the returned context back in `rctx.Ctx`. Everything inside uses that context: middleware, the handler, and through `HookContext.Ctx` and the store, everything they call.
 - It runs inside `withRequestScope`, so the request ID is known and becomes an attribute. A trace can be found from the ID a client quotes.
@@ -116,7 +118,7 @@ Because the adapter is called with the span's context, a driver's own instrument
 
 ### Managers
 
-`Create`, `Get` and `Revoke` of the session manager, and `Issue` and `Consume` of the token manager, are each a thin method that starts a span, calls the unexported method holding the body (`create`, `get`, ...), and finishes the span with its error. The body is unchanged, and none of its many return paths has to remember the span.
+`Create`, `Get`, and `Revoke` of the session manager, and `Issue` and `Consume` of the token manager, are each a thin method that starts a span, calls the unexported method holding the body (`create`, `get`, ...), and finishes the span with its error. The body is unchanged, and none of its many return paths has to remember the span.
 
 `Validate` goes through `Get`, so `behemoth.session.validate` covers both. The token manager reads the `Telemetry` from its `AuthContext` on use, as it does for its logger.
 
@@ -138,25 +140,36 @@ Because the adapter is called with the span's context, a driver's own instrument
 
 A nil provider means the global one. The instrumentation scope of every span and instrument is `github.com/MastewalB/behemoth`.
 
+The adapter has these properties:
+
 - **It depends on the OpenTelemetry API.** The SDK appears in `go.mod` for the tests only. The application builds the SDK, its providers and exporters, and shuts them down.
-- **Attributes keep their type.** `attributes` converts strings, booleans, integers and floats to typed key-values, in key order, and formats anything else.
+- **Attributes keep their type.** `attributes` converts strings, booleans, integers, and floats to typed key-values, in key order, and formats anything else.
 - **`RecordError`** adds the error as a span event and sets the status to `Error`. Since `FinishSpan` only calls it for system failures, a rejected request keeps the status `Unset`.
 - **Instruments are created on first use** and cached by name behind a read-write lock. A histogram whose name ends in `.duration` gets the unit `s`. An instrument that cannot be created is reported to OpenTelemetry's error handler and its measurements are dropped.
 - **`WithTraceIDs` decorates a logger** and does not export logs. It reads the span context from the line's context and adds the two IDs. It goes inside `telemetry.New`, which adds redaction and the request ID around it.
 
 ### No log exporter in the adapter
+
 **Context:** The plan listed an OpenTelemetry logger next to the tracer and the metrics.
+
 **Options considered:**
+
 - *Implement `telemetry.Logger` on the OpenTelemetry Logs API.* Logs would reach the collector with no further setup. The Logs API for Go is younger than the trace and metric APIs, and the adapter would duplicate what `otelslog` already does for any slog logger.
 - *Decorate an existing logger with the trace and span IDs.* Works with stdout today. An application that wants logs in its collector builds a slog logger over `otelslog` and passes it to `telemetry.NewSlogLogger`, and the decorator still adds the IDs.
+
 **Decision:** The decorator. Correlating a line with its trace is the part only behemoth's adapter can do; transporting log records is not.
+
 **Revisit if:** applications keep writing the same `otelslog` wiring, at which point a constructor for it belongs here.
 
 ### No Jaeger adapter
+
 **Context:** Jaeger was named as a backend alongside OpenTelemetry and stdout.
+
 **Options considered:**
+
 - *A Jaeger adapter on the Jaeger client library.* The library is deprecated in favor of OpenTelemetry.
 - *Reach Jaeger through OpenTelemetry.* Jaeger ingests OTLP. The application points an OTLP exporter at it.
+
 **Decision:** No Jaeger code. The choice of destination is the exporter's, and the exporter is the application's.
 
 ## Testing

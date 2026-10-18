@@ -1,4 +1,4 @@
-# Telemetry Foundations
+# Telemetry foundations
 
 This document describes the `telemetry` package as built: what it defines, how a log line travels from a call site to a backend, and how a request gets its ID. It is phase 1 of `plan.md`. Audit storage, the metric catalog and tracing are later phases and are described there.
 
@@ -24,7 +24,7 @@ It relates to the error taxonomy in two ways. It follows the same split: behemot
 
 `types.AuditSpec` stayed in `types`, next to `HookPointDef`, because it is part of a hook point's declaration and not of a sink.
 
-## `Telemetry`, `New` and `OrDefault`
+## `Telemetry`, `New`, and `OrDefault`
 
 ```go
 type Telemetry struct {
@@ -96,12 +96,17 @@ Limits: matching is by key. A secret inside a message string, or under a key tha
 ### Design decision
 
 ### Suffix matching for redacted keys
+
 **Context:** Field keys are free-form, and the same secret appears under different names (`password`, `newPassword`, `passwordHash`).
+
 **Options considered:**
+
 - *Exact match.* Predictable. Misses every variant, so each new field name needs a new entry.
 - *Substring match.* Catches the most. Also redacts `tokenID` and `token_kind`, which are the fields that make a token-related log line useful.
 - *Suffix match.* Catches the variants where the secret word is the noun (`refresh_token`, `newPassword`) and leaves keys where it qualifies something else (`tokenID`).
+
 **Decision:** Suffix match, case-insensitive.
+
 **Revisit if:** a field that holds a secret is found with the secret word at the start of its key.
 
 ## Field keys and `ErrorFields`
@@ -120,7 +125,7 @@ Limits: matching is by key. A secret inside a message string, or under a key tha
 
 `ErrorFields(err, extra...)` also copies the fields of `extra` into the result, for a line that says more than the error does. A key the error sets wins over the same key in `extra`.
 
-Further keys were added with the logging phase: `FieldMethod`, `FieldRoute`, `FieldStatus` and `FieldStatement`. How components use the keys and `Named` is described in `logging.md`.
+Further keys were added with the logging phase: `FieldMethod`, `FieldRoute`, `FieldStatus`, and `FieldStatement`. How components use the keys and `Named` is described in `logging.md`.
 
 ## Request ID
 
@@ -141,6 +146,8 @@ Audit events carry the ID too: `telemetry.NormalizeAuditEvent` fills `AuditEvent
 ## The slog backend
 
 `NewSlogLogger(l *slog.Logger)` adapts any slog logger; `NewTextLogger` and `NewJSONLogger` build one over an `io.Writer` at a minimum level.
+
+Output follows these rules:
 
 - Fields become attributes in key order, so output is stable between runs.
 - The level check runs before the attributes are built.

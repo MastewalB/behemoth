@@ -1,4 +1,4 @@
-## **Hooks**
+# Hooks
 
 This folder explains how hooks work inside Behemoth: how a hook point is declared, how a handler is registered on it, how the handlers of a point are put in order, and how the dispatcher runs them when the point is fired.
 
@@ -25,7 +25,7 @@ The code lives in:
 
 ---
 
-# **From declaration to execution**
+## From declaration to execution
 
 A hook goes through four stages. The first three happen once, at startup. The fourth happens on every request.
 
@@ -38,13 +38,13 @@ A hook goes through four stages. The first three happen once, at startup. The fo
 
 Nothing is added or reordered after the freeze. A dispatch reads the catalog and the frozen chains and writes neither.
 
-### **One sign-up, end to end**
+### One sign-up, end to end
 
 The example follows `POST /sign-up/email` from the email/password plugin with one extra plugin, `profile`, that adds a row of its own for every new user and sends a welcome email.
 
 **At `Prepare`:**
 
-1. `CoreDeclareHookPoints` declares 23 points under owner `core`, among them `auth.signUp.before`, `auth.signUp.after`, `auth.signUp.failed`, `data.user.beforeCreate`, `data.user.afterCreate` and `data.user.created`.
+1. `CoreDeclareHookPoints` declares 23 points under owner `core`, among them `auth.signUp.before`, `auth.signUp.after`, `auth.signUp.failed`, `data.user.beforeCreate`, `data.user.afterCreate`, and `data.user.created`.
 2. Each plugin's `Declare` runs in dependency order. Neither plugin declares a point of its own here.
 3. The catalog is frozen.
 
@@ -85,7 +85,7 @@ What a failure does depends on where it happens:
 
 ---
 
-# **Terms**
+## Terms
 
 | Term | Meaning |
 | --- | --- |

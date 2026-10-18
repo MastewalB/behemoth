@@ -12,11 +12,11 @@ The code it refers to lives in:
 - `errors/errors.go`, `errors/session.go`: `DomainError`, `DefaultErrorMapper`
 - `plugins/*`: each plugin's routes, body keys and error codes
 
-The other guideline documents are [`transport_neutral_flows.md`](transport_neutral_flows.md), about what belongs in a handler and what belongs in the flow behind it, and [`service_ready_components.md`](service_ready_components.md), about options, state and background work in a component that may run in a standalone service.
+The other guideline documents are [`transport_neutral_flows.md`](transport_neutral_flows.md), about what belongs in a handler and what belongs in the flow behind it, and [`service_ready_components.md`](service_ready_components.md), about options, state, and background work in a component that may run in a standalone service.
 
 ## What a client depends on
 
-A client never sees hooks, the store, migrations or the router adapters. Those can change freely. It sees this:
+A client never sees hooks, the store, migrations, or the router adapters. Those can change freely. It sees this:
 
 | Part of the contract | Example | Decided by |
 | --- | --- | --- |
@@ -46,13 +46,15 @@ The flow returns the typed error, the handler returns it unchanged, and the rout
 
 Compare with a handler that writes the response itself, `rctx.Response.Error(400, "user already exists")`. The body has no code, so a client can only compare the English text. Sign-up answered this way before its rejections were given types.
 
+A rejection follows these rules:
+
 - A new rejection gets a new code. An existing code is not reused for something else.
 - Codes are snake case and name what is wrong: `email_taken`, `invalid_magic_link`, `session_expired`.
 - A hook handler of the application can reject with a code of its own, so a client treats codes as an open set. A code is not a promise that no other code can come from the route.
 
 ### Add to a response, and leave what is there
 
-A client ignores keys it does not know, so a new key is safe. A renamed or removed key, a changed type and a changed status are not. `WriteSignIn` follows this for plugins: its `extra` argument adds keys next to `user`, and can't replace `user`, `token` or `status`.
+A client ignores keys it does not know, so a new key is safe. A renamed or removed key, a changed type and a changed status are not. `WriteSignIn` follows this for plugins: its `extra` argument adds keys next to `user`, and can't replace `user`, `token`, or `status`.
 
 ### Answer in the shapes that exist
 
@@ -95,11 +97,11 @@ The page posts the token to behemoth. `docs/internal/plugins/magiclink.md` has t
 
 ### Treat a header a client reads as part of the contract
 
-`Set-Auth-Token`, `Retry-After` and the request ID header are read by clients. A script on another origin reads a response header only when the application's CORS setup exposes it, so a new one is listed in `docs/api` for the application to expose. The body has no such condition and is the better place for new data.
+`Set-Auth-Token`, `Retry-After`, and the request ID header are read by clients. A script on another origin reads a response header only when the application's CORS setup exposes it, so a new one is listed in `docs/api` for the application to expose. The body has no such condition and is the better place for new data.
 
 ### Update the API docs in the same change
 
-`docs/api/<plugin>.md` lists each route's body, answers and codes. Until a contract file is generated from the routes, these pages are the only description a client's author has.
+`docs/api/<plugin>.md` lists each route's body, answers, and codes. Until a contract file is generated from the routes, these pages are the only description a client's author has.
 
 ## How the clients are expected to be built
 
@@ -109,26 +111,30 @@ The plan is one core client with client plugins, and thin packages per framework
 - **A client plugin** matches one server plugin and adds its methods and types. Email and password is a client plugin like the others, since it is optional on the server.
 - **A framework package** (Svelte, SvelteKit, React) takes a client and adds reactivity or server integration. It does not know about plugins.
 
-Two things follow for server code. A plugin's routes, keys and codes should make sense on their own, because one client plugin is written against one server plugin. What the core client calls has to exist whichever plugins are installed, which is the reason for *Put what every client needs in core*.
+Two things follow for server code. A plugin's routes, keys, and codes should make sense on their own, because one client plugin is written against one server plugin. What the core client calls has to exist whichever plugins are installed, which is the reason for *Put what every client needs in core*.
 
 ## Where the code differs today
 
-Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted.
+Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted:
 
 - No route returns the caller's session, and `POST /sign-out` is mounted by the email/password plugin. "No route answers with the caller's session, and sign-out belongs to one plugin".
 - An application's `RouterConfig.ErrorMapper` returns the whole error body and can leave `code` out. "An application's error mapper decides the error body".
 - Two sign-ups racing for one email answer with the store's code and not `email_taken`. "Two sign-ups racing for one email answer with the store's code".
 - A route does not describe its input, its output or its codes, so no contract file can be generated or tested. "Routes do not describe their input and output".
-- The email/password plugin's sign-up, sign-in and sign-out paths are string literals, repeated in core's rate-limit rules. No entry.
+- The email/password plugin's sign-up, sign-in, and sign-out paths are string literals, repeated in core's rate-limit rules. No entry.
 
 ## Design decisions
 
 ### The error code is the contract, the message is not
+
 **Context:** A client has to tell rejections apart: a wrong password, an email that is taken, a session that expired, a rate limit. It needs something that stays the same while the wording improves.
+
 **Options considered:**
+
 - *The status alone.* Nothing to maintain. A `401` is a wrong password, an expired session and a used link, which a client treats differently.
 - *The message.* It is already there. Rewording it breaks clients, and it can't be translated without breaking them.
 - *A code next to the message.* One more constant per rejection, exported so that the tests and the API docs name it.
 
 **Decision:** the code. A rejection a client can cause is a `DomainError` with an exported code, and handlers do not write error bodies themselves.
+
 **Revisit if:** clients need more than a code to act on a rejection, such as the field a validation error is about. The error body would then gain a key, which the guideline on adding allows.

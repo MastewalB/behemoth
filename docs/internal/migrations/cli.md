@@ -1,4 +1,4 @@
-## **The Command Line**
+# The command line
 
 This document explains how `behemoth generate` reaches an application's declarations and its database: which parts exist, what each does, and why they are built this way. The migration pipeline the command drives is described in [`migration_design_decision.md`](migration_design_decision.md).
 
@@ -12,7 +12,7 @@ The code lives in:
 
 `[Status]` This is a prototype. It has two commands, `generate` and `migrate`, and one dialect constructor, for PostgreSQL. What is left out is listed under *Deferred*.
 
-### **The problem**
+## The problem
 
 A migration run needs the inputs below. Before the command line an application supplied all of them by hand (`examples/init/migrate.go`).
 
@@ -29,7 +29,7 @@ Two inputs can't be derived: how to prepare, and how to reach the database. Go l
 
 `Prepare` already separates what needs no connection from what does, so the first input is one call the application makes anyway. `Boot`'s configuration (crypto, sessions, mail, router) plays no part in a migration.
 
-### **The parts**
+## The parts
 
 ```
 behemoth generate
@@ -41,7 +41,7 @@ behemoth generate
 behemoth migrate takes the same route to core.Migrate and RunManagedApply.
 ```
 
-**`core.Backend`, `core.Generate` and `core.Migrate`.** `Backend` holds what the pipeline needs from one database: `Introspector`, `Renderer`, `Driver`, `DB` and `Close`. `Generate` and `Migrate` take it with the configuration and the declarations, and do the wiring. They are described in the design document under *Entry points*. `postgres.MigrationBackend(db, resolver)` fills a `Backend` from one `*sql.DB`.
+**`core.Backend`, `core.Generate`, and `core.Migrate`.** `Backend` holds what the pipeline needs from one database: `Introspector`, `Renderer`, `Driver`, `DB`, and `Close`. `Generate` and `Migrate` take it with the configuration and the declarations, and do the wiring. They are described in the design document under *Entry points*. `postgres.MigrationBackend(db, resolver)` fills a `Backend` from one `*sql.DB`.
 
 **The `cli` package.** The commands as a library. An application gives it two functions:
 
@@ -98,67 +98,98 @@ In `examples/cli`, `behemoth generate` takes about half a second with a warm bui
 
 `[Convention]` The launcher links no database driver and depends on the standard library only, so `go install` works without cgo whatever database the application uses.
 
-### **Design decisions**
+## Design decisions
 
-### Who compiles the application's code
+## Who compiles the application's code
+
 **Context:** the declarations exist only as Go code in the application's build, so some program that contains that code has to run.
+
 **Options considered:**
+
 - *A config file that lists plugins by name.* No Go code runs. It cannot express a plugin the application wrote, its own tables or an option that changes what a plugin declares, and it is a second description of the application that can disagree with what `Boot` runs.
 - *A manifest.* The application writes its declared schema as JSON, and a prebuilt binary reads it together with a dialect name and a DSN. The application's code still has to run to produce the file, the file can go stale, the binary has to link every driver (which undoes one module per database, `go-sqlite3` and cgo included), and connection setup shrinks to what DSN flags can say.
 - *The commands as a library.* The application writes a `main` of a few lines that calls `cli.Main`. Nothing is generated, and it works where there is no Go toolchain, because the application ships the binary.
 - *A launcher.* An installed binary writes that `main` and builds it, the way mage and ent's `entc` do. It needs the Go toolchain where it runs.
+
 **Decision:** the library, with the launcher on top of it. The launcher is the library's `main`, generated. That gives `behemoth generate` during development, and leaves the hand-written `main` for places without a toolchain.
+
 **Revisit if:** applications need to run the commands against a schema that is not their own build's, for example to compare two releases. That is what a manifest is good for.
 
-### The generated main is compiled through an overlay
+## The generated main is compiled through an overlay
+
 **Context:** the main has to be compiled as part of the application's module. Only there do the module's requirements and `replace` directives apply, and only code inside the module may import one of its `internal` packages.
+
 **Options considered:**
+
 - *Write the file into the application's tree*, in a directory the go command ignores. A crash leaves it behind, and it shows up in editors, file watchers and `git status` while the command runs.
 - *A temporary module* that requires the application's module. It cannot import an `internal` package, and it has to copy the application's `replace` directives.
 - *`go build -overlay`.* The overlay maps a path inside the module to a file somewhere else. The go command builds as if the file were there.
+
 **Decision:** the overlay. The virtual directory is `behemoth_cli_main` below the setup package, which satisfies the `internal` rule wherever that package is. `virtualDir` picks another name when a directory of that name exists. Nothing is written into the application's tree, which `TestLauncherRunsAnApplication` checks.
+
 **Revisit if:** applications that vendor their dependencies want the launcher. In vendor mode the `cli` package is missing from `vendor/`, because nothing in the application imports it, so the build fails. The hand-written `main` works there.
 
-### Build, then run the binary
+## Build, then run the binary
+
 **Context:** the command's exit code and output should be its own.
+
 **Options considered:**
+
 - *`go run`.* One step. It exits with 1 for every failure of the program and prints `exit status N` after the program's own output.
 - *`go build`, then run the binary.* Two steps and a temporary file. The exit code is the program's, so a usage error is 2 for a script that checks.
+
 **Decision:** build, then run. The compile is cached by the go command. The link is repeated on every run, because the binary goes to a new temporary directory.
+
 **Revisit if:** the link time becomes a nuisance. The binary can then be kept under `os.UserCacheDir()`, keyed by the setup package, where the go command skips an up-to-date link.
 
-### The setup package is found by a file name
+## The setup package is found by a file name
+
 **Context:** `behemoth generate` should need no argument, so the launcher has to find the package with `Prepare` and `MigrationBackend`.
+
 **Options considered:**
+
 - *A flag on every call.* Explicit, and it defeats the purpose.
 - *A config file at the module root.* One more file to keep, in a format that would need a parser.
 - *A file name, `behemoth.go`.* Nothing to configure, and the file is where a reader looks for the setup. A second application in the same directory tree makes it ambiguous.
 - *Searching for the two functions by signature.* It needs type information, so the whole module would be loaded on every run.
+
 **Decision:** the file name, with `-app` and `$BEHEMOTH_APP` to name the directory when the search finds none or several. The search starts at the current directory and does not look above it.
+
 **Revisit if:** modules with several applications turn out to be common.
 
-### The command runs in the caller's directory
+## The command runs in the caller's directory
+
 **Context:** `MigrationConfig.FolderPath` is usually relative (`"migrations"`), and the launcher can be started anywhere in the module.
+
 **Options considered:** run the command at the module root, or in the directory the launcher was started in.
+
 **Decision:** the caller's directory. A relative path then means the same as when the application's own binary runs there, and a module that holds several applications works. The cost: started from another directory, the command creates a second `migrations` folder there and numbers from `0001` again. The API doc says to run it where the application runs.
 
-### `generate` on both paths, `migrate` on one
+## `generate` on both paths, `migrate` on one
+
 **Context:** the two paths differ in who applies a migration, not in how one is asked for.
+
 **Options considered:**
+
 - *One command that follows `cfg.Path`.* On the managed path the same command would sometimes write a file and sometimes change the schema.
 - *One command per path.* The name says whether the database changes, but `generate` would be unavailable to an application on the managed path, which also generates.
 - *`generate` for both paths and `migrate` for the managed one.* The commands describe the two steps of the flow. `generate` never changes the database, and `migrate` is the only command that does.
+
 **Decision:** the third. It needed the managed path's single entry point split in `core` (see the design document, *Generating and applying are separate entry points on the managed path*). `migrate` refuses `PathGenerateOnly` before the database is opened: such an application applies the files with its own tool.
 
-### `Backend` is a struct, and its constructor sets `Close`
+## `Backend` is a struct, and its constructor sets `Close`
+
 **Context:** a command opens a connection through the application's `BackendFunc` and has to release it.
+
 **Options considered:**
+
 - *An interface with a method per capability.* Every dialect would implement methods that return its own driver.
 - *A struct of the existing capability interfaces.* A dialect fills the fields it has, and a custom driver can leave `Renderer` empty.
 - *For cleanup: a second return value of `BackendFunc`,* or a `Close` field.
+
 **Decision:** a struct with a `Close` field. `postgres.MigrationBackend` sets it to `db.Close`, as wrappers such as `sqlx.NewDb` close the handle they were given. `core` never calls it. The `cli` package does, and a caller that shares the `*sql.DB` leaves it alone.
 
-### **What the command shows of the draft**
+## What the command shows of the draft
 
 Planning writes each new question to `draft.json` with its default answer already chosen, and reads that answer back in the same run. Every default is "Leave as-is", so the change behind the question is left out of the migration. A run can therefore report `No schema changes detected.` while a declared column differs from the database.
 
@@ -166,7 +197,7 @@ Planning writes each new question to `draft.json` with its default answer alread
 
 When a command fails with `unresolved_issues`, the command adds a line that names the draft file.
 
-### **Tests**
+## Tests
 
 | Test | Covers |
 | --- | --- |
@@ -175,9 +206,11 @@ When a command fails with `unresolved_issues`, the command adds a line that name
 | `cmd/behemoth/main_test.go` | `findApp`, `checkEntryPoints`, the generated source, and `TestLauncherRunsAnApplication`, which writes a module to a temporary directory, runs the launcher in it and checks the migration file, the untouched tree and the exit code. It is skipped with `-short`. |
 | `tests/storage/migrations/backend_test.go` | `postgres.MigrationBackend` in a container: physical names in the script, the script applied, a second run without changes, and the driver and the adapter agreeing on the ledger. |
 
-### **Deferred**
+## Deferred
+
+These parts are deferred:
 
 - **Asking the questions.** `ResolveIssues` has an empty `if interactive` branch that leaves a prompt to this layer. The design document requires a prompt to write every answer through to the draft file. Showing the questions needs an exported view of the draft's entries.
 - **`--previous <id>` and `behemoth schema snapshot`,** which the design document names for `PathGenerateOnly`.
-- **Constructors for SQLite, MySQL and SQL Server.** Each is the five lines of `postgres.MigrationBackend`. Until then an application on one of them fills `core.Backend` itself.
+- **Constructors for SQLite, MySQL, and SQL Server.** Each is the five lines of `postgres.MigrationBackend`. Until then an application on one of them fills `core.Backend` itself.
 - **The audit event of an applied migration.** `migrate` sets no audit recorder, so none is written. The audit table may be created by the very migration being applied.

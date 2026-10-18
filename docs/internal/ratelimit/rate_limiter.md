@@ -1,4 +1,4 @@
-## **Rate Limiter**
+# Rate limiter
 
 This document explains how rate limiting works: how a rule becomes a check, the fixed-window algorithm, the two places counters are kept (Redis and the `rate_limits` table), how the database counter behaves when many requests hit one key at once, how old counters are removed, and what is not built.
 
@@ -13,7 +13,7 @@ The code lives in:
 
 ---
 
-# **Status**
+## Status
 
 | Piece | State |
 |---|---|
@@ -29,7 +29,9 @@ The code lives in:
 
 ---
 
-# **How a check flows**
+## How a check flows
+
+A check passes through these steps:
 
 1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
 2. At `Boot`, `resolveRateLimitStore` picks the counter storage and `newLimiters` builds one `Limiter` per algorithm over it.
@@ -40,7 +42,7 @@ The code lives in:
 
 Route rules and hook rules differ in one way. For a route, the single most specific matching rule applies. For a hook point, every declared rule is evaluated and all must pass.
 
-### **A rule names its algorithm**
+### A rule names its algorithm
 
 ```go
 type RouteRateLimitRule struct {
@@ -52,7 +54,7 @@ type RouteRateLimitRule struct {
 
 A `Limiter` needs somewhere to count, and rules are declared before any connection exists. So a rule holds a name, and `Boot` builds the limiter. `Limiter` on the rule is the way out for a strategy core does not have: it is used as it is, has to bring its own storage, and its `Limit` is not checked.
 
-### **The fixed window**
+### The fixed window
 
 `FixedWindow.Allow` is one call and one comparison:
 
@@ -74,7 +76,7 @@ With a limit of 10 a minute, a client's attempts look like this:
 - **A refused attempt is counted.** The count keeps rising, but the window ends when it was going to. A client that keeps trying is not punished with a longer wait, and does not get through earlier.
 - **Retry-after is the time left**, from the `resetAt` the counter returns. It is capped at the window's length and never negative, because the counter's clock may not be this process's.
 
-### **The core rules**
+### The core rules
 
 `CoreDeclareRateLimitRules` declares two rules, each 10 attempts a minute keyed by client address:
 
@@ -89,7 +91,7 @@ The sign-in rule is keyed by address and not by email on purpose. A per-account 
 
 An application replaces a rule with a more specific route rule for the same path, or turns it off with a rule that has `Disabled` set.
 
-### **What a hook rule can key on**
+### What a hook rule can key on
 
 A route rule's `KeyFunc` gets the request and the client address. A hook rule's gets the `HookContext`, because a hook point also fires without a request: from a CLI, a job or another plugin. That is the reason to use one. "Five invite tokens a minute per team" as a route rule covers one path; as a rule on `token.beforeIssue` it covers every caller of `TokenManager.Issue`.
 
@@ -124,7 +126,7 @@ ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
 - **Handlers see the entries too**, on every point of the operation. Nothing else reads them: the audit event takes its subject from `HookValueUserID` only as a last fallback (see `auditEvent`), and does not copy the email.
 - **A per-account limit lets anyone lock a user out** by spending the account's attempts. Core's own sign-in rule stays per client address for that reason. An application that keys on the email is making that trade.
 
-### **When a hook rule does not apply**
+### When a hook rule does not apply
 
 ```go
 KeyFunc func(hctx *HookContext) (key string, ok bool)
@@ -146,9 +148,9 @@ A route rule's `KeyFunc` keeps its single return value. It always has a request 
 
 ---
 
-# **The database counter**
+## The database counter
 
-### **Table**
+### Table
 
 ```go
 type RateLimit struct {
@@ -160,9 +162,9 @@ type RateLimit struct {
 
 - One row per key. `Count` is the number of attempts in the window that ends at `ExpiresAt`.
 - The key column is `limit_key`, not `key`. The SQL adapters emit column names unquoted, and `KEY` is a reserved word in MySQL and SQL Server.
-- The table is always declared, even when a key-value store will do the counting. See [`../models/models.md`](../models/models.md).
+- The table is always declared, even when a key-value store does the counting. See [`../models/models.md`](../models/models.md).
 
-### **`IncrementRateLimit(ctx, key, ttl)`**
+### `IncrementRateLimit(ctx, key, ttl)`
 
 It counts one attempt and returns the count in the current window and the window's end (the row's `expires_at`). This is a fixed window:
 
@@ -178,15 +180,17 @@ It counts one attempt and returns the count in the current window and the window
 4. Row found, window passed: update to count 1 and a new `expires_at` **where the count is still the value that was read and `expires_at` is still in the past**.
 5. If the update matched no row, another call wrote first, so start again.
 
-The guarantee is that no two calls return the same count for one window. The contract test runs 20 concurrent calls on SQLite and Postgres, through the raw SQL, GORM and Bun adapters, and checks that the counts are exactly 1 to 20.
+The guarantee is that no two calls return the same count for one window. The contract test runs 20 concurrent calls on SQLite and Postgres, through the raw SQL, GORM, and Bun adapters, and checks that the counts are exactly 1 to 20.
 
 The extra `expires_at` condition in step 4 is what stops two calls from both resetting an expired window. The second one finds `expires_at` in the future again, fails its guard, re-reads, and increments to 2.
 
 ---
 
-# **Behavior on contention**
+## Behavior on contention
 
 Each attempt costs one read and one write, and a call that loses a race repeats both.
+
+Contention behaves as follows:
 
 - **Every lost race is someone else's success.** When several calls read the same count, exactly one write matches. The others retry. The counter always moves forward; no call blocks another.
 - **Retries are bounded.** `rateLimitAttempts` is 32. A call gives up only after losing 32 races in a row, which needs at least that many other calls to have incremented the same key in the meantime.
@@ -202,18 +206,20 @@ In practice the number of calls contending for one key is limited by the databas
 Other things to know:
 
 - **Do not call it inside a transaction.** On Postgres a `DuplicateKey` error aborts the enclosing transaction, so the retry in step 2 would fail. `dbCounterStore` uses a store of its own that is never bound to a transaction.
-- **The clock is the application's**, not the database's. `expires_at` is computed from the store's clock, in UTC. Application servers with skewed clocks will disagree about when a window ends by the amount of the skew.
+- **The clock is the application's**, not the database's. `expires_at` is computed from the store's clock, in UTC. Application servers with skewed clocks disagree about when a window ends by the amount of the skew.
 - **Fixed windows allow a burst across the boundary.** A client can make `Max` attempts at the end of one window and `Max` more at the start of the next.
 
 ---
 
-# **Removing old counters**
+## Removing old counters
 
 A counter row is reused when its key is seen again: the expired window is reset in place. So a key that keeps coming back never needs cleaning up.
 
 Rows only accumulate for keys that never return. With keys built from client IP addresses or emails, that is most of them, and the table grows without bound.
 
 `Store.PurgeExpiredRateLimits(ctx)` deletes every row whose `expires_at` is at or before now. `expires_at` is indexed for this.
+
+The purge follows these rules:
 
 - It is safe to run at any time and from several processes. Deleting an expired row loses nothing: the next attempt for that key starts at 1 either way.
 - It can race with an increment that is resetting the same expired row. The increment's update then matches no row, and it retries and inserts.
@@ -222,7 +228,7 @@ Rows only accumulate for keys that never return. With keys built from client IP 
 
 ---
 
-# **`AtomicIncrementer`: where counters are kept**
+## `AtomicIncrementer`: where counters are kept
 
 ```go
 type AtomicIncrementer interface {
@@ -230,20 +236,20 @@ type AtomicIncrementer interface {
 }
 ```
 
-A fixed-window counter needs "add one and return the new count" as one atomic step. `KeyValueStorage` only has `Get`, `Set` and `Delete`, and get-then-set loses updates under concurrency. `AtomicIncrementer` is that step, and `resolveRateLimitStore` picks the implementation at `Boot`:
+A fixed-window counter needs "add one and return the new count" as one atomic step. `KeyValueStorage` only has `Get`, `Set`, and `Delete`, and get-then-set loses updates under concurrency. `AtomicIncrementer` is that step, and `resolveRateLimitStore` picks the implementation at `Boot`:
 
 | Configured | Counter | Cost per attempt |
 | --- | --- | --- |
 | a key-value storage that implements `AtomicIncrementer` (the Redis adapter) | Redis | one round trip |
 | no key-value storage, or one without it | `dbCounterStore`, which calls `Store.IncrementRateLimit` | a read and a write, repeated on a lost race |
 
-### **Why it returns the window's end**
+### Why it returns the window's end
 
 A refused client is told how long to wait. With only a count, the limiter knows the window's length and not how much of it has passed, so it could only answer with the whole window: a client refused 50 seconds into a one-minute window would be told to wait 60 seconds instead of 10. Both counters already know the end (the row's `expires_at`, the key's remaining lifetime), so `Increment` returns it.
 
 It is a time and not a duration. A duration starts going stale when it is computed; a time stays right however long the call took.
 
-### **The Redis counter**
+### The Redis counter
 
 `RedisAdapter.Increment` runs one Lua script:
 
@@ -263,13 +269,15 @@ return {count, ttl}
 - **Keys are prefixed `ratelimit:`**, apart from the session cache's `session:` keys.
 - **Redis removes the key itself.** There is nothing to purge.
 
-### **Limit of the interface**
+### Limit of the interface
 
-`Increment(key, ttl)` can only express fixed-window counting. A sliding window or a token bucket needs more state than one counter: a script on Redis, a different table shape in the database. Those should be separate optional capabilities with their own fallbacks, not extensions of this one. For throttling sign-in, sign-up and password reset, a fixed window is usually enough.
+`Increment(key, ttl)` can only express fixed-window counting. A sliding window or a token bucket needs more state than one counter: a script on Redis, a different table shape in the database. Those should be separate optional capabilities with their own fallbacks, not extensions of this one. For throttling sign-in, sign-up, and password reset, a fixed window is usually enough.
 
 ---
 
-# **Limits to know**
+## Limits to know
+
+These limits apply:
 
 - **There is no lockout.** `ActionLockout` and `LockoutFor` exist on the rule types, and a rule that uses the action fails at `Prepare`. A refused key is let in again when its window ends.
 - **A burst across the window boundary.** A client can make `Max` attempts at the end of one window and `Max` at the start of the next.
@@ -283,7 +291,7 @@ return {count, ttl}
 
 ---
 
-# **Tests**
+## Tests
 
 | Test | File | Covers |
 | --- | --- | --- |
@@ -299,22 +307,29 @@ return {count, ttl}
 
 ---
 
-# **Design decisions**
+## Design decisions
 
 ### Fixed window first
+
 **Context:** No algorithm counted. The limits core needs are "at most N attempts per window per key" on sign-in and similar routes.
+
 **Options considered:**
+
 - *Fixed window.* One counter per key. The counter existed already, tested on every database. Allows a burst across the boundary.
 - *Sliding window counter.* No boundary burst. Two counters per key and a weighted sum, which is a new table shape and a Redis script.
 - *Sliding window log.* Exact. One row per attempt, heavy on a database.
 - *Token bucket.* A burst, then a steady rate. Fractional state and a timestamp per key, updated atomically: a Redis script and a new compare-and-swap on SQL.
 
 **Decision:** Fixed window. For throttling password guesses, up to twice `Max` in a short span at a boundary is acceptable. `Limiter` stays an interface, so another strategy is a second implementation and a second name.
+
 **Revisit if:** a limit has to hold exactly across a boundary, or an API-style limit needs smooth traffic.
 
 ### A rule names its algorithm; `Boot` builds the limiter
+
 **Context:** Rules held a ready `Limiter` value and are declared during `Prepare`, before a store or key-value connection exists. A limiter that counts needs one.
+
 **Options considered:**
+
 - *Pass the counter to `Limiter.Allow`.* The smaller change. Every algorithm is then tied to the fixed-window counter's shape.
 - *Rules name a strategy and `Boot` builds it.* `Prepare` stays free of connections, and each algorithm can take the storage it needs. Rules can't name a strategy core does not know.
 - *Both a name and an optional `Limiter` on the rule.* The name for what core builds, the instance for what it doesn't.
@@ -322,28 +337,42 @@ return {count, ttl}
 **Decision:** The third. An empty name means the fixed window, so a rule that only sets a `Limit` works.
 
 ### A hook rule keys on `Values`, not on the payload
+
 **Context:** `KeyFunc` receives the `HookContext`. On `auth.signIn.before` the email was in the payload only, so a rule could count per client address and not per account. An address-based key is also empty when the flow runs without a request, which is the case hook rules exist for.
+
 **Options considered:**
+
 - *Pass the payload to `KeyFunc`.* Every key in the payload becomes available with no code at the firing site. It changes the signatures of `KeyFunc` and `RateLimiter.CheckHookLimit`. Each rule reads untyped keys and has to normalize what it reads: two rules on sign-in could disagree on whether `Ada@Example.com` is `ada@example.com`. A renamed payload key turns a rule's key into `""` without an error.
 - *The firing site publishes the values in `Values`.* No signature changes. The site normalizes once and decides what is safe to count per. A rule can only key on what a site chose to publish, so each site has a short published list to keep. The entries are visible to handlers and are copied into nested operations.
+
 **Decision:** `Values`. It is what `SignOut` and the data hooks already did with the session id and the row id, and the published list is small: one or two entries per site. The sites covered are the ones that create something a caller can ask for repeatedly: sign-up, sign-in, session create and token issue.
+
 **Revisit if:** rules need payload fields that sites keep having to add one by one, or a plugin's own firing sites find publishing a burden. The payload can be passed as well; the two do not exclude each other.
 
 ### A hook rule's `KeyFunc` says whether the rule applies
+
 **Context:** The counter key is `<rule name>:<KeyFunc result>`. A `KeyFunc` that returned `""` counted every caller under one key. A hook rule hit this when it keyed on the client address and the operation ran without a request, when its point did not publish the entry it read, and when a sign-in arrived without an email. Callers with nothing in common then used up each other's attempts.
+
 **Options considered:**
+
 - *Treat an empty key as "skip the rule".* No signature change. It fails open without a sign: a rule meant as a limit on the whole operation returns `""` on purpose, or by mistake, and stops limiting. The two meanings of `""` can't be told apart.
 - *Keep the shared count and document it.* Nothing changes. Every author has to remember to build a key that can't be empty, and a rule per address still can't be used on a point that also fires from a job.
 - *A second return value.* `KeyFunc` returns `(key, ok)`. Skipping is something the author writes, and `"", true` stays a valid shared count. It changes the signature of `HookRateLimitRule.KeyFunc`; no rule existed outside tests.
+
 **Decision:** The second value, with `KeyByValues` as the helper that returns `false` for a missing or empty entry, and firing sites that don't publish empty values. The helper matters as much as the signature: an author can still write `return email, true`, and the helper makes the correct form the short one. Route rules keep one return value because they have no such case.
+
 **Revisit if:** a route rule needs to say it does not apply (a rule per session on a path that also serves anonymous requests, for example). The two `KeyFunc` signatures would then be made the same.
 
 ### Lockout is declared and rejected
+
 **Context:** `ActionLockout` was documented as blocking a key for `LockoutFor`, whatever the window does. `evaluate` only replaced the retry-after it returned with `LockoutFor`. Nothing was stored, so with a 1-minute window and a 15-minute lockout a client that ignored the header was let in after a minute. The lockout held only for clients that obeyed it. No core rule used the action.
+
 **Options considered:**
+
 - *Build it.* A second key per rule key, `lockout:<key>`, that lives for `LockoutFor`. It needs a "set if absent, with expiry" on both counter backends, which `AtomicIncrementer` does not have, and one more read on every attempt. Nothing needs a lockout yet.
 - *Remove the action and `LockoutFor`.* Nothing can ask for what it does not get. The rule types change now and again when the lockout is built.
 - *Keep the types and reject the rule.* `checkRateLimitRule` refuses `ActionLockout` at `Prepare`, so the mistake is found at startup and not in production. The rule types keep their shape.
+
 **Decision:** Keep and reject. The same check refuses an action it does not know, which before was treated as a rejection without a word. The retry-after swap is removed from `evaluate`; its `action` and `lockoutFor` parameters stay, unread, so the call sites don't change when the lockout is built.
 
 To build it:
@@ -354,6 +383,7 @@ To build it:
 4. Remove the `ActionLockout` case from `checkRateLimitRule`, and require a positive `LockoutFor` there.
 
 The lockout sits in `evaluate` and not in a `Limiter`, so it also covers a rule that brings its own `Limiter`. That is why the check rejects the action before it accepts such a rule.
+
 **Revisit if:** a rule needs a penalty longer than its window. Decide the key with it: a lockout per account lets anyone lock a user out for the whole `LockoutFor`, which is worse than the same trade for a plain limit (see *What a hook rule can key on*).
 
 ### `Increment` returns the end of the window

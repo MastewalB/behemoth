@@ -66,6 +66,8 @@ The OAuth plugin's `Init` takes `Options.HTTPClient`, then `ac.HTTPClient`, and 
 
 ## Invariants
 
+These invariants hold:
+
 - **Every outbound call goes through `outbound.NewClient`.** A plugin's own option may replace the client. The plugin then documents that the replacement should follow no redirect.
 - **The client follows no redirect unless its options say so, and never retries.** A redirect could take a client secret elsewhere, and a repeated code exchange fails.
 - **The span names no path and no query.**
@@ -112,7 +114,9 @@ The OAuth plugin's `Init` takes `Options.HTTPClient`, then `ac.HTTPClient`, and 
 
 **Revisit if:** a caller treats a `3xx` as success by mistake.
 
-## Not built
+## Deferred
+
+These parts are deferred:
 
 - **An address guard.** It would refuse private, loopback, and link-local addresses, for URLs that come from a configuration file. It comes with the standalone service (ADR-0003). Today the URLs come from the application's code, and `CheckURL` asks for `https`, or `http` on a loopback address for development, where a credential or a key is involved.
 - **A proxy URL and a CA bundle as plain values next to `Transport`.** Today they need a `Transport`. Tracked in `docs/ongoing.md` under "An application configures behemoth with Go values only".

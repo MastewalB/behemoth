@@ -98,6 +98,8 @@ The checks run in this order, and the first that fails decides the code:
 
 ## Invariants
 
+These invariants hold:
+
 - **`crypto` makes no outbound call.** The codec reads bytes. A source fetches them.
 - **A token's algorithm comes from the caller's list and from its key**, never from the header alone. `none` and the HMAC algorithms can't be listed.
 - **The signature is checked before any claim.** A forged token learns nothing from which claim fails.
@@ -209,7 +211,9 @@ The checks run in this order, and the first that fails decides the code:
 
 **Decision:** the concrete type, which can gain methods without changing `types.KeySet`, and an error for a nil source or a negative duration, so a wrong value fails where the set is built.
 
-## Not built
+## Deferred
+
+These parts are deferred:
 
 - **The answer's `Cache-Control`.** The source does not read it, and the cached key set uses its own durations. The default TTL is the `max-age` of Behemoth's own route.
 - **A refresh in the background.** The call that finds the keys past their TTL fetches them, and the others wait for it. A refresh while the old keys keep serving would need a goroutine the set has to stop.

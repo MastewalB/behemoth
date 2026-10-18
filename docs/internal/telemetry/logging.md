@@ -1,6 +1,6 @@
 # Logging
 
-This document describes how behemoth's components log, as built: which component writes which line, where a request's failure is logged, how the SQL adapters log statements, and what `Boot` reports. It is phase 2 of `plan.md` and builds on `foundations.md`, which covers the `Logger` interface, redaction and the request ID.
+This document describes how behemoth's components log, as built: which component writes which line, where a request's failure is logged, how the SQL adapters log statements, and what `Boot` reports. It is phase 2 of `plan.md` and builds on `foundations.md`, which covers the `Logger` interface, redaction, and the request ID.
 
 ## The rule: log where an error stops
 
@@ -78,11 +78,16 @@ p.log = telemetry.Named(ac.Telemetry.Logger, PluginName)
 ```
 
 ### Named loggers for plugins come from the AuthContext
+
 **Context:** A plugin needs a logger whose lines can be told apart from core's. `PluginContext` existed for this and was never wired.
+
 **Options considered:**
+
 - *Pass a `PluginContext` to `Init`.* The logger arrives already named. It changes the `Plugin` interface, which every plugin implements, and adds a second context type next to `AuthContext` that carries one useful field.
 - *Take the logger from `AuthContext.Telemetry` and name it.* One line in `Init`. The plugin chooses the name, so nothing stops it from using another plugin's.
+
 **Decision:** The second option. `AuthContext` already carries every other service a plugin uses, and the interface stays as it is.
+
 **Revisit if:** plugins need more per-plugin state from core than a name, which would justify a context of their own.
 
 ## SQL statements
@@ -97,7 +102,7 @@ How it is built:
 
 - Each adapter has a `Logger` field and a `WithLogger` method that sets it and returns the adapter.
 - Each adapter runs its statements on `q()` and not on `DB` directly. `q()` returns `adapters.LogQueries(DB, Logger, component)`.
-- `LogQueries` (`storage/adapters/logging.go`) wraps a `Querier` in one that writes a Debug line with `component` and `statement` before each `ExecContext`, `QueryContext` and `QueryRowContext`. For a nil or no-op logger it returns the `Querier` itself.
+- `LogQueries` (`storage/adapters/logging.go`) wraps a `Querier` in one that writes a Debug line with `component` and `statement` before each `ExecContext`, `QueryContext`, and `QueryRowContext`. For a nil or no-op logger it returns the `Querier` itself.
 - `Transaction` builds the adapter bound to the transaction with the same logger, so statements inside a transaction are logged too.
 
 `DB` stays the raw `*sql.DB` or `*sql.Tx`. `Transaction` switches on its type to decide whether to begin a transaction, and a wrapped value would hide that.
@@ -108,17 +113,24 @@ The logger is opt-in per adapter and separate from `BootConfig.Telemetry`, becau
 
 `[Cost]` `Logger` has no level check, so with a logger set, each statement builds a small field map even when the backend discards Debug lines. An application that does not want statement logs leaves `WithLogger` out.
 
-`[Not covered]` The `gorm`, `bun` and `mongo` adapters have no statement logging of their own; GORM and Bun have their own query logging. The migration drivers and introspectors do not log their statements.
+`[Not covered]` The `gorm`, `bun`, and `mongo` adapters have no statement logging of their own; GORM and Bun have their own query logging. The migration drivers and introspectors do not log their statements.
 
 ### Statement logging wraps the connection
+
 **Context:** The adapters printed statements from a few methods, with arguments. Logging had to cover every statement and stay out of each method's body.
+
 **Options considered:**
+
 - *A log call in each method.* Explicit, and each line can name its operation (`FindOne`). About fifty call sites across four adapters, and a new method can forget its line.
 - *Wrap the `Querier`.* One implementation for all four adapters, and no statement can be missed. The line does not know which adapter method ran it.
+
 **Decision:** Wrap the `Querier`. The statement text identifies the operation well enough for a Debug line.
+
 **Revisit if:** statement lines need the name of the adapter method. Tracing did not need a hook per method: the store's spans are started one layer up, around the adapter (`tracing.md`).
 
 ## Removed prints
+
+These prints were removed:
 
 - `providers/google.go` and `providers/facebook.go` printed the provider's user-info response body with `log.Println`. The calls are removed and not replaced: the body is personal data. The `providers` package was removed later, ahead of the OAuth redesign.
 - `storage/utils.go` printed unmatched columns and scan errors. The scan error is returned to the caller with the same detail, so the prints are removed.

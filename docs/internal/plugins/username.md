@@ -111,6 +111,8 @@ The tests run on SQLite, with `_txlock=immediate`: the data handlers read in the
 
 ## Limits to know
 
+These limits apply:
+
 - `[Not built]` A route to change the caller's username or its spelling. `SetUsername` is the flow such a route would call.
 - `[Limit]` The availability route's limit is a route rule, so `Available` called from code has none. This is the gap of *A flow called from code skips the per-address limits of its route* in `docs/ongoing.md`.
 - `[Limit]` A released username is free at once. `docs/ongoing.md` has the entry.
@@ -120,37 +122,52 @@ The tests run on SQLite, with `_txlock=immediate`: the data handlers read in the
 ## Design decisions
 
 ### The username column belongs to the plugin, not to core
+
 **Context:** `users.username` was a core column: nullable, not unique, written by sign-up as the client sent it. An empty one was stored as `""`. Signing in by it needs it unique and normalized.
+
 **Options considered:**
+
 - *A unique index on the core column.* One column. `User.ToMap` writes an empty string for an empty field, so a unique index would allow one user without a username; core would have to write `NULL` for this one field. The typed casing would be lost, and every application would keep a column that only this plugin gives a meaning.
 - *Keep the core column for display and add a unique lookup column.* No change to core, and the casing is kept. Two columns have to stay in step, and the core one still has no rules without the plugin.
 - *Remove the column from core and let the plugin contribute it.* One column with one owner. A contributed column that is not set is left out of the insert, so "no username" is `NULL` without special handling. It changes `models.User`, which no application depended on yet.
 
-**Decision:** The third. `models.User` lost `Username`, `GetUsername` and `UserUsername`, sign-up stopped copying the field, and `FromUserInfo` (removed later with the OAuth provider code) stopped setting it to the email.
+**Decision:** The third. `models.User` lost `Username`, `GetUsername`, and `UserUsername`, sign-up stopped copying the field, and `FromUserInfo` (removed later with the OAuth provider code) stopped setting it to the email.
+
 **Revisit if:** core needs a username without the email/password plugin, for a sign-in plugin that has no passwords.
 
 ### Sign-in goes through the email/password plugin
+
 **Context:** `signInBody` looked the user up by email and was private. A sign-in by username differs from it in that one step.
+
 **Options considered:**
+
 - *A flow of its own, as in the magic link plugin, with `emailpassword` exporting a password check.* The plugin would repeat the hash for an unknown user, the three refusals with one answer, the `credentialsVerified` checkpoint and the session create. A later fix to one copy would not reach the other.
 - *A before handler on `auth.signIn.before` that turns a username into an email.* No new code in `emailpassword`. Clients would post a username to `/sign-in/email`, an unknown username would need a made-up email, and the published email would be empty.
 - *One sign-in body with the lookup as a parameter (`SignInWith`).* `emailpassword` keeps everything that is about the password, and this plugin supplies `Find`.
 
 **Decision:** The third.
+
 **Revisit if:** an identifier needs a different check after the lookup, not only a different lookup.
 
 ### The plugin is given the email/password plugin at construction
+
 **Context:** `SignIn` has to call a method on the application's `emailpassword.Plugin`. `AuthContext` has no way to look a plugin up.
+
 **Options considered:**
+
 - *`username.New(passwords, opts)`.* The dependency is in the signature. A configuration file can't carry a pointer, so the standalone service's plugin factories will have to resolve it by name.
 - *A plugin lookup on `AuthContext`, used in `Init`.* The constructor takes data only. It adds a registry of plugins to core, and a type assertion that fails at `Boot` instead of a compile error.
 
 **Decision:** The first. `PluginMeta.Dependencies` names `emailpassword` as well, which orders the two and fails `Prepare` when it is missing.
+
 **Revisit if:** several plugins need another plugin's value. A lookup on `AuthContext` would then be worth its cost.
 
 ### One stored form, lowercase
+
 **Context:** Users expect `Ada` and `ada` to be the same account, and some expect to see `Ada`.
+
 **Options considered:**
+
 - *Store as typed and compare case-insensitively.* Needs a case-insensitive unique index, which each database and MongoDB do differently.
 - *Store the lowercase form only.* A plain unique constraint works everywhere. The typed form is lost.
 - *Two columns: the lowercase form and the typed one.* Both needs are met, at the cost of a second column on every user.
@@ -158,37 +175,52 @@ The tests run on SQLite, with `_txlock=immediate`: the data handlers read in the
 **Decision:** The second at first, then the third: `display_username` was added next to `username` without changing it. See *The display username spells the username*.
 
 ### The display username spells the username
+
 **Context:** `display_username` is public and is what an application shows. It needs a rule for what it may hold.
+
 **Options considered:**
+
 - *Any text, like a profile name.* The most freedom. A user with the username `mallory` could show `ada`, and uniqueness would protect nothing a person reads. `firstname` and `lastname` already exist for a free name.
 - *Derived only: always the username as typed, with no input of its own.* Nothing to validate. A user who signed up as `ada_l` can't become `Ada_L` without a username change.
 - *An optional input that has to normalize to the username.* The spelling can be given or changed alone, and it can never read as another username.
 
 **Decision:** The third. The value is checked wherever it is written, by the same data handlers as the username.
+
 **Revisit if:** applications want a free-form handle shown next to the username. That would be another column, not a looser rule on this one.
 
 ### The availability route is opt-in
+
 **Context:** A sign-up form wants to tell the user that a name is taken before they submit. Any answer to that question also tells a stranger which usernames exist.
+
 **Options considered:**
+
 - *No route; let applications call `Available` from their own.* Nothing exposed by default. Every application with a sign-up form writes the same route.
 - *Always mounted.* Works out of the box. An application that treats usernames as private can't turn it off, and sign-in's single answer for unknown usernames would be undone by default.
 - *Mounted when `Options.AvailabilityRoute` is set, with a rule per address.* The application decides, and the flow is the same either way.
 
 **Decision:** The third. The route is a `POST` with the username in the body, so usernames stay out of URLs and access logs, and every route of the plugin is a JSON call. A reserved name answers `false` and not an error, so the response does not show which names are reserved for the application and which are users.
+
 **Revisit if:** the answer should be hidden behind a session or a captcha. A handler can't veto it today, because the flow fires no point.
 
 ### Usernames are ASCII and never contain `@`
+
 **Context:** The character set decides whether two usernames can look alike, and whether a username can be an email address.
+
 **Options considered:**
+
 - *Any Unicode letter.* Friendlier in many languages. It needs Unicode normalization and a policy for look-alike characters, or two users can hold names that render the same.
-- *`a` to `z`, digits, `_` and `.`, starting with a letter or a digit.* No look-alikes within the set and nothing to normalize beyond case. A username can't be mistaken for an address, so the two identifiers never overlap.
+- *`a` to `z`, digits, `_`, and `.`, starting with a letter or a digit.* No look-alikes within the set and nothing to normalize beyond case. A username can't be mistaken for an address, so the two identifiers never overlap.
 
 **Decision:** The second. The set is fixed in `Validate`; the lengths and the reserved names are options, all of them data.
+
 **Revisit if:** applications need other characters. An option would then choose among named sets, so that it stays data.
 
 ### No limit per username by default
+
 **Context:** A sign-in by username publishes no email, so an application's rule per email does not count it.
+
 **Options considered:**
+
 - *Declare a rule per username in the plugin.* Covered without the application doing anything. Core has no rule per email for a reason that applies here too: anyone can keep a user out by failing on purpose.
 - *Publish the username and leave the rule to the application.* It matches core's sign-in, which is limited per address only.
 

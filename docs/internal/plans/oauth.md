@@ -119,6 +119,8 @@ The binding value ties the two calls to one client. How the client keeps it depe
 
 The provider sends the browser back to a page of the application, not to a route of Behemoth. The page reads the authorization code and the state from its URL and posts them to `Complete`. The magic link plugin works the same way: its link opens a page of the application, which posts the token.
 
+The callback follows these rules:
+
 - **The redirect URI is an option of the plugin.** It names the application's page, as `LinkURL` does for the magic link plugin. `Init` checks it, and the same value is registered at the provider.
 - **The session arrives like any sign-in.** The session token travels by whichever transport is configured. No route of Behemoth redirects a browser.
 - **A failure is a typed error.** The route returns the flow's error, and the router answers with a status and an exported code, as for every other route.
@@ -256,52 +258,72 @@ The cost is the extra step. A user who signed up with a password and later choos
 ## Design decisions
 
 ### Linking is explicit by default
+
 **Context:** A user who signed up with a password later signs in with a provider that reports the same email. `Complete` has to decide whether that is the same person.
+
 **Options considered:**
+
 - *Auto-link on a matching email.* No extra step for the user. An unverified email on either side is an account takeover.
 - *Auto-link when both emails are verified.* Closes both takeovers. Every enabled provider can then open any account with a matching address, and a reassigned address passes the check.
 - *Explicit linking only.* The user proves control of the existing account by signing in to it. A user who forgot how they signed up gets a refusal first, and an application that trusts its provider has no way to skip the step.
 - *Explicit by default, with auto-link as an option per provider.* The application decides which providers it trusts that far. The option needs a clear description of what it trades away.
 
 **Decision:** explicit by default. Auto-link is an option per provider, off unless the application turns it on, and it requires a verified email on both sides.
+
 **Revisit if:** applications report that the `account_not_linked` refusal turns users away, and most of them turn auto-link on for the same providers.
 
 ### Provider tokens are not stored by default
+
 **Context:** `accounts` has sealed columns for an access token, a refresh token, and an ID token. Signing in needs only the identity. An application that calls the provider's API on the user's behalf needs the tokens later.
+
 **Options considered:**
+
 - *Always store them.* The application can call the provider at any time. Every application then holds credentials for its users' provider accounts, including those that only wanted sign-in.
 - *Never store them.* Nothing to steal, refresh, or revoke. An application that needs the provider's API has to build its own storage around the plugin.
 - *An option, off by default.* An application that only wants sign-in holds nothing worth stealing. One that needs the tokens opts in, and takes on refresh and revocation with it.
 
 **Decision:** an option, off by default.
+
 **Revisit if:** most applications turn the option on. The cost of the default is that tokens of earlier sign-ins are gone: users have to sign in again before the application can call the provider for them.
 
 ### The provider redirects to a page of the application
+
 **Context:** The provider sends the browser to a redirect URI with the authorization code. Something has to receive that request and finish the sign-in. `http_contract.md` says that every flow is a JSON call, that no route redirects a browser, and that a sign-in route answers through `WriteSignIn`.
+
 **Options considered:**
+
 - *A callback route of Behemoth that redirects.* The application builds no page. The route is a `GET` that signs the user in, and it can deliver a session only by cookie. The header and body transports then need a single-use handoff code that the client redeems, with a verifier of its own. A failure reaches the application as a query parameter and not as a typed error. A wrapper for another transport still depends on this HTTP route.
 - *A page of the application that posts the code and the state.* The route answers through `WriteSignIn` under every transport, a failure is a typed error, and a gRPC wrapper can expose both flows. Each application builds the page, and the redirect URI becomes an option. The code passes through the page's scripts, and a provider that posts the callback reaches the application and not Behemoth.
 
 **Decision:** the page of the application. An earlier plan to support only the cookie transport in the first version is dropped with it. That limit came from the handoff code, which this design does not need.
+
 **Revisit if:** applications without a front end of their own need the flow. A callback route that redirects can then be added as a second HTTP wrapper over the same `Complete`.
 
 ### A provider that returns no email is refused
+
 **Context:** Some providers return no email for some users. A GitHub user can keep every address private, for example. `users.email` is unique and not nullable, and core writes an empty email as `""`, so the unique index allows one such user at most. The magic link, email verification, and password reset flows all assume an address.
+
 **Options considered:**
+
 - *Refuse the sign-in with a typed error.* No change to core. A user without a public address at the provider can't sign in until they share one.
 - *Create a user without an email.* Nobody is turned away. Core needs a nullable email and a rule for every flow that sends mail.
 
 **Decision:** refuse, with an error code of its own.
+
 **Revisit if:** core supports a user without an email. "No sign-up with a phone number alone" in `docs/ongoing.md` raises the same need from the phone number plugin.
 
 ### The first providers are generic OpenID Connect, Google, and GitHub
+
 **Context:** The provider interface has to cover two kinds of provider: one that returns an ID token, and one that needs a profile call.
+
 **Options considered:**
+
 - *The generic OpenID Connect provider alone.* Data only, and any issuer that follows the standard works. GitHub does not issue ID tokens, so the interface for a provider with code stays untested.
 - *Presets for many providers.* More applications are covered on the first day. Each preset is code to maintain against a provider's changes.
 - *The generic provider, Google, and GitHub.* One provider per kind, plus the generic one. Other providers wait.
 
 **Decision:** the generic provider, Google, and GitHub. Apple is deferred: it posts the callback, so the application needs an endpoint that accepts a form post. Facebook, which the removed code supported, is not in the first set.
+
 **Revisit if:** applications ask for a provider that neither the generic provider nor the two presets cover.
 
 ## Implementation steps
@@ -323,7 +345,7 @@ The plugin is built in this order. Each step ends with its tests and its docs.
 These entries in `docs/ongoing.md` affect the design:
 
 - **"No route can accept a form body under the cookie transports".** The entry names an OAuth callback as a route that needs the exemption. With the callback on a page of the application, the plugin has no such route. A provider's form post goes to the application.
-- **"Nothing removes old sessions, tokens or rate-limit counters".** Every `Begin` writes a state row, and nothing purges them. The key-value backend suits the `oauth_state` kind, because an entry there expires by itself.
+- **"Nothing removes old sessions, tokens, or rate-limit counters".** Every `Begin` writes a state row, and nothing purges them. The key-value backend suits the `oauth_state` kind, because an entry there expires by itself.
 
 ## Integration with goth
 
