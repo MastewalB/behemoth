@@ -23,13 +23,15 @@ Compare with a plugin such as the example `activity` (`examples/init/plugin.go`)
 
 ## The flows
 
+The plugin has these flows:
+
 - **Sign-up** (`Plugin.signUpBody`) validates the email and password with the plugin's `Options`, hashes the password with `AuthContext.Crypto.Passwords`, and creates the user and its credential account in one store transaction.
 - **Sign-in** (`Plugin.signInBody`) verifies the password against the credential account and creates a session. It passes only the session's state to `SessionManager.Create`; the manager takes the IP address and user agent from the request on the context, so the flow also runs without a request. It applies no password rules, so a password accepted under an older policy still works.
 - **Sign-out** (`SignOut`) revokes the session. The route, `handleSignOut`, then takes the token back from the client with `SessionManager.ClearToken`, which removes the cookie under a cookie transport. `SignOut` itself writes no response: see *Taking the token back* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
 
 `signUpBody` and `signInBody` are methods on the plugin, which `Init` wraps with `WithLifecycle`. `signUpBody` reads the options; `signInBody` reads none today and is a method so both flows have the same shape.
 
-Sign-up stores `email`, the password hash and three profile fields: `firstname`, `lastname` and `image_url`. It has no username: the username plugin adds the column and fills it from its own handlers; see [`username.md`](username.md).
+Sign-up stores `email`, the password hash and three profile fields: `firstname`, `lastname`, and `image_url`. It has no username: the username plugin adds the column and fills it from its own handlers; see [`username.md`](username.md).
 
 The wrapped flows are reached through two exported methods, `Plugin.SignUp(ctx, input)` and `Plugin.SignIn(ctx, creds)`. Each builds the flow's `HookContext` (`Plugin.operation`): the `AuthContext` kept by `Init`, the request found on `ctx` or nil, and `Values` copied from the operation `ctx` belongs to, if any. The route handlers call these methods with `rctx.Ctx`, so a route, a CLI and another plugin all enter the flow the same way. Called before `Boot` has run `Init`, they return a configuration error.
 
@@ -37,7 +39,7 @@ Before entering the wrapped flow, both put the email they were called with in `V
 
 ### Sign-in's input
 
-`Plugin.SignIn` takes an `EmailAndPasswordCredentials`: `Email`, `Password` and an `Extra` map. `signInBody` reads the two fields. `Extra` exists for handlers on `auth.signIn.before`.
+`Plugin.SignIn` takes an `EmailAndPasswordCredentials`: `Email`, `Password`, and an `Extra` map. `signInBody` reads the two fields. `Extra` exists for handlers on `auth.signIn.before`.
 
 The struct implements `behemoth.Serializable`, so `WithLifecycle` converts it with its own methods and not with a JSON round trip:
 
@@ -57,14 +59,14 @@ Rules that follow from the two methods:
 
 ### Sign-in by another identifier
 
-`signInBody` takes an `IdentifierCredentials`, not an `EmailAndPasswordCredentials`. Its first step is `creds.Find(ctx, store, value)`, and everything after it is the same for every identifier: the hash for an unknown user, the credential account, the password check, `auth.signIn.credentialsVerified` and the session.
+`signInBody` takes an `IdentifierCredentials`, not an `EmailAndPasswordCredentials`. Its first step is `creds.Find(ctx, store, value)`, and everything after it is the same for every identifier: the hash for an unknown user, the credential account, the password check, `auth.signIn.credentialsVerified`, and the session.
 
 | Entry point | `Key` | `Find` | Publishes |
 | --- | --- | --- | --- |
 | `Plugin.SignIn(ctx, EmailAndPasswordCredentials)` | `email` | `Store.FindUserByEmail` | `HookValueEmail`, normalized (`publishEmail`) |
 | `Plugin.SignInWith(ctx, IdentifierCredentials)` | the caller's, such as `username` | the caller's | `Value` under `Key`, as it is; removes an inherited `HookValueEmail` |
 
-- **`IdentifierCredentials` is `Serializable`,** by the rules of the table above: the payload is flat, with `Value` under `Key`. `FromMap` reads `Value`, `Password` and `Extra` back and keeps `Key`, `Method` and `Find`, so a handler can rewrite the identifier and can't change how it is looked up. The two types share `credentialFields`.
+- **`IdentifierCredentials` is `Serializable`,** by the rules of the table above: the payload is flat, with `Value` under `Key`. `FromMap` reads `Value`, `Password`, and `Extra` back and keeps `Key`, `Method`, and `Find`, so a handler can rewrite the identifier and can't change how it is looked up. The two types share `credentialFields`.
 - **`Find` is a function and is not in the payload.** The hook payload stays plain data.
 - **`SignIn` builds the same struct** with an unexported `normalize`, which keeps the email in a failed sign-in's audit metadata lowercased as before. `SignInWith` clears it: a caller's value is recorded as given.
 - **`SignInWith` refuses a `Key` that is empty or `password`, and a nil `Find`,** with a configuration error.
@@ -77,13 +79,13 @@ The username plugin is the one caller; see [`username.md`](username.md) for the 
 
 ## Password reset
 
-Reset lives in `reset.go` and is off until `Options.Reset.LinkURL` is set. `Declare`, `Init` and `Routes` each branch on `ResetOptions.enabled()` and call `declareReset`, `initReset` or add the two routes. With reset off the exported flows return a configuration error (`resetOperation`).
+Reset lives in `reset.go` and is off until `Options.Reset.LinkURL` is set. `Declare`, `Init`, and `Routes` each branch on `ResetOptions.enabled()` and call `declareReset`, `initReset`, or add the two routes. With reset off the exported flows return a configuration error (`resetOperation`).
 
 The two flows have the shape of the magic link plugin's request and verify; see [`magiclink.md`](magiclink.md). The request side is the same code path with another token kind and mail kind. The second half differs: a magic link ends in a session, a reset ends in a new password and no session.
 
 ### Requesting a link
 
-`Plugin.RequestPasswordReset` publishes the email (`publishEmail`) and runs `resetRequestBody`, wrapped with `auth.passwordReset.beforeRequest`, `.afterRequest` and `.requestFailed`:
+`Plugin.RequestPasswordReset` publishes the email (`publishEmail`) and runs `resetRequestBody`, wrapped with `auth.passwordReset.beforeRequest`, `.afterRequest`, and `.requestFailed`:
 
 | Step | What | On failure |
 | --- | --- | --- |
@@ -99,7 +101,7 @@ The two flows have the shape of the magic link plugin's request and verify; see 
 
 ### Using a link
 
-`Plugin.ResetPassword` first reads the token without consuming it (`TokenManager.Verify`). The email in it goes in the before payload and in `Values`, and the token itself is handed to the flow in `resetInput.verified`. It then runs `resetBody`, wrapped with `auth.passwordReset.before`, `.after` and `.failed`:
+`Plugin.ResetPassword` first reads the token without consuming it (`TokenManager.Verify`). The email in it goes in the before payload and in `Values`, and the token itself is handed to the flow in `resetInput.verified`. It then runs `resetBody`, wrapped with `auth.passwordReset.before`, `.after`, and `.failed`:
 
 | Step | What | On failure |
 | --- | --- | --- |
@@ -151,35 +153,50 @@ The phone number plugin is the one caller; see [`phonenumber.md`](phonenumber.md
 
 ## Limits to know
 
+These limits apply:
+
 - `[Not built]` Password change for a signed-in user. It needs a way to re-check the current password; see *Nothing refreshes a session in place* in `docs/ongoing.md`.
 - `[Limit]` A reset consumes its token just before it writes the password, outside the write's transaction. If that write fails, the link is spent and the user asks for another. `docs/ongoing.md` has what consuming inside the transaction would need.
 - `[Not built]` Rehash on sign-in. `PasswordHasher.NeedsRehash` exists but sign-in does not call it.
-- Sign-up, sign-in and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`behemotherr.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
+- Sign-up, sign-in, and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`behemotherr.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
 - `Options.ValidateEmail` and `ValidatePassword` errors are replaced by `invalid email` and `invalid password` in the response, so a custom message does not reach the client. The function's error is the typed error's cause, for logs.
 
 ### The email and password rules belong to the plugin
+
 **Context:** Sign-up read `AuthContext.Validator` and `AuthContext.PasswordOptions`. `Boot` set neither and `BootConfig` had no field for them, so a booted application panicked on the first sign-up. Only this plugin read them.
+
 **Options considered:**
+
 - *Wire both through `BootConfig`, with a default validator in core.* Every plugin can read one shared policy. An application without passwords (OAuth or magic links only) still carries a password policy, and core gains a `Validator` interface with one consumer.
 - *Make them options of the plugin: `emailpassword.New(Options)`.* The dependency is visible where it is used, the zero value has defaults, and `AuthContext` loses two fields. A second plugin that sets passwords can't read the policy from the `AuthContext`.
-**Decision:** The second option. `types.Validator`, `types.PasswordOptions` and the two `AuthContext` fields are removed. The hasher was never a policy choice of the plugin: it comes from `AuthContext.Crypto.Passwords`, which `Boot` builds from `BootConfig.Crypto`. The default email check is `utils.IsValidEmail`, a plain function other plugins can call. Plugins that set passwords are expected to depend on this one and go through it.
+
+**Decision:** The second option. `types.Validator`, `types.PasswordOptions`, and the two `AuthContext` fields are removed. The hasher was never a policy choice of the plugin: it comes from `AuthContext.Crypto.Passwords`, which `Boot` builds from `BootConfig.Crypto`. The default email check is `utils.IsValidEmail`, a plain function other plugins can call. Plugins that set passwords are expected to depend on this one and go through it.
+
 **Revisit if:** plugins that don't depend on `emailpassword` need to set passwords. A shared policy on `AuthContext` would then be justified.
 
 ### Sign-in takes a struct with an `Extra` map
+
 **Context:** Sign-up takes a `behemoth.M`, so a field a plugin adds to the request (an invite code) reaches `auth.signUp.before`. Sign-in decoded the body into a two-field struct, so a captcha token or a device id was gone before the before chain ran. A handler could not read it from `hctx.Request` either, since the body had been consumed, and a caller of `Plugin.SignIn` had no way to pass it.
+
 **Options considered:**
+
 - *Take a `behemoth.M`, like sign-up.* One convention and the least code. `SignIn(ctx, behemoth.M{"emial": ...})` compiles, the two required values are checked at run time only, and the exported signature changes.
 - *Add `Extra behemoth.M` and keep the JSON round trip.* Small. Handlers get `payload["extra"]["captchaToken"]` on sign-in and `payload["inviteCode"]` on sign-up, so one captcha handler for both points needs two lookups.
 - *Add `Extra` and implement `behemoth.Serializable`.* The required input stays typed, the payload is flat, and `Plugin.SignIn` keeps its signature. It costs two methods and a rule for a key that collides with a field.
 
 **Decision:** The third. A fixed shape checked by the compiler is preferred over a map, and sign-in's shape is fixed: two required values and an open tail. Sign-up keeps its map because its profile fields are open-ended. Other plugins with a flow of fixed input are expected to follow the same shape: a struct for what the flow reads, an `Extra` map for what only handlers read, and `ToMap`/`FromMap` that keep the payload flat.
+
 **Revisit if:** several plugins repeat the same two methods. A helper in `types` that flattens a struct with an `Extra` field would then be worth having.
 
 ### Sign-in's refusals are typed
+
 **Context:** `signInBody` returned `errors.New("invalid email or password")` for an unknown email, a user without a credential account and a wrong password. An untyped error could therefore be a wrong password or a broken system, and `handleSignIn` could not tell them apart. It wrapped every error in a validation error, so a database outage was answered with `400` and never reached the router's log. `handleSignOut` wrote its own `500` with `err.Error()` as the body, which sent internal error text to the client.
+
 **Options considered:**
+
 - *Return typed errors from the handlers and keep the untyped refusal.* The router maps an untyped error to `500`, so a wrong password would become a `500`.
 - *Make the refusal a typed error and return everything to the router.* `errInvalidCredentials` is an unauthorized error (`behemotherr.NewUnauthorized`) with the code `invalid_credentials`. After that, every error out of `SignIn` is a typed rejection or a failure of the system, and the handler has nothing to decide.
+
 **Decision:** The second, for sign-in. Sign-out needed only the first half: `SignOut` already returned typed errors. Both handlers now end in `return err`.
 
 What the router does with each error:
@@ -197,10 +214,14 @@ The three refusals share one code and one message on purpose: a different answer
 Two changes a client can observe: a wrong password is a `401` where it was a `400`, and an untyped error from a handler on a sign-in point is a `500` where it was a `400`. The second matches what the hook docs ask for, a typed error from a handler that rejects.
 
 ### Sign-up's refusals are typed too
+
 **Context:** After the change above, sign-up still returned untyped errors for an invalid email, an invalid password and a taken email, and `handleSignUp` wrote every untyped error itself as `400 {"error": "<text>"}`. A client could tell the three apart only by their English text. The same branch caught failures: the `user create failed` that replaced an untyped transaction error, and an untyped error from the password hasher, whose text went to the client. Both were a `400` and were not logged, because the handler had written the response and returned nil.
+
 **Options considered:**
+
 - *Keep the `400`s and add a `code` field in the handler.* No status changes. The handler still decides what is a rejection by the absence of a type, so a failure stays a `400`.
 - *Typed errors with exported codes, and `return err` in the handler.* The same rule as sign-in: every error out of `SignUp` is a typed rejection or a failure of the system.
+
 **Decision:** The second. `errInvalidEmail` and `errInvalidPassword` are validation errors (`email_invalid_input`, `password_invalid_input`), and `errEmailTaken` is a conflict (`email_taken`). The codes are the ones the reset flow and the email change flow already use for the same conditions. An untyped transaction error is returned as it is and no longer replaced: the router never sends an untyped error's text.
 
 | Error from the flow | Status | Code |
@@ -216,50 +237,78 @@ Three changes a client can observe: the three rejections carry a `code`, a taken
 `[Limit]` Two sign-ups racing for one email both pass the lookup, and the loser fails on the unique constraint. That is the store's duplicate key error, also a `409`, but with the store's code and not `email_taken`, and `auth.signUp.failed` does not fire for it.
 
 ### Password reset is part of this plugin and off by default
+
 **Context:** The docs expected reset to be a plugin of its own that depends on this one. A reset sets a password, and the password rules (`validatePassword`) and the traced hash (`hashPassword`) are private to this package.
+
 **Options considered:**
+
 - *A `passwordreset` plugin that depends on `emailpassword`.* An application without reset carries none of it. This plugin would have to export a `SetPassword` for it, and an application wires two plugins for what users see as one feature.
 - *Part of this plugin, always on.* Nothing to wire. Every application with passwords would then need a mail sender and the `tokens` table, and `emailpassword.New(Options{})` would stop working without them.
 - *Part of this plugin, on when `Options.Reset.LinkURL` is set.* The rules stay private, and an application that does not set the URL sees no change.
+
 **Decision:** The third. The link URL is required for reset anyway, so it doubles as the switch and no separate `Enabled` field can disagree with it.
+
 **Revisit if:** reset by link should become a plugin of its own. `SetPassword` now exists (the phone number plugin needed it), so such a plugin has what it would call.
 
 ### A reset ends the user's sessions and does not start one
+
 **Context:** After the password is set, the flow could hand back a session, as a magic link does.
+
 **Options considered:**
+
 - *Sign the user in.* One step fewer for the user. The reset link becomes a sign-in credential with a one hour life, and the flow would have to fire the `auth.signIn.*` points to keep a second factor in the path.
 - *Set the password, end every session, create none.* The user signs in with the new password through the normal flow, second factor included.
+
 **Decision:** The second. Ending the sessions is the point of a reset after a compromise, and `RevokeAllForUser` takes no exception here because the caller has no session.
+
 **Revisit if:** applications ask for the shorter path. It would be an option that runs the sign-in flow after the reset.
 
 ### A reset gives a password to a user who has none
+
 **Context:** A user created by a magic link or a provider has no credential account. A reset request for their email has to do something.
+
 **Options considered:**
+
 - *Send nothing.* Reset stays strictly "replace a password". The request has to look the account up before deciding, and the user gets no explanation since the route answers the same either way.
 - *Send the link and create the credential account at the reset.* The link proves control of the address, which is what sign-up by password asks for too.
+
 **Decision:** The second. The account is created in the transaction that would otherwise update it.
+
 **Revisit if:** an application wants accounts that can never have a password. A handler on `auth.passwordReset.beforeRequest` can refuse them today.
 
 ### Following a link marks the email verified, with an opt-out
-**Context:** A reset link and a magic link are both sent to the account's address, so using one shows the user controls it. Both flows set `email_verified` for that reason. An application may want the flag to mean only "went through our verification flow", for example when it records consent there.
+
+**Context:** A reset link and a magic link are both sent to the account's address, so using one shows the user controls it. Both flows set `email_verified` for that reason. An application may want the flag to mean only that the user passed the application's own verification flow, for example when it records consent there.
+
 **Options considered:**
+
 - *Always mark.* No option. The application can't keep the flag for its own flow.
 - *Never mark.* With `RequireVerified`, a user who reset their password by email would still be told to verify that same address.
 - *Mark by default, with `LeaveEmailUnverified` on both plugins.* The zero value keeps the earlier behaviour.
+
 **Decision:** The third, as `ResetOptions.LeaveEmailUnverified` and `magiclink.Options.LeaveEmailUnverified`. The field is phrased as the opt-out so that the zero value is the default.
 
 ### The reset link is sent in the background by default
+
 **Context:** The request route answers the same for a known and an unknown email. A sender the request waits for is only called for a known one, so its latency shows which is which.
+
 **Options considered:**
+
 - *`Send`, as the magic link plugin defaults to.* A failed send is seen and the link revoked.
 - *`SendAsync`.* The sender is out of the response time. A failed send is logged by the mailer and the link stays valid until it expires.
+
 **Decision:** `SendAsync` by default, with `ResetOptions.WaitForSend` for an application whose sender only enqueues. The magic link plugin has the same option and default.
 
 ### A completed reset sends a notice
+
 **Context:** A reset link reaches whoever reads the account's mailbox. If that is not the owner (a shared or compromised mailbox), the owner should learn that the password changed. The email change flow sends a notice for the same reason.
+
 **Options considered:**
+
 - *Leave it to a handler on `auth.passwordReset.after`.* No new mail kind. Every application has to write the same handler, and most would not.
 - *Send a `MailPasswordChanged` message with `Send`.* A failure is seen. The password is already set, so there is nothing to undo, and the reset would wait for the sender.
 - *Send it with `SendAsync`.* The reset does not wait or fail for it. A lost notice is only in the log.
+
 **Decision:** The third. The message has no link and no token. There is no option to turn it off: an application that does not want it returns nil for the kind in its sender.
+
 **Revisit if:** the notice should carry a way to act, such as a link that locks the account.

@@ -1,12 +1,12 @@
 # Architecture decision records
 
-This directory holds the design decisions that shape Behemoth. Each decision lives in its own numbered file. The goal is simple: when you (or a new contributor) ask "why is it built this way?", the answer is written down, including the options we rejected and the conditions under which we should change our minds.
+This directory holds the design decisions that shape Behemoth. Each decision lives in its own numbered file. The goal is simple: when you (or a new contributor) ask "why is it built this way?", the answer is written down, including the options that were rejected and the conditions under which the decision should change.
 
 These instructions apply to every developer and contributor.
 
 ## Style
 
-Behemoth records decisions as **Architecture Decision Records (ADRs)** in the Nygard/MADR style. The content follows the [Google developer documentation style guide](https://developers.google.com/style) (active voice, present tense, one idea per sentence, sentence-case headings). See [`docs-style-guide.md`](../../../docs-style-guide.md) for the Behemoth-specific rules.
+Behemoth records decisions as **Architecture Decision Records (ADRs)** in the Nygard/MADR style. The content follows the [Google developer documentation style guide](https://developers.google.com/style) (active voice, present tense, one idea per sentence, sentence-case headings). See [`docs_style_guide.md`](../../docs_style_guide.md) for the Behemoth-specific rules.
 
 Behemoth adds three sections to the standard format: **Decision drivers**, **Invariants**, and **Revisit when**. See [Why these additions](#why-these-additions).
 

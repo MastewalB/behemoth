@@ -106,7 +106,7 @@ A point declared with `Audit: &types.AuditSpec{}` records one event per dispatch
 **Subject**, first match:
 
 1. `FailureReason.SubjectType` and `SubjectID`, for a failed point. The sign-in flow sets them once it has found the user, so a wrong password is recorded as an attempt on that account.
-2. The result (`auditSubject`): a `*models.Session` is its own subject; a result implementing `types.AuditSubject` says what it is about (`types.SignInResult`, `magiclink.LinkResult` and `emailpassword.ResetRequestResult` name their user); any other `behemoth.Model` is its table and primary key.
+2. The result (`auditSubject`): a `*models.Session` is its own subject; a result implementing `types.AuditSubject` says what it is about (`types.SignInResult`, `magiclink.LinkResult`, and `emailpassword.ResetRequestResult` name their user); any other `behemoth.Model` is its table and primary key.
 3. `HookContext.Values[HookValueUserID]`, the user the operation concerns.
 
 **Actor**, first match:
@@ -134,11 +134,16 @@ A failed operation is never attributed to its subject. A wrong password for an a
 `[Limit]` `HookContext.Values` are not used to pass audit detail from a flow, apart from the two keys above that were already part of the hook contract. Handlers see `Values`, and a flow that published extra keys for the dispatcher would change what every handler observes.
 
 ### The actor of a write is derived, not passed
+
 **Context:** The dispatcher has to say who did something, and no firing site passes an actor.
+
 **Options considered:**
+
 - *Add an actor to `HookContext`.* Explicit. Every firing site and every caller of a flow would have to set it, and most have nothing to set: sign-in has no session until it succeeds.
 - *Derive it from the request's session and the operation's subject.* No change at firing sites. The rule for unauthenticated success (the subject's user is the actor) is a convention and is wrong for an operation one user performs on another without a session on the request.
+
 **Decision:** Derive it. With `RequireSession` on a route the actor is exact. Without a session the rule is right for the two flows that have none by nature.
+
 **Revisit if:** an admin flow acts on other users through code paths that carry no session, at which point an explicit actor on the context is needed.
 
 ## Reliability
@@ -165,11 +170,16 @@ A dispatch with no `HookContext.Tx` (a caller other than the store) has no trans
 `[Consequence]` A database without the `audit_log` table cannot write users while the database recorder is in use: the audit insert fails and takes the user write with it. The table is a core table and the migration engine creates it. An application upgrading from a version without it has to run its migrations before it serves requests.
 
 ### A failed in-transaction audit write fails the write
+
 **Context:** The audit insert runs in the user write's transaction. It can fail on its own (a missing table, a full disk).
+
 **Options considered:**
+
 - *Log it and let the write commit.* The user is created and the audit row is not, which is the gap in-transaction recording exists to close. On PostgreSQL it is also not possible without a savepoint: a failed statement aborts the transaction.
 - *Return the error.* The write fails with the audit insert. A broken audit table stops sign-ups.
+
 **Decision:** Return the error. The data points promise that the row and its event commit together, and an audit log that silently misses writes is worse than a visible failure.
+
 **Revisit if:** availability of sign-up has to outrank the audit trail, which would call for a configuration switch.
 
 ## Storage
@@ -200,6 +210,8 @@ An empty optional value is stored as NULL (`models.AuditLog.ToMap`), so "no acto
 
 ### The store
 
+The store has these audit methods:
+
 - `Store.RecordAuditEvent(ctx, event)` inserts one row with a new id. It writes through `s.db` directly: the table fires no data hooks. On a store bound to a transaction the row belongs to it.
 - `Store.QueryAuditEvents(ctx, filter)` returns one page, newest first.
 - `Store.PurgeAuditEvents(ctx, before)` deletes the events recorded before a time. Behemoth never calls it; the application runs it from its own scheduled job.
@@ -215,12 +227,17 @@ There is no operation to change or delete one event.
 Events are ordered by `id` descending, and the cursor is the id of the last event of the page: the next page is `id < cursor`. `QueryAuditEvents` asks for one row more than the page to learn whether another follows.
 
 ### Audit ids are UUIDv7 and the page order
+
 **Context:** `Database.FindMany` orders by one column and pages by limit and offset. The audit log needs a stable newest-first order.
+
 **Options considered:**
+
 - *Order by `created_at`, page by offset.* Uses what exists. Events recorded while a caller pages shift every later page, so events are repeated. Two events in one timestamp have no defined order.
 - *Order by `created_at` and `id`, keyset on both.* Stable. Needs ordering by two columns, which `QueryOptions` cannot express.
 - *Make the id time-ordered and order by it alone.* One column gives a total order that follows recording time, and a keyset cursor is one condition.
+
 **Decision:** UUIDv7 ids, ordered by `id`. `newAuditID` falls back to a random UUID when the clock or entropy source fails, which keeps ids unique and loses order for that event.
+
 **Revisit if:** events are recorded by several processes whose clocks disagree by more than the application tolerates in the order. The `From` and `To` filters use `created_at` and are not affected.
 
 ## The default recorder
@@ -239,7 +256,9 @@ if !tel.AuditConfigured() {
 
 To keep the table and add a sink, the application passes `telemetry.MultiRecorder(store.NewAuditRecorder(st), sink)`. The dispatcher finds the database recorder inside it, so the data events are still written in their transaction.
 
-## Not built
+## Deferred
+
+These parts are deferred:
 
 - An HTTP route to query events. It needs an authorization model behemoth does not have. Reading is a Go API: `ac.Store.QueryAuditEvents`.
 - Tamper evidence, such as a hash chain over rows.

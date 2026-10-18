@@ -64,6 +64,8 @@ A six-digit code can't be found by its own hash: two users can hold the same cod
 
 ## What is left out
 
+The design leaves out these parts:
+
 - **No hook points and no audit events.** The token manager fires `token.*`. A code is always consumed inside a flow that has failed and after points of its own, and those carry the reason.
 - **No key-value backend.** Codes are rows.
 - **No lockout beyond the code.** After the last attempt the subject asks for a new code, and the issuing flow's rate limit bounds how often.
@@ -75,26 +77,36 @@ A six-digit code can't be found by its own hash: two users can hold the same cod
 ## Design decisions
 
 ### A table of its own, not the user row or the tokens table
+
 **Context:** A one-time code needs a place to live between being sent and being typed.
+
 **Options considered:**
+
 - *Columns on `users`.* No new table. A code often exists for something that is not on the user yet (a number being added), a user can have several at once, and each needs its own attempts and expiry.
-- *Rows of `tokens`.* The table has a kind, a subject, a hash, metadata and an expiry already. A token is found by `lookup_hash`, which is unique per kind and required; a code has no such value. It would also need an attempts column that means nothing for a token, and "one per subject" contradicts how tokens are used.
+- *Rows of `tokens`.* The table has a kind, a subject, a hash, metadata, and an expiry already. A token is found by `lookup_hash`, which is unique per kind and required; a code has no such value. It would also need an attempts column that means nothing for a token, and "one per subject" contradicts how tokens are used.
 - *A table of its own.* One more core table. Each column has one meaning.
 
 **Decision:** The third.
+
 **Revisit if:** a third kind of short-lived secret appears and the three tables turn out to share most of their columns.
 
 ### In core, not in the phone number plugin
+
 **Context:** The phone number plugin is the only consumer today.
+
 **Options considered:**
+
 - *A table and a manager inside the plugin.* Core stays smaller. A second-factor plugin by SMS and a code by email would each write the attempt counting again, or depend on the phone plugin for it.
 - *A core component.* Available to every plugin through `AuthContext.Codes`. Every application gets the table, used or not.
 
 **Decision:** The second. The concurrency rules above are the kind of thing that should exist once.
 
-### Deleting a used code, not marking it
+### Delete a used code instead of marking it
+
 **Context:** A token keeps its row after use, with `consumed_at`.
+
 **Options considered:**
+
 - *Mark it consumed.* A record stays. "One live code per kind and subject" then needs the unique index to ignore consumed rows, which is a partial index and differs per database.
 - *Delete it.* A plain unique index is enough, and the delete is itself the at-most-once step.
 

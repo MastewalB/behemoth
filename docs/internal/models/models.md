@@ -1,19 +1,19 @@
-## **Core Models**
+# Core models
 
 This document explains the tables behemoth's core owns: which models exist and where they are defined, how a model, its column constants and its table declaration stay in step, how an `Account` stores credentials and encrypts OAuth tokens, what an existing database needs before `users.password_hash` is dropped, and how data hooks run inside the transaction of the write that fires them.
 
 The code lives in:
 
-- `models/` — one file per model, plus `schema.go` (table declarations) and `extension.go` (contributed columns)
-- `store/` — the typed operations on those models; `seal.go` holds the at-rest encryption
-- `types/init/init.go` — `CoreDeclareSchema`, which declares the tables, and `Boot`, which builds the store
-- `types/cryptotypes/` — the crypto contracts the store uses (`Encryptor`)
+- `models/`: one file per model, plus `schema.go` (table declarations) and `extension.go` (contributed columns)
+- `store/`: the typed operations on those models; `seal.go` holds the at-rest encryption
+- `types/init/init.go`: `CoreDeclareSchema`, which declares the tables, and `Boot`, which builds the store
+- `types/cryptotypes/`: the crypto contracts the store uses (`Encryptor`)
 
 The rate limiter that writes `rate_limits` is described in [`../ratelimit/rate_limiter.md`](../ratelimit/rate_limiter.md).
 
 ---
 
-# **What exists**
+## What exists
 
 | Table | Model | Definition | Declared by core | Store operations |
 |---|---|---|---|---|
@@ -25,34 +25,36 @@ The rate limiter that writes `rate_limits` is described in [`../ratelimit/rate_l
 
 What each one is for:
 
-- **`users`** — who signs in: id, unique email, profile fields, `email_verified`. It holds no credential.
-- **`accounts`** — how a user signs in. One row per `(provider_id, account_id)`: the `"credential"` provider carries the password hash, an OAuth provider carries its tokens.
-- **`sessions`** — one row per issued session, looked up by the hash of its token.
-- **`tokens`** — the verification table. It is generic by `Kind` (email verification, password reset, magic link, API key), so there is no separate `verifications` table.
-- **`rate_limits`** — fixed-window counters, used only when rate limiting has no key-value store to count in.
+- **`users`**: who signs in: id, unique email, profile fields, `email_verified`. It holds no credential.
+- **`accounts`**: how a user signs in. One row per `(provider_id, account_id)`: the `"credential"` provider carries the password hash, an OAuth provider carries its tokens.
+- **`sessions`**: one row per issued session, looked up by the hash of its token.
+- **`tokens`**: the verification table. It is generic by `Kind` (email verification, password reset, magic link, API key), so there is no separate `verifications` table.
+- **`rate_limits`**: fixed-window counters, used only when rate limiting has no key-value store to count in.
 
 `sessions` and `accounts` each declare a cascading foreign key to `users`, so deleting a user removes both.
 
 ---
 
-# **How a model is put together**
+## How a model is put together
 
 Every model in `models/` follows the same four-part shape. `models/session.go` is the reference.
 
-1. **Column constants.** The table name and every column name are constants (`SessionTable`, `SessionUserID`, …). They are canonical names: the `SchemaResolver` maps them to physical ones.
+The four parts are:
+
+1. **Column constants.** The table name and every column name are constants (`SessionTable`, `SessionUserID`, ...). They are canonical names: the `SchemaResolver` maps them to physical ones.
 2. **The struct, with `ToMap` and `FromMap`.** `ToMap` is the row that gets written; `FromMap` reads a row back. Both use the constants.
 3. **The own-column set.** `sessionColumns`, `accountColumns`, and so on list the columns the model itself has.
 4. **The table declaration.** `models/schema.go` has one function per table (`SessionTableSchema()`), built from the same constants, with indexes and foreign keys.
 
 `[Convention, important]` These three must list exactly the same columns: the table declaration, the own-column set, and the keys `ToMap` returns. `TestDeclaredTablesMatchModels` in `models/schema_test.go` fails when they drift. A new model is added to that test's table.
 
-### **Contributed columns**
+### Contributed columns
 
 A plugin or the application may add a column to a core table (`Registry.ExtendColumn`). A model that embeds `models.Extension` carries those values in `Extra`: `FromMap` puts every column that is not in the own-column set there, and `ToMap` merges them back. Typed access goes through `schema.Field`.
 
-`User`, `Account`, `Session` and `Token` embed `Extension`. `RateLimit` does not: it is an internal counter, and a column contributed to it would be ignored.
+`User`, `Account`, `Session`, and `Token` embed `Extension`. `RateLimit` does not: it is an internal counter, and a column contributed to it would be ignored.
 
-### **What a client sees: public columns**
+### What a client sees: public columns
 
 A model has two serializations, and neither is what a route should send:
 
@@ -78,22 +80,24 @@ Both carry every column. A route answers with a third form, `AuthContext.Public.
 
 The routes that return a user (`WriteSignIn`, sign-up, the two verify routes, the email change confirm) all go through it.
 
+The flag works as follows:
+
 - **`Public` has the tag `json:"-"`.** Schema snapshots and migration files are JSON of `schema.Table`, and the differ's `columnsEqual` compares named fields. The flag appears in neither, so marking a column plans nothing and does not change a stored snapshot.
 - **The model's own JSON is unchanged.** `Extension.Extra` still serializes every contributed column. The session cache depends on that: a cached session has to come back with all its columns.
 
-### **Declaration**
+### Declaration
 
-`CoreDeclareSchema` declares core's tables (`users`, `sessions`, `tokens`, `accounts`, `rate_limits`, `audit_log` and `verification_codes`) under owner `"core"` during `Prepare`, before any plugin declares. `rate_limits` is declared whether or not a key-value store is configured, because `Prepare` runs without a live connection and cannot know. With a key-value store that counts natively, the table exists and stays empty.
+`CoreDeclareSchema` declares core's tables (`users`, `sessions`, `tokens`, `accounts`, `rate_limits`, `audit_log`, and `verification_codes`) under owner `"core"` during `Prepare`, before any plugin declares. `rate_limits` is declared whether or not a key-value store is configured, because `Prepare` runs without a live connection and cannot know. With a key-value store that counts natively, the table exists and stays empty.
 
 `[Reminder]` Adding a table to `CoreDeclareSchema`, or removing one, changes the name of the first migration of an application without plugins. `TestLauncherRunsAnApplication` (`cmd/behemoth/main_test.go`) checks that name, `0001_create_accounts_and_6_more.json` for the seven tables above: the first table and the count of the others. Update its `migrationName` and the list above in the same change.
 
-### **NULL versus empty**
+### NULL versus empty
 
 `Account.ToMap` writes an empty string or a nil time as `NULL` (`nullIfEmpty`, `nullIfNil`). `User` and `Session` write empty strings as empty strings. For `Account` the distinction matters: a missing token must be `NULL`, not an encrypted empty string.
 
 ---
 
-# **Accounts**
+## Accounts
 
 ```go
 type Account struct {
@@ -122,7 +126,7 @@ type Account struct {
 - **A user without a credential account** signed up through an OAuth provider only and has no password. Sign-in answers them exactly like a wrong password, runs the same dummy hash for timing, and fires the failed hook with code `no_credential_account`.
 - **JSON.** `PasswordHash` and the three tokens are tagged `json:"-"`. Handlers return models as JSON, and these must never be in a response.
 
-### **Secret columns**
+### Secret columns
 
 `models.AccountSecretColumns` names the columns encrypted at rest: `access_token`, `refresh_token`, `id_token`. `password_hash` is not in the list: it is already a one-way hash.
 
@@ -134,7 +138,7 @@ The store is the only place that encrypts and decrypts them. The rule is:
 | The row in the database | sealed |
 | The row or model a data hook receives | sealed |
 
-### **Seal and open**
+### Seal and open
 
 A sealed value is a string:
 
@@ -152,14 +156,16 @@ v<key version>:<base64 ciphertext>
 
 `[Not built]` No such sweep exists. Old key versions must stay available to the `KeyManager` for as long as rows sealed under them exist.
 
-### **What each store operation does**
+### What each store operation does
+
+Each store operation behaves as follows:
 
 - **`CreateAccount`** assigns the id and timestamps, seals each non-empty token, and inserts. The caller's `Account` holds the plaintext again when the call returns, whether it succeeded or failed.
 - **`FindAccountByID`, `FindAccount`, `ListAccountsForUser`** open the tokens on a copy of the stored model and return the copy. The copy matters: the stored model may already have been handed to an after-hook, which must keep seeing the sealed form.
 - **`UpdateAccount`** takes token columns in plaintext in the changes map. It seals them before the before-update hook runs. A value of `""` or `nil` clears the column to `NULL`. A non-string value is a validation error. The caller's map is not modified.
 - **`DeleteAccount`** deletes by id.
 
-### **The encryptor is required for tokens**
+### The encryptor is required for tokens
 
 `store.WithEncryptor(e)` supplies the encryptor. `Boot` passes `Crypto.AtRest`.
 
@@ -167,7 +173,9 @@ v<key version>:<base64 ciphertext>
 
 A stored value that is not a valid sealed string, or whose ciphertext is truncated or tampered with, is a security error from `open`. It is not a panic.
 
-### **Limits to know**
+### Limits to know
+
+These limits apply:
 
 - **Hooks do not fire for accounts today.** The store calls its hooks for every table, but `coreDataHookPoints` in `types/init/datahooks.go` only maps `users` to hook points. The "hooks see the sealed form" rule takes effect when account points are declared.
 - **A hook that rewrites a token column on create is not reflected in the caller's model.** `CreateAccount` restores the caller's original plaintext after the insert.
@@ -175,7 +183,7 @@ A stored value that is not a valid sealed string, or whose ciphertext is truncat
 
 ---
 
-# **Moving `password_hash` from `users` to `accounts`**
+## Moving `password_hash` from `users` to `accounts`
 
 `users.password_hash` no longer exists in the declared schema. The hash now lives in `accounts.password_hash` on the user's credential account.
 
@@ -186,7 +194,9 @@ A stored value that is not a valid sealed string, or whose ciphertext is truncat
 
 The planner never drops the column on its own. A drop is a plan issue with two options ("Drop column", "Leave as-is"), and the drop operation must be confirmed.
 
-### **Order of operations**
+### Order of operations
+
+Move `password_hash` in this order:
 
 1. Generate and apply the migration that creates `accounts`. Resolve the `password_hash` issue as **Leave as-is**.
 2. Copy the hashes into credential accounts (below).
@@ -196,7 +206,7 @@ The planner never drops the column on its own. A drop is a plan issue with two o
 
 Steps 2 and 4 must not be far apart. A user who signs up through the old code after the copy has a hash in `users` and no account. Either run the copy again just before step 5 (it is idempotent as written below) or stop sign-ups during the switch.
 
-### **The copy**
+### The copy
 
 `[Not built]` The migration system has no data operation. `SchemaOperation` kinds are all schema changes, and a `CustomMigration` is made of the same kinds, so the copy cannot be expressed as a behemoth migration today. It is run as SQL against the database.
 
@@ -221,7 +231,7 @@ WHERE u.password_hash IS NOT NULL
 
 ---
 
-# **Data hooks and transactions**
+## Data hooks and transactions
 
 Behemoth has two tiers of hooks. Tier 1 data hooks (`data.user.beforeCreate`, `data.user.afterCreate`, ...) are fired by the store around a write to one table. Tier 2 flow hooks (`auth.signUp.before`, `auth.signUp.after`, ...) are fired by a plugin around a whole operation. This section covers Tier 1.
 
@@ -235,7 +245,7 @@ Behemoth has two tiers of hooks. Tier 1 data hooks (`data.user.beforeCreate`, `d
 | A later handler | does not run after a failure | runs anyway |
 | Meant for | rows in other tables that belong with the user | welcome emails, webhooks, other systems |
 
-### **How a hooked write runs**
+### How a hooked write runs
 
 `Store.create` and `Store.update` wrap three steps in one transaction (`Store.hooked` in `store/create.go`):
 
@@ -267,9 +277,9 @@ err = ac.Store.Transaction(hctx.Ctx, func(ctx context.Context, tx *store.Store) 
 
 If step 4 fails, the after-create hook in step 3 has already run for a user that is then rolled back. Whatever the hook wrote through the transaction is rolled back with it.
 
-Only tables that fire hooks get a transaction. `store.Hooks.Fires(table)` answers that, and `dataHooks` answers it from `coreDataHookPoints`, which maps only `users` today. Writes to `sessions`, `tokens`, `accounts` and `rate_limits` go straight to the database as before.
+Only tables that fire hooks get a transaction. `store.Hooks.Fires(table)` answers that, and `dataHooks` answers it from `coreDataHookPoints`, which maps only `users` today. Writes to `sessions`, `tokens`, `accounts`, and `rate_limits` go straight to the database as before.
 
-### **The hook's store: `HookContext.Tx`**
+### The hook's store: `HookContext.Tx`
 
 The store passes itself to every `store.Hooks` method, and `dataHooks` publishes it as `HookContext.Tx`. Inside a hooked write it is the store bound to the transaction.
 
@@ -327,7 +337,7 @@ How each adapter binds a transaction, and what `Transaction` does when called on
 - **The bound adapter ends with the hook.** On the SQL adapters it wraps a `*sql.Tx` and returns `sql.ErrTxDone` afterwards.
 - **A failed statement aborts a Postgres transaction.** A handler that swallows an adapter error leaves the transaction unusable, and the commit fails.
 
-### **The dispatcher: `RunAfter` and `RunAfterTx`**
+### The dispatcher: `RunAfter` and `RunAfterTx`
 
 Both run the same frozen after-chain. They differ in what a handler error means.
 
@@ -344,9 +354,11 @@ All four dispatcher methods start with `DefaultDispatcher.checkPhase`. A point t
 
 `dataHooks.AfterCreate` and `AfterUpdate` call `RunAfterTx` and return its error to the store. Before hooks need no second entry point: `RunBefore` already stops at the first error.
 
-### **After commit: the commit queue**
+### After commit: the commit queue
 
 `data.user.created` and `data.user.updated` fire once the write's transaction has committed. The store does not know hook points; it has a queue of callbacks per transaction and two more `store.Hooks` methods.
+
+The commit queue works in these steps:
 
 1. `Store.Transaction` creates a `commitQueue` and puts it on the bound store (`tx.commit`). A `Transaction` call on a bound store returns that same store, so a joined transaction shares the queue of the outermost one.
 2. `dataHooks.AfterCreate` and `AfterUpdate` queue the dispatch of the committed point with `tx.AfterCommit` once the in-transaction after chain has succeeded (`dataHooks.onCommit`). The store has no call of its own for this, and a table that fires no hooks queues nothing.
@@ -371,7 +383,9 @@ Details that matter:
 - **A callback's panic is recovered.** `Store.runCommitted` wraps each callback. A panic is logged at Error under the `store` component (when the store has a `Telemetry`), the callbacks queued behind it still run, and `Transaction` returns nil because the write is committed. The same wrapper runs a callback called at once on an unbound store. Handler panics on the `created` and `updated` points never get this far: the dispatcher recovers them first.
 - **Adapter-level transactions are not seen.** Only `Store.Transaction` owns a queue. A transaction opened directly on the adapter around store calls does not delay the notifications of those calls.
 
-### **What a rollback does not undo**
+### What a rollback does not undo
+
+A rollback does not undo these writes:
 
 - **Key-value writes.** A hook that writes to `KeyValueStorage` (Redis, a KV-backed token) leaves that write behind. Only database writes through `HookContext.Tx` are covered.
 - **Writes through `Auth.Store` or `Auth.DB`**, as described above.
@@ -381,7 +395,9 @@ Details that matter:
 - **The caller's model.** `Store.create` reads the before hook's rewrite back into the model and the caller's `CreateUser` has already set its id and timestamps. After a failed create the model keeps those values for a row that does not exist.
 - **`HookContext.Values`** and any other in-memory state a handler changed.
 
-### **Limits to know**
+### Limits to know
+
+These limits apply:
 
 - **After-commit delivery is best effort.** The queue is in memory. A process that stops between the commit and the callbacks never runs them. There is no outbox in core; see the decision below.
 - **The in-transaction after points are audited inside the transaction.** `data.user.afterCreate` and `data.user.afterUpdate` are declared with an `AuditSpec`. `RunAfterTx` writes the event through `HookContext.Tx`, so it commits or rolls back with the row, and a failed audit insert fails the write. The after-commit points carry no spec, so a write is recorded once. See `../telemetry/audit.md`.
@@ -391,65 +407,99 @@ Details that matter:
 - **Hooks fire only for `users`.** The transaction rules apply to any table that gains hook points in `coreDataHookPoints`. The `auth.session.*` and `token.*` points are not data points: the session and token managers fire them as Tier 2 points, so `sessions` and `tokens` have no entry there. The managers build a `HookContext` per dispatch (`hookContext` in `transport/session.go`) with the point, the phase, the operation's `Values`, the request and the `AuthContext` that `Boot` passes to their constructors. `Tx` is nil.
 
 ### Data hooks run inside the write's transaction
+
 **Context:** `data.user.afterCreate` ran at the point of the insert. Inside sign-up's transaction it could act on a user that the account insert then rolled back, it could not reach the transaction to write related rows, and its error was logged and ignored. The after hook was neither a reliable "the row is committed" signal nor a usable part of the write.
+
 **Options considered:**
+
 - *After hooks fire after commit.* Gives a reliable "committed" signal. A handler can no longer fail the write or add rows atomically, and the store has to queue hooks until the outermost transaction commits.
 - *After hooks stay as they were, with a documented warning.* No code change. Handlers still can't write in the transaction or abort, so the only safe handler is one that does nothing durable.
 - *Before and after hooks both run inside the transaction, and an after-hook error rolls back.* A handler can add related rows atomically and veto the write. Handlers must avoid work a rollback can't undo, and the dispatcher needs an after-dispatch that returns errors.
+
 **Decision:** The third option. It matches what a data hook is for, plugins adding their own rows and columns to a write, and it gives after hooks a contract that is the same inside and outside a caller's transaction. Irreversible side effects already have a home in Tier 2, which fires after commit. Tier 2 after hooks keep the log-and-continue behaviour.
+
 **Revisit if:** the in-transaction contract proves too strict for common handlers. Work that must not fail the write has its own points now (`data.user.created`, see the next decision).
 
 ### After-commit data hooks use an in-memory queue
+
 **Context:** The in-transaction after hook can't mean "this row is committed", and the Tier 2 after points only cover one flow each. With OAuth, users are created by more than one flow, and a plugin that reacts to every new user would have to know all of them. Data points also could not be audited.
+
 **Options considered:**
+
 - *Fire after the single write.* Simple, but wrong inside a caller's transaction: sign-up's user would be reported before the account insert that can still roll it back.
 - *An in-memory queue on the outermost transaction, run after commit.* Correct for nested writes and cheap. A process that stops between the commit and the callbacks loses them. This is what better-auth's `queueAfterTransactionHook`, Rails' `after_commit` and Django's `transaction.on_commit` do.
-- *A transactional outbox in core.* The event is a row written in the same transaction, and a worker delivers it at least once. Nothing is lost on a crash. Core would own a table, a worker, retries and cleanup, and every handler would have to be idempotent.
+- *A transactional outbox in core.* The event is a row written in the same transaction, and a worker delivers it at least once. Nothing is lost on a crash. Core would own a table, a worker, retries, and cleanup, and every handler would have to be idempotent.
+
 **Decision:** The in-memory queue, documented as best effort. It covers the common uses (emails, stats, cache updates). An application that needs guaranteed delivery writes its own outbox row from `data.user.afterCreate` through `HookContext.Tx`, which is atomic with the user row, and runs its own worker. The API docs describe that recipe.
+
 **Revisit if:** core features need guaranteed delivery themselves (for example an audit log that must not miss a write, or webhooks as a built-in feature). An outbox in core would then be justified.
 
 ### After-commit callbacks stay in the caller's goroutine, and their panics are recovered
+
 **Context:** The commit queue runs in the goroutine that called `Transaction`, before it returns. Two things followed. A callback that panicked unwound into the caller after the commit, so a stored sign-up looked like a failure and the callbacks behind it never ran. A slow callback (an email sent inline from `data.user.created`) delays the response.
+
 **Options considered:**
+
 - *Recover each callback's panic in `Store.Transaction`.* About fifteen lines and no API change. It fixes the panic and leaves the latency.
 - *Run the queue in a goroutine.* Fixes the latency for every application. The store then needs a wait for shutdown, a bound on concurrent callbacks and a timeout, since the request's cancellation no longer applies. Handlers lose two things they can rely on today: `hctx.Request` may be read after the response is written, and `data.user.created` no longer runs before `auth.signUp.after`. The audit recorders that are not written in the transaction share the queue and would become asynchronous too.
 - *An executor supplied by the application.* `store.WithCommitRunner(func(run func()))`, passed through `BootConfig`, with the synchronous loop as the default. The application owns the pool, the bound and the shutdown, and core gains no background state. The stale request and the lost ordering apply to the applications that opt in.
 - *A transactional outbox in core.* The only option where queued work survives a crash. See the decision above for its cost.
 
 **Decision:** Recover the panic and stay synchronous. A handler with slow work can start its own goroutine or queue a job, which solves the latency where it occurs, while the hazards of an asynchronous queue would reach every handler. The executor option and the outbox are deferred, not rejected: [`../../ongoing.md`](../../ongoing.md) tracks both.
+
 **Revisit if:** an application needs every committed callback off the request path (the executor), or core needs delivery that survives a crash (the outbox).
 
 ### An undeclared hook point is a configuration error, not a panic
-**Context:** `checkPhase` panicked when a point was dispatched without being declared, or in the wrong phase. Core fired the `auth.*`, `auth.session.*` and `token.*` points without declaring them, so sign-in, session creation and token issue panicked under a real `Boot`. Every other setup mistake (a duplicate declaration, a handler on an unknown point, a reserved owner name) is returned as a `ConfigurationError`.
+
+**Context:** `checkPhase` panicked when a point was dispatched without being declared, or in the wrong phase. Core fired the `auth.*`, `auth.session.*`, and `token.*` points without declaring them, so sign-in, session creation and token issue panicked under a real `Boot`. Every other setup mistake (a duplicate declaration, a handler on an unknown point, a reserved owner name) is returned as a `ConfigurationError`.
+
 **Options considered:**
+
 - *Keep the panic.* Loud, and the signatures of `RunAfter` and `Fail` stay without a return value. A missing declaration in one flow takes the whole process down at request time, unless the HTTP layer recovers.
 - *Return the error from `RunBefore` and `RunAfterTx`, log it in `RunAfter` and `Fail`.* No interface change. A flow with an undeclared after or failed point then looks healthy while its handlers and audit events never run.
 - *Return a `ConfigurationError` from all four methods.* The mistake reaches the caller as an error on every path. `RunAfter` and `Fail` gain an error return that every caller has to check, and a flow can fail after its work is done (the session row exists, the after point is undeclared).
+
 **Decision:** The third option. `RunAfter` and `Fail` return only this error; handler errors are still logged. Core now declares every point it fires (`CoreDeclareHookPoints`), with the session points split into `beforeCreate`/`afterCreate` and `beforeRevoke`/`afterRevoke` because a point has one phase.
+
 **Revisit if:** the set of dispatched points can be known at boot (for example flows registering the points they fire). The check could then move to `Boot` entirely and `RunAfter` and `Fail` could drop the return value.
 
 ### A client sees public columns, and a column is private unless declared public
-**Context:** The routes encoded `models.User` directly, and its `Extension` serialized every contributed column under `"extra"`. A plugin that added a column no client should see (a risk note, a billing id) had it returned by sign-up, sign-in and the verify routes.
+
+**Context:** The routes encoded `models.User` directly, and its `Extension` serialized every contributed column under `"extra"`. A plugin that added a column no client should see (a risk note, a billing id) had it returned by sign-up, sign-in, and the verify routes.
+
 **Options considered:**
+
 - *Filter in `Extension`'s JSON.* No route changes. The session cache and key-value tokens use the same encoding, so a cached session would lose its private columns, and a model can't see the schema while it is being marshalled.
 - *Return core columns only; plugins add fields to responses themselves.* Nothing to leak. Every plugin with a public column would need a way into every response that carries a user.
 - *A flag on the column and a view built at the response.* The plugin decides where it already declares the column. Routes have to answer with the view and not with the model.
 - *Public unless marked private.* Less to write. A forgotten flag leaks.
+
 **Decision:** The flag, with private as the default, and `PublicView` on the `AuthContext`. The view is flat, like `ToMap`, so a response names a column the way a request does and the `extra` nesting is gone from responses.
+
 **Revisit if:** a column has to be visible to some viewers and not others (an admin listing). `PublicView` is an interface so that a per-request decision can wrap the schema's; nothing does yet.
 
 ### Core tables through the store is a convention, not an enforced rule
-**Context:** `Store.DB()` and `AuthContext.DB` give plugins the raw adapter. A write to `users`, `accounts`, `sessions` or `tokens` through it skips everything the store and the managers add. The most serious case is an OAuth token stored in plaintext, which nothing reports at write time.
+
+**Context:** `Store.DB()` and `AuthContext.DB` give plugins the raw adapter. A write to `users`, `accounts`, `sessions`, or `tokens` through it skips everything the store and the managers add. The most serious case is an OAuth token stored in plaintext, which nothing reports at write time.
+
 **Options considered:**
+
 - *A wrapper `Database` that rejects writes to core-owned tables.* The schema registry knows each table's owner, so the wrapper is cheap to build and turns a silent mistake into an error. It also blocks legitimate direct writes (a backfill, an import, a maintenance job that must not fire hooks), and it fixes the set of protected steps in code. Sealing may become optional per configuration later, and a plugin can already avoid the sensitive tables by using the managers.
 - *Keep it a convention and document exactly what a direct write skips.* No code, and the plugin author decides per write. A plugin that ignores the documentation can still store a token in plaintext.
+
 **Decision:** The convention. Plugin authors are expected to use the store for core tables and the managers for sessions and tokens, and `docs/api/core-tables.md` lists per table what a direct write skips so that the choice is an informed one. `Store.DB` and `AuthContext.DB` carry the same warning in their doc comments.
+
 **Revisit if:** direct writes to core tables become a recurring source of bugs or of plaintext secrets in third-party plugins. The wrapper could then be offered as an opt-in (`BootConfig`), or limited to the columns that are sealed.
 
 ### Plugins write their own tables through the adapter
+
 **Context:** A data hook runs inside the write's transaction, but `Store` only had typed operations for core tables. A plugin that owns a table could not write it inside the transaction, so the convention above could not be followed for the tables plugins care most about. Plugins such as a dashboard or an audit log also need to read every table.
+
 **Options considered:**
-- *Generic `Create`/`Update`/`Find` on `Store` for any declared model.* Keeps one door to the database. It re-implements the adapter interface one level up, and the generic methods would have to decide per table whether hooks, sealing and normalization apply.
+
+- *Generic `Create`/`Update`/`Find` on `Store` for any declared model.* Keeps one door to the database. It re-implements the adapter interface one level up, and the generic methods would have to decide per table whether hooks, sealing, and normalization apply.
 - *Expose the adapter: `Store.DB()`.* One accessor, no new API to maintain, and plugins get the full `behemoth.Database` they already have as `AuthContext.DB`. The store is no longer the only path to core tables, so their invariants rest on a convention.
+
 **Decision:** Expose the adapter. `AuthContext.DB` was already public, so the store was never an enforced boundary; what was missing was the transaction-bound adapter. The store stays the owner of core tables' rules, and the convention (core tables through the store, own tables through the adapter) is documented in the package doc, on `Store.DB` and in the API docs.
+
 **Revisit if:** plugins writing core tables through the adapter becomes a recurring source of bugs. A wrapper adapter that rejects writes to core tables would then enforce the convention.

@@ -7,7 +7,7 @@ The guidelines are suggestions for new code and for changes. They do not describ
 The code it refers to lives in:
 
 - `types/init/init.go`: `Prepare`, `Boot`, `BootConfig`, `PrepareConfig`
-- `plugins/*`: each plugin's `Options`, `New` and `Init`
+- `plugins/*`: each plugin's `Options`, `New`, and `Init`
 - `types/mail.go`: `MailSender`, `MailMessage`
 - `types/cryptotypes/cryptotypes.go`, `crypto/`: `SecretSource`, `WatchableSecretSource`, `PollingWatcher`
 - `types/init/mailer.go`: `DefaultMailer`, the one component with background workers
@@ -33,7 +33,7 @@ Two questions cover most small decisions. Could this be set up from a file? Woul
 
 ### An option is data, and code is the exception
 
-A file carries text, numbers, booleans, durations, lists and maps. An option of one of those types works in both modes. `magiclink.Options` is all data:
+A file carries text, numbers, booleans, durations, lists, and maps. An option of one of those types works in both modes. `magiclink.Options` is all data:
 
 ```go
 type Options struct {
@@ -69,6 +69,8 @@ An interface the application implements is easiest to carry over a network when 
 
 Hook handlers are planned to be reachable as HTTP callouts and events. A point's payload and result are then sent to another system.
 
+A payload and a result follow these rules:
+
 - A payload is a `behemoth.M` of plain values, and a result is a model or a small struct. Avoid a payload that holds a function, a channel or a handle.
 - A credential sits under a key the telemetry redactor knows: `password`, `token`, `secret`, `hash`, `cookie`, `authorization`, or a key that ends in one of them. The sign-in payload holds the password under `password`. A key such as `pw` would pass a forwarder unredacted.
 - A before handler answers with data: a changed payload, or a typed error with a code. A point whose handler is expected to change a shared object in place can't be answered from another process.
@@ -98,7 +100,7 @@ With several replicas, a request reaches any of them, and a replica can disappea
 
 Memory is fine for what may be lost or may differ between replicas, such as a cache with a short life. It does not suit a count that a limit depends on, or work that was accepted and not yet done.
 
-### Core reads no environment, file or flag
+### Core reads no environment, file, or flag
 
 Settings arrive as values. `Boot` and the plugins read no environment variable. The composition root does: the application's `main` today, the service's `main` later. The migration code reads the migration folder, whose path it was given.
 
@@ -122,21 +124,25 @@ The framework and storage adapters are modules of their own, and the root `go.mo
 
 ## Where the code differs today
 
-Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted.
+Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted:
 
 - `emailpassword.Options.ValidatePassword` and `ValidateEmail` are functions. `BootConfig.Hooks` and `PrepareConfig.Schema` are functions too. The application's `MailSender` is the only way to send, and it writes the message. `StaticSecretSource` is the only secret source. `outbound.Options.Transport` is an interface with no plain-value form for a proxy or a CA bundle, and the default transport takes the proxy from the environment. "An application configures behemoth with Go values only".
-- Nothing schedules the purges, and no method removes old sessions or tokens. "Nothing removes old sessions, tokens or rate-limit counters".
+- Nothing schedules the purges, and no method removes old sessions or tokens. "Nothing removes old sessions, tokens, or rate-limit counters".
 - The mail queue is in memory, and `Boot` returns no handle that stops everything it started. "The background mail queue is in memory and does not retry".
 - No call reports whether the database and the key-value store answer. No entry.
 
 ## Design decisions
 
 ### The service is a second composition root, not a second code base
+
 **Context:** A standalone service needs things a library application writes itself: reading a file, choosing a database by name, sending mail, calling out for hooks, scheduling upkeep.
+
 **Options considered:**
+
 - *A separate server with its own logic.* It could be shaped for a service from the start. Two code bases would then implement sign-in, and a fix in one would have to be repeated in the other.
 - *Service-only code inside the library, switched on by a mode.* One code base. Every component would carry a second path, and the library would pull in the service's dependencies.
 - *A `main` in a module of its own that builds `Prepare` and `Boot` from a file.* What the service needs (a file secret source, a posting mail sender, callouts for hooks) is added to the library as ordinary packages, which a library application can use too. The service module only wires them.
 
 **Decision:** the third. The guidelines above are what keep it possible: a component that takes data, holds its state on a value and can be stopped needs no second path.
+
 **Revisit if:** the service needs behavior a library application should not have, such as tenants sharing one process.

@@ -286,151 +286,211 @@ An ID token without a `kid` is checked against every key of the set that fits it
 ## Design decisions
 
 ### One redirect URI per provider, derived from `CallbackURL`
+
 **Context:** A redirect URI per provider is the control against provider mix-up: finishing a sign-in can compare the page a code arrived at with the provider the state names. The application also needs a page for the provider to send the browser to.
+
 **Options considered:**
+
 - *A redirect URI in each provider's own configuration.* Any shape of URL works. The plugin can't know the URI of a provider an application implements, and nothing stops two providers from sharing one.
 - *One `CallbackURL`, with the provider's id as a query parameter.* One page for the application. The id then shares the query with the `code` and the `state` the provider adds, and `CallbackURL` could no longer be required to have no query.
 - *One `CallbackURL`, with the provider's id appended as a path segment.* One option, one route with a parameter in the application, and the URIs can't collide because the ids can't. The application's route has to have that shape.
 
 **Decision:** the path segment. `oauth.RedirectURI` returns the URI, so an application registers the same string the plugin sends.
+
 **Revisit if:** an application can't serve `<CallbackURL>/<id>`, for example because a provider's console accepts one fixed URI that is already in use.
 
 ### The state token is kept in the database
+
 **Context:** The plan notes that the key-value backend suits `oauth_state`, because an entry there expires by itself. A token kind names one backend when it is declared, before `Boot` knows whether a key-value storage exists.
+
 **Options considered:**
+
 - *The key-value backend.* No row outlives its sign-in. `Boot` fails for an application without a key-value storage.
 - *The database backend.* The plugin works wherever core does. Used and expired rows stay, since nothing purges tokens.
 - *An option.* Each application picks. One more setting, for a problem that a purge of tokens solves for every kind.
 
 **Decision:** the database backend.
-**Revisit if:** a purge of tokens is not built and the rows become a problem. "Nothing removes old sessions, tokens or rate-limit counters" in `docs/ongoing.md` is the entry.
+
+**Revisit if:** a purge of tokens is not built and the rows become a problem. "Nothing removes old sessions, tokens, or rate-limit counters" in `docs/ongoing.md` is the entry.
 
 ### Handlers on the after point do not get the URL or the binding value
+
 **Context:** `types.WithLifecycle` hands the flow's result to the after point as it is. `Begin`'s result holds the authorization URL, which holds the state, and the binding value. Hook handlers are planned to be reachable in other processes, as `service_ready_components.md` describes.
+
 **Options considered:**
+
 - *`WithLifecycle`, with the full result.* The shortest code, and what the sign-in points do with a session token. Every handler and every forwarder then holds what finishes the sign-in.
 - *Write the three dispatches out in `Begin`, and give the after point a copy without the two fields.* About fifteen lines that repeat `WithLifecycle`. A handler learns the provider, the transaction's id, and the expiry.
 
 **Decision:** the copy. `Begin` calls `AsOperation`, `RunBefore`, `FailIfRejected`, and `RunAfter` itself.
+
 **Revisit if:** a second flow needs the same, and `WithLifecycle` gets a way to say what the after point receives.
 
 ### `Store.Seal` and `Store.Open` are exported
+
 **Context:** The verifier has to be sealed before it goes into the token's metadata. The store's sealing was private, and its form (`v<key version>:<base64>`) is what a re-encryption sweep selects on.
+
 **Options considered:**
+
 - *Repeat the form in the plugin, over `ac.Crypto.AtRest`.* No change to the store. Two places then define what a sealed value looks like.
 - *Package functions that take an `Encryptor`.* Usable without a store. A plugin has the store at hand, and would have to pass the same encryptor the store already holds.
 - *Two methods on `Store`.* One form, one encryptor, and nothing new to configure.
 
 **Decision:** `Store.Seal` and `Store.Open`. A plugin with a secret column of its own uses the same two methods.
+
 **Revisit if:** code without a store needs to seal a value.
 
 ### The checks that need no write run before the consume
+
 **Context:** A state has to be single use, and the consume is what makes it so. The state travels in two URLs, so more people can read it than can finish the sign-in.
+
 **Options considered:**
+
 - *Consume first, then check.* One read of the token. Any request with a valid state ends the sign-in, whether or not it has the binding value.
 - *Read, check, then consume.* Two reads. A request without the binding value changes nothing. The checks run on a token that may be consumed a moment later, which the consume itself catches.
 
 **Decision:** read, check, then consume. `Complete` hands the token it read to the flow, so the flow does not read it a second time.
+
 **Revisit if:** the token's metadata can change after it is issued. The checks would then have to run on what the consume returns.
 
 ### One error code for a refused callback
+
 **Context:** A callback can be wrong in several ways: the state, the binding value, the provider, or the code. A client does the same thing for all of them: it starts the sign-in again.
+
 **Options considered:**
+
 - *A code per cause.* A developer sees at once what failed. The answer also tells a caller without the binding value that the state it tried is valid.
 - *One code.* The response says nothing about which part was wrong. The cause is in the audit event and the log.
 
 **Decision:** one code, `invalid_oauth_callback`, as the magic link plugin answers every refused link with `invalid_magic_link`. `account_not_linked` and `email_not_provided` have their own, because the user has to do something different for each.
+
 **Revisit if:** client developers can't find the cause of a refusal in practice.
 
 ### A new user's sign-up is a nested operation with a veto-only payload
+
 **Context:** A first sign-in creates a user. Handlers and counters for sign-ups are attached to `auth.signUp.*`, which the email/password plugin fires.
+
 **Options considered:**
+
 - *Create the user inside the sign-in and fire no sign-up point.* Less code. A handler that keeps a domain out, a welcome email, and the sign-up counter would all miss these users.
 - *Fire `auth.signUp.*` with a payload a handler can rewrite, as for an email sign-up.* One contract for both. A handler could then change the email the provider reported.
 - *Fire `auth.signUp.*` with a veto-only payload.* A handler can refuse and can read the profile. The payload has `method` and no `password`, so a handler written for email sign-up has to allow for that.
 
 **Decision:** the veto-only payload, in an operation nested under the sign-in. A refused sign-up fires `auth.signUp.failed` and then `auth.signIn.failed`: both operations failed.
+
 **Revisit if:** applications need to complete a new user's profile at this point. A data hook on `data.user.beforeCreate` already can.
 
 ### A sign-up that loses a race is resolved once more
+
 **Context:** Two callbacks of one new person can both find no account and no user, for example from two tabs. The second insert fails on a unique index.
+
 **Options considered:**
+
 - *Return the store's error.* No code. The loser gets a `409` with the store's code for a sign-in that should have worked.
 - *Look again, once.* By then the winner has committed. The loser signs in the winner's user, or is refused with `account_not_linked` when the winner was a sign-up with the same email by another way.
 
 **Decision:** look again, once. A second duplicate is returned as it is.
+
 **Revisit if:** the store gains a retry for writes that lose a race.
 
 ### The binding value follows the session token
+
 **Context:** A started sign-in hands the client a binding value that it shows again at completion. A browser client of the cookie transports should not be able to read it from a script, and a client without cookies has nowhere else to keep it.
+
 **Options considered:**
+
 - *Always a cookie.* One behavior. A native application, whose callback runs in the system browser, does not have the cookie when it completes the sign-in.
 - *Always the body.* One behavior. A script on the page can read a value that an `HttpOnly` cookie would keep from it, which the cookie transports exist to avoid.
 - *The way the session token travels.* A client that already handles the session token one way handles the binding value the same way. The plugin needs to know the transport.
 
 **Decision:** the way the session token travels. `Boot` puts the session settings on `AuthContext` as `SessionConfig`. The settings and not only the transport, because the cookie also needs the session cookie's `SameSite` and `Secure`.
+
 **Revisit if:** the HTTP side of the session manager moves into a component of its own ("The session manager also carries the token over HTTP" in `docs/ongoing.md`). The cookie would belong there.
 
 ### One binding cookie per sign-in
+
 **Context:** A user can start two sign-ins in one browser, from two tabs or with a second click.
+
 **Options considered:**
+
 - *One cookie for all sign-ins.* One name. The second sign-in overwrites the first one's value, and completing the first fails.
 - *A cookie per sign-in, named after the state.* Each sign-in finds its own. A browser keeps a cookie for every sign-in that was started and not completed, until it expires.
 
 **Decision:** a cookie per sign-in. The name has 16 hex characters of the state's SHA-256, which the complete route computes from the state in the body.
+
 **Revisit if:** applications report hitting a browser's limit on cookies per host.
 
 ### Built-in providers are data, and the application's providers are a second list
+
 **Context:** `service_ready_components.md` asks for a data form next to an option that is an interface ("The OAuth plugin's providers are Go values" in `docs/ongoing.md` until this step). `Options.Providers` was the list of `Provider` values.
+
 **Options considered:**
+
 - *Constructors, such as `oauth.Google(cfg)`, that return a `Provider`.* Short in Go. A configuration file still can't name a provider, and a service would have to map each kind to a constructor itself.
 - *A second option for the data, next to `Providers`.* No rename. The common case gets the longer name.
 - *`Providers` for the data, and `CustomProviders` for the application's own.* The common case reads naturally. The plugin's earlier `Options.Providers` changes type, which an experimental plugin can still do.
 
 **Decision:** `Providers []ProviderConfig` and `CustomProviders []Provider`.
+
 **Revisit if:** a kind needs a setting that is code, such as a function. It would get a data form of its own.
 
 ### The client secret is a `SecretSource`, read for every exchange
+
 **Context:** A client secret is a secret, which `service_ready_components.md` keeps out of the options. The core already has `SecretSource`, built for versioned keys: a map of secrets and the current version.
+
 **Options considered:**
+
 - *A string field.* Simple. It ends up in a configuration file and is printed with it.
 - *A source of its own, with one value.* A new interface for one use.
 - *`SecretSource`, using its current secret.* The type that a file or environment source implements anyway. A source with one entry is a little verbose.
 
 **Decision:** `SecretSource`. `Init` reads it once to fail early, and every code exchange reads it again, so a rotated secret takes effect at once.
+
 **Revisit if:** sources that are slow to read appear. The exchange would then cache the secret for a short time.
 
 ### Discovery happens at the first sign-in, not at `Boot`
+
 **Context:** An OpenID Connect provider is described by its issuer, and its endpoints come from a document on the network.
+
 **Options considered:**
+
 - *Fetch at `Init`.* A wrong issuer fails the boot, where `service_ready_components.md` wants a wrong value to fail. A provider that is down also fails the boot, and with it every other way to sign in.
 - *Fetch at the first use, and keep it.* The boot does not depend on the provider. A wrong issuer shows up at the first sign-in, as a failure of the system.
 
 **Decision:** at the first use. `Init` checks everything it can without the network: the issuer's form, the client id, the secret.
+
 **Revisit if:** applications ask for a check at start. A method that fetches every provider's document could be called by the application after `Boot`.
 
 ### An unknown key is fetched at most once a minute
+
 **Context:** An issuer rotates its keys, and the key set is cached. A token that names a key the cache lacks is either newly signed or forged.
+
 **Options considered:**
+
 - *Fetch the set for every unknown key.* A rotation is picked up at once. Anybody can make the plugin call the issuer by sending tokens with made-up key ids.
 - *Fetch on a schedule only.* No call can be caused from outside. A rotation fails sign-ins until the next fetch.
 - *Fetch for an unknown key, at most once a minute, and every hour anyway.* At most one call a minute can be caused, and a rotation fails sign-ins for a minute at most.
 
 **Decision:** the third. Issuers publish a new key before they sign with it, so in practice the hourly fetch already has it.
+
 **Revisit if:** an issuer rotates without publishing ahead, and the minute shows up as failed sign-ins.
 
 ### GitHub's subject is its numeric id, and its email is the primary verified address
+
 **Context:** GitHub has no ID token. Its API returns a login, a numeric id, and a list of addresses.
+
 **Options considered:**
+
 - *The login as the subject.* Readable. A renamed login can be taken by somebody else, who would then sign in to the first user's account.
 - *The numeric id as the subject.* It never changes.
 - *For the email, the public address on the profile.* One call less. Whether GitHub verified it is not part of that answer.
 - *For the email, the primary address from `/user/emails`, when it is verified.* One more call, and the `user:email` scope. The address is one GitHub verified.
 
 **Decision:** the numeric id, and the primary verified address. A user whose primary address is not verified has no email, and a first sign-in is refused with `email_not_provided`.
+
 **Revisit if:** users with a verified address that is not primary are refused in practice. Another verified address could stand in.
 
-## Not built
+## Deferred
 
 Each item is a step of the plan:
 

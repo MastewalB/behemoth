@@ -1,8 +1,8 @@
-## **Single-Row Writes: `UpdateOne` and `DeleteOne`**
+# Single-row writes: `UpdateOne` and `DeleteOne`
 
 This document explains how each SQL adapter writes "one row matching an expression", why the statement differs between databases, and the deadlock that the difference avoids. It is the companion of [`transactions.md`](transactions.md): that one covers transactions the caller opens, this one the locks a single statement takes.
 
-### The contract
+## The contract
 
 `behemoth.Database` in `storage.go` asks two things of `UpdateOne` and `DeleteOne`:
 
@@ -11,7 +11,7 @@ This document explains how each SQL adapter writes "one row matching an expressi
 
 The store builds its at-most-once operations on the second point. `ConsumeToken` updates `WHERE id = ? AND consumed_at IS NULL`, and `IncrementRateLimit` updates `WHERE limit_key = ? AND count = <the count it read>`. Of several concurrent calls one writes, and the others get `NotFound` and treat it as a lost race.
 
-### The statement per adapter
+## The statement per adapter
 
 | Adapter | Statement |
 | --- | --- |
@@ -28,7 +28,7 @@ The GORM and Bun adapters build their statement in one helper, `oneRow`, which c
 
 MySQL and SQL Server used the subquery form too, until the store contract test ran against them. The next section explains why it fails there.
 
-### Why the subquery form deadlocks on MySQL and SQL Server
+## Why the subquery form deadlocks on MySQL and SQL Server
 
 The difference is whether the database locks the rows the subquery reads.
 
@@ -55,16 +55,21 @@ Both databases confirmed this in their deadlock reports, taken while 20 goroutin
 
 Between 7 and 11 of the 20 calls failed in the runs observed, on both databases. No count was handed out twice, because the victim's statement is rolled back. The cost was an error returned to the caller where a retry was expected.
 
-### `LIMIT 1` and `TOP (1)` instead of a subquery on MySQL and SQL Server
+## `LIMIT 1` and `TOP (1)` instead of a subquery on MySQL and SQL Server
+
 **Context:** The deadlock above. It affects every `UpdateOne` and `DeleteOne`, and shows wherever two calls race on one row. The rate limiter does that on purpose.
+
 **Options considered:**
+
 - *Let the write statement pick the row itself: `LIMIT 1` on MySQL, `TOP (1)` on SQL Server.* Without a subquery there is no shared lock. The statement asks for the write lock as it finds the row, so concurrent statements queue. The one that waited checks the expression against the committed row, matches nothing and returns `NotFound`. It works for any table and expression, and the expression appears once.
 - *Keep the subquery and retry on the deadlock error in the store.* The deadlock still happens and costs a rollback each time. The adapters do not classify deadlock errors yet.
 - *Keep the subquery and make it a locking read (`FOR UPDATE` on MySQL, `WITH (UPDLOCK)` on SQL Server).* Also removes the shared lock, with a longer statement and one more database-specific clause.
+
 **Decision:** The first. PostgreSQL and SQLite keep the subquery form: they have no `LIMIT` on `UPDATE`, and it does not deadlock there.
+
 **Revisit if:** SQL Server is run with `READ_COMMITTED_SNAPSHOT` on and the subquery form is wanted back for uniformity (reads then use row versions, as on PostgreSQL). The `TOP (1)` form is correct in both modes.
 
-### What this does not prevent
+## What this does not prevent
 
 `[Known limitation]` A deadlock is still possible where a single statement cannot avoid it:
 
@@ -77,6 +82,6 @@ The store does not retry on a deadlock error, and the adapters report it as an u
 
 Both are tracked in `docs/ongoing.md`.
 
-### Tests
+## Tests
 
 `TestStoreContract` in `tests/store/contract_test.go` runs the store's operations against every backend. Its `RateLimits` part sends 20 concurrent hits on one key and expects the counts 1 to 20, and its `Tokens` part consumes one single-use token from several goroutines and expects one success. Those two parts are what caught the deadlock. The MySQL, SQL Server and PostgreSQL backends start containers and are skipped with `-short`.

@@ -47,6 +47,8 @@ The token kind is database-backed on purpose. `RevokeAllForSubject` is not suppo
 
 Steps 1 and 2 come before the lookup, so a validation error does not depend on whether the email has an account.
 
+The request flow follows these rules:
+
 - **The token's subject is the user's id.** The email the link was sent to is in the token's metadata. See the design decision below.
 - **`Metadata` is not stored.** It goes from the request to the mail sender and nowhere else. Only the email and the redirect URL are kept with the token.
 - **By default, step 7 only fails when the message could not be queued.** A send that fails later is logged by the mailer; the link is not revoked and no failed point fires. See [`../mail/mailer.md`](../mail/mailer.md).
@@ -88,6 +90,8 @@ The route hands the result to `types.WriteSignIn` with the redirect URL as an ex
 
 Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with the code `invalid_magic_link`. The audit event of `auth.signIn.failed` has the real code.
 
+Verification follows these rules:
+
 - **The token is consumed in step 1 and stays consumed.** A refusal in step 5 or a session limit in step 6 does not give the link back. Consuming last would let a link be tried again and again against a second factor.
 - **`Consume` is the at-most-once step.** Two verifies of one link race inside the token manager's transaction, and one loses with `token_already_consumed`.
 - **The payload on `auth.signIn.before` is veto-only.** `verifyInput.FromMap` reads nothing back. A handler can refuse the sign-in; it can't swap the token or the email.
@@ -95,40 +99,61 @@ Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with
 ## Design decisions
 
 ### The link points at the application and verify is a POST
+
 **Context:** Mail servers and clients open the links in a message to scan or preview them. A link that signs in on a `GET` is consumed by the scanner, and the user finds it already used.
+
 **Options considered:**
+
 - *A `GET` route that verifies and redirects.* The shortest path: the link is the whole flow. Scanners use the link up.
 - *A `GET` route that serves a confirmation page and a `POST` that verifies.* Scanner-proof, and Behemoth would serve HTML, which it does nowhere else.
 - *The link points at a page of the application, which posts the token.* Scanner-proof, and the page is the application's to design. The application has to build that page.
+
 **Decision:** The third. `Options.LinkURL` names the page. Behemoth stays an API.
+
 **Revisit if:** applications without a front end of their own (a server-rendered site with no script) need the flow. A confirmation page could be added as an option.
 
 ### The token's subject is the user, not the email
+
 **Context:** The token has to name who it signs in. The request has an email, and the lookup turns it into a user before the token is issued.
+
 **Options considered:**
+
 - *The email.* It is what the link was sent to, and it would allow a link for an address without an account, which sign-up by link needs. `Store.DeleteUser` removes tokens by user id, so the plugin would have to delete its own on `data.user.beforeDelete`. A link would follow the address to whoever holds it next.
 - *The user's id, with the email in the metadata.* `DeleteUser` and `RevokeAllForSubject` work as they are. The email is compared at verify, so a link does not outlive a change of address.
+
 **Decision:** The user's id. There is no sign-up by link, so a user always exists when a token is issued.
+
 **Revisit if:** sign-up by link is built. A link for an address without an account has no user to name.
 
 ### Verify fires core's sign-in points
+
 **Context:** A magic-link sign-in ends the way a password sign-in does: a user, a session, possibly a second factor. Handlers that care about sign-ins should not need to know every method.
+
 **Options considered:**
+
 - *Points of the plugin's own for verify.* Clear ownership. A second-factor plugin, a sign-in notifier and the audit log would each have to register on every sign-in plugin's points.
 - *Core's `auth.signIn.*` points.* One place to hook. The payload of `auth.signIn.before` differs by method: an email and a password there, an email and a method here.
+
 **Decision:** Core's points, which is what they were declared in core for. `SignInResult` moved from `emailpassword` to `types` so that `auth.signIn.after` hands every handler one type, and it gained `Method`. The request for a link is not a sign-in and has the plugin's own points.
+
 **Revisit if:** the differing `auth.signIn.before` payloads cause handler bugs. A `method` key on the email/password payload would let a handler tell them apart there too; today it is set only by this plugin.
 
 ### The link is sent through the shared mailer
+
 **Context:** The plugin first took a `SendLink` callback in its options. Email verification then needed to send too.
+
 **Decision:** The callback was replaced by `AuthContext.Mailer`, which every plugin uses; [`../mail/mailer.md`](../mail/mailer.md) has the options that were weighed. The request's `Metadata` map is handed to the sender untouched, in `MailMessage.Metadata`, so an application can pass what its message needs (a locale, a template) without the plugin growing a field for each. It is client input when it comes from the route, and the API doc says so.
 
 ### The link is sent in the background by default
+
 **Context:** The mailer offers `Send`, which waits, and `SendAsync`, which does not. The plugin first waited by default (`SendInBackground`, off). Password reset then chose the background default, and the two plugins had options named in opposite directions.
+
 **Options considered:**
+
 - *Always wait.* A failed send revokes the link and is audited. A sender that calls a provider directly holds the request, and widens the timing gap between known and unknown emails.
 - *Never wait.* Fast and even. A link that was never sent stays valid until it expires, and the failure is only in the log.
 - *An option.* Both are reasonable, and which is better depends on the application's sender.
+
 **Decision:** `Options.WaitForSend`, off by default, the same name and default as `emailpassword.ResetOptions.WaitForSend`. Not waiting keeps the sender out of the response time whatever the sender does. A link that was never sent is harmless: nobody holds it, and it ends at its expiry or at the user's next request. With a sender that only enqueues, `WaitForSend` costs nothing and keeps the revoke.
 
 ## Trusted origins
@@ -160,11 +185,16 @@ The same list also says which origins may send a state-changing request under th
 A plugin checks a redirect URL when it receives it, before storing it. The magic link plugin checks at request time and not at verify: a bad URL is then a `400` for the request, and nothing unchecked is kept with the token.
 
 ### Origins match exactly
+
 **Context:** An application may serve many subdomains, and listing each is tedious.
+
 **Options considered:**
-- *Wildcards (`https://*.example.com`).* Convenient. One forgotten or user-controlled subdomain becomes an open redirect, and matching rules are easy to get subtly wrong.
+
+- *Wildcards (`https://*.example.com`).* Convenient. One forgotten or user-controlled subdomain becomes an open redirect, and matching rules are error-prone.
 - *Exact match.* Nothing to misread.
+
 **Decision:** Exact match for now.
+
 **Revisit if:** an application has subdomains it can't list, such as one per tenant.
 
 ## Tests

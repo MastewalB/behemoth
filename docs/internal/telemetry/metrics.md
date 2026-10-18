@@ -81,7 +81,7 @@ Names and attribute keys are constants in `telemetry/metrics.go` (`MetricSignIn`
 
 `route` is `Route.Path`, the mounted pattern with its `{name}` parameters.
 
-### Flows, sessions and tokens
+### Flows, sessions, and tokens
 
 These are counted in the dispatcher, not in the flows. `corePointMetrics` maps a core after or failed point to a counter and an outcome:
 
@@ -92,19 +92,24 @@ hooks.HookSignInFailed: {telemetry.MetricSignIn, telemetry.OutcomeFailure},
 
 `countPoint` runs at the end of `RunAfter` and `Fail`, next to `recordAudit`. A failure adds `FailureReason.Code` as `reason`, and a `*models.Token` result adds its `kind`.
 
-The sign-in flow, the session manager and the token manager report nothing themselves. Any flow that fires `auth.signIn.after` is counted as a sign-in, which will cover OAuth sign-in when it fires the same points.
+The sign-in flow, the session manager and the token manager report nothing themselves. Any flow that fires `auth.signIn.after` is counted as a sign-in, which also covers an OAuth sign-in once it fires the same points.
 
 `[Limit]` A point declared by a plugin has no entry. The plugin counts what it needs through `ac.Telemetry.Metrics`.
 
 `[Limit]` The plan listed a `plugin` attribute on the sign-in and sign-up counters. The dispatcher does not know which plugin fired a core point, so the attribute is not there.
 
 ### Counting flows in the dispatcher
-**Context:** Sign-ins, sign-ups, sessions and tokens have to be counted with their outcome. The code that produces them is spread over a plugin and two managers.
+
+**Context:** Sign-ins, sign-ups, sessions, and tokens have to be counted with their outcome. The code that produces them is spread over a plugin and two managers.
+
 **Options considered:**
+
 - *Count at each site.* The site knows everything, including which plugin it is. Every flow and every future plugin has to remember to count, in the same names, on every exit path.
 - *A metric declaration on `HookPointDef`, like `AuditSpec`.* Plugins could have their own points counted. It adds to the hook declaration API for a need no plugin has yet.
 - *A table in core from point to counter.* Every dispatch of a core point is counted once, whoever fired it, with no new API. Only core points are covered.
+
 **Decision:** The table. The after and failed points already mark exactly the moments to count, and the audit events are produced at the same place from the same data.
+
 **Revisit if:** plugins want their points in the catalog, which would turn the table into a declaration on the point.
 
 ### Session lookups
@@ -125,7 +130,7 @@ A rejection is still also an audit event; see the entry "Every rate-limit reject
 
 `observeHandler` runs after every handler call in all four dispatcher methods. It records the duration, and one `behemoth.hook.errors` when the handler returned an error or panicked.
 
-`[Convention]` On a before point a returned error is a veto, the way a handler refuses an operation. It is counted like any other handler error, and the `phase` attribute separates the two: `phase="before"` are refusals, `phase="after"` and `phase="failed"` are handlers that did not do their work.
+`[Convention]` On a before point a returned error is a veto, the way a handler refuses an operation. It is counted like any other handler error, and the `phase` attribute separates the two: `phase="before"` are refusals, `phase="after"`, and `phase="failed"` are handlers that did not do their work.
 
 ### The database
 
@@ -147,12 +152,17 @@ A rejection is still also an audit event; see the entry "Every rate-limit reject
 `[Consequence]` `Store.DB()` returns the wrapped adapter. What a plugin does through it is measured too. It can no longer be type-asserted to the adapter the application built; nothing in the repository did.
 
 ### Measuring the store by wrapping its adapter
+
 **Context:** The store has about forty call sites of `s.db`. Each needs a duration and an error count.
+
 **Options considered:**
+
 - *Measure in each store method.* The operation can have a business name (`FindUserByEmail`). Every method and every future one needs the same four lines.
 - *Wrap the adapter.* One implementation covers every method, transactions included, and plugins' own tables through `Store.DB()`. The operation is named after the `Database` method, not the store method.
 - *Measure in the storage adapters.* Covers code that bypasses the store. It would have to be written once per adapter, in separate modules.
+
 **Decision:** Wrap the adapter in the store. The table and the kind of operation are what a dashboard groups by.
+
 **Revisit if:** a dashboard or a trace needs the store method's name (`FindUserByEmail`). Tracing uses the same wrapper and the same operation names.
 
 The metric is named `behemoth.store.*` because it measures what the store asks of the database. It is not a per-statement metric; drivers have their own instrumentation for that.

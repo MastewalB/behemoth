@@ -30,7 +30,9 @@ The two data handlers enforce this for every other writer:
 
 **The note.** `write` starts an operation (`types.BeginOperation`) and puts the number in its `Values` under `phonenumber.confirmed`. The update's data handlers start from a copy of those `Values`, so `onUserUpdate` finds the note and compares it with the number in the changes. A `Store.UpdateUser` from anywhere else has no note.
 
-- The note names the number, not just "allowed". A flow that confirmed one number can't be used to write another through a `beforeUpdate` rewrite by a different handler.
+The note follows these rules:
+
+- The note names the number, not only "allowed". A flow that confirmed one number can't be used to write another through a `beforeUpdate` rewrite by a different handler.
 - It is a convention inside one process, not a security boundary: code that runs in the application can write the same key. What it stops is the common mistake, a profile route that copies a request body into `UpdateUser`.
 - Compare with the email verification plugin, whose `beforeUpdate` handler lets a direct change of `email` through and clears `EmailVerified`. `docs/ongoing.md` has that entry; this mechanism is what closing it would look like.
 
@@ -117,6 +119,8 @@ The plugin's own tests run on SQLite.
 
 ## Limits to know
 
+These limits apply:
+
 - `[Not built]` Sign-up with a number and no email. `users.email` is required and unique in core.
 - `[Not built]` National number formats. `Parse` accepts E.164 only; converting needs the caller's country and a numbering-plan library, which by the guidelines is a module of its own.
 - `[Not built]` A notice by text message when a number changes or a password is reset. A number change sends nothing to the old number.
@@ -127,43 +131,60 @@ The plugin's own tests run on SQLite.
 ## Design decisions
 
 ### No verified flag: the column holds confirmed numbers only
+
 **Context:** A number can be stored when the user types it and flagged once confirmed, or stored only once confirmed.
+
 **Options considered:**
+
 - *`phone_number` plus `phone_number_verified`.* A profile can show a pending number. Every reader has to check the flag, the unique column can be squatted with a number that was never confirmed, and sign-in has to refuse unverified numbers.
 - *Write the number at the confirmation.* One column. The pending number lives in the code's metadata for five minutes and is gone if it is not confirmed.
 
 **Decision:** The second. The email change flow made the same choice for a new address.
+
 **Revisit if:** sign-up by phone is built and has to hold a number before any code is confirmed.
 
 ### Direct writes of a number are refused
+
 **Context:** With the choice above, a `Store.UpdateUser` that sets `phone_number` would put an unconfirmed number into a column every reader trusts.
+
 **Options considered:**
+
 - *Document that the flow has to be used.* Nothing to build. An application's profile update route breaks the rule without anyone noticing, which is the open issue with `email`.
 - *Refuse in the data handlers unless the write comes from the plugin.* The rule holds for every writer. The application needs a way to vouch for a number, and the handlers need to recognize the plugin's own writes.
 
 **Decision:** The second, with the note in `Values` as the recognition and `SetPhoneNumber` as the way in for the application. Removing a number is allowed directly: it grants nothing.
 
 ### Send and verify decide by the session
+
 **Context:** Adding a number and signing in by code are the same two steps for a client.
+
 **Options considered:**
+
 - *Four routes.* Each does one thing. A client has two pairs to wire for what a user sees as "enter the code".
 - *Two routes, with a `purpose` field in the body.* One pair. A client could ask for a sign-in code while signed in, or the reverse, and each combination needs an answer.
 - *Two routes, decided by the session on the request.* Nothing for the client to choose, and the purpose can't disagree with who is asking.
 
 **Decision:** The third, as requested for the routes' shape. The purpose is fixed when the code is issued, by its kind, so the two requests of a pair can't be mixed.
+
 **Revisit if:** a signed-in user needs a code for something else on these routes, such as re-authentication.
 
 ### Password reset by code is opt-in
+
 **Context:** A code by text message can reset a password, as a link by mail can.
+
 **Options considered:**
+
 - *Always on.* One option fewer. Every application's accounts become as strong as their owners' SIM cards, without anyone choosing that.
 - *On with `Options.PasswordReset`.* The application decides.
 
 **Decision:** The second. The reset is `emailpassword.SetPassword`, so it ends the sessions and sends the mail notice like a reset by link.
 
 ### Request bodies use `phone_number`
+
 **Context:** The plugins' body keys were camel case (`redirectURL`) and a user's keys column names (`email_verified`).
+
 **Options considered:**
+
 - *Camel case for the new keys (`phoneNumber`), like the other plugins.* No existing key changes. A user in a response would still carry `phone_number`, so one body would hold both styles for the same value.
 - *Snake case for the new keys only.* The plugins would then disagree with each other.
 - *Snake case for every body key.* One style. It renames `redirectURL`, which no client depended on yet.

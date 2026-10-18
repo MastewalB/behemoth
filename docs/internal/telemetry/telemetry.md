@@ -1,6 +1,6 @@
-## **Telemetry**
+# Telemetry
 
-This folder explains how behemoth reports what it does: log lines, audit events, metrics and trace spans. The four share one package, one configuration value and one set of names, and each has a document of its own.
+This folder explains how behemoth reports what it does: log lines, audit events, metrics, and trace spans. The four share one package, one configuration value and one set of names, and each has a document of its own.
 
 For how to configure and read them from an application, see [`../../api/telemetry.md`](../../api/telemetry.md). These documents describe the code behind that API.
 
@@ -23,7 +23,7 @@ The code lives in:
 
 ---
 
-# **The shape**
+## The shape
 
 Behemoth's part is thin. It defines four small interfaces and the names used through them, and decides where a line is written, an event recorded, a counter incremented and a span started. A backend does the rest.
 
@@ -41,7 +41,7 @@ This is the split the error taxonomy and the storage layer use. `errors/` define
 
 Every component receives the same `*telemetry.Telemetry`, built once by the application with `telemetry.New` and passed in `BootConfig.Telemetry`. Each field left out is a no-op, except audit, where `Boot` uses the database recorder.
 
-# **What each signal is for**
+## What each signal is for
 
 | Signal | Answers | Kept | May be dropped |
 | --- | --- | --- | --- |
@@ -52,7 +52,7 @@ Every component receives the same `*telemetry.Telemetry`, built once by the appl
 
 The same occurrence usually produces more than one. A wrong password is a Debug log line from the router, an `auth.signIn.failed` audit event, one `behemoth.auth.sign_in{outcome="failure"}`, and a `behemoth.request` span with status 400 that is not marked as failed.
 
-# **One rule in four places**
+## One rule in four places
 
 A refused request is not an error of the system. Each signal applies that the same way:
 
@@ -65,7 +65,7 @@ A refused request is not an error of the system. Each signal applies that the sa
 
 `telemetry.IsSystemFailure(err)` is the test the span uses. The router uses the mapped status (5xx) for its log level, which gives the same split for errors that reach it.
 
-# **How the signals are tied together**
+## How the signals are tied together
 
 | Identifier | Carried by | Set by |
 | --- | --- | --- |
@@ -76,13 +76,13 @@ A refused request is not an error of the system. Each signal applies that the sa
 
 A client quotes the request ID from the response header. That finds the log lines and audit events of the request, the line gives the trace ID, and the trace shows where the time went.
 
-# **Names are a contract**
+## Names are a contract
 
-Field keys, audit event types, metric names with their attributes, and span names are constants in `telemetry`. Dashboards, alerts and queries are built on them, so renaming one is a breaking change for applications even though no Go code breaks. They are listed for users in `docs/api/telemetry.md`.
+Field keys, audit event types, metric names with their attributes, and span names are constants in `telemetry`. Dashboards, alerts, and queries are built on them, so renaming one is a breaking change for applications even though no Go code breaks. They are listed for users in `docs/api/telemetry.md`.
 
 New call sites take their names from the constants or add one there. An attribute value has to come from a fixed set; see "Attributes are bounded" in [metrics.md](metrics.md).
 
-# **Seen working**
+## Seen working
 
 `examples/init` wires all four: text logs on stdout, the audit table, and OTLP export of traces and metrics when an endpoint is set (`telemetry.go` in the example). Run against PostgreSQL and Jaeger, one sign-up through the route produces this trace. The first span is gin's own tracing middleware; the rest are behemoth's.
 
