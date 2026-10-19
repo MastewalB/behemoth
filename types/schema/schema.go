@@ -5,7 +5,7 @@
 // It sits below the types package so PluginInitContext can carry a Registry.
 // It must never import github.com/MastewalB/behemoth/types — that would
 // reintroduce the cycle this package exists to break. Migration planning,
-// operations and running stay in migration/core.
+// operations and running stay in migration.
 package schema
 
 type ColumnType string

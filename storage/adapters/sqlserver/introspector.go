@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -24,7 +24,7 @@ import (
 // types, ...) comes back as text with an ambiguity, never as a guess at a
 // specific type. Text is the fallback because any value scanned as a Go
 // string fits it.
-func mapSQLServerType(typeName string, maxLength int) (ct schema.ColumnType, length int, ambiguity *core.ColumnAmbiguity) {
+func mapSQLServerType(typeName string, maxLength int) (ct schema.ColumnType, length int, ambiguity *migration.ColumnAmbiguity) {
 	switch strings.ToLower(typeName) {
 	case "nvarchar", "nchar":
 		if maxLength < 0 {
@@ -64,10 +64,10 @@ func mapSQLServerType(typeName string, maxLength int) (ct schema.ColumnType, len
 	case "image":
 		return schema.ColTypeBlob, 0, nil
 	}
-	return schema.ColTypeText, 0, &core.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized SQL Server type %q, defaulted to text; verify manually", typeName)}
+	return schema.ColTypeText, 0, &migration.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized SQL Server type %q, defaulted to text; verify manually", typeName)}
 }
 
-// NormalizeColumn implements [core.ColumnNormalizer]: col as Introspect
+// NormalizeColumn implements [migration.ColumnNormalizer]: col as Introspect
 // reports it once columnDefinition has created it. It replays every change
 // the DDL makes to a declaration, so it must change together with
 // columnDefinition, renderSQLServerType and renderDefaultExpr:
@@ -121,7 +121,7 @@ func (d *SQLServerDriver) NormalizeColumn(_ string, raw schema.Column) schema.Co
 	return col
 }
 
-// TableExists implements [core.SchemaIntrospector]. A view counts: Introspect
+// TableExists implements [migration.SchemaIntrospector]. A view counts: Introspect
 // reports it as an incompatible object rather than hiding it here.
 func (d *SQLServerDriver) TableExists(ctx context.Context, name string) (bool, error) {
 	_, exists, err := d.objectKind(ctx, d.resolver.Resolve(name))
@@ -130,7 +130,7 @@ func (d *SQLServerDriver) TableExists(ctx context.Context, name string) (bool, e
 
 // objectKind maps sys.objects.type to an ObjectKind. It backs the "table
 // found live as incompatible object" branch of RunIntrospection.
-func (d *SQLServerDriver) objectKind(ctx context.Context, physical string) (kind core.ObjectKind, exists bool, err error) {
+func (d *SQLServerDriver) objectKind(ctx context.Context, physical string) (kind migration.ObjectKind, exists bool, err error) {
 	var objType string
 	err = d.db.QueryRowContext(ctx, `SELECT RTRIM(type) FROM sys.objects WHERE schema_id = SCHEMA_ID() AND name = @p1`, physical).Scan(&objType)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -141,15 +141,15 @@ func (d *SQLServerDriver) objectKind(ctx context.Context, physical string) (kind
 	}
 	switch objType {
 	case "U":
-		return core.ObjectTable, true, nil
+		return migration.ObjectTable, true, nil
 	case "V":
-		return core.ObjectView, true, nil
+		return migration.ObjectView, true, nil
 	default:
-		return core.ObjectOther, true, nil
+		return migration.ObjectOther, true, nil
 	}
 }
 
-// Introspect implements [core.SchemaIntrospector]: a best-effort reverse
+// Introspect implements [migration.SchemaIntrospector]: a best-effort reverse
 // mapping of one live table into the canonical model.
 //
 // Column names are returned as their physical names: SchemaResolver maps
@@ -159,20 +159,20 @@ func (d *SQLServerDriver) objectKind(ctx context.Context, physical string) (kind
 // collations, included and descending index columns, check constraints, and a
 // foreign key's ON UPDATE action. Indexes the model can't express at all are
 // left out (see liveIndex.representable).
-func (d *SQLServerDriver) Introspect(ctx context.Context, name string) (core.IntrospectedTable, error) {
+func (d *SQLServerDriver) Introspect(ctx context.Context, name string) (migration.IntrospectedTable, error) {
 	physical := d.resolver.Resolve(name)
 
 	kind, exists, err := d.objectKind(ctx, physical)
 	if err != nil || !exists {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
-	if kind != core.ObjectTable {
-		return core.IntrospectedTable{Kind: kind, Exists: true}, nil // caller checks Kind before touching Schema
+	if kind != migration.ObjectTable {
+		return migration.IntrospectedTable{Kind: kind, Exists: true}, nil // caller checks Kind before touching Schema
 	}
 
 	live, err := d.readTable(ctx, d.db, physical)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 
 	var pkCols, uniqueCols []string
@@ -190,7 +190,7 @@ func (d *SQLServerDriver) Introspect(ctx context.Context, name string) (core.Int
 	}
 
 	var cols []schema.Column
-	var ambiguities []core.ColumnAmbiguity
+	var ambiguities []migration.ColumnAmbiguity
 	for _, c := range live.columns {
 		col, ambig := c.canonical(pkCols, uniqueCols)
 		if ambig != nil {
@@ -208,8 +208,8 @@ func (d *SQLServerDriver) Introspect(ctx context.Context, name string) (core.Int
 		})
 	}
 
-	return core.IntrospectedTable{
-		Kind:        core.ObjectTable,
+	return migration.IntrospectedTable{
+		Kind:        migration.ObjectTable,
 		Exists:      true,
 		Schema:      schema.Table{Name: name, PhysicalName: physical, Columns: cols, Indexes: indexes, ForeignKeys: fks},
 		Ambiguities: ambiguities,
@@ -290,10 +290,10 @@ func (d *SQLServerDriver) liveColumns(ctx context.Context, q adapters.Querier, t
 // canonical maps the column to the canonical model. pkCols and uniqueCols are
 // the table's primary key columns and the columns with a unique index of
 // their own.
-func (c liveColumn) canonical(pkCols, uniqueCols []string) (schema.Column, *core.ColumnAmbiguity) {
+func (c liveColumn) canonical(pkCols, uniqueCols []string) (schema.Column, *migration.ColumnAmbiguity) {
 	ct, length, ambig := mapSQLServerType(c.typeName, c.maxLength)
 	if ambig == nil && c.computed {
-		ambig = &core.ColumnAmbiguity{Reason: "computed column; the canonical model can't express it"}
+		ambig = &migration.ColumnAmbiguity{Reason: "computed column; the canonical model can't express it"}
 	}
 	isPK := slices.Contains(pkCols, c.name)
 	col := schema.Column{

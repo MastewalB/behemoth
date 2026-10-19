@@ -3,9 +3,9 @@
 //
 //   - PostgresAdapter implements behemoth.Database (application reads/writes).
 //   - PostgreSQLDriver implements the migration interfaces:
-//     core.SchemaDriver, core.MigrationRenderer and core.SchemaIntrospector.
-//   - MigrationBackend bundles both into the core.Backend that core.Generate,
-//     core.Migrate and the behemoth CLI take.
+//     migration.SchemaDriver, migration.MigrationRenderer and migration.SchemaIntrospector.
+//   - MigrationBackend bundles both into the migration.Backend that migration.Generate,
+//     migration.Migrate and the behemoth CLI take.
 //
 // Neither imports a database/sql driver: open the *sql.DB with lib/pq,
 // pgx/stdlib or any other PostgreSQL driver. Both take the same

@@ -12,7 +12,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -41,14 +41,14 @@ func (l liveTables) TableExists(_ context.Context, name string) (bool, error) {
 	return ok, nil
 }
 
-func (l liveTables) Introspect(_ context.Context, name string) (core.IntrospectedTable, error) {
+func (l liveTables) Introspect(_ context.Context, name string) (migration.IntrospectedTable, error) {
 	t, ok := l[name]
-	return core.IntrospectedTable{Schema: t, Kind: core.ObjectTable, Exists: ok}, nil
+	return migration.IntrospectedTable{Schema: t, Kind: migration.ObjectTable, Exists: ok}, nil
 }
 
 type scriptRenderer struct{}
 
-func (scriptRenderer) RenderMigration(context.Context, core.Migration) (string, error) {
+func (scriptRenderer) RenderMigration(context.Context, migration.Migration) (string, error) {
 	return "-- script\n", nil
 }
 func (scriptRenderer) FileExtension() string { return ".sql" }
@@ -57,9 +57,9 @@ func (scriptRenderer) FileExtension() string { return ".sql" }
 // command line is given.
 type fixture struct {
 	dir     string // the migrations folder
-	path    core.MigrationPath
+	path    migration.MigrationPath
 	live    liveTables
-	ledger  []core.MigrationLedgerEntry
+	ledger  []migration.MigrationLedgerEntry
 	version string // the snapshot's, set by the last applied migration
 	tables  map[string]schema.Table
 	opened  int // calls to the BackendFunc
@@ -73,17 +73,17 @@ func (f *fixture) prepare() (*bmth.PreparedApp, error) {
 		return nil, f.prepErr
 	}
 	return bmth.Prepare(nil, bmth.PrepareConfig{
-		Migration: core.MigrationConfig{FolderPath: f.dir, Path: f.path},
+		Migration: migration.MigrationConfig{FolderPath: f.dir, Path: f.path},
 		Schema:    declareNotes,
 	})
 }
 
-func (f *fixture) backend(context.Context, *bmth.PreparedApp) (core.Backend, error) {
+func (f *fixture) backend(context.Context, *bmth.PreparedApp) (migration.Backend, error) {
 	f.opened++
 	if f.openErr != nil {
-		return core.Backend{}, f.openErr
+		return migration.Backend{}, f.openErr
 	}
-	return core.Backend{
+	return migration.Backend{
 		Introspector: fixtureIntrospector{f},
 		Renderer:     scriptRenderer{},
 		Driver:       fixtureDriver{f},
@@ -97,13 +97,13 @@ func (f *fixture) backend(context.Context, *bmth.PreparedApp) (core.Backend, err
 type fixtureIntrospector struct{ f *fixture }
 
 func (i fixtureIntrospector) TableExists(ctx context.Context, name string) (bool, error) {
-	if name == core.LedgerCanonicalName {
+	if name == migration.LedgerCanonicalName {
 		return len(i.f.ledger) > 0, nil
 	}
 	return i.f.live.TableExists(ctx, name)
 }
 
-func (i fixtureIntrospector) Introspect(ctx context.Context, name string) (core.IntrospectedTable, error) {
+func (i fixtureIntrospector) Introspect(ctx context.Context, name string) (migration.IntrospectedTable, error) {
 	return i.f.live.Introspect(ctx, name)
 }
 
@@ -111,20 +111,20 @@ func (i fixtureIntrospector) Introspect(ctx context.Context, name string) (core.
 // projected for the snapshot as the live ones.
 type fixtureDriver struct{ f *fixture }
 
-func (d fixtureDriver) ApplyMigration(_ context.Context, req core.MigrationRequest) error {
+func (d fixtureDriver) ApplyMigration(_ context.Context, req migration.MigrationRequest) error {
 	for name, table := range req.SnapshotUpdate.Tables {
 		d.f.live[name] = table
 	}
 	return d.RecordBaseline(context.Background(), req)
 }
 
-func (d fixtureDriver) RecordBaseline(_ context.Context, req core.MigrationRequest) error {
+func (d fixtureDriver) RecordBaseline(_ context.Context, req migration.MigrationRequest) error {
 	d.f.ledger = append(d.f.ledger, req.LedgerEntry)
 	d.f.version, d.f.tables = req.SnapshotUpdate.Version, req.SnapshotUpdate.Tables
 	return nil
 }
 
-func (fixtureDriver) AtomicityLevel() core.AtomicityLevel { return core.AtomicityFull }
+func (fixtureDriver) AtomicityLevel() migration.AtomicityLevel { return migration.AtomicityFull }
 
 // fixtureLedger is what the runner reads: the ledger and the snapshot. It
 // never writes through the database, so the rest is left to the nil
@@ -147,7 +147,7 @@ func (l fixtureLedger) FindOne(context.Context, behemoth.Model, clause.Expressio
 	if l.f.version == "" {
 		return nil, errs.NewNotFound("fixtureLedger.FindOne", "schema_snapshot", nil)
 	}
-	return &core.SchemaSnapshot{Version: l.f.version, Tables: l.f.tables}, nil
+	return &migration.SchemaSnapshot{Version: l.f.version, Tables: l.f.tables}, nil
 }
 
 // run runs the command line against f and returns its exit code and output.
@@ -274,7 +274,7 @@ func TestGenerateSaysWhenAnswersWereRead(t *testing.T) {
 // applies what generate wrote.
 func TestGenerateThenMigrateOnTheManagedPath(t *testing.T) {
 	f := newFixture(t)
-	f.path = core.PathManaged
+	f.path = migration.PathManaged
 
 	code, stdout, stderr := f.run("generate", "-confirm")
 	if code != ExitOK || !strings.Contains(stdout, "create table notes") {
@@ -340,18 +340,18 @@ func TestGenerateReportsFailures(t *testing.T) {
 }
 
 func TestDescribe(t *testing.T) {
-	for want, op := range map[string]core.SchemaOperation{
-		"create table users":             {Kind: core.OpCreateTable, Table: "users"},
-		"add column users.plan":          {Kind: core.OpAddColumn, Table: "users", Column: &schema.Column{Name: "plan"}},
-		"alter column users.name":        {Kind: core.OpAlterColumn, Table: "users", Column: &schema.Column{Name: "name"}},
-		"drop column users.plan":         {Kind: core.OpDropColumn, Table: "users", ColumnName: "plan"},
-		"rename column users.a to b":     {Kind: core.OpRenameColumn, Table: "users", ColumnName: "a", NewColumnName: "b"},
-		"add index idx on users":         {Kind: core.OpAddIndex, Table: "users", Index: &schema.Index{Name: "idx"}},
-		"drop index idx on users":        {Kind: core.OpDropIndex, Table: "users", IndexName: "idx"},
-		"add foreign key fk on sessions": {Kind: core.OpAddForeignKey, Table: "sessions", ForeignKey: &schema.ForeignKey{Name: "fk"}},
-		"drop foreign key fk on users":   {Kind: core.OpDropForeignKey, Table: "users", ForeignKeyName: "fk"},
-		"drop table users":               {Kind: core.OpDropTable, Table: "users"},
-		"add_index users":                {Kind: core.OpAddIndex, Table: "users"}, // a malformed operation still gets a line
+	for want, op := range map[string]migration.SchemaOperation{
+		"create table users":             {Kind: migration.OpCreateTable, Table: "users"},
+		"add column users.plan":          {Kind: migration.OpAddColumn, Table: "users", Column: &schema.Column{Name: "plan"}},
+		"alter column users.name":        {Kind: migration.OpAlterColumn, Table: "users", Column: &schema.Column{Name: "name"}},
+		"drop column users.plan":         {Kind: migration.OpDropColumn, Table: "users", ColumnName: "plan"},
+		"rename column users.a to b":     {Kind: migration.OpRenameColumn, Table: "users", ColumnName: "a", NewColumnName: "b"},
+		"add index idx on users":         {Kind: migration.OpAddIndex, Table: "users", Index: &schema.Index{Name: "idx"}},
+		"drop index idx on users":        {Kind: migration.OpDropIndex, Table: "users", IndexName: "idx"},
+		"add foreign key fk on sessions": {Kind: migration.OpAddForeignKey, Table: "sessions", ForeignKey: &schema.ForeignKey{Name: "fk"}},
+		"drop foreign key fk on users":   {Kind: migration.OpDropForeignKey, Table: "users", ForeignKeyName: "fk"},
+		"drop table users":               {Kind: migration.OpDropTable, Table: "users"},
+		"add_index users":                {Kind: migration.OpAddIndex, Table: "users"}, // a malformed operation still gets a line
 	} {
 		if got := describe(op); got != want {
 			t.Errorf("describe(%s) = %q, want %q", op.Kind, got, want)

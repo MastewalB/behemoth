@@ -1,7 +1,7 @@
 package migrations
 
 import (
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -14,7 +14,7 @@ import (
 // did for the indexes of a new table: the planner left them on the table,
 // and no driver creates them from there.
 func (s *DriverTestSuite) TestPlannedTablesGetTheirIndexes() {
-	introspector, ok := s.driver.(core.SchemaIntrospector)
+	introspector, ok := s.driver.(migration.SchemaIntrospector)
 	if !ok {
 		s.T().Skip("the driver does not introspect")
 	}
@@ -32,20 +32,20 @@ func (s *DriverTestSuite) TestPlannedTablesGetTheirIndexes() {
 	}
 	s.Require().NoError(registry.Freeze())
 
-	plan := func() []core.SchemaOperation {
-		report, err := core.RunIntrospection(s.ctx, registry, introspector, false)
+	plan := func() []migration.SchemaOperation {
+		report, err := migration.RunIntrospection(s.ctx, registry, introspector, false)
 		s.Require().NoError(err)
-		planned, issues, err := core.BuildPlan(report, registry)
+		planned, issues, err := migration.BuildPlan(report, registry)
 		s.Require().NoError(err)
 		s.Require().Empty(issues)
-		ops := make([]core.SchemaOperation, len(planned.Operations))
+		ops := make([]migration.SchemaOperation, len(planned.Operations))
 		for i, p := range planned.Operations {
 			ops[i] = p.Operation
 		}
 		return ops
 	}
 
-	m, err := (&core.DefaultMigrationGenerator{}).Generate(&core.ResolvedOperationSet{Operations: plan()}, "")
+	m, err := (&migration.DefaultMigrationGenerator{}).Generate(&migration.ResolvedOperationSet{Operations: plan()}, "")
 	s.Require().NoError(err)
 	s.Require().NoError(s.driver.ApplyMigration(s.ctx, request(*m, nil)))
 

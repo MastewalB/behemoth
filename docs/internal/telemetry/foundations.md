@@ -18,7 +18,7 @@ The code lives in:
 
 ## Place among other packages
 
-`telemetry` imports the root package (for `behemoth.M` and `behemoth.Model`) and `errors` (for `DomainError`). It imports nothing else from behemoth, so every other package can import it: `types`, `store`, `crypto`, `transport`, `migration/core`, and the adapter modules.
+`telemetry` imports the root package (for `behemoth.M` and `behemoth.Model`) and `errs` (for `DomainError`). It imports nothing else from behemoth, so every other package can import it: `types`, `store`, `crypto`, `transport`, `migration`, and the adapter modules.
 
 It relates to the error taxonomy in two ways. It follows the same split: behemoth owns interfaces and names, something external does the work. And `ErrorFields` is the bridge between them, turning a `DomainError` into log fields.
 

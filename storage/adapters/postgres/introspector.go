@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -43,7 +43,7 @@ var pgTypeMapping = map[string]schema.ColumnType{
 // the fallback because it's the loosest, least lossy landing spot (a value
 // scanned as a Go string is always representable), not because it's presumed
 // correct.
-func mapPgType(dataType, udtName string) (schema.ColumnType, *core.ColumnAmbiguity) {
+func mapPgType(dataType, udtName string) (schema.ColumnType, *migration.ColumnAmbiguity) {
 	if ct, ok := pgTypeMapping[dataType]; ok {
 		return ct, nil
 	}
@@ -51,10 +51,10 @@ func mapPgType(dataType, udtName string) (schema.ColumnType, *core.ColumnAmbigui
 	if dataType == "USER-DEFINED" || dataType == "ARRAY" {
 		native = udtName // e.g. an enum's name, or "_int4" for integer[]
 	}
-	return schema.ColTypeText, &core.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized Postgres type %q — defaulted to text; verify manually", native)}
+	return schema.ColTypeText, &migration.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized Postgres type %q — defaulted to text; verify manually", native)}
 }
 
-// NormalizeColumn implements [core.ColumnNormalizer]: col as Introspect
+// NormalizeColumn implements [migration.ColumnNormalizer]: col as Introspect
 // reports it once renderColumnDefinition has created it. It replays every
 // change the DDL makes to a declaration, so it must change together with
 // renderColumnDefinition and renderPgType:
@@ -94,7 +94,7 @@ func (d *PostgreSQLDriver) NormalizeColumn(_ string, col schema.Column) schema.C
 	return col
 }
 
-// TableExists implements [core.SchemaIntrospector]. Any relation counts —
+// TableExists implements [migration.SchemaIntrospector]. Any relation counts —
 // a view or sequence of the same name is reported by Introspect as an
 // incompatible object rather than hidden here.
 func (d *PostgreSQLDriver) TableExists(ctx context.Context, name string) (bool, error) {
@@ -113,7 +113,7 @@ func (d *PostgreSQLDriver) TableExists(ctx context.Context, name string) (bool, 
 
 // relKind maps pg_class.relkind to ObjectKind — this is what backs the
 // "table found live as incompatible object" branch of RunIntrospection.
-func (d *PostgreSQLDriver) relKind(ctx context.Context, physical string) (kind core.ObjectKind, exists bool, err error) {
+func (d *PostgreSQLDriver) relKind(ctx context.Context, physical string) (kind migration.ObjectKind, exists bool, err error) {
 	var relkind string
 	err = d.db.QueryRowContext(ctx, `
 		SELECT c.relkind FROM pg_catalog.pg_class c
@@ -127,62 +127,62 @@ func (d *PostgreSQLDriver) relKind(ctx context.Context, physical string) (kind c
 	}
 	switch relkind {
 	case "r", "p": // ordinary table, or partitioned-table parent
-		return core.ObjectTable, true, nil
+		return migration.ObjectTable, true, nil
 	case "v", "m":
-		return core.ObjectView, true, nil
+		return migration.ObjectView, true, nil
 	default:
-		return core.ObjectOther, true, nil
+		return migration.ObjectOther, true, nil
 	}
 }
 
-// Introspect implements [core.SchemaIntrospector]: a best-effort reverse
+// Introspect implements [migration.SchemaIntrospector]: a best-effort reverse
 // mapping of one live table into the canonical model.
 //
 // Column names are returned as their physical names: SchemaResolver maps
 // canonical -> physical only, so a column whose physical name differs from
 // its canonical one can't be mapped back here.
-func (d *PostgreSQLDriver) Introspect(ctx context.Context, name string) (core.IntrospectedTable, error) {
+func (d *PostgreSQLDriver) Introspect(ctx context.Context, name string) (migration.IntrospectedTable, error) {
 	physical := d.resolver.Resolve(name)
 
 	kind, exists, err := d.relKind(ctx, physical)
 	if err != nil || !exists {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
-	if kind != core.ObjectTable {
-		return core.IntrospectedTable{Kind: kind, Exists: true}, nil // caller checks Kind before touching Schema
+	if kind != migration.ObjectTable {
+		return migration.IntrospectedTable{Kind: kind, Exists: true}, nil // caller checks Kind before touching Schema
 	}
 
 	pkCols, err := d.primaryKeyColumns(ctx, physical)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 	uniqueSingle, uniqueComposite, err := d.uniqueConstraints(ctx, physical)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 	cols, ambiguities, err := d.introspectColumns(ctx, physical, pkCols, uniqueSingle)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 	indexes, err := d.introspectIndexes(ctx, physical)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 	indexes = append(indexes, uniqueComposite...) // multi-column UNIQUE constraints are representable as Index{Unique: true}
 	fks, err := d.introspectForeignKeys(ctx, physical)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 
-	return core.IntrospectedTable{
-		Kind:        core.ObjectTable,
+	return migration.IntrospectedTable{
+		Kind:        migration.ObjectTable,
 		Exists:      true,
 		Schema:      schema.Table{Name: name, PhysicalName: physical, Columns: cols, Indexes: indexes, ForeignKeys: fks},
 		Ambiguities: ambiguities,
 	}, nil
 }
 
-func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical string, pkCols, uniqueCols []string) ([]schema.Column, []core.ColumnAmbiguity, error) {
+func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical string, pkCols, uniqueCols []string) ([]schema.Column, []migration.ColumnAmbiguity, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT column_name, data_type, udt_name, character_maximum_length, is_nullable, column_default, is_identity
 		FROM information_schema.columns
@@ -195,7 +195,7 @@ func (d *PostgreSQLDriver) introspectColumns(ctx context.Context, physical strin
 
 	pkSet, uniqueSet := toSet(pkCols), toSet(uniqueCols)
 	var cols []schema.Column
-	var ambiguities []core.ColumnAmbiguity
+	var ambiguities []migration.ColumnAmbiguity
 
 	for rows.Next() {
 		var name, dataType, udtName, isNullable, isIdentity string

@@ -3,7 +3,7 @@
 //
 //   - SQLiteAdapter implements behemoth.Database (application reads/writes).
 //   - SQLiteDriver implements the migration interfaces:
-//     core.SchemaDriver, core.MigrationRenderer and core.SchemaIntrospector.
+//     migration.SchemaDriver, migration.MigrationRenderer and migration.SchemaIntrospector.
 //
 // Both take the same behemoth.SchemaResolver, so application queries and
 // migrations agree on physical table and column names.

@@ -12,7 +12,7 @@ The code lives in:
 - `types/init/init.go`: `DefaultDispatcher.chainSpan`, `handlerSpan`, the span in `DefaultRateLimiter.evaluate`
 - `transport/session.go`, `transport/token.go`: the span wrappers around `Create`, `Get`, `Revoke`, `Issue`, `Consume`
 - `plugins/emailpassword`: `hashPassword`, the verify span in `signInBody`
-- `migration/core/runner.go`: `applyTraced`
+- `migration/runner.go`: `applyTraced`
 - `telemetry/adapters/otel/`: the OpenTelemetry backend, in its own module
 - `telemetry/telemetrytest`: the recording tracer
 

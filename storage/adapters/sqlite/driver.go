@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -16,8 +16,8 @@ import (
 // DriverName is the key used for per-database Column.Overrides lookups.
 const DriverName = "sqlite"
 
-// SQLiteDriver implements [core.SchemaDriver], [core.MigrationRenderer]
-// and [core.SchemaIntrospector] for SQLite.
+// SQLiteDriver implements [migration.SchemaDriver], [migration.MigrationRenderer]
+// and [migration.SchemaIntrospector] for SQLite.
 //
 // The driver never imports a database/sql driver itself: the caller picks one
 // (mattn/go-sqlite3, modernc.org/sqlite, ...) and hands over an opened *sql.DB.
@@ -29,20 +29,20 @@ const DriverName = "sqlite"
 // documented at https://www.sqlite.org/lang_altertable.html#otheralter; see rebuild.go.
 type SQLiteDriver struct {
 	db       *sql.DB
-	resolver core.SchemaResolver
+	resolver migration.SchemaResolver
 }
 
 // NewSQLiteDriver returns a driver bound to db. A nil resolver maps every
 // canonical table/column name to itself.
-func NewSQLiteDriver(db *sql.DB, resolver core.SchemaResolver) *SQLiteDriver {
+func NewSQLiteDriver(db *sql.DB, resolver migration.SchemaResolver) *SQLiteDriver {
 	return &SQLiteDriver{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
 }
 
 var (
-	_ core.SchemaDriver       = (*SQLiteDriver)(nil)
-	_ core.MigrationRenderer  = (*SQLiteDriver)(nil)
-	_ core.SchemaIntrospector = (*SQLiteDriver)(nil)
-	_ core.ColumnNormalizer   = (*SQLiteDriver)(nil)
+	_ migration.SchemaDriver       = (*SQLiteDriver)(nil)
+	_ migration.MigrationRenderer  = (*SQLiteDriver)(nil)
+	_ migration.SchemaIntrospector = (*SQLiteDriver)(nil)
+	_ migration.ColumnNormalizer   = (*SQLiteDriver)(nil)
 )
 
 // execQuerier is satisfied by *sql.Tx — every DDL helper runs inside the
@@ -53,12 +53,12 @@ type execQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// AtomicityLevel implements [core.SchemaDriver]. SQLite DDL is fully transactional.
-func (d *SQLiteDriver) AtomicityLevel() core.AtomicityLevel { return core.AtomicityFull }
+// AtomicityLevel implements [migration.SchemaDriver]. SQLite DDL is fully transactional.
+func (d *SQLiteDriver) AtomicityLevel() migration.AtomicityLevel { return migration.AtomicityFull }
 
-// ApplyMigration implements [core.SchemaDriver]: every Up operation, the
+// ApplyMigration implements [migration.SchemaDriver]: every Up operation, the
 // ledger row and the snapshot upsert commit or roll back together.
-func (d *SQLiteDriver) ApplyMigration(ctx context.Context, req core.MigrationRequest) error {
+func (d *SQLiteDriver) ApplyMigration(ctx context.Context, req migration.MigrationRequest) error {
 	return d.inMigrationTx(ctx, "SQLiteDriver.ApplyMigration", false, func(tx *sql.Tx) error {
 		for _, op := range req.Migration.Up {
 			if err := d.applyOperation(ctx, tx, op); err != nil {
@@ -69,9 +69,9 @@ func (d *SQLiteDriver) ApplyMigration(ctx context.Context, req core.MigrationReq
 	})
 }
 
-// RecordBaseline implements [core.SchemaDriver]: the same ledger+snapshot
+// RecordBaseline implements [migration.SchemaDriver]: the same ledger+snapshot
 // write as ApplyMigration, with no DDL executed.
-func (d *SQLiteDriver) RecordBaseline(ctx context.Context, req core.MigrationRequest) error {
+func (d *SQLiteDriver) RecordBaseline(ctx context.Context, req migration.MigrationRequest) error {
 	return d.inMigrationTx(ctx, "SQLiteDriver.RecordBaseline", false, func(tx *sql.Tx) error {
 		return d.recordTx(ctx, tx, req)
 	})
@@ -164,7 +164,7 @@ func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
 
 // ---- Ledger & snapshot ----
 
-func (d *SQLiteDriver) recordTx(ctx context.Context, tx *sql.Tx, req core.MigrationRequest) error {
+func (d *SQLiteDriver) recordTx(ctx context.Context, tx *sql.Tx, req migration.MigrationRequest) error {
 	if err := d.ensureBookkeepingTables(ctx, tx, req.LedgerTable, req.SnapshotTable); err != nil {
 		return err
 	}
@@ -193,7 +193,7 @@ func (d *SQLiteDriver) ensureBookkeepingTables(ctx context.Context, tx *sql.Tx, 
 	return nil
 }
 
-func (d *SQLiteDriver) insertLedger(ctx context.Context, tx *sql.Tx, table string, entry core.MigrationLedgerEntry) error {
+func (d *SQLiteDriver) insertLedger(ctx context.Context, tx *sql.Tx, table string, entry migration.MigrationLedgerEntry) error {
 	query := fmt.Sprintf("INSERT INTO %s (id, applied_at) VALUES (?, ?)", quoteIdent(table))
 	if _, err := tx.ExecContext(ctx, query, entry.ID, entry.AppliedAt.UTC()); err != nil {
 		return errs.NewMigrationError("SQLiteDriver.insertLedger", errs.CodeMigrationExecFailed, err)
@@ -201,7 +201,7 @@ func (d *SQLiteDriver) insertLedger(ctx context.Context, tx *sql.Tx, table strin
 	return nil
 }
 
-func (d *SQLiteDriver) upsertSnapshot(ctx context.Context, tx *sql.Tx, table string, snap core.SchemaSnapshot) error {
+func (d *SQLiteDriver) upsertSnapshot(ctx context.Context, tx *sql.Tx, table string, snap migration.SchemaSnapshot) error {
 	data, err := json.Marshal(snap.Tables)
 	if err != nil {
 		return errs.NewMigrationError("SQLiteDriver.upsertSnapshot", errs.CodeMigrationMarshalFailed, err)
@@ -218,46 +218,46 @@ func (d *SQLiteDriver) upsertSnapshot(ctx context.Context, tx *sql.Tx, table str
 
 // applyOperation is the one switch over op.Kind. A missing payload is an
 // Internal error, never a silent no-op.
-func (d *SQLiteDriver) applyOperation(ctx context.Context, tx execQuerier, op core.SchemaOperation) error {
+func (d *SQLiteDriver) applyOperation(ctx context.Context, tx execQuerier, op migration.SchemaOperation) error {
 	missing := func(field string) error {
 		return errs.NewInternalError("SQLiteDriver.applyOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
 	}
 
 	switch op.Kind {
-	case core.OpCreateTable:
+	case migration.OpCreateTable:
 		if op.NewTable == nil {
 			return missing("NewTable")
 		}
 		return d.createTable(ctx, tx, *op.NewTable)
-	case core.OpDropTable:
+	case migration.OpDropTable:
 		return d.dropTable(ctx, tx, op.Table)
-	case core.OpAddColumn:
+	case migration.OpAddColumn:
 		if op.Column == nil {
 			return missing("Column")
 		}
 		return d.addColumn(ctx, tx, op.Table, *op.Column)
-	case core.OpDropColumn:
+	case migration.OpDropColumn:
 		return d.dropColumn(ctx, tx, op.Table, op.ColumnName)
-	case core.OpRenameColumn:
+	case migration.OpRenameColumn:
 		return d.renameColumn(ctx, tx, op.Table, op.ColumnName, op.NewColumnName)
-	case core.OpAlterColumn:
+	case migration.OpAlterColumn:
 		if op.Column == nil {
 			return missing("Column")
 		}
 		return d.alterColumn(ctx, tx, op.Table, *op.Column)
-	case core.OpAddIndex:
+	case migration.OpAddIndex:
 		if op.Index == nil {
 			return missing("Index")
 		}
 		return d.addIndex(ctx, tx, op.Table, *op.Index)
-	case core.OpDropIndex:
+	case migration.OpDropIndex:
 		return d.dropIndex(ctx, tx, op.IndexName)
-	case core.OpAddForeignKey:
+	case migration.OpAddForeignKey:
 		if op.ForeignKey == nil {
 			return missing("ForeignKey")
 		}
 		return d.addForeignKey(ctx, tx, op.Table, *op.ForeignKey)
-	case core.OpDropForeignKey:
+	case migration.OpDropForeignKey:
 		return d.dropForeignKey(ctx, tx, op.Table, op.ForeignKeyName)
 	default:
 		return errs.NewInternalError("SQLiteDriver.applyOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))

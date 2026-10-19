@@ -8,7 +8,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/tests/testutils"
@@ -19,18 +19,18 @@ import (
 
 func TestLedgerEntrySerializable(t *testing.T) {
 	applied := time.Date(2026, 9, 30, 12, 30, 45, 123456789, time.UTC)
-	entry := &core.MigrationLedgerEntry{ID: "0001_init", AppliedAt: applied}
+	entry := &migration.MigrationLedgerEntry{ID: "0001_init", AppliedAt: applied}
 
 	m, err := entry.ToMap()
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"id": "0001_init", "applied_at": applied}, m)
 
-	var back core.MigrationLedgerEntry
+	var back migration.MigrationLedgerEntry
 	require.NoError(t, back.FromMap(m))
 	assert.Equal(t, *entry, back)
 
 	// Every column is present on a zero value: adapters build their column list from it.
-	zero, err := (&core.MigrationLedgerEntry{}).ToMap()
+	zero, err := (&migration.MigrationLedgerEntry{}).ToMap()
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"id", "applied_at"}, keys(zero))
 
@@ -41,7 +41,7 @@ func TestLedgerEntrySerializable(t *testing.T) {
 		"bytes":          []byte("2026-09-30T12:30:45.123456789Z"),
 		"sqlite no zone": "2026-09-30 12:30:45.123456789",
 	} {
-		var e core.MigrationLedgerEntry
+		var e migration.MigrationLedgerEntry
 		require.NoError(t, e.FromMap(map[string]any{"id": []byte("0001_init"), "applied_at": raw}), name)
 		assert.True(t, applied.Equal(e.AppliedAt), "%s: got %v", name, e.AppliedAt)
 		assert.Equal(t, "0001_init", e.ID)
@@ -53,27 +53,27 @@ func TestLedgerEntrySerializable(t *testing.T) {
 		"no timestamp":  {"id": "0001"},
 		"non-text id":   {"id": 42, "applied_at": applied},
 	} {
-		err := (&core.MigrationLedgerEntry{}).FromMap(bad)
+		err := (&migration.MigrationLedgerEntry{}).FromMap(bad)
 		assert.True(t, errs.IsCode(err, errs.CodeMigrationInvalidLedgerEntry), "%s: %v", name, err)
 	}
 
-	assert.Equal(t, core.LedgerCanonicalName, entry.SchemaName())
+	assert.Equal(t, migration.LedgerCanonicalName, entry.SchemaName())
 	assert.Equal(t, "id", entry.PrimaryKeyName())
 	assert.Equal(t, "0001_init", entry.PrimaryKeyField())
-	assert.IsType(t, &core.MigrationLedgerEntry{}, entry.New())
+	assert.IsType(t, &migration.MigrationLedgerEntry{}, entry.New())
 }
 
 func TestSchemaSnapshotSerializable(t *testing.T) {
 	users := usersTable()
 	users.Columns[0].Overrides = map[string]schema.ColumnOverride{"postgres": {Default: "now()"}}
-	snap := &core.SchemaSnapshot{Version: "0002_posts", Tables: map[string]schema.Table{"users": users, "posts": postsTable()}}
+	snap := &migration.SchemaSnapshot{Version: "0002_posts", Tables: map[string]schema.Table{"users": users, "posts": postsTable()}}
 
 	m, err := snap.ToMap()
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"id", "version", "tables"}, keys(m))
 	assert.IsType(t, "", m["tables"], "tables is JSON text")
 
-	var back core.SchemaSnapshot
+	var back migration.SchemaSnapshot
 	require.NoError(t, back.FromMap(m))
 	assert.Equal(t, snap.Version, back.Version)
 	require.Len(t, back.Tables, 2)
@@ -82,20 +82,20 @@ func TestSchemaSnapshotSerializable(t *testing.T) {
 	assert.Equal(t, "active", back.Tables["users"].Columns[3].Default)
 
 	// []byte (e.g. JSONB via lib/pq) and already-decoded documents.
-	var fromBytes core.SchemaSnapshot
+	var fromBytes migration.SchemaSnapshot
 	require.NoError(t, fromBytes.FromMap(map[string]any{"version": []byte("v"), "tables": []byte(m["tables"].(string))}))
 	assert.Equal(t, back.Tables, fromBytes.Tables)
-	var fromDoc core.SchemaSnapshot
+	var fromDoc migration.SchemaSnapshot
 	require.NoError(t, fromDoc.FromMap(map[string]any{"version": "v", "tables": map[string]any{
 		"users": map[string]any{"Name": "users", "Columns": []any{map[string]any{"Name": "id", "Type": "int", "PrimaryKey": true}}},
 	}}))
 	assert.Equal(t, schema.ColTypeInteger, fromDoc.Tables["users"].Columns[0].Type)
 
 	// A zero value still lists every column, with "{}" rather than "null".
-	zero, err := (&core.SchemaSnapshot{}).ToMap()
+	zero, err := (&migration.SchemaSnapshot{}).ToMap()
 	require.NoError(t, err)
 	assert.Equal(t, "{}", zero["tables"])
-	var empty core.SchemaSnapshot
+	var empty migration.SchemaSnapshot
 	require.NoError(t, empty.FromMap(map[string]any{"version": "", "tables": "null"}))
 	assert.NotNil(t, empty.Tables)
 
@@ -105,14 +105,14 @@ func TestSchemaSnapshotSerializable(t *testing.T) {
 		"corrupt json":   {"version": "v", "tables": "{not json"},
 		"wrong shape":    {"version": "v", "tables": "[1, 2]"},
 	} {
-		err := (&core.SchemaSnapshot{}).FromMap(bad)
+		err := (&migration.SchemaSnapshot{}).FromMap(bad)
 		assert.True(t, errs.IsCode(err, errs.CodeMigrationInvalidSnapshot), "%s: %v", name, err)
 	}
 
-	assert.Equal(t, core.SnapshotCanonicalName, snap.SchemaName())
+	assert.Equal(t, migration.SnapshotCanonicalName, snap.SchemaName())
 	assert.Equal(t, "id", snap.PrimaryKeyName())
 	assert.Equal(t, 1, snap.PrimaryKeyField())
-	assert.IsType(t, &core.SchemaSnapshot{}, snap.New())
+	assert.IsType(t, &migration.SchemaSnapshot{}, snap.New())
 }
 
 func keys(m map[string]any) []string {
@@ -127,43 +127,43 @@ func keys(m map[string]any) []string {
 // behemoth.Database adapter reads them back through the models — the path
 // MigrationRunner.Pending / LoadSnapshot take. Bookkeeping tables are given
 // their canonical names here, since adapters address tables by SchemaName().
-func readBackThroughAdapter(t *testing.T, driver core.SchemaDriver, database behemoth.Database) {
+func readBackThroughAdapter(t *testing.T, driver migration.SchemaDriver, database behemoth.Database) {
 	ctx := context.Background()
 	users := usersTable()
 	for i, id := range []string{"0001_users", "0002_posts"} {
 		tables := map[string]schema.Table{"users": users}
-		up := []core.SchemaOperation{createTableOp(users)}
+		up := []migration.SchemaOperation{createTableOp(users)}
 		if i == 1 {
 			tables["posts"] = postsTable()
-			up = []core.SchemaOperation{createTableOp(postsTable())}
+			up = []migration.SchemaOperation{createTableOp(postsTable())}
 		}
-		require.NoError(t, driver.ApplyMigration(ctx, core.MigrationRequest{
-			Migration:      core.Migration{ID: id, Up: up},
-			LedgerEntry:    core.MigrationLedgerEntry{ID: id, AppliedAt: time.Now()},
-			SnapshotUpdate: core.SchemaSnapshot{Version: id, Tables: tables},
-			LedgerTable:    core.LedgerCanonicalName,
-			SnapshotTable:  core.SnapshotCanonicalName,
+		require.NoError(t, driver.ApplyMigration(ctx, migration.MigrationRequest{
+			Migration:      migration.Migration{ID: id, Up: up},
+			LedgerEntry:    migration.MigrationLedgerEntry{ID: id, AppliedAt: time.Now()},
+			SnapshotUpdate: migration.SchemaSnapshot{Version: id, Tables: tables},
+			LedgerTable:    migration.LedgerCanonicalName,
+			SnapshotTable:  migration.SnapshotCanonicalName,
 		}))
 	}
 
-	found, err := database.FindMany(ctx, &core.MigrationLedgerEntry{}, clause.Expression{}, nil)
+	found, err := database.FindMany(ctx, &migration.MigrationLedgerEntry{}, clause.Expression{}, nil)
 	require.NoError(t, err)
 	ids := map[string]bool{}
 	for _, f := range found {
-		e := f.(*core.MigrationLedgerEntry)
+		e := f.(*migration.MigrationLedgerEntry)
 		ids[e.ID] = true
 		assert.WithinDuration(t, time.Now(), e.AppliedAt, time.Minute, e.ID)
 	}
 	assert.Equal(t, map[string]bool{"0001_users": true, "0002_posts": true}, ids)
 
 	// Selected by primary key, as MigrationRunner.LoadSnapshot does.
-	snapModel := &core.SchemaSnapshot{}
+	snapModel := &migration.SchemaSnapshot{}
 	one, err := database.FindOne(ctx, snapModel, clause.Expression{
 		Logic:      clause.OpAnd,
 		Conditions: []clause.Condition{{Field: snapModel.PrimaryKeyName(), Operator: clause.OpEqual, Value: snapModel.PrimaryKeyField()}},
 	})
 	require.NoError(t, err)
-	snap := one.(*core.SchemaSnapshot)
+	snap := one.(*migration.SchemaSnapshot)
 	assert.Equal(t, "0002_posts", snap.Version)
 	require.Len(t, snap.Tables, 2)
 	assert.Equal(t, users.Columns, snap.Tables["users"].Columns)
@@ -182,7 +182,7 @@ func TestSQLiteLedgerReadsBackThroughAdapter(t *testing.T) {
 func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
 	db := openSQLite(t)
 	runnerUsesConfiguredTables(t,
-		func(r behemoth.SchemaResolver) core.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
+		func(r behemoth.SchemaResolver) migration.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
 		func(r behemoth.SchemaResolver) behemoth.Database { return sqlite.NewSQLiteAdapter(db, r) },
 		NewSQLiteTestManager(db),
 	)
@@ -193,21 +193,21 @@ func TestSQLiteRunnerUsesConfiguredTables(t *testing.T) {
 // resolver Boot builds from the default config.
 func runnerUsesConfiguredTables(
 	t *testing.T,
-	newDriver func(behemoth.SchemaResolver) core.SchemaDriver,
+	newDriver func(behemoth.SchemaResolver) migration.SchemaDriver,
 	newAdapter func(behemoth.SchemaResolver) behemoth.Database,
 	tm DriverTestManager,
 ) {
 	ctx := context.Background()
-	cfg := core.NewMigrationConfig(core.MigrationConfig{})
-	require.NotEqual(t, core.LedgerCanonicalName, cfg.TableName, "the test needs physical names that differ")
+	cfg := migration.NewMigrationConfig(migration.MigrationConfig{})
+	require.NotEqual(t, migration.LedgerCanonicalName, cfg.TableName, "the test needs physical names that differ")
 
-	resolver := core.NewSchemaResolver()
-	resolver.Freeze(core.BuildSchemaResolverTable(schema.NewRegistry(), cfg))
-	runner := core.NewMigrationRunner(newAdapter(resolver), newDriver(resolver), cfg, telemetry.New(nil, nil, nil))
+	resolver := migration.NewSchemaResolver()
+	resolver.Freeze(migration.BuildSchemaResolverTable(schema.NewRegistry(), cfg))
+	runner := migration.NewMigrationRunner(newAdapter(resolver), newDriver(resolver), cfg, telemetry.New(nil, nil, nil))
 
 	users, posts := usersTable(), postsTable()
-	first := core.Migration{ID: "0001_users", Up: []core.SchemaOperation{createTableOp(users)}}
-	second := core.Migration{ID: "0002_posts", Up: []core.SchemaOperation{createTableOp(posts)}, DependsOn: []string{first.ID}}
+	first := migration.Migration{ID: "0001_users", Up: []migration.SchemaOperation{createTableOp(users)}}
+	second := migration.Migration{ID: "0002_posts", Up: []migration.SchemaOperation{createTableOp(posts)}, DependsOn: []string{first.ID}}
 
 	// Fresh database: no bookkeeping tables yet. That reads as "nothing applied".
 	snap, err := runner.LoadSnapshot(ctx)
@@ -215,7 +215,7 @@ func runnerUsesConfiguredTables(
 	assert.Empty(t, snap.Version)
 	assert.NotNil(t, snap.Tables)
 
-	disk := []core.Migration{first, second}
+	disk := []migration.Migration{first, second}
 	pending, err := runner.Pending(ctx, disk)
 	require.NoError(t, err)
 	require.Len(t, pending, 2)
@@ -246,7 +246,7 @@ func runnerUsesConfiguredTables(
 		require.NoError(t, err)
 		assert.True(t, exists, physical)
 	}
-	for _, canonical := range []string{core.LedgerCanonicalName, core.SnapshotCanonicalName} {
+	for _, canonical := range []string{migration.LedgerCanonicalName, migration.SnapshotCanonicalName} {
 		exists, err := tm.TableExists(ctx, canonical)
 		require.NoError(t, err)
 		assert.False(t, exists, canonical)
@@ -267,21 +267,21 @@ func TestSQLiteAdapterClassifiesMissingTable(t *testing.T) {
 	ctx := context.Background()
 	adapter := sqlite.NewSQLiteAdapter(openSQLite(t), nil)
 
-	_, err := adapter.FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
+	_, err := adapter.FindOne(ctx, &migration.SchemaSnapshot{}, clause.Expression{})
 	assert.True(t, errs.IsUndefinedTable(err), "FindOne: %v", err)
 	assert.False(t, errs.IsNotFound(err))
 
-	_, err = adapter.FindMany(ctx, &core.MigrationLedgerEntry{}, clause.Expression{}, nil)
+	_, err = adapter.FindMany(ctx, &migration.MigrationLedgerEntry{}, clause.Expression{}, nil)
 	assert.True(t, errs.IsUndefinedTable(err), "FindMany: %v", err)
 
-	_, err = adapter.Count(ctx, &core.MigrationLedgerEntry{}, clause.Expression{})
+	_, err = adapter.Count(ctx, &migration.MigrationLedgerEntry{}, clause.Expression{})
 	assert.True(t, errs.IsUndefinedTable(err), "Count: %v", err)
 
 	// A table that exists but has no matching row is still plain not-found.
 	db := openSQLite(t)
 	_, err = db.ExecContext(ctx, `CREATE TABLE behemoth_schema_snapshot (id INTEGER PRIMARY KEY, version TEXT, tables TEXT)`)
 	require.NoError(t, err)
-	_, err = sqlite.NewSQLiteAdapter(db, nil).FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
+	_, err = sqlite.NewSQLiteAdapter(db, nil).FindOne(ctx, &migration.SchemaSnapshot{}, clause.Expression{})
 	assert.True(t, errs.IsNotFound(err), "empty table: %v", err)
 	assert.False(t, errs.IsUndefinedTable(err))
 }

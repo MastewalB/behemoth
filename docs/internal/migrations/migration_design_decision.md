@@ -24,8 +24,8 @@ Behemoth might provide tool-specific generation (for goose or golang-migrate for
 | Package | Holds |
 | --- | --- |
 | `types/schema` | The declaration vocabulary shared across packages: `schema.Table`, `Column`, `Index`, `ForeignKey`, `ColumnOverride`, the `ColumnType` and `FK*` action constants, the contribution types, and `schema.Registry` (`DefaultRegistry`, `NewRegistry`). `[Convention, important]` It must never import `types`: it sits below it so `PluginInitContext` can carry a registry without an import cycle. |
-| `migration/core` | Everything about migrating: operations, `Migration`, `MigrationConfig`, `CustomMigration`, introspection/diff, planning, resolution, generation, the runner, `BuildSchemaResolverTable`, the driver capability interfaces below, and `Backend` with `Generate` and `Migrate`, which bundle those capabilities and pick the entry point by path (see *Entry points*). |
-| `storage/adapters/postgres`, `storage/adapters/sqlite`, `storage/adapters/mysql`, `storage/adapters/sqlserver` | One module per database, each holding the `behemoth.Database` adapter **and** the migration driver, built with the same `SchemaResolver` so application queries and migrations agree on physical names. SQLite is its own module so only applications using it link `go-sqlite3` (and therefore cgo). The Postgres module also has `MigrationBackend`, which returns both as one `core.Backend`. |
+| `migration` | Everything about migrating: operations, `Migration`, `MigrationConfig`, `CustomMigration`, introspection/diff, planning, resolution, generation, the runner, `BuildSchemaResolverTable`, the driver capability interfaces below, and `Backend` with `Generate` and `Migrate`, which bundle those capabilities and pick the entry point by path (see *Entry points*). |
+| `storage/adapters/postgres`, `storage/adapters/sqlite`, `storage/adapters/mysql`, `storage/adapters/sqlserver` | One module per database, each holding the `behemoth.Database` adapter **and** the migration driver, built with the same `SchemaResolver` so application queries and migrations agree on physical names. SQLite is its own module so only applications using it link `go-sqlite3` (and therefore cgo). The Postgres module also has `MigrationBackend`, which returns both as one `migration.Backend`. |
 | `cli`, `cmd/behemoth` | The command line: the commands as a library an application links, and the launcher that builds that link for it. Described in [`cli.md`](cli.md). |
 
 ### Declaration
@@ -38,7 +38,7 @@ Tables are declared once, during `Prepare` (`types/init`), into a single registr
 
 `Prepare` then freezes the registry and derives the `SchemaResolver` from it (`BuildSchemaResolverTable`). `[Convention, important]` The resolver is therefore complete **before** any adapter or migration driver exists; the application builds both with `PreparedApp.Resolver`. Migration tooling calls `Prepare` only: it never needs `Boot` or a running application.
 
-Every migration entry point (`Generate`, `Migrate`, and `RunGenerateCLI`, `RunManagedGenerate`, `RunManagedApply` below them) takes the declaration as one value, `core.Declared{Schemas, Custom}`, which `PreparedApp.Declared()` builds (see *Custom Migrations*). Introspection and baselining use only `Declared.Schemas`.
+Every migration entry point (`Generate`, `Migrate`, and `RunGenerateCLI`, `RunManagedGenerate`, `RunManagedApply` below them) takes the declaration as one value, `migration.Declared{Schemas, Custom}`, which `PreparedApp.Declared()` builds (see *Custom Migrations*). Introspection and baselining use only `Declared.Schemas`.
 
 ### Entry points
 
@@ -254,7 +254,7 @@ An implementation follows these rules:
 - **Tests every driver must have:**
   1. unit tests for each rule, including other drivers' overrides being ignored and an already-normal column passing through unchanged;
   2. an integration test that creates one column per rule through the driver and expects every column to match after `RunIntrospection`;
-  3. the same test with the normalizer hidden (`struct{ core.SchemaIntrospector }{driver}`), expecting every column to **differ**: proof the normalizer is what makes them match;
+  3. the same test with the normalizer hidden (`struct{ migration.SchemaIntrospector }{driver}`), expecting every column to **differ**: proof the normalizer is what makes them match;
   4. a "real changes still differ" test: a different length, type, or nullability is still reported.
 
 #### Current rules
@@ -1146,14 +1146,14 @@ type CustomMigration struct {
 
 Declaration works as follows:
 
-- The application declares custom migrations in `PrepareConfig.Migrations`. `Prepare` carries them on `PreparedApp.Custom`, and `PreparedApp.Declared()` pairs them with the frozen schema registry into `core.Declared{Schemas, Custom}`, the single input every migration entry point takes (see *Entry points*).
+- The application declares custom migrations in `PrepareConfig.Migrations`. `Prepare` carries them on `PreparedApp.Custom`, and `PreparedApp.Declared()` pairs them with the frozen schema registry into `migration.Declared{Schemas, Custom}`, the single input every migration entry point takes (see *Entry points*).
 - `Prepare` validates them up front, before plugin ordering, via `ValidateCustomMigrations`. Each rule fails `Prepare` with a configuration error:
 	- every custom migration has a non-empty `Name`, and names are unique
 	- every operation, in `Up` and `Down`, has a non-empty `ID`
 	- no operation ID is used by two different custom migrations
 	- no operation ID equals a custom migration `Name` (both are node identities in the Generation stage graph)
 - These are the checks that need no plan. Collisions with *generated* operation IDs depend on the plan and are checked at Generation.
-- `[Deferred]` **Plugin-declared custom migrations.** `PluginInitContext` lives in `types`, which cannot reference `migration/core` types without an import cycle. Supporting plugins means moving `SchemaOperation` and `CustomMigration` into `types/schema`, which is deferred until a plugin needs it.
+- `[Deferred]` **Plugin-declared custom migrations.** `PluginInitContext` lives in `types`, which cannot reference `migration` types without an import cycle. Supporting plugins means moving `SchemaOperation` and `CustomMigration` into `types/schema`, which is deferred until a plugin needs it.
 
 ### Stage 1: introspection and diff
 
@@ -1271,7 +1271,7 @@ This section describes how contributed columns now travel between the database a
 
 The schema works as follows:
 
-- `behemoth.SchemaResolver` has `Columns(canonicalTable) []string`: the table's declared columns, canonical names, in declaration order, contributions included (base columns first, as the registry merges them). `core.DefaultSchemaResolver` serves it from `SchemaResolverTable.ColumnOrder`, built by `BuildSchemaResolverTable` from the frozen registry. `IdentityResolver` returns `nil`.
+- `behemoth.SchemaResolver` has `Columns(canonicalTable) []string`: the table's declared columns, canonical names, in declaration order, contributions included (base columns first, as the registry merges them). `migration.DefaultSchemaResolver` serves it from `SchemaResolverTable.ColumnOrder`, built by `BuildSchemaResolverTable` from the frozen registry. `IdentityResolver` returns `nil`.
 - Adapters read through `adapters.ReadColumns(resolver, model, selected)`: the resolver's columns when it knows the table, otherwise the model's own `ToMap` keys (sorted, so query text is stable), which is the fallback for tables nobody declared, such as the migration ledger. `QueryOptions.Select` narrows that list.
 - `[Convention]` The column list for **reads** comes from the schema; the column list for **writes** comes from the model's row (`ToMap`, extras included). A contributed column a model doesn't carry a value for is simply not written, and the database applies its default.
 

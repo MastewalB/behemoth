@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
@@ -197,21 +197,21 @@ func (m *SQLServerTestManager) LedgerIDs(ctx context.Context, ledgerTable string
 	return ids, rows.Err()
 }
 
-func (m *SQLServerTestManager) Snapshot(ctx context.Context, snapshotTable string) (core.SchemaSnapshot, bool, error) {
+func (m *SQLServerTestManager) Snapshot(ctx context.Context, snapshotTable string) (migration.SchemaSnapshot, bool, error) {
 	if exists, err := m.TableExists(ctx, snapshotTable); err != nil || !exists {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
-	var snap core.SchemaSnapshot
+	var snap migration.SchemaSnapshot
 	var tables string
 	err := m.db.QueryRowContext(ctx, "SELECT version, tables FROM "+bracket(snapshotTable)+" WHERE id = 1").Scan(&snap.Version, &tables)
 	if errors.Is(err, sql.ErrNoRows) {
-		return core.SchemaSnapshot{}, false, nil
+		return migration.SchemaSnapshot{}, false, nil
 	}
 	if err != nil {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
 	if err := json.Unmarshal([]byte(tables), &snap.Tables); err != nil {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
 	return snap, true, nil
 }
@@ -296,9 +296,9 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 	ctx := context.Background()
 	driver := sqlserver.NewSQLServerDriver(db, nil)
 
-	apply := func(t *testing.T, d *sqlserver.SQLServerDriver, id string, ops ...core.SchemaOperation) error {
+	apply := func(t *testing.T, d *sqlserver.SQLServerDriver, id string, ops ...migration.SchemaOperation) error {
 		t.Helper()
-		return d.ApplyMigration(ctx, request(core.Migration{ID: id, Up: ops}, nil))
+		return d.ApplyMigration(ctx, request(migration.Migration{ID: id, Up: ops}, nil))
 	}
 	exec := func(t *testing.T, stmts ...string) {
 		t.Helper()
@@ -312,7 +312,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		require.NoError(t, tm.DropAllTables(ctx))
 		require.NoError(t, apply(t, driver, "0001_test", tableOps(usersTable(), sqlServerAllTypesTable())...))
 	}
-	introspect := func(t *testing.T, table string) (map[string]schema.Column, core.IntrospectedTable) {
+	introspect := func(t *testing.T, table string) (map[string]schema.Column, migration.IntrospectedTable) {
 		t.Helper()
 		live, err := driver.Introspect(ctx, table)
 		require.NoError(t, err)
@@ -336,7 +336,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		declared := sqlServerAllTypesTable()
 		byName, live := introspect(t, "all_types")
 		require.True(t, live.Exists)
-		assert.Equal(t, core.ObjectTable, live.Kind)
+		assert.Equal(t, migration.ObjectTable, live.Kind)
 		assert.Empty(t, live.Ambiguities)
 
 		// What SQL Server can't keep apart reads back collapsed.
@@ -372,15 +372,15 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 	// with no divergence, so a generate-only run right after produces nothing.
 	t.Run("NoDivergenceAgainstDeclaredRegistry", func(t *testing.T) {
 		setup(t)
-		report, err := core.RunIntrospection(ctx, declare(t, usersTable(), sqlServerAllTypesTable()), driver, true)
+		report, err := migration.RunIntrospection(ctx, declare(t, usersTable(), sqlServerAllTypesTable()), driver, true)
 		require.NoError(t, err)
-		require.NoError(t, core.RejectAmbiguousTypes(report))
+		require.NoError(t, migration.RejectAmbiguousTypes(report))
 		require.Len(t, report.Tables, 2)
 		assertNoDivergence(t, report)
 	})
 
 	// Declarations the DDL can't preserve exactly still match once normalized
-	// (core.ColumnNormalizer).
+	// (migration.ColumnNormalizer).
 	t.Run("NormalizedDeclarationsMatch", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		normalized := schema.Table{Name: "normalized", Columns: []schema.Column{
@@ -397,19 +397,19 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		require.NoError(t, apply(t, driver, "0001_test", createTableOp(normalized)))
 		registry := declare(t, normalized)
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		require.NoError(t, core.RejectAmbiguousTypes(report))
+		require.NoError(t, migration.RejectAmbiguousTypes(report))
 		require.Len(t, report.Tables["normalized"].Columns, len(normalized.Columns))
 		assertNoDivergence(t, report)
 
 		// Normalization is what makes them match: hidden from the type
 		// assertion, every one of these columns differs.
-		unnormalized := struct{ core.SchemaIntrospector }{driver}
-		report, err = core.RunIntrospection(ctx, registry, unnormalized, true)
+		unnormalized := struct{ migration.SchemaIntrospector }{driver}
+		report, err = migration.RunIntrospection(ctx, registry, unnormalized, true)
 		require.NoError(t, err)
 		for _, f := range report.Tables["normalized"].Columns {
-			assert.Equal(t, core.ColDiffers, f.Kind, "%s should differ without normalization", f.Name)
+			assert.Equal(t, migration.ColDiffers, f.Kind, "%s should differ without normalization", f.Name)
 		}
 	})
 
@@ -425,10 +425,10 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 			{Name: "b", Type: schema.ColTypeBytes, Nullable: true}, // same type after normalization, but nullability changed
 		}})
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		assert.Equal(t, map[string]core.ColumnDivergenceKind{
-			"id": core.ColMatch, "s": core.ColDiffers, "n": core.ColDiffers, "b": core.ColDiffers,
+		assert.Equal(t, map[string]migration.ColumnDivergenceKind{
+			"id": migration.ColMatch, "s": migration.ColDiffers, "n": migration.ColDiffers, "b": migration.ColDiffers,
 		}, columnKinds(report, "changed"))
 	})
 
@@ -460,11 +460,11 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		}}
 		require.NoError(t, apply(t, driver, "0001_test", createTableOp(defaults)))
 
-		report, err := core.RunIntrospection(ctx, declare(t, defaults), driver, true)
+		report, err := migration.RunIntrospection(ctx, declare(t, defaults), driver, true)
 		require.NoError(t, err)
 		require.Len(t, report.Tables["defaults"].Columns, len(defaults.Columns))
 		for _, f := range report.Tables["defaults"].Columns {
-			assert.Equal(t, core.ColMatch, f.Kind, "%s: declared %#v %v, live %#v %v", f.Name, f.Declared.Default, f.Declared.Overrides, f.Live.Default, f.Live.Overrides)
+			assert.Equal(t, migration.ColMatch, f.Kind, "%s: declared %#v %v, live %#v %v", f.Name, f.Declared.Default, f.Declared.Overrides, f.Live.Default, f.Live.Overrides)
 		}
 
 		require.NoError(t, tm.Insert(ctx, "defaults", map[string]any{"id": 1}))
@@ -484,10 +484,10 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 			{Name: "removed", Type: schema.ColTypeTimestamp},
 		}})
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		assert.Equal(t, map[string]core.ColumnDivergenceKind{
-			"id": core.ColMatch, "kept": core.ColMatch, "changed": core.ColDiffers, "removed": core.ColDiffers,
+		assert.Equal(t, map[string]migration.ColumnDivergenceKind{
+			"id": migration.ColMatch, "kept": migration.ColMatch, "changed": migration.ColDiffers, "removed": migration.ColDiffers,
 		}, columnKinds(report, "changed"))
 	})
 
@@ -579,8 +579,8 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		}
 
 		registry := declare(t, users, posts)
-		resolver := core.NewSchemaResolver()
-		resolver.Freeze(core.BuildSchemaResolverTable(registry, core.NewMigrationConfig(core.MigrationConfig{})))
+		resolver := migration.NewSchemaResolver()
+		resolver.Freeze(migration.BuildSchemaResolverTable(registry, migration.NewMigrationConfig(migration.MigrationConfig{})))
 		mapped := sqlserver.NewSQLServerDriver(db, resolver)
 		require.NoError(t, apply(t, mapped, "0001_test", tableOps(users, posts)...))
 
@@ -591,7 +591,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		require.NoError(t, err)
 		assert.Equal(t, "author_id", cols[1].Name)
 
-		report, err := core.RunIntrospection(ctx, registry, mapped, true)
+		report, err := migration.RunIntrospection(ctx, registry, mapped, true)
 		require.NoError(t, err)
 		require.Len(t, report.Tables, 2)
 		assertNoDivergence(t, report)
@@ -611,7 +611,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		assert.True(t, exists)
 		live, err := driver.Introspect(ctx, "active_users")
 		require.NoError(t, err)
-		assert.Equal(t, core.ObjectView, live.Kind)
+		assert.Equal(t, migration.ObjectView, live.Kind)
 
 		exists, err = driver.TableExists(ctx, "nope")
 		require.NoError(t, err)
@@ -705,7 +705,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		require.NoError(t, apply(t, driver, "0002_test", op))
 
 		assert.Equal(t, "int", nativeType(t, "items", "code"))
-		report, err := core.RunIntrospection(ctx, declare(t, table), driver, true)
+		report, err := migration.RunIntrospection(ctx, declare(t, table), driver, true)
 		require.NoError(t, err)
 		assertNoDivergence(t, report)
 		rows, err := tm.Rows(ctx, "items", "id")
@@ -733,11 +733,11 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 
 		table.Columns[1].Name, table.Columns[2].Name = "nickname", "national_id"
 		table.Indexes[0].Columns = []string{"nickname", "national_id"}
-		report, err := core.RunIntrospection(ctx, declare(t, table), driver, true)
+		report, err := migration.RunIntrospection(ctx, declare(t, table), driver, true)
 		require.NoError(t, err)
 		assertNoDivergence(t, report)
 		for _, f := range report.Tables["people"].Columns {
-			assert.Equal(t, core.ColMatch, f.Kind, f.Name)
+			assert.Equal(t, migration.ColMatch, f.Kind, f.Name)
 		}
 		require.Len(t, report.Tables["people"].Indexes, 1)
 	})
@@ -823,7 +823,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 	// empty database, it produces the declared schema.
 	t.Run("RenderedScriptReproducesApply", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
-		m := core.Migration{ID: "0001_test", Up: tableOps(usersTable(), sqlServerAllTypesTable())}
+		m := migration.Migration{ID: "0001_test", Up: tableOps(usersTable(), sqlServerAllTypesTable())}
 		script, err := driver.RenderMigration(ctx, m)
 		require.NoError(t, err)
 		assert.Equal(t, ".sql", driver.FileExtension())
@@ -836,7 +836,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 				exec(t, stmt)
 			}
 		}
-		report, err := core.RunIntrospection(ctx, declare(t, usersTable(), sqlServerAllTypesTable()), driver, true)
+		report, err := migration.RunIntrospection(ctx, declare(t, usersTable(), sqlServerAllTypesTable()), driver, true)
 		require.NoError(t, err)
 		assertNoDivergence(t, report)
 	})
@@ -845,7 +845,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 	// being executed.
 	t.Run("RenderBaseline", func(t *testing.T) {
 		setup(t)
-		m := core.Migration{ID: "0000", IsBaseline: true, Up: tableOps(usersTable(), sqlServerAllTypesTable())}
+		m := migration.Migration{ID: "0000", IsBaseline: true, Up: tableOps(usersTable(), sqlServerAllTypesTable())}
 		script, err := driver.RenderMigration(ctx, m)
 		require.NoError(t, err)
 		assert.Contains(t, script, "-- Baseline")

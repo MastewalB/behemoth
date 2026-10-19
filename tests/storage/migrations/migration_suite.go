@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/suite"
 )
@@ -19,7 +19,7 @@ const (
 
 // DriverFactory builds the driver under test. The suite passes its own
 // resolver for the physical-name tests and nil everywhere else.
-type DriverFactory func(resolver core.SchemaResolver) core.SchemaDriver
+type DriverFactory func(resolver migration.SchemaResolver) migration.SchemaDriver
 
 // DriverTestManager is the database-specific half of the suite: it inspects
 // and seeds the database directly, without going through the driver under test.
@@ -41,7 +41,7 @@ type DriverTestManager interface {
 	LedgerIDs(ctx context.Context, ledgerTable string) ([]string, error)
 	// Snapshot returns the persisted snapshot; found is false if the snapshot
 	// table or its row doesn't exist.
-	Snapshot(ctx context.Context, snapshotTable string) (snap core.SchemaSnapshot, found bool, err error)
+	Snapshot(ctx context.Context, snapshotTable string) (snap migration.SchemaSnapshot, found bool, err error)
 
 	DropAllTables(ctx context.Context) error
 	CleanupDatabase(ctx context.Context)
@@ -68,7 +68,7 @@ type ForeignKeyInfo struct {
 	OnDelete   schema.ForeignKeyAction
 }
 
-// DriverTestSuite is the database-agnostic contract every core.SchemaDriver
+// DriverTestSuite is the database-agnostic contract every migration.SchemaDriver
 // must satisfy. Each test drives the driver only through ApplyMigration /
 // RecordBaseline, exactly as core's MigrationRunner does, and verifies the
 // outcome both structurally (via the manager) and behaviorally (constraints
@@ -77,7 +77,7 @@ type DriverTestSuite struct {
 	suite.Suite
 	ctx       context.Context
 	newDriver DriverFactory
-	driver    core.SchemaDriver
+	driver    migration.SchemaDriver
 	tm        DriverTestManager
 	seq       int
 }
@@ -132,70 +132,70 @@ func postsUserFK(onDelete schema.ForeignKeyAction) schema.ForeignKey {
 	return schema.ForeignKey{Name: "fk_posts_user", Columns: []string{"user_id"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: onDelete}
 }
 
-func createTableOp(t schema.Table) core.SchemaOperation {
-	return core.SchemaOperation{ID: "create_table_" + t.Name, Kind: core.OpCreateTable, Table: t.Name, NewTable: &t}
+func createTableOp(t schema.Table) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "create_table_" + t.Name, Kind: migration.OpCreateTable, Table: t.Name, NewTable: &t}
 }
 
-func dropTableOp(table string) core.SchemaOperation {
-	return core.SchemaOperation{ID: "drop_table_" + table, Kind: core.OpDropTable, Table: table, Confirmed: true}
+func dropTableOp(table string) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "drop_table_" + table, Kind: migration.OpDropTable, Table: table, Confirmed: true}
 }
 
-func addColumnOp(table string, col schema.Column) core.SchemaOperation {
-	return core.SchemaOperation{ID: "add_column_" + table + "_" + col.Name, Kind: core.OpAddColumn, Table: table, Column: &col}
+func addColumnOp(table string, col schema.Column) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "add_column_" + table + "_" + col.Name, Kind: migration.OpAddColumn, Table: table, Column: &col}
 }
 
-func dropColumnOp(table, column string) core.SchemaOperation {
-	return core.SchemaOperation{ID: "drop_column_" + table + "_" + column, Kind: core.OpDropColumn, Table: table, ColumnName: column, Confirmed: true}
+func dropColumnOp(table, column string) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "drop_column_" + table + "_" + column, Kind: migration.OpDropColumn, Table: table, ColumnName: column, Confirmed: true}
 }
 
-func renameColumnOp(table, from, to string) core.SchemaOperation {
-	return core.SchemaOperation{ID: "rename_column_" + table + "_" + from, Kind: core.OpRenameColumn, Table: table, ColumnName: from, NewColumnName: to, Confirmed: true}
+func renameColumnOp(table, from, to string) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "rename_column_" + table + "_" + from, Kind: migration.OpRenameColumn, Table: table, ColumnName: from, NewColumnName: to, Confirmed: true}
 }
 
-func alterColumnOp(table string, col schema.Column) core.SchemaOperation {
-	return core.SchemaOperation{ID: "alter_column_" + table + "_" + col.Name, Kind: core.OpAlterColumn, Table: table, Column: &col}
+func alterColumnOp(table string, col schema.Column) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "alter_column_" + table + "_" + col.Name, Kind: migration.OpAlterColumn, Table: table, Column: &col}
 }
 
-func addIndexOp(table string, idx schema.Index) core.SchemaOperation {
-	return core.SchemaOperation{ID: "add_index_" + idx.Name, Kind: core.OpAddIndex, Table: table, Index: &idx}
+func addIndexOp(table string, idx schema.Index) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "add_index_" + idx.Name, Kind: migration.OpAddIndex, Table: table, Index: &idx}
 }
 
-func dropIndexOp(table, name string) core.SchemaOperation {
-	return core.SchemaOperation{ID: "drop_index_" + name, Kind: core.OpDropIndex, Table: table, IndexName: name, Confirmed: true}
+func dropIndexOp(table, name string) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "drop_index_" + name, Kind: migration.OpDropIndex, Table: table, IndexName: name, Confirmed: true}
 }
 
-func addForeignKeyOp(table string, fk schema.ForeignKey) core.SchemaOperation {
-	return core.SchemaOperation{ID: "add_fk_" + fk.Name, Kind: core.OpAddForeignKey, Table: table, ForeignKey: &fk}
+func addForeignKeyOp(table string, fk schema.ForeignKey) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "add_fk_" + fk.Name, Kind: migration.OpAddForeignKey, Table: table, ForeignKey: &fk}
 }
 
-func dropForeignKeyOp(table, name string) core.SchemaOperation {
-	return core.SchemaOperation{ID: "drop_fk_" + name, Kind: core.OpDropForeignKey, Table: table, ForeignKeyName: name, Confirmed: true}
+func dropForeignKeyOp(table, name string) migration.SchemaOperation {
+	return migration.SchemaOperation{ID: "drop_fk_" + name, Kind: migration.OpDropForeignKey, Table: table, ForeignKeyName: name, Confirmed: true}
 }
 
-func (s *DriverTestSuite) nextMigration(ops ...core.SchemaOperation) core.Migration {
+func (s *DriverTestSuite) nextMigration(ops ...migration.SchemaOperation) migration.Migration {
 	s.seq++
-	return core.Migration{ID: fmt.Sprintf("%04d_test", s.seq), Name: "test", Up: ops, CreatedAt: time.Now()}
+	return migration.Migration{ID: fmt.Sprintf("%04d_test", s.seq), Name: "test", Up: ops, CreatedAt: time.Now()}
 }
 
-func request(m core.Migration, tables map[string]schema.Table) core.MigrationRequest {
+func request(m migration.Migration, tables map[string]schema.Table) migration.MigrationRequest {
 	if tables == nil {
 		tables = map[string]schema.Table{}
 	}
-	return core.MigrationRequest{
+	return migration.MigrationRequest{
 		Migration:      m,
-		LedgerEntry:    core.MigrationLedgerEntry{ID: m.ID, AppliedAt: time.Now()},
-		SnapshotUpdate: core.SchemaSnapshot{Version: m.ID, Tables: tables},
+		LedgerEntry:    migration.MigrationLedgerEntry{ID: m.ID, AppliedAt: time.Now()},
+		SnapshotUpdate: migration.SchemaSnapshot{Version: m.ID, Tables: tables},
 		LedgerTable:    ledgerTable,
 		SnapshotTable:  snapshotTable,
 	}
 }
 
 // apply runs ops as one migration through ApplyMigration.
-func (s *DriverTestSuite) apply(ops ...core.SchemaOperation) error {
+func (s *DriverTestSuite) apply(ops ...migration.SchemaOperation) error {
 	return s.driver.ApplyMigration(s.ctx, request(s.nextMigration(ops...), nil))
 }
 
-func (s *DriverTestSuite) mustApply(ops ...core.SchemaOperation) {
+func (s *DriverTestSuite) mustApply(ops ...migration.SchemaOperation) {
 	s.Require().NoError(s.apply(ops...))
 }
 
@@ -539,8 +539,8 @@ func (s *DriverTestSuite) TestAlterColumnType() {
 
 // introspect reads a table back through the driver's own introspector.
 func (s *DriverTestSuite) introspect(table string) map[string]schema.Column {
-	introspector, ok := s.driver.(core.SchemaIntrospector)
-	s.Require().True(ok, "driver does not implement core.SchemaIntrospector")
+	introspector, ok := s.driver.(migration.SchemaIntrospector)
+	s.Require().True(ok, "driver does not implement migration.SchemaIntrospector")
 	live, err := introspector.Introspect(s.ctx, table)
 	s.Require().NoError(err)
 	cols := map[string]schema.Column{}
@@ -764,7 +764,7 @@ func (s *DriverTestSuite) TestApplyRecordsLedgerAndSnapshot() {
 }
 
 func (s *DriverTestSuite) TestApplyIsAtomic() {
-	if s.driver.AtomicityLevel() != core.AtomicityFull {
+	if s.driver.AtomicityLevel() != migration.AtomicityFull {
 		s.T().Skipf("driver atomicity is %q", s.driver.AtomicityLevel())
 	}
 
@@ -785,9 +785,9 @@ func (s *DriverTestSuite) TestReapplyingMigrationFails() {
 	s.Require().NoError(s.driver.ApplyMigration(s.ctx, request(m, nil)))
 
 	// Same ID, different DDL: the duplicate ledger row must abort the whole unit.
-	m.Up = []core.SchemaOperation{createTableOp(postsTable())}
+	m.Up = []migration.SchemaOperation{createTableOp(postsTable())}
 	s.Error(s.driver.ApplyMigration(s.ctx, request(m, nil)))
-	if s.driver.AtomicityLevel() == core.AtomicityFull {
+	if s.driver.AtomicityLevel() == migration.AtomicityFull {
 		s.False(s.tableExists("posts"), "DDL is rolled back with the rejected ledger write")
 	}
 	s.Equal([]string{m.ID}, s.ledgerIDs())
@@ -810,12 +810,12 @@ func (s *DriverTestSuite) TestRecordBaselineExecutesNoDDL() {
 
 func (s *DriverTestSuite) TestOperationMissingPayloadFails() {
 	s.seedUsers()
-	for _, op := range []core.SchemaOperation{
-		{ID: "no_table", Kind: core.OpCreateTable, Table: "t"},
-		{ID: "no_column", Kind: core.OpAddColumn, Table: "users"},
-		{ID: "no_alter_column", Kind: core.OpAlterColumn, Table: "users"},
-		{ID: "no_index", Kind: core.OpAddIndex, Table: "users"},
-		{ID: "no_fk", Kind: core.OpAddForeignKey, Table: "users"},
+	for _, op := range []migration.SchemaOperation{
+		{ID: "no_table", Kind: migration.OpCreateTable, Table: "t"},
+		{ID: "no_column", Kind: migration.OpAddColumn, Table: "users"},
+		{ID: "no_alter_column", Kind: migration.OpAlterColumn, Table: "users"},
+		{ID: "no_index", Kind: migration.OpAddIndex, Table: "users"},
+		{ID: "no_fk", Kind: migration.OpAddForeignKey, Table: "users"},
 	} {
 		s.Error(s.apply(op), "kind %s with no payload", op.Kind)
 	}
@@ -823,7 +823,7 @@ func (s *DriverTestSuite) TestOperationMissingPayloadFails() {
 }
 
 func (s *DriverTestSuite) TestUnknownOperationKindFails() {
-	s.Error(s.apply(core.SchemaOperation{ID: "bogus", Kind: core.OperationKind("bogus"), Table: "users"}))
+	s.Error(s.apply(migration.SchemaOperation{ID: "bogus", Kind: migration.OperationKind("bogus"), Table: "users"}))
 	s.Empty(s.ledgerIDs())
 }
 
@@ -854,12 +854,12 @@ func (s *DriverTestSuite) TestUpThenDownRoundTrip() {
 	s.Equal("Ada", asString(s.rows("users", "id")[0]["name"]))
 }
 
-// ---- core.MigrationRenderer (optional) ----
+// ---- migration.MigrationRenderer (optional) ----
 
-func (s *DriverTestSuite) renderer() core.MigrationRenderer {
-	r, ok := s.driver.(core.MigrationRenderer)
+func (s *DriverTestSuite) renderer() migration.MigrationRenderer {
+	r, ok := s.driver.(migration.MigrationRenderer)
 	if !ok {
-		s.T().Skip("driver does not implement core.MigrationRenderer")
+		s.T().Skip("driver does not implement migration.MigrationRenderer")
 	}
 	return r
 }
@@ -895,7 +895,7 @@ func (s *DriverTestSuite) TestRenderMigrationHasNoSideEffects() {
 
 func (s *DriverTestSuite) TestRenderMigrationFailsLikeApply() {
 	r := s.renderer()
-	_, err := r.RenderMigration(s.ctx, s.nextMigration(core.SchemaOperation{ID: "no_table", Kind: core.OpCreateTable, Table: "t"}))
+	_, err := r.RenderMigration(s.ctx, s.nextMigration(migration.SchemaOperation{ID: "no_table", Kind: migration.OpCreateTable, Table: "t"}))
 	s.Error(err)
 }
 

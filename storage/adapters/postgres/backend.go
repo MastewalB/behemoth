@@ -4,10 +4,10 @@ import (
 	"database/sql"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 )
 
-// MigrationBackend returns the migration backend of db for core.Generate, core.Migrate and the
+// MigrationBackend returns the migration backend of db for migration.Generate, migration.Migrate and the
 // cli package: one PostgreSQLDriver as introspector, renderer and schema
 // driver, and a PostgresAdapter over the same connection, through which the
 // managed path reads its ledger.
@@ -18,9 +18,9 @@ import (
 //
 // The backend's Close closes db. Don't call it when db is shared with code
 // that outlives the migration run.
-func MigrationBackend(db *sql.DB, resolver behemoth.SchemaResolver) core.Backend {
+func MigrationBackend(db *sql.DB, resolver behemoth.SchemaResolver) migration.Backend {
 	driver := NewPostgreSQLDriver(db, resolver)
-	return core.Backend{
+	return migration.Backend{
 		Introspector: driver,
 		Renderer:     driver,
 		Driver:       driver,

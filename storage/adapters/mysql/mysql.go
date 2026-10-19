@@ -2,8 +2,8 @@
 // module does not depend on the MySQL driver:
 //
 //   - MySQLAdapter implements behemoth.Database (application reads/writes).
-//   - MySQLDriver implements the migration interfaces: core.SchemaDriver,
-//     core.MigrationRenderer, core.SchemaIntrospector and core.ColumnNormalizer.
+//   - MySQLDriver implements the migration interfaces: migration.SchemaDriver,
+//     migration.MigrationRenderer, migration.SchemaIntrospector and migration.ColumnNormalizer.
 //
 // Both take the same behemoth.SchemaResolver, so application queries and
 // migrations agree on physical table and column names.

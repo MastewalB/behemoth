@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -29,8 +29,8 @@ const (
 	maxStringLength = 4000
 )
 
-// SQLServerDriver implements [core.SchemaDriver], [core.MigrationRenderer],
-// [core.SchemaIntrospector] and [core.ColumnNormalizer] for Microsoft SQL
+// SQLServerDriver implements [migration.SchemaDriver], [migration.MigrationRenderer],
+// [migration.SchemaIntrospector] and [migration.ColumnNormalizer] for Microsoft SQL
 // Server 2016 and later.
 //
 // It is the migration counterpart of SQLServerAdapter: build both with the
@@ -49,29 +49,29 @@ const (
 // and hands over an opened *sql.DB.
 type SQLServerDriver struct {
 	db       *sql.DB
-	resolver core.SchemaResolver
+	resolver migration.SchemaResolver
 }
 
 // NewSQLServerDriver returns a driver bound to db, operating in the
 // connection's default schema (SCHEMA_NAME()). A nil resolver maps every
 // canonical table/column name to itself.
-func NewSQLServerDriver(db *sql.DB, resolver core.SchemaResolver) *SQLServerDriver {
+func NewSQLServerDriver(db *sql.DB, resolver migration.SchemaResolver) *SQLServerDriver {
 	return &SQLServerDriver{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
 }
 
 var (
-	_ core.SchemaDriver       = (*SQLServerDriver)(nil)
-	_ core.MigrationRenderer  = (*SQLServerDriver)(nil)
-	_ core.SchemaIntrospector = (*SQLServerDriver)(nil)
-	_ core.ColumnNormalizer   = (*SQLServerDriver)(nil)
+	_ migration.SchemaDriver       = (*SQLServerDriver)(nil)
+	_ migration.MigrationRenderer  = (*SQLServerDriver)(nil)
+	_ migration.SchemaIntrospector = (*SQLServerDriver)(nil)
+	_ migration.ColumnNormalizer   = (*SQLServerDriver)(nil)
 )
 
-// AtomicityLevel implements [core.SchemaDriver]. SQL Server DDL is transactional.
-func (d *SQLServerDriver) AtomicityLevel() core.AtomicityLevel { return core.AtomicityFull }
+// AtomicityLevel implements [migration.SchemaDriver]. SQL Server DDL is transactional.
+func (d *SQLServerDriver) AtomicityLevel() migration.AtomicityLevel { return migration.AtomicityFull }
 
-// ApplyMigration implements [core.SchemaDriver]: every Up operation, the
+// ApplyMigration implements [migration.SchemaDriver]: every Up operation, the
 // ledger row and the snapshot write commit or roll back together.
-func (d *SQLServerDriver) ApplyMigration(ctx context.Context, req core.MigrationRequest) error {
+func (d *SQLServerDriver) ApplyMigration(ctx context.Context, req migration.MigrationRequest) error {
 	const op = "SQLServerDriver.ApplyMigration"
 	return d.inMigrationTx(ctx, op, req, func(tx *sql.Tx) error {
 		r := &run{ctx: ctx, tx: tx}
@@ -84,9 +84,9 @@ func (d *SQLServerDriver) ApplyMigration(ctx context.Context, req core.Migration
 	})
 }
 
-// RecordBaseline implements [core.SchemaDriver]: the same ledger and snapshot
+// RecordBaseline implements [migration.SchemaDriver]: the same ledger and snapshot
 // write as ApplyMigration, with no DDL executed.
-func (d *SQLServerDriver) RecordBaseline(ctx context.Context, req core.MigrationRequest) error {
+func (d *SQLServerDriver) RecordBaseline(ctx context.Context, req migration.MigrationRequest) error {
 	return d.inMigrationTx(ctx, "SQLServerDriver.RecordBaseline", req, func(*sql.Tx) error { return nil })
 }
 
@@ -97,7 +97,7 @@ func (d *SQLServerDriver) RecordBaseline(ctx context.Context, req core.Migration
 // concurrent migrators (several app instances booting at once): the second
 // one waits until the first commits, then fails on the duplicate ledger row
 // and rolls its DDL back.
-func (d *SQLServerDriver) inMigrationTx(ctx context.Context, op string, req core.MigrationRequest, fn func(tx *sql.Tx) error) error {
+func (d *SQLServerDriver) inMigrationTx(ctx context.Context, op string, req migration.MigrationRequest, fn func(tx *sql.Tx) error) error {
 	if req.LedgerTable == "" || req.SnapshotTable == "" {
 		return errs.NewInternalError(op, fmt.Errorf("ledger table %q / snapshot table %q must both be set", req.LedgerTable, req.SnapshotTable))
 	}
@@ -137,7 +137,7 @@ func (d *SQLServerDriver) inMigrationTx(ctx context.Context, op string, req core
 
 // recordTx creates the ledger and snapshot tables on first use, inserts the
 // ledger row and replaces the snapshot.
-func (d *SQLServerDriver) recordTx(ctx context.Context, tx *sql.Tx, op string, req core.MigrationRequest) error {
+func (d *SQLServerDriver) recordTx(ctx context.Context, tx *sql.Tx, op string, req migration.MigrationRequest) error {
 	data, err := json.Marshal(req.SnapshotUpdate.Tables)
 	if err != nil {
 		return errs.NewMigrationError(op, errs.CodeMigrationMarshalFailed, err)
@@ -162,9 +162,9 @@ func (d *SQLServerDriver) recordTx(ctx context.Context, tx *sql.Tx, op string, r
 	return nil
 }
 
-// ---- core.MigrationRenderer ----
+// ---- migration.MigrationRenderer ----
 
-// RenderMigration implements [core.MigrationRenderer]. It applies m's Up in a
+// RenderMigration implements [migration.MigrationRenderer]. It applies m's Up in a
 // transaction that is always rolled back and returns the statements that ran,
 // in order. Statements depend on the live schema (see SQLServerDriver), so it
 // has to run against the database m will be applied to. Schema, data and
@@ -172,7 +172,7 @@ func (d *SQLServerDriver) recordTx(ctx context.Context, tx *sql.Tx, op string, r
 //
 // A baseline's Up is never executed: its tables already exist. Its statements
 // are built without being run.
-func (d *SQLServerDriver) RenderMigration(ctx context.Context, m core.Migration) (string, error) {
+func (d *SQLServerDriver) RenderMigration(ctx context.Context, m migration.Migration) (string, error) {
 	const op = "SQLServerDriver.RenderMigration"
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -199,7 +199,7 @@ func (d *SQLServerDriver) RenderMigration(ctx context.Context, m core.Migration)
 	return b.String(), nil
 }
 
-// FileExtension implements [core.MigrationRenderer].
+// FileExtension implements [migration.MigrationRenderer].
 func (d *SQLServerDriver) FileExtension() string { return ".sql" }
 
 // ---- Applying operations ----
@@ -229,14 +229,14 @@ func (r *run) exec(stmts ...string) error {
 
 // applyOperation is the one switch over op.Kind. An operation missing its
 // required payload is an Internal error, never a silent no-op.
-func (d *SQLServerDriver) applyOperation(r *run, op core.SchemaOperation) error {
+func (d *SQLServerDriver) applyOperation(r *run, op migration.SchemaOperation) error {
 	missing := func(field string) error {
 		return errs.NewInternalError("SQLServerDriver.applyOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
 	}
 	table := d.resolver.Resolve(op.Table)
 
 	switch op.Kind {
-	case core.OpCreateTable:
+	case migration.OpCreateTable:
 		if op.NewTable == nil {
 			return missing("NewTable")
 		}
@@ -245,9 +245,9 @@ func (d *SQLServerDriver) applyOperation(r *run, op core.SchemaOperation) error 
 			return err
 		}
 		return r.exec(stmts...)
-	case core.OpDropTable:
+	case migration.OpDropTable:
 		return r.exec("DROP TABLE " + quoteIdent(table))
-	case core.OpAddColumn:
+	case migration.OpAddColumn:
 		if op.Column == nil {
 			return missing("Column")
 		}
@@ -256,23 +256,23 @@ func (d *SQLServerDriver) applyOperation(r *run, op core.SchemaOperation) error 
 			return err
 		}
 		return r.exec(stmts...)
-	case core.OpDropColumn:
+	case migration.OpDropColumn:
 		return d.dropColumn(r, table, d.resolver.ResolveColumn(op.Table, op.ColumnName))
-	case core.OpRenameColumn:
+	case migration.OpRenameColumn:
 		return d.renameColumn(r, table, d.resolver.ResolveColumn(op.Table, op.ColumnName), d.resolver.ResolveColumn(op.Table, op.NewColumnName))
-	case core.OpAlterColumn:
+	case migration.OpAlterColumn:
 		if op.Column == nil {
 			return missing("Column")
 		}
 		return d.alterColumn(r, op.Table, *op.Column, op.PrevColumn)
-	case core.OpAddIndex:
+	case migration.OpAddIndex:
 		if op.Index == nil {
 			return missing("Index")
 		}
 		return d.addIndex(r, op.Table, *op.Index)
-	case core.OpDropIndex:
+	case migration.OpDropIndex:
 		return r.exec(fmt.Sprintf("DROP INDEX %s ON %s", quoteIdent(op.IndexName), quoteIdent(table)))
-	case core.OpAddForeignKey:
+	case migration.OpAddForeignKey:
 		if op.ForeignKey == nil {
 			return missing("ForeignKey")
 		}
@@ -281,7 +281,7 @@ func (d *SQLServerDriver) applyOperation(r *run, op core.SchemaOperation) error 
 			return err
 		}
 		return r.exec(stmt)
-	case core.OpDropForeignKey:
+	case migration.OpDropForeignKey:
 		return r.exec(fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT %s", quoteIdent(table), quoteIdent(op.ForeignKeyName)))
 	default:
 		return errs.NewInternalError("SQLServerDriver.applyOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))

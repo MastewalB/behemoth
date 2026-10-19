@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -55,7 +55,7 @@ var mysqlTypeMapping = map[string]schema.ColumnType{
 // (ENUM, SET, DATE, TIME, BIT, spatial types, ...) comes back as text with an
 // ambiguity, never as a guess at a specific type. Text is the fallback because
 // any value scanned as a Go string fits it.
-func mapMySQLType(dataType, columnType string) (schema.ColumnType, *core.ColumnAmbiguity) {
+func mapMySQLType(dataType, columnType string) (schema.ColumnType, *migration.ColumnAmbiguity) {
 	dataType, columnType = strings.ToLower(dataType), strings.ToLower(columnType)
 	if dataType == "tinyint" && strings.HasPrefix(columnType, "tinyint(1)") {
 		return schema.ColTypeBoolean, nil
@@ -63,10 +63,10 @@ func mapMySQLType(dataType, columnType string) (schema.ColumnType, *core.ColumnA
 	if ct, ok := mysqlTypeMapping[dataType]; ok {
 		return ct, nil
 	}
-	return schema.ColTypeText, &core.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized MySQL type %q, defaulted to text; verify manually", columnType)}
+	return schema.ColTypeText, &migration.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized MySQL type %q, defaulted to text; verify manually", columnType)}
 }
 
-// NormalizeColumn implements [core.ColumnNormalizer]: col as Introspect
+// NormalizeColumn implements [migration.ColumnNormalizer]: col as Introspect
 // reports it once renderColumnDefinition has created it. It replays every
 // change the DDL makes to a declaration, so it must change together with
 // renderColumnDefinition, renderMySQLType and renderDefaultExpr:
@@ -112,7 +112,7 @@ func (d *MySQLDriver) NormalizeColumn(_ string, raw schema.Column) schema.Column
 	return col
 }
 
-// TableExists implements [core.SchemaIntrospector]. A view counts: Introspect
+// TableExists implements [migration.SchemaIntrospector]. A view counts: Introspect
 // reports it as an incompatible object rather than hiding it here.
 func (d *MySQLDriver) TableExists(ctx context.Context, name string) (bool, error) {
 	_, exists, err := d.objectKind(ctx, d.resolver.Resolve(name))
@@ -121,7 +121,7 @@ func (d *MySQLDriver) TableExists(ctx context.Context, name string) (bool, error
 
 // objectKind maps information_schema.TABLES.TABLE_TYPE to an ObjectKind. It
 // backs the "table found live as incompatible object" branch of RunIntrospection.
-func (d *MySQLDriver) objectKind(ctx context.Context, physical string) (kind core.ObjectKind, exists bool, err error) {
+func (d *MySQLDriver) objectKind(ctx context.Context, physical string) (kind migration.ObjectKind, exists bool, err error) {
 	var tableType string
 	err = d.db.QueryRowContext(ctx, `
 		SELECT TABLE_TYPE FROM information_schema.TABLES
@@ -134,15 +134,15 @@ func (d *MySQLDriver) objectKind(ctx context.Context, physical string) (kind cor
 	}
 	switch tableType {
 	case "BASE TABLE":
-		return core.ObjectTable, true, nil
+		return migration.ObjectTable, true, nil
 	case "VIEW":
-		return core.ObjectView, true, nil
+		return migration.ObjectView, true, nil
 	default:
-		return core.ObjectOther, true, nil
+		return migration.ObjectOther, true, nil
 	}
 }
 
-// Introspect implements [core.SchemaIntrospector]: a best-effort reverse
+// Introspect implements [migration.SchemaIntrospector]: a best-effort reverse
 // mapping of one live table into the canonical model.
 //
 // Column names are returned as their physical names: SchemaResolver maps
@@ -151,40 +151,40 @@ func (d *MySQLDriver) objectKind(ctx context.Context, physical string) (kind cor
 // Not represented, because the canonical model has no place for them: ON
 // UPDATE CURRENT_TIMESTAMP, index prefix lengths, character sets and
 // collations, and a foreign key's ON UPDATE action.
-func (d *MySQLDriver) Introspect(ctx context.Context, name string) (core.IntrospectedTable, error) {
+func (d *MySQLDriver) Introspect(ctx context.Context, name string) (migration.IntrospectedTable, error) {
 	physical := d.resolver.Resolve(name)
 
 	kind, exists, err := d.objectKind(ctx, physical)
 	if err != nil || !exists {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
-	if kind != core.ObjectTable {
-		return core.IntrospectedTable{Kind: kind, Exists: true}, nil // caller checks Kind before touching Schema
+	if kind != migration.ObjectTable {
+		return migration.IntrospectedTable{Kind: kind, Exists: true}, nil // caller checks Kind before touching Schema
 	}
 
 	fks, err := d.introspectForeignKeys(ctx, physical)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 	keys, err := d.introspectKeys(ctx, physical)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 	pkCols, uniqueCols, indexes := classifyKeys(physical, keys, fks)
 	cols, ambiguities, err := d.introspectColumns(ctx, physical, pkCols, uniqueCols)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 
-	return core.IntrospectedTable{
-		Kind:        core.ObjectTable,
+	return migration.IntrospectedTable{
+		Kind:        migration.ObjectTable,
 		Exists:      true,
 		Schema:      schema.Table{Name: name, PhysicalName: physical, Columns: cols, Indexes: indexes, ForeignKeys: fks},
 		Ambiguities: ambiguities,
 	}, nil
 }
 
-func (d *MySQLDriver) introspectColumns(ctx context.Context, physical string, pkCols, uniqueCols []string) ([]schema.Column, []core.ColumnAmbiguity, error) {
+func (d *MySQLDriver) introspectColumns(ctx context.Context, physical string, pkCols, uniqueCols []string) ([]schema.Column, []migration.ColumnAmbiguity, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT, EXTRA
 		FROM information_schema.COLUMNS
@@ -196,7 +196,7 @@ func (d *MySQLDriver) introspectColumns(ctx context.Context, physical string, pk
 	defer rows.Close()
 
 	var cols []schema.Column
-	var ambiguities []core.ColumnAmbiguity
+	var ambiguities []migration.ColumnAmbiguity
 
 	for rows.Next() {
 		var name, dataType, columnType, isNullable, extra string
@@ -209,7 +209,7 @@ func (d *MySQLDriver) introspectColumns(ctx context.Context, physical string, pk
 		ct, ambig := mapMySQLType(dataType, columnType)
 		if ambig == nil && strings.Contains(extra, " GENERATED") {
 			// "VIRTUAL GENERATED" / "STORED GENERATED": a computed column.
-			ambig = &core.ColumnAmbiguity{Reason: "generated column; the canonical model can't express it"}
+			ambig = &migration.ColumnAmbiguity{Reason: "generated column; the canonical model can't express it"}
 		}
 		if ambig != nil {
 			ambig.Column = name

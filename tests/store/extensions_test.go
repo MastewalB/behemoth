@@ -10,7 +10,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/models"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -42,8 +42,8 @@ func extendedUsers(t *testing.T) (schema.Table, behemoth.SchemaResolver) {
 	require.NoError(t, reg.ExtendColumn(p))
 	require.NoError(t, reg.Freeze())
 
-	resolver := core.NewSchemaResolver()
-	resolver.Freeze(core.BuildSchemaResolverTable(reg, core.NewMigrationConfig(core.MigrationConfig{})))
+	resolver := migration.NewSchemaResolver()
+	resolver.Freeze(migration.BuildSchemaResolverTable(reg, migration.NewMigrationConfig(migration.MigrationConfig{})))
 	users, ok := reg.Lookup(models.UserTable)
 	require.True(t, ok)
 	return users, resolver
@@ -51,13 +51,13 @@ func extendedUsers(t *testing.T) (schema.Table, behemoth.SchemaResolver) {
 
 // createTable creates table through the database's own migration driver, as
 // a generated migration would.
-func createTable(t *testing.T, driver core.SchemaDriver, table schema.Table) {
+func createTable(t *testing.T, driver migration.SchemaDriver, table schema.Table) {
 	t.Helper()
-	m := core.Migration{ID: "0001", Up: []core.SchemaOperation{{ID: "create_" + table.Name, Kind: core.OpCreateTable, Table: table.Name, NewTable: &table}}}
-	require.NoError(t, driver.ApplyMigration(context.Background(), core.MigrationRequest{
+	m := migration.Migration{ID: "0001", Up: []migration.SchemaOperation{{ID: "create_" + table.Name, Kind: migration.OpCreateTable, Table: table.Name, NewTable: &table}}}
+	require.NoError(t, driver.ApplyMigration(context.Background(), migration.MigrationRequest{
 		Migration:      m,
-		LedgerEntry:    core.MigrationLedgerEntry{ID: m.ID, AppliedAt: time.Now()},
-		SnapshotUpdate: core.SchemaSnapshot{Version: m.ID, Tables: map[string]schema.Table{table.Name: table}},
+		LedgerEntry:    migration.MigrationLedgerEntry{ID: m.ID, AppliedAt: time.Now()},
+		SnapshotUpdate: migration.SchemaSnapshot{Version: m.ID, Tables: map[string]schema.Table{table.Name: table}},
 		LedgerTable:    "behemoth_auth_schema",
 		SnapshotTable:  "behemoth_auth_schema_snapshot",
 	}))

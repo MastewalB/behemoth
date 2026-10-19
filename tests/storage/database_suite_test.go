@@ -11,7 +11,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
 	mysqlAdapter "github.com/MastewalB/behemoth/storage/adapters/mysql"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
@@ -160,8 +160,8 @@ func physicalNamesResolver(t *testing.T) behemoth.SchemaResolver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolver := core.NewSchemaResolver()
-	resolver.Freeze(core.BuildSchemaResolverTable(registry, core.NewMigrationConfig(core.MigrationConfig{})))
+	resolver := migration.NewSchemaResolver()
+	resolver.Freeze(migration.BuildSchemaResolverTable(registry, migration.NewMigrationConfig(migration.MigrationConfig{})))
 	return resolver
 }
 
@@ -221,7 +221,7 @@ func assertConstraintClassification(t *testing.T, adapter behemoth.Database, db 
 func assertUndefinedTable(t *testing.T, adapter behemoth.Database) {
 	t.Helper()
 	ctx := t.Context()
-	missing := &core.SchemaSnapshot{} // its table is never created in these databases
+	missing := &migration.SchemaSnapshot{} // its table is never created in these databases
 
 	_, err := adapter.FindOne(ctx, missing, clause.Expression{})
 	if !errs.IsUndefinedTable(err) || errs.IsNotFound(err) {
