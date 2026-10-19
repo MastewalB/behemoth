@@ -4,8 +4,8 @@ This document explains how a request to one of behemoth's HTTP endpoints reaches
 
 The code lives in:
 
-- `types/router.go`: `Router`, `RouterConfig`, `FrameworkDriver`, the wrapping pipeline
-- `types/plugins.go`: `Plugin`, `Route`, `Middleware`, `RequestContext`, `ResponseRecorder`
+- `core/router.go`: `Router`, `RouterConfig`, `FrameworkDriver`, the wrapping pipeline
+- `core/plugins.go`: `Plugin`, `Route`, `Middleware`, `RequestContext`, `ResponseRecorder`
 - `engine/init.go`: `Boot`, which drives everything below
 - `plugins/adapters/{gin,echo,chi,fiber}`: one `FrameworkDriver` per framework, each in its own module
 - `plugins/adapters/nethttp`: the `FrameworkDriver` for the standard library's `*http.ServeMux`, a package of the root module
@@ -22,7 +22,7 @@ engine.GET("/", ...) // the application's own routes
 
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg,
-	Router: types.RouterConfig{BasePath: "/api/auth"}, // optional; defaults shown
+	Router: core.RouterConfig{BasePath: "/api/auth"}, // optional; defaults shown
 	HTTP:   ginadapter.New(engine),
 })
 engine.Run(addr)
@@ -94,7 +94,7 @@ One field of `RouterConfig` is read before the router exists: `Boot` builds `Aut
 
 After the AuthContext is fully built and every plugin's `Init` has run, `Boot`:
 
-1. Creates the router: `types.NewRouter(cfg.Router, ac)`. The `AuthContext` is captured here, once.
+1. Creates the router: `core.NewRouter(cfg.Router, ac)`. The `AuthContext` is captured here, once.
 2. For each plugin, in dependency order: `router.Mount(name, meta.MountPath, p.Routes())`, and appends `p.Middlewares()` to the global middleware list.
 3. Builds the client-IP configuration from `RouterConfig.TrustedProxies` / `ClientIPHeader` and calls `router.ApplyRateLimiting(rateLimiter, rateLimitCatalog, ipCfg)`.
 4. If `cfg.HTTP != nil`: `router.Build(cfg.HTTP, globalMiddleware...)`.
@@ -229,7 +229,7 @@ The wrapping works as follows:
 
 The layers are ordered for these reasons:
 
-- **Request scope outermost.** `withRequestScope` sets `rctx.Auth` before anything else runs, so every middleware (global or per-route) and the handler can rely on it. The router captured the `AuthContext` in `NewRouter`; adapters build the `RequestContext` without ever knowing about it. It also puts the `RequestContext` on `rctx.Ctx` (`types.ContextWithRequest`), so code that only receives a `context.Context` still knows which request it serves: the store's data hooks read it back with `types.RequestFrom` to give hooks `HookContext.Request`. `[Convention]` Only the request travels through the context, because it is request-scoped by definition; everything else is passed explicitly. A `context.Context` without one (CLI, background job) is a call made outside any request.
+- **Request scope outermost.** `withRequestScope` sets `rctx.Auth` before anything else runs, so every middleware (global or per-route) and the handler can rely on it. The router captured the `AuthContext` in `NewRouter`; adapters build the `RequestContext` without ever knowing about it. It also puts the `RequestContext` on `rctx.Ctx` (`core.ContextWithRequest`), so code that only receives a `context.Context` still knows which request it serves: the store's data hooks read it back with `core.RequestFrom` to give hooks `HookContext.Request`. `[Convention]` Only the request travels through the context, because it is request-scoped by definition; everything else is passed explicitly. A `context.Context` without one (CLI, background job) is a call made outside any request.
 - **Request ID with the scope.** `withRequestScope` also assigns the request ID: the one already on the context, else a usable value of the `RouterConfig.RequestIDHeader` request header (default `X-Request-ID`), else a generated one. It stores the ID on `rctx.Ctx` (`telemetry.ContextWithRequestID`) and sets it on the response header. Doing this in the outermost wrapper means every log line written for the request carries the ID, and an error response has the header too. See `docs/internal/telemetry/foundations.md`.
 - **Tracing inside the request scope.** `withTracing` needs the request ID for the span, and replaces `rctx.Ctx` with the span's context so middleware and the handler nest under it. See `docs/internal/telemetry/tracing.md`.
 - **Metrics outside error mapping.** `withMetrics` reads the status after the mapper has run, so `behemoth.http.requests` reports what the client received. See `docs/internal/telemetry/metrics.md`.
@@ -372,10 +372,10 @@ Known gaps:
 
 ### Future: exported middleware the developer opts into
 
-The real needs behind "intercept every request" are things like *make the current user available in my own handlers* or *protect my `/dashboard` routes*. Those are met by plugins **exporting** `types.Middleware` values and the developer applying them where they choose:
+The real needs behind "intercept every request" are things like *make the current user available in my own handlers* or *protect my `/dashboard` routes*. Those are met by plugins **exporting** `core.Middleware` values and the developer applying them where they choose:
 
 ```go
-// a plugin exports types.Middleware; the adapter bridges it to the framework
+// a plugin exports core.Middleware; the adapter bridges it to the framework
 engine.Use(ginadapter.Middleware(ac, sessions.LoadSession))              // whole app — the developer's call
 admin := engine.Group("/admin", ginadapter.Middleware(ac, sessions.RequireAuth))
 
@@ -386,7 +386,7 @@ func handler(c *gin.Context) {
 
 Implementation outline:
 
-1. **A bridge per adapter**: `Middleware(ac *types.AuthContext, mw types.Middleware)` returning the framework's native middleware (`gin.HandlerFunc`, `echo.MiddlewareFunc`, `func(http.Handler) http.Handler` for chi). It builds a `RequestContext` with `Auth` set, runs `mw` with a `next` that continues the native chain, and stores the `RequestContext` on the native context (`c.Set`, `c.Set`, `context.WithValue`). If `mw` returns without calling `next`, the bridge flushes the middleware's `Response` and aborts the native chain; if it returns an error, the bridge maps it with the same `ErrorMapper` the router uses, so an application route rejected by a behemoth middleware answers exactly like a behemoth route would.
+1. **A bridge per adapter**: `Middleware(ac *core.AuthContext, mw core.Middleware)` returning the framework's native middleware (`gin.HandlerFunc`, `echo.MiddlewareFunc`, `func(http.Handler) http.Handler` for chi). It builds a `RequestContext` with `Auth` set, runs `mw` with a `next` that continues the native chain, and stores the `RequestContext` on the native context (`c.Set`, `c.Set`, `context.WithValue`). If `mw` returns without calling `next`, the bridge flushes the middleware's `Response` and aborts the native chain; if it returns an error, the bridge maps it with the same `ErrorMapper` the router uses, so an application route rejected by a behemoth middleware answers exactly like a behemoth route would.
 2. **Typed accessors per adapter**: `CurrentUser(c)`, `Session(c)`, ... read what the middleware stored, so application handlers never handle `RequestContext` or untyped `Values`.
 3. **A `net/http` form in core**: `func(http.Handler) http.Handler` built on the same bridge logic, covering chi and the standard library's `ServeMux` without a framework-specific adapter; framework adapters can wrap it where their native type differs. `plugins/adapters/nethttp`, which is already in the root module, is the place for it.
 4. **Shared `RequestContext` with behemoth's own routes is not required.** The bridge serves application routes; behemoth's routes keep building their context in the adapter's route handler. Anything both need (session lookup) lives in the plugin's service, called from both.

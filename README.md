@@ -37,7 +37,7 @@ Setup has two steps. `Prepare` collects the declarations of your plugins and sch
 import (
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/engine"
 	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
 )
@@ -45,7 +45,7 @@ import (
 plugin := emailpassword.New(emailpassword.Options{})
 
 // 1. Declarations: plugins, hooks, schema.
-app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
+app, err := engine.Prepare([]core.Plugin{plugin}, engine.PrepareConfig{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -57,9 +57,9 @@ engine := gin.New()
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg, // the master secret(s) every key is derived from
 	HTTP:   ginadapter.New(engine),
-	Session: types.SessionConfig{
+	Session: core.SessionConfig{
 		ExpiresIn: 24 * time.Hour,
-		Transport: types.TransportHeader,
+		Transport: core.TransportHeader,
 	},
 })
 if err != nil {

@@ -6,12 +6,12 @@ The code lives in `plugins/emailverification/`: `emailverification.go` has the v
 
 ## What the plugin contributes
 
-| `types.Plugin` method | Result |
+| `core.Plugin` method | Result |
 | --- | --- |
 | `Meta` | name `emailverification`, no dependencies, no mount path |
 | `Declare` | the `email_verification` token kind (single use, `Options.TTL`, database backend), six hook points, three rate-limit rules |
 | `Register` | handlers on three user data points, and with `RequireVerified` on `auth.signIn.credentialsVerified` |
-| `Init` | checks the options and the mailer, parses `LinkURL`, wraps the two flows with `types.WithLifecycle` |
+| `Init` | checks the options and the mailer, parses `LinkURL`, wraps the two flows with `core.WithLifecycle` |
 | `Routes` | `POST /email/send-verification`, `POST /email/verify` |
 
 It is the first plugin that registers handlers. The email/password and magic link plugins only fire points.
@@ -58,7 +58,7 @@ Both sends run in after-commit handlers. An error there is logged by the dispatc
 
 | Step | What | On failure |
 | --- | --- | --- |
-| 1 | check the email's shape and the redirect URL (`types.TrustedRedirect`) | a validation error |
+| 1 | check the email's shape and the redirect URL (`core.TrustedRedirect`) | a validation error |
 | 2 | find the user by email, unless the request came with one | not found: `Fail` with `user_not_found`, return `ErrNoAccount` |
 | 3 | the user is verified already | return `ErrAlreadyVerified`; no point fires |
 | 4 | `RevokeAllForSubject(email_verification, user.ID)`, then `Issue` with `{email, redirect_url}` | `Fail` with `issue_failed` |
@@ -192,9 +192,9 @@ The same link therefore cancels a change that is pending and undoes one that was
 
 | Addition | Where | Why |
 | --- | --- | --- |
-| `TokenManager.ListForSubject(kind, subject)` | `types/token.go`, `auth/token.go`, `Store.ListTokensForSubject` | step 2 of the revert revokes some of a user's revert tokens and not all. It returns the usable tokens of a kind, oldest first; a key-value kind can't be listed |
-| `SessionManager.IsFresh(session)` and `types.RequireFreshSession` | `types/session.go`, `auth/session.go` | `SessionConfig.FreshAge` and `Session.FreshAt` existed and nothing read them. A session is fresh when it is active and `FreshAt` is within `FreshAge` (`DefaultFreshAge`, 15 minutes, when zero). `FreshAt` is set by `Create` and `Promote` |
-| `MailMessage.Data`, two mail kinds | `types/mail.go` | the notice has to name the new address, which nothing else on the message carries |
+| `TokenManager.ListForSubject(kind, subject)` | `core/token.go`, `auth/token.go`, `Store.ListTokensForSubject` | step 2 of the revert revokes some of a user's revert tokens and not all. It returns the usable tokens of a kind, oldest first; a key-value kind can't be listed |
+| `SessionManager.IsFresh(session)` and `core.RequireFreshSession` | `core/session.go`, `auth/session.go` | `SessionConfig.FreshAge` and `Session.FreshAt` existed and nothing read them. A session is fresh when it is active and `FreshAt` is within `FreshAge` (`DefaultFreshAge`, 15 minutes, when zero). `FreshAt` is set by `Create` and `Promote` |
+| `MailMessage.Data`, two mail kinds | `core/mail.go` | the notice has to name the new address, which nothing else on the message carries |
 
 `RequireFreshSession` wraps `RequireSession` and then checks `IsFresh`. A stale session gets a typed session error, `session_not_fresh`, which maps to `401`.
 

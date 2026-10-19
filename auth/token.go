@@ -7,24 +7,24 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
 type DefaultTokenManager struct {
 	st      *store.Store
 	kv      behemoth.KeyValueStorage
-	catalog types.TokenCatalog
+	catalog core.TokenCatalog
 	crypto  crypto.Services
-	cfg     types.TokenConfig
-	disp    types.Dispatcher
-	auth    *types.AuthContext
+	cfg     core.TokenConfig
+	disp    core.Dispatcher
+	auth    *core.AuthContext
 }
 
 // NewDefaultTokenManager builds the default TokenManager. auth is the
@@ -34,12 +34,12 @@ type DefaultTokenManager struct {
 func NewDefaultTokenManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
-	catalog types.TokenCatalog,
+	catalog core.TokenCatalog,
 	crypto crypto.Services,
-	dispatcher types.Dispatcher,
-	cfg types.TokenConfig,
-	auth *types.AuthContext,
-) types.TokenManager {
+	dispatcher core.Dispatcher,
+	cfg core.TokenConfig,
+	auth *core.AuthContext,
+) core.TokenManager {
 	return &DefaultTokenManager{
 		st:      st,
 		kv:      kv,
@@ -73,7 +73,7 @@ func kvKey(kind models.TokenKind, lookupHash string) string {
 	return "token:" + string(kind) + ":" + lookupHash
 }
 
-func resolveTTL(def types.TokenKindDef, cfg types.TokenConfig) time.Duration {
+func resolveTTL(def core.TokenKindDef, cfg core.TokenConfig) time.Duration {
 	if override, ok := cfg.TTLOverrides[def.Kind]; ok {
 		return override
 	}
@@ -118,13 +118,13 @@ func (tm *DefaultTokenManager) issue(
 	meta behemoth.M,
 ) (*models.Token, string, error) {
 	const op = "TokenManager.Issue"
-	ctx = types.BeginOperation(ctx) // beforeIssue and afterIssue share Values
+	ctx = core.BeginOperation(ctx) // beforeIssue and afterIssue share Values
 
 	// The kind and subject are also published in Values, where a rate-limit
 	// rule on token.beforeIssue keys on them: HookRateLimitRule.KeyFunc gets
 	// the HookContext and not the payload. A token without a subject leaves
 	// no subject entry, so a rule per subject does not apply to it.
-	values := types.HookValuesFrom(ctx)
+	values := core.HookValuesFrom(ctx)
 	values[hooks.HookValueTokenKind] = string(kind)
 	if s := subjectString(subject); s != "" {
 		values[hooks.HookValueTokenSubject] = s
@@ -137,7 +137,7 @@ func (tm *DefaultTokenManager) issue(
 		return nil, "", errs.NewValidationError(op, "kind", fmt.Errorf("unknown token kind %q", kind))
 	}
 
-	if def.Backend == types.TokenBackendKV && tm.kv == nil {
+	if def.Backend == core.TokenBackendKV && tm.kv == nil {
 		// this should already have been caught at Boot when
 		// resolving backends, but a kind declared after boot misconfiguration
 		// (or a bug in that check) must not silently fall through to a nil
@@ -173,7 +173,7 @@ func (tm *DefaultTokenManager) issue(
 
 	// The returned payload is not read: a handler can stop the issue, but
 	// it can't change the token's kind or subject.
-	if _, err := tm.disp.RunBefore(hookContext(ctx, tm.auth, hooks.HookTokenBeforeIssue, types.BeforeHookPhase), hooks.HookTokenBeforeIssue, behemoth.M{
+	if _, err := tm.disp.RunBefore(hookContext(ctx, tm.auth, hooks.HookTokenBeforeIssue, core.BeforeHookPhase), hooks.HookTokenBeforeIssue, behemoth.M{
 		hooks.HookValueTokenKind:    string(kind),
 		hooks.HookValueTokenSubject: subjectString(subject),
 	}); err != nil {
@@ -184,7 +184,7 @@ func (tm *DefaultTokenManager) issue(
 		return nil, "", errs.WrapOp(op, "token", err)
 	}
 
-	if err := tm.disp.RunAfter(hookContext(ctx, tm.auth, hooks.HookTokenAfterIssue, types.AfterHookPhase), hooks.HookTokenAfterIssue, tok); err != nil {
+	if err := tm.disp.RunAfter(hookContext(ctx, tm.auth, hooks.HookTokenAfterIssue, core.AfterHookPhase), hooks.HookTokenAfterIssue, tok); err != nil {
 		return nil, "", err
 	}
 	return tok, rawToken, nil
@@ -197,10 +197,10 @@ func subjectString(subject any) string {
 	return fmt.Sprint(subject)
 }
 
-func (tm *DefaultTokenManager) persist(ctx context.Context, def types.TokenKindDef, token *models.Token, ttl time.Duration) error {
+func (tm *DefaultTokenManager) persist(ctx context.Context, def core.TokenKindDef, token *models.Token, ttl time.Duration) error {
 	const op = "TokenManager.persist"
 	switch def.Backend {
-	case types.TokenBackendKV:
+	case core.TokenBackendKV:
 		// No store involved: the KV entry is the whole record, so its
 		// identity and creation time are assigned here.
 		token.ID, token.CreatedAt = utils.GenerateUUID(), time.Now()
@@ -224,13 +224,13 @@ func (tm *DefaultTokenManager) persist(ctx context.Context, def types.TokenKindD
 // fetch is the shared lookup & authenticity check path used by Verify and
 // Consume, so the two entry points can never drift on that logic. A DB token
 // is read through st — Consume passes its transaction's store.
-func (tm *DefaultTokenManager) fetch(ctx context.Context, st *store.Store, def types.TokenKindDef, kind models.TokenKind, rawToken string) (*models.Token, error) {
+func (tm *DefaultTokenManager) fetch(ctx context.Context, st *store.Store, def core.TokenKindDef, kind models.TokenKind, rawToken string) (*models.Token, error) {
 	const op = "TokenManager.fetch"
 	lookupHash := utils.LookupHashOf(rawToken)
 
 	var m *models.Token
 	switch def.Backend {
-	case types.TokenBackendKV:
+	case core.TokenBackendKV:
 		raw, err := tm.kv.Get(ctx, kvKey(kind, lookupHash))
 		if err != nil {
 			return nil, errs.NewTokenError(op, errs.CodeTokenNotFound, err)
@@ -294,7 +294,7 @@ func (tm *DefaultTokenManager) Consume(ctx context.Context, kind models.TokenKin
 // consume is Consume without its span.
 func (tm *DefaultTokenManager) consume(ctx context.Context, kind models.TokenKind, rawToken string) (*models.Token, error) {
 	const op = "TokenManager.Consume"
-	ctx = types.BeginOperation(ctx) // one operation for the consume and its consumed or failed point
+	ctx = core.BeginOperation(ctx) // one operation for the consume and its consumed or failed point
 
 	def, ok := tm.catalog.Lookup(kind)
 	if !ok {
@@ -311,7 +311,7 @@ func (tm *DefaultTokenManager) consume(ctx context.Context, kind models.TokenKin
 	var consumeErr error
 
 	switch def.Backend {
-	case types.TokenBackendDB:
+	case core.TokenBackendDB:
 		// Fetch, validate and consume in one transaction. ConsumeToken is
 		// what makes it at-most-once: a concurrent Consume that read the
 		// token before this one stamped it still loses.
@@ -331,7 +331,7 @@ func (tm *DefaultTokenManager) consume(ctx context.Context, kind models.TokenKin
 			result = tok
 			return nil
 		})
-	case types.TokenBackendKV:
+	case core.TokenBackendKV:
 		// KeyValueStorage exposes no transaction primitive, so this is
 		// non-atomic Get-then-Delete. Two concurrent Consume calls for the
 		// same token can both pass Get before either Delete runs, and both
@@ -351,19 +351,19 @@ func (tm *DefaultTokenManager) consume(ctx context.Context, kind models.TokenKin
 	}
 
 	if consumeErr != nil {
-		hctx := hookContext(ctx, tm.auth, hooks.HookTokenFailed, types.FailedHookPhase)
-		if err := tm.disp.Fail(hctx, hooks.HookTokenFailed, types.FailureReason{Code: errs.ClassifyCode(consumeErr), Cause: consumeErr}); err != nil {
+		hctx := hookContext(ctx, tm.auth, hooks.HookTokenFailed, core.FailedHookPhase)
+		if err := tm.disp.Fail(hctx, hooks.HookTokenFailed, core.FailureReason{Code: errs.ClassifyCode(consumeErr), Cause: consumeErr}); err != nil {
 			return nil, err
 		}
 		return nil, consumeErr
 	}
-	if err := tm.disp.RunAfter(hookContext(ctx, tm.auth, hooks.HookTokenConsumed, types.AfterHookPhase), hooks.HookTokenConsumed, result); err != nil {
+	if err := tm.disp.RunAfter(hookContext(ctx, tm.auth, hooks.HookTokenConsumed, core.AfterHookPhase), hooks.HookTokenConsumed, result); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-// Revoke implements [types.TokenManager].
+// Revoke implements [core.TokenManager].
 func (tm *DefaultTokenManager) Revoke(ctx context.Context, tokenID string) error {
 	const op = "TokenManager.Revoke"
 
@@ -381,7 +381,7 @@ func (tm *DefaultTokenManager) Revoke(ctx context.Context, tokenID string) error
 	return nil
 }
 
-// RevokeAllForSubject implements [types.TokenManager].
+// RevokeAllForSubject implements [core.TokenManager].
 func (tm *DefaultTokenManager) RevokeAllForSubject(ctx context.Context, kind models.TokenKind, subject any) error {
 	const op = "TokenManager.RevokeAllForSubject"
 
@@ -389,7 +389,7 @@ func (tm *DefaultTokenManager) RevokeAllForSubject(ctx context.Context, kind mod
 	if !ok {
 		return errs.NewValidationError(op, "kind", fmt.Errorf("unknown token kind %q", kind))
 	}
-	if def.Backend == types.TokenBackendKV {
+	if def.Backend == core.TokenBackendKV {
 		return errs.NewConfigurationError(op, fmt.Sprintf("kind %q is KV-backed; bulk revoke by subject is not supported", kind), nil)
 	}
 	if err := tm.st.RevokeTokensForSubject(ctx, kind, subjectString(subject)); err != nil {
@@ -398,7 +398,7 @@ func (tm *DefaultTokenManager) RevokeAllForSubject(ctx context.Context, kind mod
 	return nil
 }
 
-// ListForSubject implements [types.TokenManager].
+// ListForSubject implements [core.TokenManager].
 func (tm *DefaultTokenManager) ListForSubject(ctx context.Context, kind models.TokenKind, subject any) ([]*models.Token, error) {
 	const op = "TokenManager.ListForSubject"
 
@@ -406,7 +406,7 @@ func (tm *DefaultTokenManager) ListForSubject(ctx context.Context, kind models.T
 	if !ok {
 		return nil, errs.NewValidationError(op, "kind", fmt.Errorf("unknown token kind %q", kind))
 	}
-	if def.Backend == types.TokenBackendKV {
+	if def.Backend == core.TokenBackendKV {
 		return nil, errs.NewConfigurationError(op, fmt.Sprintf("kind %q is KV-backed; listing by subject is not supported", kind), nil)
 	}
 	found, err := tm.st.ListTokensForSubject(ctx, kind, subjectString(subject))
@@ -422,4 +422,4 @@ func (tm *DefaultTokenManager) ListForSubject(ctx context.Context, kind models.T
 	return usable, nil
 }
 
-var _ types.TokenManager = (*DefaultTokenManager)(nil)
+var _ core.TokenManager = (*DefaultTokenManager)(nil)

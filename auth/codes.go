@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // maxCodeLength bounds CodeOptions.Length. A longer secret is a token's job.
 const maxCodeLength = 12
 
-// DefaultCodeManager is the types.CodeManager Boot puts on the AuthContext.
+// DefaultCodeManager is the core.CodeManager Boot puts on the AuthContext.
 // Codes are rows of verification_codes, written through the store, and are
 // hashed with the keyed hasher tokens use (Crypto.Secrets), so a copy of the
 // table does not give the codes away.
@@ -35,20 +35,20 @@ func hashed(kind models.CodeKind, subject, code string) string {
 	return string(kind) + "\x00" + subject + "\x00" + code
 }
 
-// Issue implements [types.CodeManager].
-func (m *DefaultCodeManager) Issue(ctx context.Context, kind models.CodeKind, subject string, opts types.CodeOptions) (string, *models.VerificationCode, error) {
+// Issue implements [core.CodeManager].
+func (m *DefaultCodeManager) Issue(ctx context.Context, kind models.CodeKind, subject string, opts core.CodeOptions) (string, *models.VerificationCode, error) {
 	const op = "CodeManager.Issue"
 	if kind == "" || subject == "" {
 		return "", nil, errs.NewConfigurationError(op, "a code needs a kind and a subject", nil)
 	}
 	if opts.Length == 0 {
-		opts.Length = types.DefaultCodeLength
+		opts.Length = core.DefaultCodeLength
 	}
 	if opts.TTL == 0 {
-		opts.TTL = types.DefaultCodeTTL
+		opts.TTL = core.DefaultCodeTTL
 	}
 	if opts.MaxAttempts == 0 {
-		opts.MaxAttempts = types.DefaultCodeMaxAttempts
+		opts.MaxAttempts = core.DefaultCodeMaxAttempts
 	}
 	if opts.Length < 4 || opts.Length > maxCodeLength || opts.TTL < 0 || opts.MaxAttempts < 1 {
 		return "", nil, errs.NewConfigurationError(op,
@@ -92,7 +92,7 @@ func (m *DefaultCodeManager) digits(n int) (string, error) {
 	return b.String(), nil
 }
 
-// Consume implements [types.CodeManager]. The attempt is taken before the
+// Consume implements [core.CodeManager]. The attempt is taken before the
 // guess is compared, so that guesses arriving together can't share one.
 func (m *DefaultCodeManager) Consume(ctx context.Context, kind models.CodeKind, subject, code string) (*models.VerificationCode, error) {
 	const op = "CodeManager.Consume"
@@ -124,9 +124,9 @@ func (m *DefaultCodeManager) Consume(ctx context.Context, kind models.CodeKind, 
 	return found, nil
 }
 
-// Revoke implements [types.CodeManager].
+// Revoke implements [core.CodeManager].
 func (m *DefaultCodeManager) Revoke(ctx context.Context, kind models.CodeKind, subject string) error {
 	return m.st.DeleteVerificationCodeFor(ctx, kind, subject)
 }
 
-var _ types.CodeManager = (*DefaultCodeManager)(nil)
+var _ core.CodeManager = (*DefaultCodeManager)(nil)

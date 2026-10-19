@@ -16,6 +16,8 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -25,8 +27,6 @@ import (
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/tests/testutils"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -518,14 +518,14 @@ func TestDeleteUser(t *testing.T) {
 // dispatch path a plugin would use.
 type usernamePlugin struct{}
 
-func (usernamePlugin) Meta() types.PluginMeta                 { return types.PluginMeta{Name: "usernames"} }
-func (usernamePlugin) Version() string                        { return "0.0.0" }
-func (usernamePlugin) Init(*types.AuthContext) error          { return nil }
-func (usernamePlugin) Routes() []types.Route                  { return nil }
-func (usernamePlugin) Middlewares() []types.Middleware        { return nil }
-func (usernamePlugin) Declare(*types.PluginInitContext) error { return nil }
-func (usernamePlugin) Register(reg types.HookRegistry) error {
-	if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
+func (usernamePlugin) Meta() core.PluginMeta                 { return core.PluginMeta{Name: "usernames"} }
+func (usernamePlugin) Version() string                       { return "0.0.0" }
+func (usernamePlugin) Init(*core.AuthContext) error          { return nil }
+func (usernamePlugin) Routes() []core.Route                  { return nil }
+func (usernamePlugin) Middlewares() []core.Middleware        { return nil }
+func (usernamePlugin) Declare(*core.PluginInitContext) error { return nil }
+func (usernamePlugin) Register(reg core.HookRegistry) error {
+	if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
 		email, _ := row[models.UserEmail].(string)
 		row[models.UserFirstname] = strings.SplitN(email, "@", 2)[0]
 		return row, nil
@@ -534,7 +534,7 @@ func (usernamePlugin) Register(reg types.HookRegistry) error {
 	}
 	// On update, keep the username in step with a changed email, and record
 	// which user it was (published in Values, not in the payload).
-	return reg.OnBefore(hooks.HookUserBeforeUpdate, func(hctx *types.HookContext, changes behemoth.M) (behemoth.M, error) {
+	return reg.OnBefore(hooks.HookUserBeforeUpdate, func(hctx *core.HookContext, changes behemoth.M) (behemoth.M, error) {
 		if email, ok := changes[models.UserEmail].(string); ok {
 			changes[models.UserFirstname] = strings.SplitN(email, "@", 2)[0]
 		}
@@ -549,7 +549,7 @@ func (usernamePlugin) Register(reg types.HookRegistry) error {
 // data.user.beforeCreate handler shapes the stored user.
 func TestBootWiresStoreToPluginHooks(t *testing.T) {
 	ctx := context.Background()
-	app, err := engine.Prepare([]types.Plugin{usernamePlugin{}}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{usernamePlugin{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{Crypto: crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
@@ -576,7 +576,7 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 	cryptoCfg := crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 	}
-	app, err := engine.Prepare([]types.Plugin{usernamePlugin{}}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{usernamePlugin{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	var sawUsername any
@@ -584,15 +584,15 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 	reject := false
 	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: cryptoCfg,
-		Hooks: func(reg types.HookRegistry) error {
-			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
+		Hooks: func(reg core.HookRegistry) error {
+			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *core.HookContext, row behemoth.M) (behemoth.M, error) {
 				sawUsername = row[models.UserFirstname]
 				row[models.UserFirstname] = "from-app"
 				return row, nil
 			}, nil); err != nil {
 				return err
 			}
-			return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, _ any) error {
+			return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, _ any) error {
 				if hctx.Tx == nil {
 					return errors.New("a data hook should get the transaction's store")
 				}
@@ -623,8 +623,8 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 	require.NoError(t, err)
 	_, err = engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: cryptoCfg,
-		Hooks: func(reg types.HookRegistry) error {
-			return reg.OnBefore("no.such.point", func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) { return p, nil }, nil)
+		Hooks: func(reg core.HookRegistry) error {
+			return reg.OnBefore("no.such.point", func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) { return p, nil }, nil)
 		},
 	})
 	require.Error(t, err, "registering on an undeclared point fails Boot")
@@ -643,7 +643,7 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "app", app.AppName, "the default name")
 
-	app, err = engine.Prepare([]types.Plugin{usernamePlugin{}}, engine.PrepareConfig{AppName: "shop"})
+	app, err = engine.Prepare([]core.Plugin{usernamePlugin{}}, engine.PrepareConfig{AppName: "shop"})
 	require.NoError(t, err)
 	assert.Equal(t, "shop", app.AppName)
 
@@ -651,11 +651,11 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 	var sawUsername any = "unset"
 	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: cryptoCfg,
-		Hooks: func(reg types.HookRegistry) error {
-			return reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
+		Hooks: func(reg core.HookRegistry) error {
+			return reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *core.HookContext, row behemoth.M) (behemoth.M, error) {
 				sawUsername = row[models.UserFirstname]
 				return row, nil
-			}, &types.HookOptions{Before: []string{pluginName}})
+			}, &core.HookOptions{Before: []string{pluginName}})
 		},
 	})
 	require.NoError(t, err)
@@ -666,7 +666,7 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 		"an application named core":   {AppName: "core"},
 		"a plugin named like the app": {AppName: pluginName},
 	} {
-		_, err = engine.Prepare([]types.Plugin{usernamePlugin{}}, cfg)
+		_, err = engine.Prepare([]core.Plugin{usernamePlugin{}}, cfg)
 		assert.Error(t, err, name)
 	}
 }
@@ -677,18 +677,18 @@ func TestSecondHandlerOnAPointIsRejected(t *testing.T) {
 	ctx := context.Background()
 	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
-	pass := func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) { return row, nil }
+	pass := func(_ *core.HookContext, row behemoth.M) (behemoth.M, error) { return row, nil }
 
 	_, err = engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
-		Hooks: func(reg types.HookRegistry) error {
+		Hooks: func(reg core.HookRegistry) error {
 			if err := reg.OnBefore(hooks.HookUserBeforeCreate, pass, nil); err != nil {
 				return err
 			}
 			// A different priority doesn't make it a different handler slot.
-			return reg.OnBefore(hooks.HookUserBeforeCreate, pass, &types.HookOptions{Priority: types.PriorityLow})
+			return reg.OnBefore(hooks.HookUserBeforeCreate, pass, &core.HookOptions{Priority: core.PriorityLow})
 		},
 	})
 	require.Error(t, err)
@@ -697,9 +697,9 @@ func TestSecondHandlerOnAPointIsRejected(t *testing.T) {
 }
 
 // capturingDriver keeps the routes Boot mounts, so a test can call them.
-type capturingDriver struct{ routes []types.Route }
+type capturingDriver struct{ routes []core.Route }
 
-func (d *capturingDriver) Mount(routes ...types.Route) error {
+func (d *capturingDriver) Mount(routes ...core.Route) error {
 	d.routes = append(d.routes, routes...)
 	return nil
 }
@@ -707,16 +707,16 @@ func (d *capturingDriver) Mount(routes ...types.Route) error {
 // signupPlugin creates a user from a route, through the store only; its
 // data hook names the user after a request header — which the hook can only
 // see if the request travelled through the context.
-type signupPlugin struct{ ac *types.AuthContext }
+type signupPlugin struct{ ac *core.AuthContext }
 
-func (p *signupPlugin) Meta() types.PluginMeta                 { return types.PluginMeta{Name: "signup"} }
-func (p *signupPlugin) Version() string                        { return "0.0.0" }
-func (p *signupPlugin) Init(ac *types.AuthContext) error       { p.ac = ac; return nil }
-func (p *signupPlugin) Middlewares() []types.Middleware        { return nil }
-func (p *signupPlugin) Declare(*types.PluginInitContext) error { return nil }
+func (p *signupPlugin) Meta() core.PluginMeta                 { return core.PluginMeta{Name: "signup"} }
+func (p *signupPlugin) Version() string                       { return "0.0.0" }
+func (p *signupPlugin) Init(ac *core.AuthContext) error       { p.ac = ac; return nil }
+func (p *signupPlugin) Middlewares() []core.Middleware        { return nil }
+func (p *signupPlugin) Declare(*core.PluginInitContext) error { return nil }
 
-func (p *signupPlugin) Routes() []types.Route {
-	return []types.Route{{Method: http.MethodPost, Path: "/sign-up", Handler: func(rctx *types.RequestContext) error {
+func (p *signupPlugin) Routes() []core.Route {
+	return []core.Route{{Method: http.MethodPost, Path: "/sign-up", Handler: func(rctx *core.RequestContext) error {
 		u := &models.User{Email: rctx.Request.URL.Query().Get("email")}
 		if err := p.ac.Store.CreateUser(rctx.Ctx, u); err != nil {
 			return err
@@ -725,8 +725,8 @@ func (p *signupPlugin) Routes() []types.Route {
 	}}}
 }
 
-func (p *signupPlugin) Register(reg types.HookRegistry) error {
-	return reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
+func (p *signupPlugin) Register(reg core.HookRegistry) error {
+	return reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
 		if hctx.Request == nil {
 			row[models.UserFirstname] = "no-request"
 		} else {
@@ -739,7 +739,7 @@ func (p *signupPlugin) Register(reg types.HookRegistry) error {
 func TestDataHooksSeeTheRequestBeingHandled(t *testing.T) {
 	ctx := context.Background()
 	plugin := &signupPlugin{}
-	app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	driver := &capturingDriver{}
 	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
@@ -755,7 +755,7 @@ func TestDataHooksSeeTheRequestBeingHandled(t *testing.T) {
 	// the native request, with the request's own context.
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/sign-up?email=ada@example.com", nil)
 	req.Header.Set("X-Username", "from-header")
-	rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+	rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 	require.NoError(t, driver.routes[0].Handler(rctx))
 	w := httptest.NewRecorder()
 	rctx.Response.Flush(w)
@@ -1028,8 +1028,8 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 
 	var seen []string
 	var veto error
-	before := func(name string) types.BeforeHookFunc {
-		return func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	before := func(name string) core.BeforeHookFunc {
+		return func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			seen = append(seen, fmt.Sprint(name, " tx=", hctx.Tx != nil))
 			if name == "beforeDelete" {
 				assert.Equal(t, "ada@example.com", payload[models.UserEmail], "the payload is the user row")
@@ -1039,8 +1039,8 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 			return nil, nil
 		}
 	}
-	after := func(name string) types.AfterHookFunc {
-		return func(hctx *types.HookContext, result any) error {
+	after := func(name string) core.AfterHookFunc {
+		return func(hctx *core.HookContext, result any) error {
 			line := fmt.Sprint(name, " tx=", hctx.Tx != nil)
 			if sess, ok := result.(*models.Session); ok {
 				line += fmt.Sprint(" ", sess.State, " ", sess.RevokedReason, " at=", sess.RevokedAt != nil)
@@ -1055,18 +1055,18 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: 5 * time.Minute},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: 5 * time.Minute},
 		KV:        kv,
 		Telemetry: tel,
-		Hooks: func(reg types.HookRegistry) error {
-			for point, name := range map[types.HookPoint]string{
+		Hooks: func(reg core.HookRegistry) error {
+			for point, name := range map[core.HookPoint]string{
 				hooks.HookUserBeforeDelete: "beforeDelete", hooks.HookSessionBeforeRevoke: "beforeRevoke",
 			} {
 				if err := reg.OnBefore(point, before(name), nil); err != nil {
 					return err
 				}
 			}
-			for point, name := range map[types.HookPoint]string{
+			for point, name := range map[core.HookPoint]string{
 				hooks.HookUserAfterDelete: "afterDelete", hooks.HookUserDeleted: "deleted", hooks.HookSessionAfterRevoke: "afterRevoke",
 			} {
 				if err := reg.OnAfter(point, after(name), nil); err != nil {
@@ -1080,9 +1080,9 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 
 	u := &models.User{Email: "ada@example.com"}
 	require.NoError(t, ac.Store.CreateUser(ctx, u))
-	_, live, err := ac.SessionManager.Create(ctx, u.ID, types.SessionMeta{State: models.SessionActive})
+	_, live, err := ac.SessionManager.Create(ctx, u.ID, core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	old, _, err := ac.SessionManager.Create(ctx, u.ID, types.SessionMeta{State: models.SessionActive})
+	old, _, err := ac.SessionManager.Create(ctx, u.ID, core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	require.NoError(t, ac.SessionManager.Revoke(ctx, old.ID, "user_logout"))
 	_, err = ac.SessionManager.Validate(ctx, live)
@@ -1127,8 +1127,8 @@ func TestCommittedDataPointsUnderBoot(t *testing.T) {
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
-		Hooks: func(reg types.HookRegistry) error {
-			if err := reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) error {
+		Hooks: func(reg core.HookRegistry) error {
+			if err := reg.OnAfter(hooks.HookUserCreated, func(hctx *core.HookContext, result any) error {
 				seen = append(seen, "created "+result.(*models.User).Email)
 				assert.Nil(t, hctx.Tx, "the transaction is over")
 				// The row is visible on the root store's connection.
@@ -1138,7 +1138,7 @@ func TestCommittedDataPointsUnderBoot(t *testing.T) {
 			}, nil); err != nil {
 				return err
 			}
-			return reg.OnAfter(hooks.HookUserUpdated, func(hctx *types.HookContext, result any) error {
+			return reg.OnAfter(hooks.HookUserUpdated, func(hctx *core.HookContext, result any) error {
 				seen = append(seen, fmt.Sprint("updated ", hctx.Values[hooks.HookValueUserID] == result.(*models.User).ID))
 				return nil
 			}, nil)

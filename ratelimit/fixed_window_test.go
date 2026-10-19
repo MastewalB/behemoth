@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 )
 
 // counter is an AtomicIncrementer that counts in memory and reports the end
@@ -32,7 +32,7 @@ func (c *counter) Increment(_ context.Context, key string, ttl time.Duration) (i
 func TestFixedWindow(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 8, 12, 0, 50, 0, time.UTC)
-	limit := types.Limit{Max: 3, Window: time.Minute}
+	limit := core.Limit{Max: 3, Window: time.Minute}
 	c := &counter{counts: map[string]int64{}, resetAt: now.Add(10 * time.Second)}
 	l := NewFixedWindow(c).WithClock(func() time.Time { return now })
 

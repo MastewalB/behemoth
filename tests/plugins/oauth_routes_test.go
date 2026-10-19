@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/plugins/oauth"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,8 +36,8 @@ func (app *oauthApp) post(t *testing.T, path, body string, cookies ...*http.Cook
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
 	}
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: app.ac}
-	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: app.ac}
+	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	w := httptest.NewRecorder()
 	if err := route.Handler(rctx); err != nil {
 		status, errBody := (&errs.DefaultErrorMapper{}).Map(err)
@@ -78,7 +78,7 @@ func stateOf(t *testing.T, begun routeAnswer) string {
 	return state
 }
 
-func withTransport(transport types.TokenTransport) func(*engine.BootConfig) {
+func withTransport(transport core.TokenTransport) func(*engine.BootConfig) {
 	return func(cfg *engine.BootConfig) { cfg.Session.Transport = transport }
 }
 
@@ -94,7 +94,7 @@ func completeBodyFor(provider, state string, extra ...string) string {
 // an HttpOnly cookie of the sign-in, and the complete route reads it from
 // there. The answer is the one every sign-in route gives.
 func TestOAuthRoutesUnderTheCookieTransport(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(types.TransportCookie))
+	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(core.TransportCookie))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -113,7 +113,7 @@ func TestOAuthRoutesUnderTheCookieTransport(t *testing.T) {
 	assert.Equal(t, "/", binding.Path)
 	assert.Empty(t, binding.Domain, "a host-only cookie")
 	assert.InDelta(t, oauth.DefaultStateTTL.Seconds(), binding.MaxAge, 5, "it lasts as long as the sign-in")
-	token, err := app.ac.TokenManager.Verify(t.Context(), types.TokenKindOAuthState, state)
+	token, err := app.ac.TokenManager.Verify(t.Context(), core.TokenKindOAuthState, state)
 	require.NoError(t, err)
 	assert.Equal(t, utils.LookupHashOf(binding.Value), token.MetadataJSON["binding_hash"])
 
@@ -128,7 +128,7 @@ func TestOAuthRoutesUnderTheCookieTransport(t *testing.T) {
 	assert.Equal(t, "ada@example.com", user["email"])
 	assert.Equal(t, "/dashboard", done.body["redirect_url"])
 	assert.NotContains(t, done.body, "token", "the session token is in the cookie")
-	assert.NotEmpty(t, done.cookie(t, types.DefaultSessionCookieName).Value)
+	assert.NotEmpty(t, done.cookie(t, core.DefaultSessionCookieName).Value)
 	cleared := done.cookie(t, binding.Name)
 	assert.Empty(t, cleared.Value)
 	assert.Equal(t, -1, cleared.MaxAge, "the used binding cookie is removed")
@@ -140,7 +140,7 @@ func TestOAuthRoutesUnderTheCookieTransport(t *testing.T) {
 // Two sign-ins started in one browser, from two tabs, keep a cookie each.
 // Either one can be completed.
 func TestOAuthRoutesKeepACookiePerSignIn(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(types.TransportCookie))
+	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(core.TransportCookie))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -160,7 +160,7 @@ func TestOAuthRoutesKeepACookiePerSignIn(t *testing.T) {
 // A client that keeps the session token itself gets the binding value in
 // the body and sends it back in the body. No cookie is set.
 func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
-	for _, transport := range []types.TokenTransport{types.TransportHeader, types.TransportBody} {
+	for _, transport := range []core.TokenTransport{core.TransportHeader, core.TransportBody} {
 		t.Run(string(transport), func(t *testing.T) {
 			app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(transport))
 			require.NoError(t, err)
@@ -178,8 +178,8 @@ func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
 			done := app.post(t, oauth.PathComplete, completeBody(stateOf(t, begun), `,"binding":"`+binding+`"`))
 			require.Equal(t, http.StatusOK, done.StatusCode, done.body)
 			assert.Empty(t, done.Cookies())
-			if transport == types.TransportHeader {
-				assert.NotEmpty(t, done.Header.Get(types.SessionTokenHeader))
+			if transport == core.TransportHeader {
+				assert.NotEmpty(t, done.Header.Get(core.SessionTokenHeader))
 			} else {
 				assert.NotEmpty(t, done.body["token"])
 			}
@@ -190,7 +190,7 @@ func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
 // Under TransportBoth the binding value goes both ways, as the session token
 // does, and either way back works.
 func TestOAuthRoutesUnderTransportBoth(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(types.TransportBoth))
+	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(core.TransportBoth))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -211,7 +211,7 @@ func TestOAuthRoutesUnderTransportBoth(t *testing.T) {
 func TestOAuthBindingCookieFollowsTheSessionCookie(t *testing.T) {
 	t.Run("a front end on another site", func(t *testing.T) {
 		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) {
-			cfg.Session.Transport, cfg.Session.CookieSameSite = types.TransportCookie, types.SameSiteNone
+			cfg.Session.Transport, cfg.Session.CookieSameSite = core.TransportCookie, core.SameSiteNone
 			cfg.Router.BaseURL = "https://auth.example.com"
 		})
 		require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestOAuthBindingCookieFollowsTheSessionCookie(t *testing.T) {
 	})
 	t.Run("development over plain HTTP", func(t *testing.T) {
 		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) {
-			cfg.Session.Transport, cfg.Session.CookieInsecure = types.TransportCookie, true
+			cfg.Session.Transport, cfg.Session.CookieInsecure = core.TransportCookie, true
 		})
 		require.NoError(t, err)
 		app.google.identity = ada
@@ -276,8 +276,8 @@ func TestOAuthRoutesAreRateLimited(t *testing.T) {
 func TestOAuthRoutesReadTheSessionDefaults(t *testing.T) {
 	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(""))
 	require.NoError(t, err)
-	assert.Equal(t, types.TransportCookie, app.ac.SessionConfig.Transport)
-	assert.Equal(t, types.DefaultSessionCookieName, app.ac.SessionConfig.CookieName)
+	assert.Equal(t, core.TransportCookie, app.ac.SessionConfig.Transport)
+	assert.Equal(t, core.DefaultSessionCookieName, app.ac.SessionConfig.CookieName)
 
 	begun := app.post(t, oauth.PathBegin, `{"provider":"google"}`)
 	assert.NotContains(t, begun.body, "binding")

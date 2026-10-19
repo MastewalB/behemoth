@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-19
 - **Deciders:** MastewalB
-- **Affects:** `types` (`Access`, `PermissionCatalog`, `PluginInitContext`), `identity` (the grant), `engine` (`Boot`), every plugin with a self-service flow or an admin operation, and plugins written outside this repository
+- **Affects:** `core` (`Access`, `PermissionCatalog`, `PluginInitContext`), `identity` (the grant), `engine` (`Boot`), every plugin with a self-service flow or an admin operation, and plugins written outside this repository
 
 ## Context and problem
 
@@ -107,6 +107,6 @@ Freshness stays at the call site so that a reader of the flow sees it. Policy in
 
 - [`../plans/caller.md`](../plans/caller.md): `Access`, the catalog, and the first names
 - [ADR-0005](0005-treating-a-missing-caller-as-anonymous.md): the zero caller, and why a missing caller holds nothing
-- `types/plugins.go`: `HookCatalog` and `PluginInitContext`, the pattern the catalog follows
+- `core/plugins.go`: `HookCatalog` and `PluginInitContext`, the pattern the catalog follows
 - [RFC 6749, section 3.3](https://www.rfc-editor.org/rfc/rfc6749#section-3.3): the syntax of a scope
 - [RFC 6750, section 3.1](https://www.rfc-editor.org/rfc/rfc6750#section-3.1): the `insufficient_scope` error

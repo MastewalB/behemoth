@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // A rule names its algorithm, or brings a Limiter of its own. The catalog
@@ -22,26 +22,26 @@ import (
 // rate limiter resolves the name to the Limiter Boot built.
 func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
 	keyFunc := func(*http.Request, string) string { return "k" }
-	declare := func(rule types.RouteRateLimitRule) error {
+	declare := func(rule core.RouteRateLimitRule) error {
 		rule.Method, rule.Path, rule.KeyFunc, rule.Owner = http.MethodPost, "/x", keyFunc, "test"
 		return NewRateLimitCatalog(dispatch.NewDefaultHookCatalog()).DeclareRouteRateLimitRule(rule)
 	}
-	limit := types.Limit{Max: 5, Window: time.Minute}
+	limit := core.Limit{Max: 5, Window: time.Minute}
 	for name, tc := range map[string]struct {
-		rule types.RouteRateLimitRule
+		rule core.RouteRateLimitRule
 		ok   bool
 	}{
-		"the default algorithm":         {types.RouteRateLimitRule{Name: "a", Limit: limit}, true},
-		"fixed window by name":          {types.RouteRateLimitRule{Name: "b", Limit: limit, Algorithm: types.AlgorithmFixedWindow}, true},
-		"an unknown algorithm":          {types.RouteRateLimitRule{Name: "c", Limit: limit, Algorithm: "token_bucket"}, false},
-		"no limit":                      {types.RouteRateLimitRule{Name: "d"}, false},
-		"no window":                     {types.RouteRateLimitRule{Name: "e", Limit: types.Limit{Max: 5}}, false},
-		"its own limiter, any limit":    {types.RouteRateLimitRule{Name: "f", Limiter: fixedLimiter{allowed: true}}, true},
-		"disabled rules are not judged": {types.RouteRateLimitRule{Name: "g", Disabled: true}, true},
-		"reject by name":                {types.RouteRateLimitRule{Name: "h", Limit: limit, Action: types.ActionReject}, true},
-		"lockout is not built":          {types.RouteRateLimitRule{Name: "i", Limit: limit, Action: types.ActionLockout, LockoutFor: time.Hour}, false},
-		"lockout with its own limiter":  {types.RouteRateLimitRule{Name: "j", Limiter: fixedLimiter{allowed: true}, Action: types.ActionLockout}, false},
-		"an unknown action":             {types.RouteRateLimitRule{Name: "k", Limit: limit, Action: "ban"}, false},
+		"the default algorithm":         {core.RouteRateLimitRule{Name: "a", Limit: limit}, true},
+		"fixed window by name":          {core.RouteRateLimitRule{Name: "b", Limit: limit, Algorithm: core.AlgorithmFixedWindow}, true},
+		"an unknown algorithm":          {core.RouteRateLimitRule{Name: "c", Limit: limit, Algorithm: "token_bucket"}, false},
+		"no limit":                      {core.RouteRateLimitRule{Name: "d"}, false},
+		"no window":                     {core.RouteRateLimitRule{Name: "e", Limit: core.Limit{Max: 5}}, false},
+		"its own limiter, any limit":    {core.RouteRateLimitRule{Name: "f", Limiter: fixedLimiter{allowed: true}}, true},
+		"disabled rules are not judged": {core.RouteRateLimitRule{Name: "g", Disabled: true}, true},
+		"reject by name":                {core.RouteRateLimitRule{Name: "h", Limit: limit, Action: core.ActionReject}, true},
+		"lockout is not built":          {core.RouteRateLimitRule{Name: "i", Limit: limit, Action: core.ActionLockout, LockoutFor: time.Hour}, false},
+		"lockout with its own limiter":  {core.RouteRateLimitRule{Name: "j", Limiter: fixedLimiter{allowed: true}, Action: core.ActionLockout}, false},
+		"an unknown action":             {core.RouteRateLimitRule{Name: "k", Limit: limit, Action: "ban"}, false},
 	} {
 		if err := declare(tc.rule); (err == nil) != tc.ok {
 			t.Errorf("%s: Declare = %v, want ok=%v", name, err, tc.ok)
@@ -50,23 +50,23 @@ func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
 
 	// A hook rule goes through the same check.
 	hookCatalog := dispatch.NewDefaultHookCatalog()
-	if err := hookCatalog.Declare(types.HookPointDef{Point: "test.thing.before", Owner: "test", Phase: types.BeforeHookPhase}); err != nil {
+	if err := hookCatalog.Declare(core.HookPointDef{Point: "test.thing.before", Owner: "test", Phase: core.BeforeHookPhase}); err != nil {
 		t.Fatal(err)
 	}
-	err := NewRateLimitCatalog(hookCatalog).DeclareHookRateLimitRule(types.HookRateLimitRule{
-		Name: "l", Point: "test.thing.before", KeyFunc: types.KeyByValues("email"), Limit: limit,
-		Action: types.ActionLockout, LockoutFor: time.Hour, Owner: "test",
+	err := NewRateLimitCatalog(hookCatalog).DeclareHookRateLimitRule(core.HookRateLimitRule{
+		Name: "l", Point: "test.thing.before", KeyFunc: core.KeyByValues("email"), Limit: limit,
+		Action: core.ActionLockout, LockoutFor: time.Hour, Owner: "test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "ActionLockout") {
 		t.Errorf("a hook rule with ActionLockout: Declare = %v, want an error naming the action", err)
 	}
 
 	built, own := fixedLimiter{allowed: true}, fixedLimiter{allowed: false}
-	rl := &DefaultRateLimiter{limiters: map[types.RateLimitAlgorithm]types.Limiter{types.AlgorithmFixedWindow: built}}
-	if got, err := rl.limiterFor("r", "", nil); err != nil || got != types.Limiter(built) {
+	rl := &DefaultRateLimiter{limiters: map[core.RateLimitAlgorithm]core.Limiter{core.AlgorithmFixedWindow: built}}
+	if got, err := rl.limiterFor("r", "", nil); err != nil || got != core.Limiter(built) {
 		t.Errorf("an empty algorithm resolved to (%v, %v), want the fixed window", got, err)
 	}
-	if got, err := rl.limiterFor("r", types.AlgorithmFixedWindow, own); err != nil || got != types.Limiter(own) {
+	if got, err := rl.limiterFor("r", core.AlgorithmFixedWindow, own); err != nil || got != core.Limiter(own) {
 		t.Errorf("a rule's own limiter resolved to (%v, %v), want its own", got, err)
 	}
 	if _, err := rl.limiterFor("r", "token_bucket", nil); !errs.IsCategory(err, errs.CategoryConfiguration) {
@@ -78,7 +78,7 @@ func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
 // was asked about.
 type keyRecorder struct{ keys *[]string }
 
-func (l keyRecorder) Allow(_ context.Context, key string, _ types.Limit) (bool, time.Duration, error) {
+func (l keyRecorder) Allow(_ context.Context, key string, _ core.Limit) (bool, time.Duration, error) {
 	*l.keys = append(*l.keys, key)
 	return true, 0, nil
 }
@@ -87,18 +87,18 @@ func (l keyRecorder) Allow(_ context.Context, key string, _ types.Limit) (bool, 
 // is counted for it, and the point's other rules are still checked. An empty
 // key returned with true is counted like any other.
 func TestHookRuleIsSkippedWhenItDoesNotApply(t *testing.T) {
-	const point = types.HookPoint("test.thing.before")
+	const point = core.HookPoint("test.thing.before")
 	hookCatalog := dispatch.NewDefaultHookCatalog()
-	if err := hookCatalog.Declare(types.HookPointDef{Point: point, Owner: "test", Phase: types.BeforeHookPhase}); err != nil {
+	if err := hookCatalog.Declare(core.HookPointDef{Point: point, Owner: "test", Phase: core.BeforeHookPhase}); err != nil {
 		t.Fatal(err)
 	}
 	var keys []string
 	catalog := NewRateLimitCatalog(hookCatalog)
-	for name, keyFunc := range map[string]func(*types.HookContext) (string, bool){
-		"per.email": types.KeyByValues("email"),
-		"global":    func(*types.HookContext) (string, bool) { return "", true },
+	for name, keyFunc := range map[string]func(*core.HookContext) (string, bool){
+		"per.email": core.KeyByValues("email"),
+		"global":    func(*core.HookContext) (string, bool) { return "", true },
 	} {
-		if err := catalog.DeclareHookRateLimitRule(types.HookRateLimitRule{
+		if err := catalog.DeclareHookRateLimitRule(core.HookRateLimitRule{
 			Name: name, Point: point, KeyFunc: keyFunc, Limiter: keyRecorder{&keys}, Owner: "test",
 		}); err != nil {
 			t.Fatal(err)
@@ -109,7 +109,7 @@ func TestHookRuleIsSkippedWhenItDoesNotApply(t *testing.T) {
 	ctx := context.Background()
 
 	for _, values := range []behemoth.M{{}, {"email": ""}, {"email": "ada@example.com"}} {
-		if err := rl.CheckHookLimit(ctx, point, &types.HookContext{Ctx: ctx, Values: values}); err != nil {
+		if err := rl.CheckHookLimit(ctx, point, &core.HookContext{Ctx: ctx, Values: values}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -131,7 +131,7 @@ type fixedLimiter struct {
 	err     error
 }
 
-func (l fixedLimiter) Allow(context.Context, string, types.Limit) (bool, time.Duration, error) {
+func (l fixedLimiter) Allow(context.Context, string, core.Limit) (bool, time.Duration, error) {
 	return l.allowed, time.Second, l.err
 }
 
@@ -141,8 +141,8 @@ func TestRateLimiterMetrics(t *testing.T) {
 	tel, rec := telemetrytest.New()
 	rl := &DefaultRateLimiter{tel: tel}
 	ctx := context.Background()
-	check := func(l types.Limiter) error {
-		return rl.evaluate(ctx, "signin", "signin:203.0.113.7", "203.0.113.7", l, types.Limit{}, "", 0)
+	check := func(l core.Limiter) error {
+		return rl.evaluate(ctx, "signin", "signin:203.0.113.7", "203.0.113.7", l, core.Limit{}, "", 0)
 	}
 
 	if err := check(fixedLimiter{allowed: true}); err != nil {

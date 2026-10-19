@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 )
 
 // DefaultSessionTokens is the SessionTokens of behemoth: it signs external
@@ -22,21 +22,21 @@ import (
 // route that exposes it is POST /session/token (Routes).
 type DefaultSessionTokens struct {
 	jwt  crypto.JWTProvider
-	disp types.Dispatcher
-	auth *types.AuthContext
-	sm   types.SessionManager
+	disp core.Dispatcher
+	auth *core.AuthContext
+	sm   core.SessionManager
 	cfg  crypto.JWTConfig
 }
 
 // NewSessionTokens returns the session token flow over jwt. cfg is the JWT
 // configuration with its defaults applied: its external audiences are the
 // ones a token may be issued for, and none means session tokens are off.
-func NewSessionTokens(jwt crypto.JWTProvider, disp types.Dispatcher, auth *types.AuthContext, sm types.SessionManager, cfg crypto.JWTConfig) *DefaultSessionTokens {
+func NewSessionTokens(jwt crypto.JWTProvider, disp core.Dispatcher, auth *core.AuthContext, sm core.SessionManager, cfg crypto.JWTConfig) *DefaultSessionTokens {
 	return &DefaultSessionTokens{jwt: jwt, disp: disp, auth: auth, sm: sm, cfg: cfg}
 }
 
-// Issue implements [types.SessionTokens].
-func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionTokenRequest) (*types.SessionToken, error) {
+// Issue implements [core.SessionTokens].
+func (s *DefaultSessionTokens) Issue(ctx context.Context, req core.SessionTokenRequest) (*core.SessionToken, error) {
 	const op = "SessionTokens.Issue"
 	if !s.cfg.ExternalEnabled() {
 		return nil, errs.NewConfigurationErrorCode(op, errs.CodeJWTExternalNotConfigured,
@@ -60,32 +60,32 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionToken
 		audience = allowed[0]
 	}
 	if !slices.Contains(allowed, audience) {
-		return nil, errs.NewInvalidInputError(op, types.SessionTokenAudienceKey, "audience is not allowed", nil)
+		return nil, errs.NewInvalidInputError(op, core.SessionTokenAudienceKey, "audience is not allowed", nil)
 	}
 	userID := session.UserID
 
 	// One operation: the three points share Values, where a rate-limit
 	// rule finds the user and the session.
-	opCtx := types.BeginOperation(ctx)
-	values := types.HookValuesFrom(opCtx)
+	opCtx := core.BeginOperation(ctx)
+	values := core.HookValuesFrom(opCtx)
 	values[hooks.HookValueUserID] = userID
 	values[hooks.HookValueSessionID] = session.ID
 
 	// The payload is veto-only but for the claims: a handler can't change
 	// who the token is about, or for whom.
-	payload, err := s.disp.RunBefore(hookContext(opCtx, s.auth, hooks.HookSessionTokenBeforeIssue, types.BeforeHookPhase),
+	payload, err := s.disp.RunBefore(hookContext(opCtx, s.auth, hooks.HookSessionTokenBeforeIssue, core.BeforeHookPhase),
 		hooks.HookSessionTokenBeforeIssue, behemoth.M{
-			hooks.HookValueUserID:         userID,
-			hooks.HookValueSessionID:      session.ID,
-			types.SessionTokenAudienceKey: audience,
-			types.SessionTokenClaimsKey:   behemoth.M{},
+			hooks.HookValueUserID:        userID,
+			hooks.HookValueSessionID:     session.ID,
+			core.SessionTokenAudienceKey: audience,
+			core.SessionTokenClaimsKey:   behemoth.M{},
 		})
 	if err != nil {
-		return nil, types.FailIfRejected(s.disp, hookContext(opCtx, s.auth, hooks.HookSessionTokenIssueFailed, types.FailedHookPhase),
-			hooks.HookSessionTokenIssueFailed, err, types.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
+		return nil, core.FailIfRejected(s.disp, hookContext(opCtx, s.auth, hooks.HookSessionTokenIssueFailed, core.FailedHookPhase),
+			hooks.HookSessionTokenIssueFailed, err, core.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
 	}
 	var custom behemoth.M
-	switch claims := payload[types.SessionTokenClaimsKey].(type) {
+	switch claims := payload[core.SessionTokenClaimsKey].(type) {
 	case nil:
 	case behemoth.M:
 		custom = claims
@@ -109,7 +109,7 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionToken
 	if err != nil {
 		return nil, err
 	}
-	result := &types.SessionToken{
+	result := &core.SessionToken{
 		Token: token, ID: claims.ID, UserID: userID, SessionID: session.ID,
 		Audience: audience, ExpiresAt: claims.ExpiresAt,
 	}
@@ -117,7 +117,7 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionToken
 	// Handlers learn that a token was issued, and not the token.
 	record := *result
 	record.Token = ""
-	if err := s.disp.RunAfter(hookContext(opCtx, s.auth, hooks.HookSessionTokenAfterIssue, types.AfterHookPhase),
+	if err := s.disp.RunAfter(hookContext(opCtx, s.auth, hooks.HookSessionTokenAfterIssue, core.AfterHookPhase),
 		hooks.HookSessionTokenAfterIssue, &record); err != nil {
 		return nil, err
 	}
@@ -126,13 +126,13 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionToken
 
 // Routes returns POST /session/token, behind RequireSession. It is nil when
 // session tokens are off.
-func (s *DefaultSessionTokens) Routes() []types.Route {
+func (s *DefaultSessionTokens) Routes() []core.Route {
 	if !s.cfg.ExternalEnabled() {
 		return nil
 	}
-	return []types.Route{{
-		Method: http.MethodPost, Path: types.PathSessionToken, Handler: s.handleIssue,
-		Middlewares: []types.Middleware{types.RequireSession(s.sm)},
+	return []core.Route{{
+		Method: http.MethodPost, Path: core.PathSessionToken, Handler: s.handleIssue,
+		Middlewares: []core.Middleware{core.RequireSession(s.sm)},
 	}}
 }
 
@@ -140,29 +140,29 @@ func (s *DefaultSessionTokens) Routes() []types.Route {
 // is optional: an empty one asks for the default audience.
 //
 //	{"token": "...", "expires_at": "2026-10-14T10:15:00Z", "audience": "https://api.example.com"}
-func (s *DefaultSessionTokens) handleIssue(rctx *types.RequestContext) error {
+func (s *DefaultSessionTokens) handleIssue(rctx *core.RequestContext) error {
 	const op = "SessionTokens.Issue"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		return errs.NewValidationError(op, "request", err)
 	}
-	audience, ok := body[types.SessionTokenAudienceKey].(string)
-	if !ok && body[types.SessionTokenAudienceKey] != nil {
-		return errs.NewInvalidInputError(op, types.SessionTokenAudienceKey, "audience must be a string", nil)
+	audience, ok := body[core.SessionTokenAudienceKey].(string)
+	if !ok && body[core.SessionTokenAudienceKey] != nil {
+		return errs.NewInvalidInputError(op, core.SessionTokenAudienceKey, "audience must be a string", nil)
 	}
 	session, _ := rctx.Values["session"].(*models.Session)
 
-	issued, err := s.Issue(rctx.Ctx, types.SessionTokenRequest{Session: session, Audience: audience})
+	issued, err := s.Issue(rctx.Ctx, core.SessionTokenRequest{Session: session, Audience: audience})
 	if err != nil {
 		return err
 	}
 	// The body is a credential.
 	rctx.Response.SetHeader("Cache-Control", "no-store")
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{
-		"token":                       issued.Token,
-		"expires_at":                  issued.ExpiresAt.UTC().Format(time.RFC3339),
-		types.SessionTokenAudienceKey: issued.Audience,
+		"token":                      issued.Token,
+		"expires_at":                 issued.ExpiresAt.UTC().Format(time.RFC3339),
+		core.SessionTokenAudienceKey: issued.Audience,
 	})
 }
 
-var _ types.SessionTokens = (*DefaultSessionTokens)(nil)
+var _ core.SessionTokens = (*DefaultSessionTokens)(nil)

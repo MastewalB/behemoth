@@ -21,7 +21,7 @@ Every adapter has one function, `New`, and its result goes into `BootConfig.HTTP
 ```go
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg,
-	Router: types.RouterConfig{BasePath: "/api/auth"}, // optional; the default is shown
+	Router: core.RouterConfig{BasePath: "/api/auth"}, // optional; the default is shown
 	HTTP:   nethttp.New(mux),
 })
 ```
@@ -188,7 +188,7 @@ auth := engine.Group("", logRequests)
 A plugin writes a path parameter as `{name}` and reads it with `rctx.Param("name")`, whatever the router:
 
 ```go
-types.Route{Method: http.MethodGet, Path: "/users/{id}", Handler: func(rctx *types.RequestContext) error {
+core.Route{Method: http.MethodGet, Path: "/users/{id}", Handler: func(rctx *core.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, map[string]string{"id": rctx.Param("id")})
 }}
 ```

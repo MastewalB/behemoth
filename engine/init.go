@@ -16,6 +16,8 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration"
@@ -25,8 +27,6 @@ import (
 	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -72,22 +72,22 @@ type PreparedApp struct {
 	// AppName is the application's owner name: PrepareConfig.AppName, or
 	// "app" when that was empty.
 	AppName    string
-	Hooks      types.HookCatalog
-	Tokens     types.TokenCatalog
-	RateLimits types.RateLimitCatalog
+	Hooks      core.HookCatalog
+	Tokens     core.TokenCatalog
+	RateLimits core.RateLimitCatalog
 	Schemas    schema.Registry
 	Resolver   behemoth.SchemaResolver
 	Migration  migration.MigrationConfig
 	Custom     []migration.CustomMigration
 
-	plugins []types.Plugin // kept so Boot runs exactly the set that was prepared
+	plugins []core.Plugin // kept so Boot runs exactly the set that was prepared
 }
 
 // Prepare runs every declaration step of initialization — plugin ordering,
 // hook/token/rate-limit catalogs and the schema registry — and freezes them.
 // It is the whole of Boot that needs no database, so migration tooling calls
 // it alone, and Boot calls nothing else to get there.
-func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
+func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	if err := DetectPluginNameConflicts(plugins); err != nil {
 		return nil, err
 	}
@@ -201,11 +201,11 @@ type BootConfig struct {
 	// HookOptions.Before/After may name the application like a plugin. Like
 	// a plugin, it may register one handler per point. nil = the application
 	// registers no handlers.
-	Hooks func(reg types.HookRegistry) error
+	Hooks func(reg core.HookRegistry) error
 
-	RateLimit types.RateLimitConfig
-	Session   types.SessionConfig
-	Token     types.TokenConfig
+	RateLimit core.RateLimitConfig
+	Session   core.SessionConfig
+	Token     core.TokenConfig
 
 	// JWT configures the JWTs behemoth issues. Naming an external audience
 	// (Audiences[JWTExternal]) turns session tokens on: POST /session/token
@@ -216,12 +216,12 @@ type BootConfig struct {
 	// Mail gives behemoth the application's mail sender, which plugins
 	// that send messages need (magic link, email verification). Zero value
 	// = no sender; such a plugin then fails Boot.
-	Mail types.MailConfig
+	Mail core.MailConfig
 
 	// SMS gives behemoth the application's SMS sender, which plugins that
 	// send text messages need (phone number). Zero value = no sender; such
 	// a plugin then fails Boot.
-	SMS types.SMSConfig
+	SMS core.SMSConfig
 
 	// Outbound configures the client behemoth calls other services with,
 	// AuthContext.HTTPClient: a timeout, whether redirects are followed, a
@@ -233,12 +233,12 @@ type BootConfig struct {
 
 	// Router configures behemoth's routes: base path, error mapping and
 	// client-IP resolution. Zero value = documented defaults.
-	Router types.RouterConfig
+	Router core.RouterConfig
 
 	// HTTP mounts behemoth's routes onto the application's framework
 	// instance, e.g. ginadapter.New(engine). nil = routes are built and
 	// checked but not served (workers, CLIs).
-	HTTP types.FrameworkDriver
+	HTTP core.FrameworkDriver
 }
 
 // IndexChecker is an optional interface of a Database on which a missing
@@ -267,7 +267,7 @@ type IndexChecker interface {
 //
 // ctx bounds long-lived background work Boot starts (e.g. the KeyManager's
 // secret watch), so it should live as long as the application.
-func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootConfig) (*types.AuthContext, error) {
+func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootConfig) (*core.AuthContext, error) {
 	if app == nil {
 		return nil, errs.NewConfigurationError("Boot", "Boot requires the result of Prepare", nil)
 	}
@@ -345,25 +345,25 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	// One client-IP configuration for sessions, route rate limiting, and audit
 	// events, so that all of them see the same address for a request.
-	ipCfg, err := types.NewClientConfig(cfg.Router.TrustedProxies, cfg.Router.ClientIPHeader)
+	ipCfg, err := core.NewClientConfig(cfg.Router.TrustedProxies, cfg.Router.ClientIPHeader)
 	if err != nil {
 		return nil, err
 	}
 	dispatcher := dispatch.NewDefaultDispatcher(app.Hooks, frozenChains, rateLimiter, ipCfg, tel)
 
-	origins, err := types.NewTrustedOrigins(cfg.Router.TrustedOrigins)
+	origins, err := core.NewTrustedOrigins(cfg.Router.TrustedOrigins)
 	if err != nil {
 		return nil, errs.NewConfigurationError("Boot", "RouterConfig.TrustedOrigins", err)
 	}
 	// Built whatever the transport, so a malformed BaseURL fails here.
-	originCheck, err := types.NewOriginCheck(cfg.Router.BaseURL, origins)
+	originCheck, err := core.NewOriginCheck(cfg.Router.BaseURL, origins)
 	if err != nil {
 		return nil, errs.NewConfigurationError("Boot", "RouterConfig.BaseURL", err)
 	}
 	if err := cfg.Outbound.Validate(); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
-	ac := &types.AuthContext{
+	ac := &core.AuthContext{
 		DB:          db,
 		KV:          kv,
 		Dispatcher:  dispatcher,
@@ -427,13 +427,13 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 
 	// The route table is built and conflict-checked even without an HTTP
 	// driver, so a misconfiguration surfaces the same way in every process.
-	router := types.NewRouter(cfg.Router, ac)
-	var globalMiddleware []types.Middleware
+	router := core.NewRouter(cfg.Router, ac)
+	var globalMiddleware []core.Middleware
 	// A bearer token is never sent by the browser on its own, so only the
 	// cookie transports need the origin check and the refusal of form
 	// bodies behind it. Both run before the plugins' middleware.
 	if cfg.Session.WithDefaults().Transport.ReadsCookie() {
-		globalMiddleware = append(globalMiddleware, originCheck.Middleware(), types.RefuseFormContentTypes())
+		globalMiddleware = append(globalMiddleware, originCheck.Middleware(), core.RefuseFormContentTypes())
 	}
 	for _, name := range order {
 		p := lookup(plugins, name)
@@ -474,12 +474,12 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 //   - CookieDomain has to be the base URL's host or a parent of it. A
 //     browser drops a cookie whose Domain does not cover the host that set
 //     it, and every sign-in would then seem to succeed and leave no session.
-func checkCookieAgainstBaseURL(session types.SessionConfig, baseURL string) error {
+func checkCookieAgainstBaseURL(session core.SessionConfig, baseURL string) error {
 	if !session.WithDefaults().Transport.ReadsCookie() {
 		return nil
 	}
 	if baseURL == "" {
-		if session.CookieSameSite == types.SameSiteNone {
+		if session.CookieSameSite == core.SameSiteNone {
 			return fmt.Errorf("SessionConfig.CookieSameSite %q needs RouterConfig.BaseURL, which the origin check compares requests with", session.CookieSameSite)
 		}
 		return nil
@@ -521,9 +521,9 @@ func logBootSummary(ctx context.Context, log telemetry.Logger, order []string, r
 // ResolvePluginOrder builds a dependency DAG from every plugin's declared
 // PluginMeta.Dependencies, resolves it via utils.KahnSort, and returns
 // plugins in an order where every hard dependency precedes its dependant.
-func ResolvePluginOrder(plugins []types.Plugin) ([]string, error) {
-	byName := make(map[string]types.Plugin, len(plugins))
-	metas := make(map[string]types.PluginMeta, len(plugins))
+func ResolvePluginOrder(plugins []core.Plugin) ([]string, error) {
+	byName := make(map[string]core.Plugin, len(plugins))
+	metas := make(map[string]core.PluginMeta, len(plugins))
 
 	// Step 1: collect each plugin's declared metadata, reject duplicate names up front
 	for _, p := range plugins {
@@ -587,52 +587,52 @@ func ResolvePluginOrder(plugins []types.Plugin) ([]string, error) {
 
 // Owner-injection wrappers - Declare phase scoping
 type scopedHookCatalog struct {
-	inner types.HookCatalog
+	inner core.HookCatalog
 	owner string
 }
 
-func (s *scopedHookCatalog) Declare(def types.HookPointDef) error {
+func (s *scopedHookCatalog) Declare(def core.HookPointDef) error {
 	def.Owner = s.owner // overwritten unconditionally — a plugin cannot misattribute a declaration
 	return s.inner.Declare(def)
 }
-func (s *scopedHookCatalog) Lookup(point types.HookPoint) (types.HookPointDef, bool) {
+func (s *scopedHookCatalog) Lookup(point core.HookPoint) (core.HookPointDef, bool) {
 	return s.inner.Lookup(point)
 }
 
-func (s *scopedHookCatalog) All() []types.HookPointDef {
+func (s *scopedHookCatalog) All() []core.HookPointDef {
 	return s.inner.All()
 }
 
 type scopedTokenCatalog struct {
-	inner types.TokenCatalog
+	inner core.TokenCatalog
 	owner string
 }
 
-func (s *scopedTokenCatalog) Declare(def types.TokenKindDef) error {
+func (s *scopedTokenCatalog) Declare(def core.TokenKindDef) error {
 	def.Owner = s.owner
 	return s.inner.Declare(def)
 }
-func (s *scopedTokenCatalog) Lookup(kind models.TokenKind) (types.TokenKindDef, bool) {
+func (s *scopedTokenCatalog) Lookup(kind models.TokenKind) (core.TokenKindDef, bool) {
 	return s.inner.Lookup(kind)
 }
 
 type scopedRateLimitCatalog struct {
-	inner types.RateLimitCatalog
+	inner core.RateLimitCatalog
 	owner string
 }
 
-func (s *scopedRateLimitCatalog) DeclareHookRateLimitRule(rule types.HookRateLimitRule) error {
+func (s *scopedRateLimitCatalog) DeclareHookRateLimitRule(rule core.HookRateLimitRule) error {
 	rule.Owner = s.owner
 	return s.inner.DeclareHookRateLimitRule(rule)
 }
-func (s *scopedRateLimitCatalog) RulesForHook(point types.HookPoint) []types.HookRateLimitRule {
+func (s *scopedRateLimitCatalog) RulesForHook(point core.HookPoint) []core.HookRateLimitRule {
 	return s.inner.RulesForHook(point)
 }
-func (s *scopedRateLimitCatalog) DeclareRouteRateLimitRule(rule types.RouteRateLimitRule) error {
+func (s *scopedRateLimitCatalog) DeclareRouteRateLimitRule(rule core.RouteRateLimitRule) error {
 	rule.Owner = s.owner
 	return s.inner.DeclareRouteRateLimitRule(rule)
 }
-func (s *scopedRateLimitCatalog) RulesForRoute() []types.RouteRateLimitRule {
+func (s *scopedRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {
 	return s.inner.RulesForRoute()
 }
 
@@ -679,8 +679,8 @@ func newScopedInitContext(
 	rl *ratelimit.DefaultRateLimitCatalog,
 	schemas schema.Registry,
 	owner string,
-) *types.PluginInitContext {
-	return &types.PluginInitContext{
+) *core.PluginInitContext {
+	return &core.PluginInitContext{
 		Hooks:      &scopedHookCatalog{inner: hooks, owner: owner},
 		Tokens:     &scopedTokenCatalog{inner: tokens, owner: owner},
 		RateLimits: &scopedRateLimitCatalog{inner: rl, owner: owner},
@@ -688,7 +688,7 @@ func newScopedInitContext(
 	}
 }
 
-func DetectPluginNameConflicts(plugins []types.Plugin) error {
+func DetectPluginNameConflicts(plugins []core.Plugin) error {
 	var conflicts strings.Builder
 	var conflictDetected bool
 
@@ -717,7 +717,7 @@ func DetectPluginNameConflicts(plugins []types.Plugin) error {
 // an application named like core, or a plugin named like core or the
 // application. Owner names attribute tables and hook points and order hook
 // handlers, so each must mean one thing.
-func checkOwnerNames(plugins []types.Plugin, appName string) error {
+func checkOwnerNames(plugins []core.Plugin, appName string) error {
 	if appName == coreOwner {
 		return errs.NewConfigurationError("Prepare",
 			fmt.Sprintf("AppName %q is reserved for behemoth's own declarations", coreOwner), nil)
@@ -740,7 +740,7 @@ func checkOwnerNames(plugins []types.Plugin, appName string) error {
 // A nil return should never happen for a name that came out of
 // ResolvePluginOrder's own output; Boot treats a nil result as an internal
 // invariant violation, not a recoverable condition.
-func lookup(plugins []types.Plugin, name string) types.Plugin {
+func lookup(plugins []core.Plugin, name string) core.Plugin {
 	for _, p := range plugins {
 		if p.Meta().Name == name {
 			return p
@@ -755,50 +755,50 @@ func lookup(plugins []types.Plugin, name string) types.Plugin {
 // A point has one phase, so an operation with a before and an after side is
 // two points. Dispatching a point missing from this list is a configuration
 // error.
-func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
-	points := []types.HookPointDef{
-		{Point: hooks.HookSignUpBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookSignUpAfter, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: hooks.HookSignUpFailed, Owner: coreOwner, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+func CoreDeclareHookPoints(ic *core.PluginInitContext) error {
+	points := []core.HookPointDef{
+		{Point: hooks.HookSignUpBefore, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookSignUpAfter, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: hooks.HookSignUpFailed, Owner: coreOwner, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 
-		{Point: hooks.HookSignInBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookSignInCredentialsVerified, Owner: coreOwner, Phase: types.BeforeHookPhase}, // also Before; a distinct checkpoint, not signIn's "after"
-		{Point: hooks.HookSignInAfter, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: hooks.HookSignInFailed, Owner: coreOwner, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookSignInBefore, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookSignInCredentialsVerified, Owner: coreOwner, Phase: core.BeforeHookPhase}, // also Before; a distinct checkpoint, not signIn's "after"
+		{Point: hooks.HookSignInAfter, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: hooks.HookSignInFailed, Owner: coreOwner, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 
-		{Point: hooks.HookSignOutBefore, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookSignOutAfter, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookSignOutBefore, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookSignOutAfter, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
 
 		// fired by the session manager
-		{Point: hooks.HookSessionBeforeCreate, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookSessionAfterCreate, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: hooks.HookSessionBeforeRevoke, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookSessionAfterRevoke, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookSessionBeforeCreate, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookSessionAfterCreate, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: hooks.HookSessionBeforeRevoke, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookSessionAfterRevoke, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
 
 		// fired by the session token flow; not audited: a client asks for a
 		// token every few minutes, and its session is audited when created
-		{Point: hooks.HookSessionTokenBeforeIssue, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookSessionTokenAfterIssue, Owner: coreOwner, Phase: types.AfterHookPhase},
-		{Point: hooks.HookSessionTokenIssueFailed, Owner: coreOwner, Phase: types.FailedHookPhase},
+		{Point: hooks.HookSessionTokenBeforeIssue, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookSessionTokenAfterIssue, Owner: coreOwner, Phase: core.AfterHookPhase},
+		{Point: hooks.HookSessionTokenIssueFailed, Owner: coreOwner, Phase: core.FailedHookPhase},
 
 		// fired by the token manager
-		{Point: hooks.HookTokenBeforeIssue, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookTokenAfterIssue, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: hooks.HookTokenConsumed, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: hooks.HookTokenFailed, Owner: coreOwner, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+		{Point: hooks.HookTokenBeforeIssue, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookTokenAfterIssue, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: hooks.HookTokenConsumed, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: hooks.HookTokenFailed, Owner: coreOwner, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 
 		// data hooks the store fires (see dispatch.NewDataHooks)
-		{Point: hooks.HookUserBeforeCreate, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookUserAfterCreate, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{Type: telemetry.AuditUserCreated}}, // written in the write's transaction
-		{Point: hooks.HookUserBeforeUpdate, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookUserAfterUpdate, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{Type: telemetry.AuditUserUpdated}}, // written in the write's transaction
+		{Point: hooks.HookUserBeforeCreate, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookUserAfterCreate, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{Type: telemetry.AuditUserCreated}}, // written in the write's transaction
+		{Point: hooks.HookUserBeforeUpdate, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookUserAfterUpdate, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{Type: telemetry.AuditUserUpdated}}, // written in the write's transaction
 		// fired once the write's transaction has committed
-		{Point: hooks.HookUserCreated, Owner: coreOwner, Phase: types.AfterHookPhase},
-		{Point: hooks.HookUserUpdated, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookUserCreated, Owner: coreOwner, Phase: core.AfterHookPhase},
+		{Point: hooks.HookUserUpdated, Owner: coreOwner, Phase: core.AfterHookPhase},
 		// a delete: Store.DeleteUser, with the user's sessions, accounts and tokens
-		{Point: hooks.HookUserBeforeDelete, Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: hooks.HookUserAfterDelete, Owner: coreOwner, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{Type: telemetry.AuditUserDeleted}}, // written in the delete's transaction
-		{Point: hooks.HookUserDeleted, Owner: coreOwner, Phase: types.AfterHookPhase},
+		{Point: hooks.HookUserBeforeDelete, Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: hooks.HookUserAfterDelete, Owner: coreOwner, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{Type: telemetry.AuditUserDeleted}}, // written in the delete's transaction
+		{Point: hooks.HookUserDeleted, Owner: coreOwner, Phase: core.AfterHookPhase},
 	}
 	for _, p := range points {
 		if err := ic.Hooks.Declare(p); err != nil {
@@ -814,7 +814,7 @@ func CoreDeclareHookPoints(ic *types.PluginInitContext) error {
 //
 // A table added here or removed changes the name of an application's first
 // migration, which TestLauncherRunsAnApplication checks: update it too.
-func CoreDeclareSchema(ic *types.PluginInitContext) error {
+func CoreDeclareSchema(ic *core.PluginInitContext) error {
 	for _, d := range []struct {
 		model behemoth.Model
 		table schema.Table
@@ -857,27 +857,27 @@ const (
 // accounts and make the server hash passwords.
 //
 // There is no password-reset route yet, and so no rule for one.
-func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
+func CoreDeclareRateLimitRules(ic *core.PluginInitContext) error {
 	byAddress := func(r *http.Request, ip string) string { return ip }
-	coreRules := []types.RouteRateLimitRule{
+	coreRules := []core.RouteRateLimitRule{
 		{
 			Name:      RuleSignInRoute,
 			Method:    http.MethodPost,
 			Path:      "/sign-in/email",
 			KeyFunc:   byAddress,
-			Limit:     types.Limit{Max: 10, Window: time.Minute},
-			Algorithm: types.AlgorithmFixedWindow,
-			Action:    types.ActionReject,
+			Limit:     core.Limit{Max: 10, Window: time.Minute},
+			Algorithm: core.AlgorithmFixedWindow,
+			Action:    core.ActionReject,
 			Owner:     "core",
 		},
 		{
 			Name:      RuleSessionTokenRoute,
 			Method:    http.MethodPost,
-			Path:      types.PathSessionToken,
+			Path:      core.PathSessionToken,
 			KeyFunc:   byAddress,
-			Limit:     types.Limit{Max: 30, Window: time.Minute},
-			Algorithm: types.AlgorithmFixedWindow,
-			Action:    types.ActionReject,
+			Limit:     core.Limit{Max: 30, Window: time.Minute},
+			Algorithm: core.AlgorithmFixedWindow,
+			Action:    core.ActionReject,
 			Owner:     "core",
 		},
 		{
@@ -885,9 +885,9 @@ func CoreDeclareRateLimitRules(ic *types.PluginInitContext) error {
 			Method:    http.MethodPost,
 			Path:      "/sign-up/email",
 			KeyFunc:   byAddress,
-			Limit:     types.Limit{Max: 10, Window: time.Minute},
-			Algorithm: types.AlgorithmFixedWindow,
-			Action:    types.ActionReject,
+			Limit:     core.Limit{Max: 10, Window: time.Minute},
+			Algorithm: core.AlgorithmFixedWindow,
+			Action:    core.ActionReject,
 			Owner:     "core",
 		},
 	}

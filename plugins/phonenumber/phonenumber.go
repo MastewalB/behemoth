@@ -25,14 +25,14 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 )
 
 // PluginName is the name the plugin registers under (PluginMeta.Name). It
@@ -67,33 +67,33 @@ const (
 const (
 	// HookSendBefore runs before a code is sent, on "phone_number",
 	// "purpose" and, for a signed-in caller, "userID". Veto only.
-	HookSendBefore types.HookPoint = "auth.phoneNumber.beforeSend"
+	HookSendBefore core.HookPoint = "auth.phoneNumber.beforeSend"
 	// HookSendAfter runs once the message has been handed to the SMS
 	// sender, with a *SendResult.
-	HookSendAfter types.HookPoint = "auth.phoneNumber.afterSend"
+	HookSendAfter core.HookPoint = "auth.phoneNumber.afterSend"
 	// HookSendFailed fires for a request that sent no code: codes
 	// "no_account", "number_taken", "already_set", "send_failed" and
 	// "rejected_by_hook".
-	HookSendFailed types.HookPoint = "auth.phoneNumber.sendFailed"
+	HookSendFailed core.HookPoint = "auth.phoneNumber.sendFailed"
 
 	// HookVerifyBefore runs before a number is added to a user, on
 	// "phone_number" and "userID". Veto only.
-	HookVerifyBefore types.HookPoint = "auth.phoneNumber.beforeVerify"
+	HookVerifyBefore core.HookPoint = "auth.phoneNumber.beforeVerify"
 	// HookVerifyAfter runs once the user holds the number, with the
 	// *models.User.
-	HookVerifyAfter types.HookPoint = "auth.phoneNumber.afterVerify"
+	HookVerifyAfter core.HookPoint = "auth.phoneNumber.afterVerify"
 	// HookVerifyFailed fires for a number that was not added: codes
 	// "invalid_code", "number_mismatch", "number_taken" and "rejected_by_hook".
-	HookVerifyFailed types.HookPoint = "auth.phoneNumber.verifyFailed"
+	HookVerifyFailed core.HookPoint = "auth.phoneNumber.verifyFailed"
 
 	// HookResetBefore runs before a password is reset with a code, on
 	// "phone_number" and "password". Veto only.
-	HookResetBefore types.HookPoint = "auth.phoneNumber.beforePasswordReset"
+	HookResetBefore core.HookPoint = "auth.phoneNumber.beforePasswordReset"
 	// HookResetAfter runs once the password is set, with the *models.User.
-	HookResetAfter types.HookPoint = "auth.phoneNumber.afterPasswordReset"
+	HookResetAfter core.HookPoint = "auth.phoneNumber.afterPasswordReset"
 	// HookResetFailed fires for a reset that was refused: codes
 	// "no_account", "invalid_code" and "rejected_by_hook".
-	HookResetFailed types.HookPoint = "auth.phoneNumber.passwordResetFailed"
+	HookResetFailed core.HookPoint = "auth.phoneNumber.passwordResetFailed"
 )
 
 // Names of the rate-limit rules the plugin declares. The route rules count
@@ -111,7 +111,7 @@ const (
 
 // HookValuePhoneNumber is the key a flow's number is published under in
 // HookContext.Values, in E.164 form, for rate-limit rules:
-// types.KeyByValues(phonenumber.HookValuePhoneNumber). It is also the key of
+// core.KeyByValues(phonenumber.HookValuePhoneNumber). It is also the key of
 // the number in the hook payloads and the request bodies.
 const HookValuePhoneNumber = "phone_number"
 
@@ -189,7 +189,7 @@ type Options struct {
 
 	// SendLimit bounds the codes sent per number, for every purpose and
 	// from any caller. Zero means 3 per 15 minutes.
-	SendLimit types.Limit
+	SendLimit core.Limit
 
 	// WaitForSend chooses how a code is handed to the SMS sender.
 	//
@@ -215,12 +215,12 @@ type Options struct {
 type Plugin struct {
 	opts        Options
 	passwords   *emailpassword.Plugin
-	authContext *types.AuthContext
+	authContext *core.AuthContext
 	log         telemetry.Logger
 
-	verify func(hctx *types.HookContext, in verifyInput) (*models.User, error)
-	signIn func(hctx *types.HookContext, in signInInput) (*types.SignInResult, error)
-	reset  func(hctx *types.HookContext, in resetInput) (*models.User, error)
+	verify func(hctx *core.HookContext, in verifyInput) (*models.User, error)
+	signIn func(hctx *core.HookContext, in signInInput) (*core.SignInResult, error)
+	reset  func(hctx *core.HookContext, in resetInput) (*models.User, error)
 }
 
 // New returns the plugin configured with opts. passwords is the
@@ -229,35 +229,35 @@ type Plugin struct {
 // can't work are reported by Init, as a configuration error from Boot.
 func New(passwords *emailpassword.Plugin, opts Options) *Plugin {
 	if opts.CodeLength == 0 {
-		opts.CodeLength = types.DefaultCodeLength
+		opts.CodeLength = core.DefaultCodeLength
 	}
 	if opts.CodeTTL == 0 {
-		opts.CodeTTL = types.DefaultCodeTTL
+		opts.CodeTTL = core.DefaultCodeTTL
 	}
 	if opts.MaxAttempts == 0 {
-		opts.MaxAttempts = types.DefaultCodeMaxAttempts
+		opts.MaxAttempts = core.DefaultCodeMaxAttempts
 	}
-	if opts.SendLimit == (types.Limit{}) {
-		opts.SendLimit = types.Limit{Max: 3, Window: 15 * time.Minute}
+	if opts.SendLimit == (core.Limit{}) {
+		opts.SendLimit = core.Limit{Max: 3, Window: 15 * time.Minute}
 	}
 	return &Plugin{opts: opts, passwords: passwords}
 }
 
-// Meta implements [types.Plugin]. The plugin depends on the email/password
+// Meta implements [core.Plugin]. The plugin depends on the email/password
 // plugin, so that plugin is initialized first. It has no mount path.
-func (p *Plugin) Meta() types.PluginMeta {
-	return types.PluginMeta{
+func (p *Plugin) Meta() core.PluginMeta {
+	return core.PluginMeta{
 		Name:         PluginName,
-		Dependencies: []types.PluginDependency{{Name: emailpassword.PluginName}},
+		Dependencies: []core.PluginDependency{{Name: emailpassword.PluginName}},
 	}
 }
 
-// Version implements [types.Plugin].
+// Version implements [core.Plugin].
 func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
-// Declare implements [types.Plugin]. The plugin declares:
+// Declare implements [core.Plugin]. The plugin declares:
 //   - the phone_number column on users (Column), nullable so that a user
 //     without a number holds no value and a version of the application
 //     without the plugin can still insert users;
@@ -268,37 +268,37 @@ func (p *Plugin) Version() string {
 //
 // It declares no table and no token kind: codes are rows of core's
 // verification_codes table, issued by the code manager.
-func (p *Plugin) Declare(ic *types.PluginInitContext) error {
+func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 	if err := ic.Schemas.ExtendColumn(Column.Contribution(schema.Column{
 		Type: schema.ColTypeString, Length: columnLength, Nullable: true, Unique: true, Public: true,
 	})); err != nil {
 		return err
 	}
 
-	points := []types.HookPointDef{
-		{Point: HookSendBefore, Phase: types.BeforeHookPhase},
-		{Point: HookSendAfter, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookSendFailed, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookVerifyBefore, Phase: types.BeforeHookPhase},
-		{Point: HookVerifyAfter, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookVerifyFailed, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+	points := []core.HookPointDef{
+		{Point: HookSendBefore, Phase: core.BeforeHookPhase},
+		{Point: HookSendAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookSendFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookVerifyBefore, Phase: core.BeforeHookPhase},
+		{Point: HookVerifyAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookVerifyFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 	}
 	byAddress := func(_ *http.Request, ip string) string { return ip }
-	perMinute := types.Limit{Max: 10, Window: time.Minute}
-	rules := []types.RouteRateLimitRule{
+	perMinute := core.Limit{Max: 10, Window: time.Minute}
+	rules := []core.RouteRateLimitRule{
 		{Name: RuleSendRoute, Method: http.MethodPost, Path: PathSendOTP, KeyFunc: byAddress, Limit: perMinute},
 		{Name: RuleVerifyRoute, Method: http.MethodPost, Path: PathVerify, KeyFunc: byAddress, Limit: perMinute},
 		{Name: RuleSignInRoute, Method: http.MethodPost, Path: PathSignIn, KeyFunc: byAddress, Limit: perMinute},
 	}
 	if p.opts.PasswordReset {
 		points = append(points,
-			types.HookPointDef{Point: HookResetBefore, Phase: types.BeforeHookPhase},
-			types.HookPointDef{Point: HookResetAfter, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-			types.HookPointDef{Point: HookResetFailed, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+			core.HookPointDef{Point: HookResetBefore, Phase: core.BeforeHookPhase},
+			core.HookPointDef{Point: HookResetAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+			core.HookPointDef{Point: HookResetFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 		)
 		rules = append(rules,
-			types.RouteRateLimitRule{Name: RuleResetRequestRoute, Method: http.MethodPost, Path: PathResetRequest, KeyFunc: byAddress, Limit: perMinute},
-			types.RouteRateLimitRule{Name: RuleResetRoute, Method: http.MethodPost, Path: PathReset, KeyFunc: byAddress, Limit: perMinute},
+			core.RouteRateLimitRule{Name: RuleResetRequestRoute, Method: http.MethodPost, Path: PathResetRequest, KeyFunc: byAddress, Limit: perMinute},
+			core.RouteRateLimitRule{Name: RuleResetRoute, Method: http.MethodPost, Path: PathReset, KeyFunc: byAddress, Limit: perMinute},
 		)
 	}
 	for _, def := range points {
@@ -314,35 +314,35 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	// Per number on the send itself, so it holds for every purpose and for
 	// SendCode called from code. It counts requests for numbers nobody
 	// holds too, and so answers the same for both.
-	return ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 		Name: RuleSendNumber, Point: HookSendBefore,
-		KeyFunc: types.KeyByValues(HookValuePhoneNumber), Limit: p.opts.SendLimit,
+		KeyFunc: core.KeyByValues(HookValuePhoneNumber), Limit: p.opts.SendLimit,
 	})
 }
 
-// Register implements [types.Plugin]. Two handlers keep the column to
+// Register implements [core.Plugin]. Two handlers keep the column to
 // confirmed numbers, for every way of writing a user:
 //   - data.user.beforeCreate: a row that carries a number is refused;
 //   - data.user.beforeUpdate: an update that sets a number is refused,
 //     unless it comes from one of the plugin's flows. One that removes the
 //     number passes.
-func (p *Plugin) Register(reg types.HookRegistry) error {
+func (p *Plugin) Register(reg core.HookRegistry) error {
 	if err := reg.OnBefore(hooks.HookUserBeforeCreate, p.onUserCreate, nil); err != nil {
 		return err
 	}
 	return reg.OnBefore(hooks.HookUserBeforeUpdate, p.onUserUpdate, nil)
 }
 
-// Middlewares implements [types.Plugin]. The plugin has no middleware that
+// Middlewares implements [core.Plugin]. The plugin has no middleware that
 // runs on every route. The session read its send and verify routes need is
 // attached to those two (see Routes).
-func (p *Plugin) Middlewares() []types.Middleware {
+func (p *Plugin) Middlewares() []core.Middleware {
 	return nil
 }
 
-// Init implements [types.Plugin]. It checks the options and the SMS sender,
+// Init implements [core.Plugin]. It checks the options and the SMS sender,
 // keeps the AuthContext and wraps the flows with their hook points.
-func (p *Plugin) Init(ac *types.AuthContext) error {
+func (p *Plugin) Init(ac *core.AuthContext) error {
 	const op = "phonenumber.Init"
 	if p.passwords == nil {
 		return errs.NewConfigurationError(op, "no email/password plugin was given to New; sign-in by password and password reset run through it", nil)
@@ -362,29 +362,29 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	if ac.Telemetry != nil {
 		p.log = telemetry.Named(ac.Telemetry.Logger, PluginName)
 	}
-	p.verify = types.WithLifecycle(ac.Dispatcher, HookVerifyBefore, HookVerifyAfter, HookVerifyFailed, p.verifyBody)
-	p.signIn = types.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.signInBody)
+	p.verify = core.WithLifecycle(ac.Dispatcher, HookVerifyBefore, HookVerifyAfter, HookVerifyFailed, p.verifyBody)
+	p.signIn = core.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.signInBody)
 	if p.opts.PasswordReset {
-		p.reset = types.WithLifecycle(ac.Dispatcher, HookResetBefore, HookResetAfter, HookResetFailed, p.resetBody)
+		p.reset = core.WithLifecycle(ac.Dispatcher, HookResetBefore, HookResetAfter, HookResetFailed, p.resetBody)
 	}
 	return nil
 }
 
-// Routes implements [types.Plugin]. The send and verify routes read the
+// Routes implements [core.Plugin]. The send and verify routes read the
 // caller's session when there is one (optionalSession): with a session they
 // add a number to the caller, without one they sign in. The two reset routes
 // are added only with Options.PasswordReset.
-func (p *Plugin) Routes() []types.Route {
-	session := []types.Middleware{optionalSession(p.authContext.SessionManager)}
-	routes := []types.Route{
+func (p *Plugin) Routes() []core.Route {
+	session := []core.Middleware{optionalSession(p.authContext.SessionManager)}
+	routes := []core.Route{
 		{Method: http.MethodPost, Path: PathSendOTP, Handler: p.handleSend, Middlewares: session},
 		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify, Middlewares: session},
 		{Method: http.MethodPost, Path: PathSignIn, Handler: p.handleSignIn},
 	}
 	if p.opts.PasswordReset {
 		routes = append(routes,
-			types.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
-			types.Route{Method: http.MethodPost, Path: PathReset, Handler: p.handleReset},
+			core.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
+			core.Route{Method: http.MethodPost, Path: PathReset, Handler: p.handleReset},
 		)
 	}
 	return routes
@@ -438,7 +438,7 @@ func errUnconfirmedChange() error {
 // onUserCreate handles data.user.beforeCreate. A user is created without a
 // number: one on the row is refused, since nothing confirmed it. A user gets
 // a number afterwards, by a code or through SetPhoneNumber.
-func (p *Plugin) onUserCreate(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
+func (p *Plugin) onUserCreate(_ *core.HookContext, row behemoth.M) (behemoth.M, error) {
 	if raw, ok := row[Column.Name]; ok && raw != nil && raw != "" {
 		return nil, errUnconfirmedChange()
 	}
@@ -452,7 +452,7 @@ func (p *Plugin) onUserCreate(_ *types.HookContext, row behemoth.M) (behemoth.M,
 // in Values (write); it is then checked against the other users. Two writes
 // racing for one number can both pass that check, and the column's unique
 // constraint refuses the second.
-func (p *Plugin) onUserUpdate(hctx *types.HookContext, changes behemoth.M) (behemoth.M, error) {
+func (p *Plugin) onUserUpdate(hctx *core.HookContext, changes behemoth.M) (behemoth.M, error) {
 	raw, changing := changes[Column.Name]
 	if !changing {
 		return nil, nil
@@ -491,10 +491,10 @@ func (p *Plugin) onUserUpdate(hctx *types.HookContext, changes behemoth.M) (behe
 // the number in the Values the update's data handlers start from, which is
 // what onUserUpdate lets through.
 func (p *Plugin) write(ctx context.Context, userID, number string) (*models.User, error) {
-	ctx = types.BeginOperation(ctx)
+	ctx = core.BeginOperation(ctx)
 	var value any
 	if number != "" {
-		types.HookValuesFrom(ctx)[valueConfirmed] = number
+		core.HookValuesFrom(ctx)[valueConfirmed] = number
 		value = number
 	}
 	return p.authContext.Store.UpdateUser(ctx, userID, behemoth.M{Column.Name: value})
@@ -502,15 +502,15 @@ func (p *Plugin) write(ctx context.Context, userID, number string) (*models.User
 
 // operation builds the HookContext one flow call runs with, as the
 // email/password plugin's does, and publishes number for rate-limit rules.
-func (p *Plugin) operation(ctx context.Context, op, number string) (*types.HookContext, error) {
+func (p *Plugin) operation(ctx context.Context, op, number string) (*core.HookContext, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
-	hctx := &types.HookContext{
+	hctx := &core.HookContext{
 		Ctx:     ctx,
 		Auth:    p.authContext,
-		Values:  types.NestedHookValues(ctx),
-		Request: types.RequestFrom(ctx),
+		Values:  core.NestedHookValues(ctx),
+		Request: core.RequestFrom(ctx),
 	}
 	delete(hctx.Values, hooks.HookValueEmail) // an enclosing operation's, not this one's
 	hctx.Values[HookValuePhoneNumber] = number
@@ -551,7 +551,7 @@ type SendResult struct {
 	ExpiresAt   time.Time
 }
 
-// AuditSubject implements [types.AuditSubject]: a code is about the user it
+// AuditSubject implements [core.AuditSubject]: a code is about the user it
 // was issued for.
 func (r *SendResult) AuditSubject() (subjectType, subjectID string) {
 	if r == nil || r.UserID == "" {
@@ -597,12 +597,12 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 	if err != nil {
 		return nil, err
 	}
-	hctx = types.AsOperation(hctx)
+	hctx = core.AsOperation(hctx)
 	ac := p.authContext
 	dispatcher := ac.Dispatcher
 
 	notSent := func(reason, code string, cause error, userID string) (*SendResult, error) {
-		failure := types.FailureReason{Code: code, Cause: cause, Metadata: behemoth.M{HookValuePhoneNumber: number, keyPurpose: string(purpose)}}
+		failure := core.FailureReason{Code: code, Cause: cause, Metadata: behemoth.M{HookValuePhoneNumber: number, keyPurpose: string(purpose)}}
 		if userID != "" {
 			failure.SubjectType, failure.SubjectID = models.UserTable, userID
 		}
@@ -617,21 +617,21 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 		payload[hooks.HookValueUserID] = req.UserID
 	}
 	if _, err := dispatcher.RunBefore(hctx, HookSendBefore, payload); err != nil {
-		return nil, types.FailIfRejected(dispatcher, hctx, HookSendFailed, err, types.FailureReason{})
+		return nil, core.FailIfRejected(dispatcher, hctx, HookSendFailed, err, core.FailureReason{})
 	}
 
 	// Who the code is for. Its subject is always a user id, so that the
 	// code goes when the user is deleted.
 	var user *models.User
 	var kind models.CodeKind
-	var message types.SMSKind
+	var message core.SMSKind
 	holder, err := p.findHolder(hctx.Ctx, number)
 	if err != nil && !errs.IsNotFound(err) {
 		return nil, err
 	}
 	switch purpose {
 	case PurposeVerify:
-		kind, message = codeVerify, types.SMSPhoneVerification
+		kind, message = codeVerify, core.SMSPhoneVerification
 		if user, err = ac.Store.FindUserByID(hctx.Ctx, req.UserID); err != nil {
 			return nil, err
 		}
@@ -642,9 +642,9 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 			return notSent(ReasonNumberTaken, "number_taken", nil, user.ID)
 		}
 	default:
-		kind, message = codeSignIn, types.SMSSignIn
+		kind, message = codeSignIn, core.SMSSignIn
 		if purpose == PurposePasswordReset {
-			kind, message = codeReset, types.SMSPasswordReset
+			kind, message = codeReset, core.SMSPasswordReset
 		}
 		if holder == nil {
 			return notSent(ReasonNoAccount, "no_account", nil, "")
@@ -652,7 +652,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 		user = holder
 	}
 
-	code, issued, err := ac.Codes.Issue(hctx.Ctx, kind, user.ID, types.CodeOptions{
+	code, issued, err := ac.Codes.Issue(hctx.Ctx, kind, user.ID, core.CodeOptions{
 		Length: p.opts.CodeLength, TTL: p.opts.CodeTTL, MaxAttempts: p.opts.MaxAttempts,
 		Metadata: behemoth.M{HookValuePhoneNumber: number},
 	})
@@ -660,7 +660,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 		return nil, err
 	}
 
-	sms := types.SMSMessage{Kind: message, To: number, Code: code, ExpiresAt: issued.ExpiresAt, User: user, Metadata: req.Metadata}
+	sms := core.SMSMessage{Kind: message, To: number, Code: code, ExpiresAt: issued.ExpiresAt, User: user, Metadata: req.Metadata}
 	if p.opts.WaitForSend {
 		err = ac.SMS.Send(hctx.Ctx, sms)
 	} else {
@@ -698,7 +698,7 @@ type VerifyResult struct {
 	// User is the user who now holds the number, when a number was added.
 	User *models.User
 	// SignIn is the sign-in, when the code signed a user in.
-	SignIn *types.SignInResult
+	SignIn *core.SignInResult
 }
 
 // Verify confirms the code SendCode sent to req.PhoneNumber. With
@@ -756,11 +756,11 @@ func (p *Plugin) AddNumber(ctx context.Context, userID, phoneNumber, code string
 	return p.verify(hctx, verifyInput{userID: userID, number: number, code: code})
 }
 
-func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.User, error) {
+func (p *Plugin) verifyBody(hctx *core.HookContext, in verifyInput) (*models.User, error) {
 	const op = "phonenumber.AddNumber"
 	ac := hctx.Auth
 	refuse := func(code string, cause error, answer error) (*models.User, error) {
-		if err := ac.Dispatcher.Fail(hctx, HookVerifyFailed, types.FailureReason{
+		if err := ac.Dispatcher.Fail(hctx, HookVerifyFailed, core.FailureReason{
 			Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: in.userID,
 		}); err != nil {
 			return nil, err
@@ -786,8 +786,8 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 		if errs.IsCode(err, ErrorCodePhoneNumberTaken) || errs.IsDuplicateKey(err) {
 			return refuse("number_taken", err, errNumberTaken(op))
 		}
-		return nil, types.FailIfRejected(ac.Dispatcher, hctx, HookVerifyFailed, err,
-			types.FailureReason{SubjectType: models.UserTable, SubjectID: in.userID})
+		return nil, core.FailIfRejected(ac.Dispatcher, hctx, HookVerifyFailed, err,
+			core.FailureReason{SubjectType: models.UserTable, SubjectID: in.userID})
 	}
 	return user, nil
 }
@@ -815,7 +815,7 @@ func (v *signInInput) FromMap(map[string]any) error { return nil }
 // auth.signIn.before, .after and .failed, like every sign-in; the result's
 // Method is "phonenumber". The raw session token is in the result and is the
 // caller's to deliver.
-func (p *Plugin) SignInWithCode(ctx context.Context, phoneNumber, code string) (*types.SignInResult, error) {
+func (p *Plugin) SignInWithCode(ctx context.Context, phoneNumber, code string) (*core.SignInResult, error) {
 	number, err := Parse(phoneNumber)
 	if err != nil {
 		return nil, err
@@ -827,7 +827,7 @@ func (p *Plugin) SignInWithCode(ctx context.Context, phoneNumber, code string) (
 	return p.signIn(hctx, signInInput{number: number, code: code})
 }
 
-func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.SignInResult, error) {
+func (p *Plugin) signInBody(hctx *core.HookContext, in signInInput) (*core.SignInResult, error) {
 	const op = "phonenumber.SignInWithCode"
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
@@ -837,15 +837,15 @@ func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.Sig
 		if !errs.IsNotFound(err) {
 			return nil, err
 		}
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
+		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, core.FailureReason{
 			Code: "user_not_found", Metadata: behemoth.M{HookValuePhoneNumber: in.number},
 		}); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidCode(op)
 	}
-	rejected := func(code string, cause error) types.FailureReason {
-		return types.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID}
+	rejected := func(code string, cause error) core.FailureReason {
+		return core.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID}
 	}
 
 	if _, err := ac.Codes.Consume(hctx.Ctx, codeSignIn, user.ID, in.code); err != nil {
@@ -862,19 +862,19 @@ func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.Sig
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
-		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
-			types.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
+		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
+			core.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
 	state := models.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
 		state = models.SessionPending
 	}
 
-	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{State: state})
+	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state})
 	if err != nil {
 		return nil, err
 	}
-	return &types.SignInResult{User: user, Session: session, RawToken: rawToken, Method: PluginName}, nil
+	return &core.SignInResult{User: user, Session: session, RawToken: rawToken, Method: PluginName}, nil
 }
 
 // Credentials is the input of SignIn: a phone number and a password.
@@ -937,7 +937,7 @@ func stringField(op string, data map[string]any, key string) (string, error) {
 // Unlike SendCode it does not refuse a number that is not in E.164 form: it
 // finds no user for it and answers like a wrong password. It is the flow
 // behind POST /sign-in/phone-number.
-func (p *Plugin) SignIn(ctx context.Context, creds Credentials) (*types.SignInResult, error) {
+func (p *Plugin) SignIn(ctx context.Context, creds Credentials) (*core.SignInResult, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError("phonenumber.SignIn", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
@@ -1028,7 +1028,7 @@ func (p *Plugin) ResetPassword(ctx context.Context, phoneNumber, code, newPasswo
 	return p.reset(hctx, resetInput{number: number, code: code, password: newPassword})
 }
 
-func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User, error) {
+func (p *Plugin) resetBody(hctx *core.HookContext, in resetInput) (*models.User, error) {
 	const op = "phonenumber.ResetPassword"
 	ac := hctx.Auth
 	user, err := p.findHolder(hctx.Ctx, in.number)
@@ -1036,7 +1036,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 		if !errs.IsNotFound(err) {
 			return nil, err
 		}
-		if failErr := ac.Dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{
+		if failErr := ac.Dispatcher.Fail(hctx, HookResetFailed, core.FailureReason{
 			Code: "no_account", Metadata: behemoth.M{HookValuePhoneNumber: in.number},
 		}); failErr != nil {
 			return nil, failErr
@@ -1047,7 +1047,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 		if !errs.IsCodeRejection(err) {
 			return nil, err
 		}
-		if failErr := ac.Dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{
+		if failErr := ac.Dispatcher.Fail(hctx, HookResetFailed, core.FailureReason{
 			Code: "invalid_code", Cause: err, SubjectType: models.UserTable, SubjectID: user.ID,
 		}); failErr != nil {
 			return nil, failErr
@@ -1088,9 +1088,9 @@ func (p *Plugin) SetPhoneNumber(ctx context.Context, userID, phoneNumber string)
 // rctx.Values["session"]: a caller whose session has ended is told so, and
 // is not taken for a visitor who wants to sign in. Unlike RequireSession it
 // does not extend the session.
-func optionalSession(sm types.SessionManager) types.Middleware {
-	return func(next types.HandlerFunc) types.HandlerFunc {
-		return func(rctx *types.RequestContext) error {
+func optionalSession(sm core.SessionManager) core.Middleware {
+	return func(next core.HandlerFunc) core.HandlerFunc {
+		return func(rctx *core.RequestContext) error {
 			token, ok := sm.ExtractToken(rctx.Request)
 			if !ok {
 				return next(rctx)
@@ -1110,7 +1110,7 @@ func optionalSession(sm types.SessionManager) types.Middleware {
 
 // sessionUser returns the id of the user whose session optionalSession
 // found, or "".
-func sessionUser(rctx *types.RequestContext) string {
+func sessionUser(rctx *core.RequestContext) string {
 	if session, _ := rctx.Values["session"].(*models.Session); session != nil {
 		return session.UserID
 	}
@@ -1118,7 +1118,7 @@ func sessionUser(rctx *types.RequestContext) string {
 }
 
 // body decodes a request body as a map.
-func body(rctx *types.RequestContext, op string) (behemoth.M, error) {
+func body(rctx *core.RequestContext, op string) (behemoth.M, error) {
 	var data behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&data); err != nil {
 		return nil, errs.NewValidationError(op, "request", err)
@@ -1142,7 +1142,7 @@ func metadataField(op string, data behemoth.M) (behemoth.M, error) {
 // says whether a code went out and why not, and none of it is passed on. A
 // validation error and a rate limit are the flow's errors and are reported,
 // since they do not depend on who holds the number.
-func (p *Plugin) handleSend(rctx *types.RequestContext) error {
+func (p *Plugin) handleSend(rctx *core.RequestContext) error {
 	const op = "phonenumber.SendCode"
 	data, err := body(rctx, op)
 	if err != nil {
@@ -1163,9 +1163,9 @@ func (p *Plugin) handleSend(rctx *types.RequestContext) error {
 }
 
 // handleVerify answers with the user for a caller who added a number, and
-// the way every sign-in route does (types.WriteSignIn) for one who signed
+// the way every sign-in route does (core.WriteSignIn) for one who signed
 // in.
-func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
+func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
 	const op = "phonenumber.Verify"
 	data, err := body(rctx, op)
 	if err != nil {
@@ -1184,18 +1184,18 @@ func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
 		return err
 	}
 	if result.SignIn != nil {
-		return types.WriteSignIn(rctx, result.SignIn, nil)
+		return core.WriteSignIn(rctx, result.SignIn, nil)
 	}
 	view, err := rctx.Auth.Public.Of(result.User)
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{types.SignInUserKey: view})
+	return rctx.Response.JSON(http.StatusOK, behemoth.M{core.SignInUserKey: view})
 }
 
 // handleSignIn decodes the body, calls SignIn and answers with
-// types.WriteSignIn. It returns the flow's error unchanged.
-func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
+// core.WriteSignIn. It returns the flow's error unchanged.
+func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 	data, err := body(rctx, "phonenumber.SignIn")
 	if err != nil {
 		return err
@@ -1208,12 +1208,12 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return types.WriteSignIn(rctx, result, nil)
+	return core.WriteSignIn(rctx, result, nil)
 }
 
 // handleResetRequest answers every well-formed request the same, like
 // handleSend.
-func (p *Plugin) handleResetRequest(rctx *types.RequestContext) error {
+func (p *Plugin) handleResetRequest(rctx *core.RequestContext) error {
 	const op = "phonenumber.RequestPasswordReset"
 	data, err := body(rctx, op)
 	if err != nil {
@@ -1235,7 +1235,7 @@ func (p *Plugin) handleResetRequest(rctx *types.RequestContext) error {
 
 // handleReset returns ResetPassword's error unchanged. It delivers no
 // session token: a reset does not sign the user in.
-func (p *Plugin) handleReset(rctx *types.RequestContext) error {
+func (p *Plugin) handleReset(rctx *core.RequestContext) error {
 	const op = "phonenumber.ResetPassword"
 	data, err := body(rctx, op)
 	if err != nil {
@@ -1259,4 +1259,4 @@ func (p *Plugin) handleReset(rctx *types.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "password_reset"})
 }
 
-var _ types.Plugin = (*Plugin)(nil)
+var _ core.Plugin = (*Plugin)(nil)

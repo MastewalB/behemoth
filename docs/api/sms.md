@@ -8,8 +8,8 @@ It works like the [mail sender](mail.md), with a code where a mail has a link.
 
 ```go
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	SMS: types.SMSConfig{
-		Sender: types.SMSSenderFunc(func(ctx context.Context, msg types.SMSMessage) error {
+	SMS: core.SMSConfig{
+		Sender: core.SMSSenderFunc(func(ctx context.Context, msg core.SMSMessage) error {
 			return provider.Send(ctx, msg.To, textFor(msg.Kind, msg.Code))
 		}),
 	},
@@ -19,7 +19,7 @@ defer ac.SMS.Close(context.Background())
 
 | `SMSMessage` field | Content |
 | --- | --- |
-| `Kind` | what the message is for: `types.SMSPhoneVerification`, `types.SMSSignIn`, `types.SMSPasswordReset` |
+| `Kind` | what the message is for: `core.SMSPhoneVerification`, `core.SMSSignIn`, `core.SMSPasswordReset` |
 | `To` | the number, in E.164 form |
 | `Code` | the one-time code. It is a credential: do not log it. |
 | `ExpiresAt` | when the code stops working |
@@ -46,7 +46,7 @@ The sender and the queue behave as follows:
 `ac.Codes` issues and checks the short numeric codes a text message carries. A plugin of yours can use it:
 
 ```go
-code, issued, err := ac.Codes.Issue(ctx, "myplugin.confirm", userID, types.CodeOptions{})
+code, issued, err := ac.Codes.Issue(ctx, "myplugin.confirm", userID, core.CodeOptions{})
 // send code ...
 consumed, err := ac.Codes.Consume(ctx, "myplugin.confirm", userID, typed)
 if errs.IsCodeRejection(err) {

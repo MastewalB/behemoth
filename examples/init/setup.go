@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"os"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/magiclink"
-	"github.com/MastewalB/behemoth/types"
 	_ "github.com/lib/pq"
 )
 
@@ -23,7 +23,7 @@ import (
 // Two of them mail a link, and each is told which page of the application
 // its link opens (pages.go). The messages go to the sender in BootConfig.Mail
 // (mail.go).
-func plugins() ([]types.Plugin, *emailpassword.Plugin) {
+func plugins() ([]core.Plugin, *emailpassword.Plugin) {
 	ep := emailpassword.New(emailpassword.Options{
 		// Setting the link URL is what turns password reset on.
 		Reset: emailpassword.ResetOptions{LinkURL: appURL() + pathResetPage},
@@ -31,7 +31,7 @@ func plugins() ([]types.Plugin, *emailpassword.Plugin) {
 	// Sign-in by a mailed link, next to sign-in by password. A user created
 	// by either plugin can use both.
 	ml := magiclink.New(magiclink.Options{LinkURL: appURL() + pathMagicPage})
-	return []types.Plugin{ep, ml, &ActivityPlugin{}}, ep
+	return []core.Plugin{ep, ml, &ActivityPlugin{}}, ep
 }
 
 func prepareConfig() engine.PrepareConfig {

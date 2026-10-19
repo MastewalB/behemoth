@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -21,7 +22,6 @@ import (
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +29,7 @@ import (
 type verificationApp struct {
 	passwords *emailpassword.Plugin
 	plugin    *emailverification.Plugin
-	ac        *types.AuthContext
+	ac        *core.AuthContext
 	outbox    *outbox
 	rec       *telemetrytest.Recorder
 	mounted   mountedRoutes
@@ -59,15 +59,15 @@ func bootVerification(t *testing.T, opts emailverification.Options, configure ..
 	tel, rec := telemetrytest.New()
 	app.rec = rec
 
-	prepared, err := engine.Prepare([]types.Plugin{app.passwords, app.plugin}, engine.PrepareConfig{})
+	prepared, err := engine.Prepare([]core.Plugin{app.passwords, app.plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	cfg := engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
-		Router:    types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
-		Mail:      types.MailConfig{Sender: app.outbox},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Router:    core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+		Mail:      core.MailConfig{Sender: app.outbox},
 		Telemetry: tel,
 		HTTP:      app.mounted,
 	}
@@ -81,7 +81,7 @@ func bootVerification(t *testing.T, opts emailverification.Options, configure ..
 }
 
 // signUp signs a user up with a password and waits for the n-th message.
-func (app *verificationApp) signUp(t *testing.T, email string, n int) (*models.User, types.MailMessage) {
+func (app *verificationApp) signUp(t *testing.T, email string, n int) (*models.User, core.MailMessage) {
 	t.Helper()
 	user, err := app.passwords.SignUp(context.Background(), behemoth.M{"email": email, "password": "correct horse"})
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func (app *verificationApp) signUp(t *testing.T, email string, n int) (*models.U
 
 // mail waits until n messages have been sent and returns the last one. The
 // plugin sends in the background.
-func (app *verificationApp) mail(t *testing.T, n int) types.MailMessage {
+func (app *verificationApp) mail(t *testing.T, n int) core.MailMessage {
 	t.Helper()
 	require.Eventually(t, func() bool { return app.outbox.count() >= n }, 5*time.Second, time.Millisecond, "message %d was not sent", n)
 	require.Equal(t, n, app.outbox.count())
@@ -116,7 +116,7 @@ func TestEmailVerificationAfterSignUp(t *testing.T) {
 	assert.False(t, user.EmailVerified)
 
 	msg := app.mail(t, 1)
-	assert.Equal(t, types.MailEmailVerification, msg.Kind)
+	assert.Equal(t, core.MailEmailVerification, msg.Kind)
 	assert.Equal(t, "ada@example.com", msg.To)
 	assert.Equal(t, user.ID, msg.User.ID)
 	assert.True(t, strings.HasPrefix(msg.URL, "https://app.example.com/auth/verify-email?token="), msg.URL)
@@ -284,7 +284,7 @@ func TestEmailVerificationRequiredToSignIn(t *testing.T) {
 // and the limit answers the same for an email without an account.
 func TestEmailVerificationSendsAreLimitedPerEmail(t *testing.T) {
 	ctx := context.Background()
-	app := bootVerification(t, emailverification.Options{SendLimit: types.Limit{Max: 2, Window: time.Minute}})
+	app := bootVerification(t, emailverification.Options{SendLimit: core.Limit{Max: 2, Window: time.Minute}})
 	user, _ := app.signUp(t, "ada@example.com", 1) // the first of the two
 
 	_, err := app.plugin.SendVerification(ctx, emailverification.SendRequest{UserID: user.ID})
@@ -308,10 +308,10 @@ func TestEmailVerificationSendsAreLimitedPerEmail(t *testing.T) {
 
 // LinkURL and a mail sender are required, and a missing one stops Boot.
 func TestEmailVerificationOptions(t *testing.T) {
-	sender := types.MailSenderFunc(func(context.Context, types.MailMessage) error { return nil })
+	sender := core.MailSenderFunc(func(context.Context, core.MailMessage) error { return nil })
 	for name, tc := range map[string]struct {
 		opts   emailverification.Options
-		sender types.MailSender
+		sender core.MailSender
 	}{
 		"no sender":      {emailverification.Options{LinkURL: "https://app.example.com/verify"}, nil},
 		"no link URL":    {emailverification.Options{}, sender},
@@ -327,13 +327,13 @@ func TestEmailVerificationOptions(t *testing.T) {
 		_, err = p.Verify(context.Background(), "token")
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
 
-		prepared, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
+		prepared, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
 		require.NoError(t, err, name)
 		_, err = engine.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 			},
-			Mail: types.MailConfig{Sender: tc.sender},
+			Mail: core.MailConfig{Sender: tc.sender},
 		})
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "emailverification", name)

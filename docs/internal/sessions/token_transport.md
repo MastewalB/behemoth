@@ -4,9 +4,9 @@ This document explains how a session token reaches the client and comes back: th
 
 The code lives in:
 
-- `types/session.go`: `TokenTransport`, `SessionTokenHeader`, the `SessionManager` interface, `RequireSession`, `RequireFreshSession`
-- `types/auth-options.go`: `SessionConfig`, `WithDefaults`, `Validate`
-- `types/signin.go`: `SignInResult`, `WriteSignIn`
+- `core/session.go`: `TokenTransport`, `SessionTokenHeader`, the `SessionManager` interface, `RequireSession`, `RequireFreshSession`
+- `core/auth-options.go`: `SessionConfig`, `WithDefaults`, `Validate`
+- `core/signin.go`: `SignInResult`, `WriteSignIn`
 - `auth/session.go`: `DefaultSessionManager.WriteToken`, `ExtractToken`, `ClearToken`, `Touch`, `ExtendToken`
 - `plugins/emailpassword/email-and-password.go`: `handleSignOut`, the one route that ends its caller's session
 - `models/user.go`: the user's JSON
@@ -43,9 +43,9 @@ WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBo
 
 | Route | Calls |
 | --- | --- |
-| `POST /sign-in/email` | `types.WriteSignIn(rctx, result, nil)` |
-| `POST /magic-link/verify` | `types.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
-| `POST /oauth/complete` | `types.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
+| `POST /sign-in/email` | `core.WriteSignIn(rctx, result, nil)` |
+| `POST /magic-link/verify` | `core.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
+| `POST /oauth/complete` | `core.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
 
 A route that hands the client a value of its own reads `AuthContext.SessionConfig`, the session settings with their defaults, to deliver it the same way. The OAuth plugin's binding value is the one case ([`../plugins/oauth.md`](../plugins/oauth.md)).
 
@@ -162,7 +162,7 @@ A response carries a user as `AuthContext.Public.Of(user)`: a flat map of the us
 
 | Test | File | Covers |
 | --- | --- | --- |
-| `TestSessionConfigDefaults`, `TestSessionConfigValidate` | `types/auth_options_test.go` | every default, a set field kept, what `Validate` refuses |
+| `TestSessionConfigDefaults`, `TestSessionConfigValidate` | `core/auth_options_test.go` | every default, a set field kept, what `Validate` refuses |
 | `TestSessionManagerWithAZeroConfig` | `tests/store/managers_test.go` | a zero config: session lifetimes, a session that validates, the default cookie |
 | `TestSessionTokenTransports` | same | per transport: what `WriteToken` sets and returns, what `ExtractToken` accepts, the cookie's name, and that `ClearToken` expires that same cookie for the request that carried it, and writes nothing for a request without the cookie or with another session's |
 | `TestSignInDeliversTheTokenByTransport` | `tests/plugins/signin_response_test.go` | through the routes, per transport: where the token arrives and that it arrives nowhere else, the body's shape, the user's keys, `no-store`, sign-out with the token where the client sends it, and that the sign-out response removes the cookie |
@@ -196,7 +196,7 @@ A response carries a user as `AuthContext.Public.Of(user)`: a flat map of the us
 
 **Decision:** The header, named `Set-Auth-Token`. Whether a header is the right place for a given client is the application's decision, and it made it by choosing the transport. The transport now names both directions, where before it described only how the client sends the token.
 
-**Revisit if:** applications need another header name. It is a constant, `types.SessionTokenHeader`.
+**Revisit if:** applications need another header name. It is a constant, `core.SessionTokenHeader`.
 
 ### The body is a transport of its own
 

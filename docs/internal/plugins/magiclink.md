@@ -5,25 +5,25 @@ This document explains how `plugins/magiclink` is put together: what it declares
 The code lives in:
 
 - `plugins/magiclink/magiclink.go`: the plugin
-- `types/origins.go`: `TrustedOrigins`, `TrustedRedirect`
-- `types/signin.go`: `SignInResult`, shared with the email/password plugin
+- `core/origins.go`: `TrustedOrigins`, `TrustedRedirect`
+- `core/signin.go`: `SignInResult`, shared with the email/password plugin
 
 ## What the plugin contributes
 
-| `types.Plugin` method | Result | Why |
+| `core.Plugin` method | Result | Why |
 | --- | --- | --- |
 | `Meta` | name `magiclink`, no dependencies, no mount path | routes sit directly under the base path |
 | `Declare` | the `magic_link` token kind, three hook points, three rate-limit rules | see below |
 | `Register` | nothing | the plugin fires points; it does not handle any |
 | `Middlewares` | nothing | neither route needs a session |
-| `Init` | checks `Options`, parses `LinkURL`, wraps the flows with `types.WithLifecycle` | runs in `Boot`, after the dispatcher exists |
+| `Init` | checks `Options`, parses `LinkURL`, wraps the flows with `core.WithLifecycle` | runs in `Boot`, after the dispatcher exists |
 | `Routes` | `POST /sign-in/magic-link`, `POST /magic-link/verify` | |
 
 Compare with the email/password plugin, which declares nothing. This one is the first plugin to use all four catalogs a plugin gets in `Declare` except the schema: it needs no table, because a link is a row in core's `tokens`.
 
 | Declared | Value |
 | --- | --- |
-| token kind | `types.TokenKindMagicLink`, single use, `Options.TTL`, database backend |
+| token kind | `core.TokenKindMagicLink`, single use, `Options.TTL`, database backend |
 | hook points | `auth.magicLink.beforeRequest` (before), `.afterRequest` (after, audited), `.requestFailed` (failed, audited) |
 | route rules | `magiclink.request.route` and `magiclink.verify.route`: 10 a minute per client address |
 | hook rule | `magiclink.request.email` on `auth.magicLink.beforeRequest`: `Options.RequestLimit` per `HookValueEmail` |
@@ -37,7 +37,7 @@ The token kind is database-backed on purpose. `RevokeAllForSubject` is not suppo
 | Step | What | On failure |
 | --- | --- | --- |
 | 1 | normalize the email and check its shape (`utils.IsValidEmail`) | a validation error |
-| 2 | check `RedirectURL` with `types.TrustedRedirect(ac.Origins, url)`, if one was given | a validation error |
+| 2 | check `RedirectURL` with `core.TrustedRedirect(ac.Origins, url)`, if one was given | a validation error |
 | 3 | `Store.FindUserByEmail` | not found: `Fail` with `user_not_found`, return `ErrNoAccount` |
 | 4 | `TokenManager.RevokeAllForSubject(magic_link, user.ID)` | `Fail` with `issue_failed` |
 | 5 | `TokenManager.Issue(magic_link, user.ID, {email, redirect_url})` | `Fail` with `issue_failed` |
@@ -84,9 +84,9 @@ The response time still differs: a known email pays for the token writes, and wi
 | 4 | set `email_verified` if it is not set (`Store.UpdateUser`), unless `Options.LeaveEmailUnverified` | the error is returned |
 | 5 | `RunBefore(auth.signIn.credentialsVerified)`; `requireStepUp` makes the session pending | `FailIfRejected`: `Fail` with `rejected_by_hook` for a rejection |
 | 6 | `SessionManager.Create` | the error is returned |
-| 7 | return a `*types.SignInResult` with `Method: "magiclink"` | |
+| 7 | return a `*core.SignInResult` with `Method: "magiclink"` | |
 
-The route hands the result to `types.WriteSignIn` with the redirect URL as an extra field, so its response and the delivery of the session token are the ones of every sign-in route ([`../sessions/token_transport.md`](../sessions/token_transport.md)).
+The route hands the result to `core.WriteSignIn` with the redirect URL as an extra field, so its response and the delivery of the session token are the ones of every sign-in route ([`../sessions/token_transport.md`](../sessions/token_transport.md)).
 
 Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with the code `invalid_magic_link`. The audit event of `auth.signIn.failed` has the real code.
 
@@ -134,7 +134,7 @@ Verification follows these rules:
 - *Points of the plugin's own for verify.* Clear ownership. A second-factor plugin, a sign-in notifier and the audit log would each have to register on every sign-in plugin's points.
 - *Core's `auth.signIn.*` points.* One place to hook. The payload of `auth.signIn.before` differs by method: an email and a password there, an email and a method here.
 
-**Decision:** Core's points, which is what they were declared in core for. `SignInResult` moved from `emailpassword` to `types` so that `auth.signIn.after` hands every handler one type, and it gained `Method`. The request for a link is not a sign-in and has the plugin's own points.
+**Decision:** Core's points, which is what they were declared in core for. `SignInResult` moved from `emailpassword` to `core` so that `auth.signIn.after` hands every handler one type, and it gained `Method`. The request for a link is not a sign-in and has the plugin's own points.
 
 **Revisit if:** the differing `auth.signIn.before` payloads cause handler bugs. A `method` key on the email/password payload would let a handler tell them apart there too; today it is set only by this plugin.
 
@@ -158,7 +158,7 @@ Verification follows these rules:
 
 ## Trusted origins
 
-`RouterConfig.TrustedOrigins` existed as a field, and `OriginValidator` as an interface, with nothing behind either. `types.TrustedOrigins` is the implementation, and `Boot` puts it on `AuthContext.Origins`.
+`RouterConfig.TrustedOrigins` existed as a field, and `OriginValidator` as an interface, with nothing behind either. `core.TrustedOrigins` is the implementation, and `Boot` puts it on `AuthContext.Origins`.
 
 | Piece | What it does |
 | --- | --- |
@@ -207,4 +207,4 @@ A plugin checks a redirect URL when it receives it, before storing it. The magic
 | `TestMagicLinkVerifyRefusalsAndSecondFactor` | same | a pending session, a changed email, a deleted user |
 | `TestMagicLinkLeavesEmailUnverified` | same | `LeaveEmailUnverified`: the link signs in and the flag stays as it was |
 | `TestMagicLinkOptions` | same | the configuration errors, and a flow called before `Boot` |
-| `TestTrustedOrigins` | `types/origins_test.go` | origin parsing and matching, and every row of the redirect table above |
+| `TestTrustedOrigins` | `core/origins_test.go` | origin parsing and matching, and every row of the redirect table above |

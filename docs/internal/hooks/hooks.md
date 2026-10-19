@@ -17,8 +17,8 @@ The transaction rules of data hooks (what `HookContext.Tx` is bound to, what a r
 
 The code lives in:
 
-- `types/plugins.go`: the public types (`HookPoint`, `HookPhase`, `HookPointDef`, `HookCatalog`, `HookRegistry`, `HookOptions`, `HookContext`, the handler function types, `Dispatcher`, `WithLifecycle`)
-- `types/hooks/hooks.go`: the names of the points core declares and the shared payload keys
+- `core/plugins.go`: the public types (`HookPoint`, `HookPhase`, `HookPointDef`, `HookCatalog`, `HookRegistry`, `HookOptions`, `HookContext`, the handler function types, `Dispatcher`, `WithLifecycle`)
+- `core/hooks/hooks.go`: the names of the points core declares and the shared payload keys
 - `utils/graph.go`: `KahnSort`, the topological sort behind plugin order and handler order
 - `dispatch/catalog.go`, `dispatch/registry.go`, `dispatch/dispatcher.go`: the implementations (`DefaultHookCatalog`, `DefaultHookRegistry` and its scoped registry, `FreezeChains`, `DefaultDispatcher`)
 - `engine/init.go`: `Prepare` and `Boot`, which run them, and the scoped catalogs
@@ -91,7 +91,7 @@ What a failure does depends on where it happens:
 
 | Term | Meaning |
 | --- | --- |
-| Hook point | a named place in the code where handlers can run, for example `auth.signIn.before`. A `types.HookPoint` string. |
+| Hook point | a named place in the code where handlers can run, for example `auth.signIn.before`. A `core.HookPoint` string. |
 | Phase | what kind of point it is: before, after or failed. A point has one phase. |
 | Tier | who fires the point. Tier 1 points are fired by the store around a table write. Tier 2 points are fired by a flow or a manager around an operation. |
 | Owner | the name a declaration or a handler is attributed to: `core`, a plugin's name, or the application's name (`app` by default). |

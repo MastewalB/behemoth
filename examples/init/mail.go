@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 )
 
 // appURL is where the application's own pages are served, without a
@@ -28,13 +28,13 @@ func appURL() string {
 // This one prints the message, so the link can be copied from the server's
 // output. The link holds the raw token, which is a credential: a real
 // application never logs it.
-func printMail(_ context.Context, msg types.MailMessage) error {
+func printMail(_ context.Context, msg core.MailMessage) error {
 	switch msg.Kind {
-	case types.MailMagicLink:
+	case core.MailMagicLink:
 		log.Printf("[mail] to=%s  Your sign-in link (until %s): %s", msg.To, msg.ExpiresAt.Format("15:04:05"), msg.URL)
-	case types.MailPasswordReset:
+	case core.MailPasswordReset:
 		log.Printf("[mail] to=%s  Reset your password (until %s): %s", msg.To, msg.ExpiresAt.Format("15:04:05"), msg.URL)
-	case types.MailPasswordChanged:
+	case core.MailPasswordChanged:
 		// A notice without a link, sent after a reset went through.
 		log.Printf("[mail] to=%s  Your password was changed. If this was not you, contact support.", msg.To)
 	default:

@@ -15,11 +15,11 @@ const (
 	CodeInvalidSessionState = "invalid_state_transition"
 	// CodeSessionNotFresh is the code of a request refused because it
 	// needs a recent sign-in and the session's is too old
-	// (types.RequireFreshSession). The client asks the user to sign in
+	// (core.RequireFreshSession). The client asks the user to sign in
 	// again and retries.
 	CodeSessionNotFresh = "session_not_fresh"
 	// CodeSessionMissing is the code of a request to a route that needs
-	// a session (types.RequireSession) and carries no session token.
+	// a session (core.RequireSession) and carries no session token.
 	CodeSessionMissing = "session_missing"
 	// CodeSessionInvalid is the code of a request to such a route whose
 	// token belongs to no session: it was never issued, or its session no

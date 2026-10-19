@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -19,8 +21,6 @@ import (
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/username"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +32,7 @@ ALTER TABLE users ADD COLUMN display_username TEXT;
 CREATE UNIQUE INDEX users_username_key ON users (username);`
 
 type usernameApp struct {
-	ac        *types.AuthContext
+	ac        *core.AuthContext
 	passwords *emailpassword.Plugin
 	names     *username.Plugin
 	routes    mountedRoutes
@@ -40,7 +40,7 @@ type usernameApp struct {
 }
 
 // bootUsernames boots the email/password and username plugins.
-func bootUsernames(t *testing.T, opts username.Options, hookFn func(reg types.HookRegistry) error) *usernameApp {
+func bootUsernames(t *testing.T, opts username.Options, hookFn func(reg core.HookRegistry) error) *usernameApp {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "username.db")+"?_busy_timeout=10000&_txlock=immediate")
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func bootUsernames(t *testing.T, opts username.Options, hookFn func(reg types.Ho
 	app.passwords = emailpassword.New(emailpassword.Options{})
 	app.names = username.New(app.passwords, opts)
 	// The username plugin is listed first: its dependency orders the two.
-	prepared, err := engine.Prepare([]types.Plugin{app.names, app.passwords}, engine.PrepareConfig{})
+	prepared, err := engine.Prepare([]core.Plugin{app.names, app.passwords}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	// The adapter is built with the resolver, so it reads and finds by the
 	// contributed columns. The transactions take SQLite's write lock at
@@ -63,7 +63,7 @@ func bootUsernames(t *testing.T, opts username.Options, hookFn func(reg types.Ho
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session: types.SessionConfig{Transport: types.TransportHeader},
+		Session: core.SessionConfig{Transport: core.TransportHeader},
 		HTTP:    app.routes,
 		Hooks:   hookFn,
 	})
@@ -102,9 +102,9 @@ func TestUsernameSignUpAndSignIn(t *testing.T) {
 	ctx := context.Background()
 	var before []behemoth.M
 	var beforeValues, failed []string
-	var after []*types.SignInResult
-	app := bootUsernames(t, username.Options{}, func(reg types.HookRegistry) error {
-		if err := reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, p behemoth.M) (behemoth.M, error) {
+	var after []*core.SignInResult
+	app := bootUsernames(t, username.Options{}, func(reg core.HookRegistry) error {
+		if err := reg.OnBefore(hooks.HookSignInBefore, func(hctx *core.HookContext, p behemoth.M) (behemoth.M, error) {
 			before = append(before, p)
 			name, _ := hctx.Values[username.HookValueUsername].(string)
 			beforeValues = append(beforeValues, name)
@@ -112,14 +112,14 @@ func TestUsernameSignUpAndSignIn(t *testing.T) {
 		}, nil); err != nil {
 			return err
 		}
-		if err := reg.OnFailed(hooks.HookSignInFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+		if err := reg.OnFailed(hooks.HookSignInFailed, func(_ *core.HookContext, reason core.FailureReason) error {
 			failed = append(failed, reason.Code)
 			return nil
 		}, nil); err != nil {
 			return err
 		}
-		return reg.OnAfter(hooks.HookSignInAfter, func(_ *types.HookContext, result any) error {
-			after = append(after, result.(*types.SignInResult))
+		return reg.OnAfter(hooks.HookSignInAfter, func(_ *core.HookContext, result any) error {
+			after = append(after, result.(*core.SignInResult))
 			return nil
 		}, nil)
 	})
@@ -185,8 +185,8 @@ func TestUsernameSignUpAndSignIn(t *testing.T) {
 func TestUsernameRulesAtSignUp(t *testing.T) {
 	ctx := context.Background()
 	var failed []string
-	app := bootUsernames(t, username.Options{Reserved: []string{"Admin"}}, func(reg types.HookRegistry) error {
-		return reg.OnFailed(hooks.HookSignUpFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+	app := bootUsernames(t, username.Options{Reserved: []string{"Admin"}}, func(reg core.HookRegistry) error {
+		return reg.OnFailed(hooks.HookSignUpFailed, func(_ *core.HookContext, reason core.FailureReason) error {
 			failed = append(failed, reason.Code)
 			return nil
 		}, nil)
@@ -382,8 +382,8 @@ func TestUsernameRoutes(t *testing.T) {
 // A second factor asked for at the shared checkpoint applies to a sign-in
 // by username too: the password check is the email/password plugin's.
 func TestUsernameSignInPassesTheSecondFactorCheckpoint(t *testing.T) {
-	app := bootUsernames(t, username.Options{}, func(reg types.HookRegistry) error {
-		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+	app := bootUsernames(t, username.Options{}, func(reg core.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) {
 			p["requireStepUp"] = true
 			return p, nil
 		}, nil)
@@ -406,7 +406,7 @@ func TestUsernameSignInsCanBeLimitedPerUsername(t *testing.T) {
 
 	passwords := emailpassword.New(emailpassword.Options{})
 	names := username.New(passwords, username.Options{})
-	prepared, err := engine.Prepare([]types.Plugin{passwords, names, perUsernameLimit{}}, engine.PrepareConfig{})
+	prepared, err := engine.Prepare([]core.Plugin{passwords, names, perUsernameLimit{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	_, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{
@@ -430,16 +430,16 @@ func TestUsernameSignInsCanBeLimitedPerUsername(t *testing.T) {
 // attempts per username.
 type perUsernameLimit struct{}
 
-func (perUsernameLimit) Meta() types.PluginMeta            { return types.PluginMeta{Name: "per-username"} }
-func (perUsernameLimit) Version() string                   { return "0.0.0" }
-func (perUsernameLimit) Init(*types.AuthContext) error     { return nil }
-func (perUsernameLimit) Routes() []types.Route             { return nil }
-func (perUsernameLimit) Middlewares() []types.Middleware   { return nil }
-func (perUsernameLimit) Register(types.HookRegistry) error { return nil }
-func (perUsernameLimit) Declare(ic *types.PluginInitContext) error {
-	return ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+func (perUsernameLimit) Meta() core.PluginMeta            { return core.PluginMeta{Name: "per-username"} }
+func (perUsernameLimit) Version() string                  { return "0.0.0" }
+func (perUsernameLimit) Init(*core.AuthContext) error     { return nil }
+func (perUsernameLimit) Routes() []core.Route             { return nil }
+func (perUsernameLimit) Middlewares() []core.Middleware   { return nil }
+func (perUsernameLimit) Register(core.HookRegistry) error { return nil }
+func (perUsernameLimit) Declare(ic *core.PluginInitContext) error {
+	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 		Name: "per-username.signin", Point: hooks.HookSignInBefore,
-		KeyFunc: types.KeyByValues(username.HookValueUsername), Limit: types.Limit{Max: 2, Window: time.Minute},
+		KeyFunc: core.KeyByValues(username.HookValueUsername), Limit: core.Limit{Max: 2, Window: time.Minute},
 	})
 }
 
@@ -449,10 +449,10 @@ func TestUsernameOptionsAndWiring(t *testing.T) {
 
 	meta := username.New(passwords, username.Options{}).Meta()
 	assert.Equal(t, username.PluginName, meta.Name)
-	assert.Equal(t, []types.PluginDependency{{Name: emailpassword.PluginName}}, meta.Dependencies)
+	assert.Equal(t, []core.PluginDependency{{Name: emailpassword.PluginName}}, meta.Dependencies)
 
 	// The email/password plugin has to be installed.
-	_, err := engine.Prepare([]types.Plugin{username.New(passwords, username.Options{})}, engine.PrepareConfig{})
+	_, err := engine.Prepare([]core.Plugin{username.New(passwords, username.Options{})}, engine.PrepareConfig{})
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 
@@ -462,7 +462,7 @@ func TestUsernameOptionsAndWiring(t *testing.T) {
 		"negative min":             username.New(passwords, username.Options{MinLength: -1}),
 		"max above the column":     username.New(passwords, username.Options{MaxLength: username.MaxColumnLength + 1}),
 	} {
-		err := p.Init(&types.AuthContext{})
+		err := p.Init(&core.AuthContext{})
 		require.Error(t, err, name)
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: %v", name, err)
 	}

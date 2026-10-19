@@ -4,8 +4,8 @@ import (
 	"github.com/MastewalB/behemoth/dispatch"
 	"testing"
 
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 )
 
 // Core declares every point its own code fires, each in the phase it is
@@ -16,22 +16,22 @@ func TestCoreDeclaresTheHookPointsItFires(t *testing.T) {
 	if err := CoreDeclareHookPoints(ic); err != nil {
 		t.Fatal(err)
 	}
-	want := map[types.HookPoint]types.HookPhase{
-		hooks.HookSignUpBefore: types.BeforeHookPhase, hooks.HookSignUpAfter: types.AfterHookPhase, hooks.HookSignUpFailed: types.FailedHookPhase,
-		hooks.HookSignInBefore: types.BeforeHookPhase, hooks.HookSignInCredentialsVerified: types.BeforeHookPhase,
-		hooks.HookSignInAfter: types.AfterHookPhase, hooks.HookSignInFailed: types.FailedHookPhase,
-		hooks.HookSignOutBefore: types.BeforeHookPhase, hooks.HookSignOutAfter: types.AfterHookPhase,
-		hooks.HookSessionBeforeCreate: types.BeforeHookPhase, hooks.HookSessionAfterCreate: types.AfterHookPhase,
-		hooks.HookSessionBeforeRevoke: types.BeforeHookPhase, hooks.HookSessionAfterRevoke: types.AfterHookPhase,
-		hooks.HookSessionTokenBeforeIssue: types.BeforeHookPhase, hooks.HookSessionTokenAfterIssue: types.AfterHookPhase,
-		hooks.HookSessionTokenIssueFailed: types.FailedHookPhase,
-		hooks.HookTokenBeforeIssue:        types.BeforeHookPhase, hooks.HookTokenAfterIssue: types.AfterHookPhase,
-		hooks.HookTokenConsumed: types.AfterHookPhase, hooks.HookTokenFailed: types.FailedHookPhase,
-		hooks.HookUserBeforeCreate: types.BeforeHookPhase, hooks.HookUserAfterCreate: types.AfterHookPhase,
-		hooks.HookUserBeforeUpdate: types.BeforeHookPhase, hooks.HookUserAfterUpdate: types.AfterHookPhase,
-		hooks.HookUserCreated: types.AfterHookPhase, hooks.HookUserUpdated: types.AfterHookPhase,
-		hooks.HookUserBeforeDelete: types.BeforeHookPhase, hooks.HookUserAfterDelete: types.AfterHookPhase,
-		hooks.HookUserDeleted: types.AfterHookPhase,
+	want := map[core.HookPoint]core.HookPhase{
+		hooks.HookSignUpBefore: core.BeforeHookPhase, hooks.HookSignUpAfter: core.AfterHookPhase, hooks.HookSignUpFailed: core.FailedHookPhase,
+		hooks.HookSignInBefore: core.BeforeHookPhase, hooks.HookSignInCredentialsVerified: core.BeforeHookPhase,
+		hooks.HookSignInAfter: core.AfterHookPhase, hooks.HookSignInFailed: core.FailedHookPhase,
+		hooks.HookSignOutBefore: core.BeforeHookPhase, hooks.HookSignOutAfter: core.AfterHookPhase,
+		hooks.HookSessionBeforeCreate: core.BeforeHookPhase, hooks.HookSessionAfterCreate: core.AfterHookPhase,
+		hooks.HookSessionBeforeRevoke: core.BeforeHookPhase, hooks.HookSessionAfterRevoke: core.AfterHookPhase,
+		hooks.HookSessionTokenBeforeIssue: core.BeforeHookPhase, hooks.HookSessionTokenAfterIssue: core.AfterHookPhase,
+		hooks.HookSessionTokenIssueFailed: core.FailedHookPhase,
+		hooks.HookTokenBeforeIssue:        core.BeforeHookPhase, hooks.HookTokenAfterIssue: core.AfterHookPhase,
+		hooks.HookTokenConsumed: core.AfterHookPhase, hooks.HookTokenFailed: core.FailedHookPhase,
+		hooks.HookUserBeforeCreate: core.BeforeHookPhase, hooks.HookUserAfterCreate: core.AfterHookPhase,
+		hooks.HookUserBeforeUpdate: core.BeforeHookPhase, hooks.HookUserAfterUpdate: core.AfterHookPhase,
+		hooks.HookUserCreated: core.AfterHookPhase, hooks.HookUserUpdated: core.AfterHookPhase,
+		hooks.HookUserBeforeDelete: core.BeforeHookPhase, hooks.HookUserAfterDelete: core.AfterHookPhase,
+		hooks.HookUserDeleted: core.AfterHookPhase,
 	}
 	for point, phase := range want {
 		def, ok := catalog.Lookup(point)

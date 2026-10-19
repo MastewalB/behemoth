@@ -131,7 +131,7 @@ func (c Caller) For(userID string) Caller
 
 ### Where the types live
 
-The caller's own types (`Principal`, `SessionRef`, `Caller`, `WithCaller`, `CallerFrom`, and `System`) live in a new package, `identity`, below `telemetry`, so that `NormalizeAuditEvent` can read the caller. `identity` imports no other Behemoth package, which is why a caller holds a `SessionRef` and not a `*models.Session`. The authenticator, the permission catalog, and `Access` are contracts in `types`, which becomes `core` in step 1 ([`package_layout.md`](package_layout.md)).
+The caller's own types (`Principal`, `SessionRef`, `Caller`, `WithCaller`, `CallerFrom`, and `System`) live in a new package, `identity`, below `telemetry`, so that `NormalizeAuditEvent` can read the caller. `identity` imports no other Behemoth package, which is why a caller holds a `SessionRef` and not a `*models.Session`. The authenticator, the permission catalog, and `Access` are contracts in `core`, the package that `types` became in step 1 ([`package_layout.md`](package_layout.md)).
 
 ### Who builds a caller
 
@@ -217,7 +217,7 @@ These parts of the session API change:
 - **The token carrier.** The four HTTP methods of `SessionManager` (`WriteToken`, `ExtractToken`, `ClearToken`, and `ExtendToken`) move to a token carrier that the HTTP layer owns. `SessionManager` keeps the lifecycle, which takes a context.
 - **The middleware.** `RequireSession`, `RequireFreshSession`, and the phone number plugin's `optionalSession` become thin wrappers over the caller. `RequireSession` and `RequireFreshSession` stay public, because applications protect their own routes with them. They require a caller that was authenticated with a session, and take no permission, since an application's own routes declare none.
 - **The session in `Values`.** `RequestContext.Values["session"]` and `Values["sessionID"]` go. A handler reads `CallerFrom(rctx.Ctx).Session()`. `docs/api/sessions.md` shows the old keys and changes with them.
-- **`HookContext.Request`.** It stays for handlers that want HTTP details. The session manager, the audit log, and rate-limit rules stop reading it. It becomes an accessor in the HTTP package when the HTTP types leave `types`.
+- **`HookContext.Request`.** It stays for handlers that want HTTP details. The session manager, the audit log, and rate-limit rules stop reading it. It becomes an accessor in the HTTP package when the HTTP types leave `core`.
 
 ## What a flow requires
 
@@ -358,7 +358,7 @@ The other decisions taken for this plan follow.
 
 ### The security context is `Caller`, and `AuthContext` keeps its meaning
 
-`types.AuthContext` already names the services every plugin receives in `Init`. Giving the name to the caller means renaming the service container, which changes every plugin's `Init` and every `hctx.Auth`, for a name. The caller takes a name of its own.
+`core.AuthContext` already names the services every plugin receives in `Init`. Giving the name to the caller means renaming the service container, which changes every plugin's `Init` and every `hctx.Auth`, for a name. The caller takes a name of its own.
 
 ### An agent is a delegate, not a principal type
 

@@ -1,4 +1,10 @@
-package types
+// Package core holds Behemoth's plugin contracts: the Plugin interface, the
+// AuthContext a plugin receives, the hook system's types and the helpers flows
+// call over them, the interfaces of the managers, and the configuration
+// they take. The implementations live in other packages, and engine wires
+// them together. core also holds the HTTP types: the router, the request
+// context, and the middleware.
+package core
 
 import (
 	"bytes"
@@ -240,7 +246,7 @@ type HookContext struct {
 	//
 	// Some firing sites also publish what they were called with before
 	// their first dispatch (the normalized email of a sign-in, the user of
-	// a session create), under the HookValue keys of types/hooks. That is
+	// a session create), under the HookValue keys of core/hooks. That is
 	// what a rate-limit rule's KeyFunc keys on, since it does not get the
 	// payload.
 	//

@@ -1,4 +1,4 @@
-package types
+package core
 
 import (
 	"net/http"
@@ -19,7 +19,7 @@ type AuthContext struct {
 	DB behemoth.Database
 	KV behemoth.KeyValueStorage
 	// Store is the data layer plugins use instead of DB. It is a concrete
-	// type: store never imports types, so no interface is needed to break
+	// type: store never imports core, so no interface is needed to break
 	// an import cycle.
 	Store          *store.Store
 	Crypto         crypto.Services

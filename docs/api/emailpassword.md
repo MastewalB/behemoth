@@ -11,7 +11,7 @@ import "github.com/MastewalB/behemoth/plugins/emailpassword"
 
 plugin := emailpassword.New(emailpassword.Options{})
 
-app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
+app, err := engine.Prepare([]core.Plugin{plugin}, engine.PrepareConfig{})
 // ...
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{ /* ... */ })
 ```
@@ -121,7 +121,7 @@ result, err := plugin.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{
 A handler on `auth.signIn.before` reads it as `payload["captchaToken"]`, next to `payload["email"]`. The route fills `Extra` from the request body, so the same handler works for a request and for a call from code:
 
 ```go
-reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+reg.OnBefore(hooks.HookSignInBefore, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 	token, _ := payload["captchaToken"].(string)
 	if !captchaPasses(hctx.Ctx, token) {
 		return nil, errs.NewInvalidInputError("signin", "captcha", "captcha check failed", nil)
@@ -136,8 +136,8 @@ Both flows follow these rules:
 - `SignUp` stores `email`, `password`, and the profile fields listed above. Other keys in the input are not stored, but handlers on `auth.signUp.before` see them, which is how a plugin accepts a field of its own (an invite code, for example).
 - `Extra` is not stored, and a key in it named `email` or `password` is ignored: the struct's fields are used.
 - Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `hctx.Request` is nil and the session has neither.
-- `SignIn` returns a `*emailpassword.SignInResult`, which is `types.SignInResult`: the user, the session, the raw token, and `Method` (`"emailpassword"`). Handlers on `auth.signIn.after` receive the same value.
-- `SignIn` returns the raw session token and delivers nothing. From a route of your own, hand the result to `types.WriteSignIn`, which is what the plugin's route does. See [Write a sign-in route](sessions.md#write-a-sign-in-route).
+- `SignIn` returns a `*emailpassword.SignInResult`, which is `core.SignInResult`: the user, the session, the raw token, and `Method` (`"emailpassword"`). Handlers on `auth.signIn.after` receive the same value.
+- `SignIn` returns the raw session token and delivers nothing. From a route of your own, hand the result to `core.WriteSignIn`, which is what the plugin's route does. See [Write a sign-in route](sessions.md#write-a-sign-in-route).
 - Called before `Boot`, both return a configuration error.
 - `SignUp` returns typed errors for its own rejections too: check `errs.IsCode(err, emailpassword.ErrorCodeEmailTaken)`, `ErrorCodeInvalidEmail`, or `ErrorCodeInvalidPassword`.
 - `SignIn` returns a typed error for a refused credential, so you can tell it from a failure:
@@ -189,7 +189,7 @@ user, err := plugin.SetPassword(ctx, userID, newPassword)
 `SetPassword` behaves as follows:
 
 - It applies the password rules, gives a user without a password one, ends every session of the user, and creates none.
-- It sends the `types.MailPasswordChanged` notice when a mail sender is configured.
+- It sends the `core.MailPasswordChanged` notice when a mail sender is configured.
 - It does not check who is asking, fires no points, and works with password reset by email off.
 - Call `ValidatePassword` first when a later refusal would cost you something, such as a code already used up.
 
@@ -200,7 +200,7 @@ user, err := plugin.SetPassword(ctx, userID, newPassword)
 A hook handler can reject a sign-up with its own status and message. Return a typed error from a handler on `auth.signUp.before`, `data.user.beforeCreate`, or `data.user.afterCreate`:
 
 ```go
-reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
+reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
 	if blocked(row[models.UserEmail]) {
 		return nil, errs.NewInvalidInputError("signup", "user", "this email domain is not allowed", nil)
 	}
@@ -235,8 +235,8 @@ plugin := emailpassword.New(emailpassword.Options{
 })
 
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Mail: types.MailConfig{
-		Sender: types.MailSenderFunc(func(ctx context.Context, msg types.MailMessage) error {
+	Mail: core.MailConfig{
+		Sender: core.MailSenderFunc(func(ctx context.Context, msg core.MailMessage) error {
 			return mailQueue.Enqueue(ctx, msg.To, subjectFor(msg.Kind), msg.URL)
 		}),
 	},
@@ -246,17 +246,17 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 
 Reset uses the core `tokens` table and, for its limit per email, the `rate_limits` table or Redis.
 
-Your sender gets two kinds of message, both as a `types.MailMessage`:
+Your sender gets two kinds of message, both as a `core.MailMessage`:
 
 | `Kind` | When | Content |
 | --- | --- | --- |
-| `types.MailPasswordReset` | a link was requested | `URL`, `Token` and `ExpiresAt` of the link |
-| `types.MailPasswordChanged` | a reset went through | no link. It tells the owner their password was changed, in case it was not them. |
+| `core.MailPasswordReset` | a link was requested | `URL`, `Token` and `ExpiresAt` of the link |
+| `core.MailPasswordChanged` | a reset went through | no link. It tells the owner their password was changed, in case it was not them. |
 
 | `ResetOptions` field | Default | Meaning |
 | --- | --- | --- |
 | `LinkURL` | empty: reset is off | The page of your application the link points to. Absolute, `http` or `https`. The plugin adds the token as the `token` query parameter and keeps any query the URL already has. |
-| `TTL` | 1 hour | How long a link works. `TokenConfig.TTLOverrides[types.TokenKindPasswordReset]` takes precedence. |
+| `TTL` | 1 hour | How long a link works. `TokenConfig.TTLOverrides[core.TokenKindPasswordReset]` takes precedence. |
 | `RequestLimit` | 5 per 15 minutes | Reset requests allowed per email. |
 | `WaitForSend` | false | false: the request returns once the message is queued, and a failed send is logged. true: the request waits for your sender, and a failed send revokes the link. |
 | `LeaveEmailUnverified` | false | Set it to stop a completed reset from marking the email as verified. |
@@ -294,7 +294,7 @@ A reset has these effects:
 - **It gives a password to a user who had none.** A user created by a magic link or a provider can ask for a reset link, and using it creates their credential account.
 - **It marks the email as verified.** The link was sent to the address, so using it shows the user controls it. Set `LeaveEmailUnverified` if verified should only mean that your own verification passed.
 - **It is tied to the address it was sent to.** If the user's email changes before the link is used, the link is refused.
-- **It tells the user.** A `types.MailPasswordChanged` message goes to the account's address in the background. If it can't be queued or sent, that is logged and the reset still stands.
+- **It tells the user.** A `core.MailPasswordChanged` message goes to the account's address in the background. If it can't be queued or sent, that is logged and the reset still stands.
 - **Asking for a link changes nothing.** The old password and the sessions keep working until the link is used.
 
 ### Call the flows from code

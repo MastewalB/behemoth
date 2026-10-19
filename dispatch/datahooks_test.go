@@ -7,41 +7,41 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 )
 
 type recordingDispatcher struct {
-	before, after []*types.HookContext
-	committed     []*types.HookContext // dispatched with RunAfter
+	before, after []*core.HookContext
+	committed     []*core.HookContext // dispatched with RunAfter
 	rewrite       behemoth.M
 	afterErr      error
 }
 
-func (d *recordingDispatcher) RunBefore(hctx *types.HookContext, point types.HookPoint, payload behemoth.M) (behemoth.M, error) {
+func (d *recordingDispatcher) RunBefore(hctx *core.HookContext, point core.HookPoint, payload behemoth.M) (behemoth.M, error) {
 	d.before = append(d.before, hctx)
 	for k, v := range d.rewrite {
 		payload[k] = v
 	}
 	return payload, nil
 }
-func (d *recordingDispatcher) RunAfter(hctx *types.HookContext, point types.HookPoint, result any) error {
+func (d *recordingDispatcher) RunAfter(hctx *core.HookContext, point core.HookPoint, result any) error {
 	d.committed = append(d.committed, hctx)
 	return nil
 }
-func (d *recordingDispatcher) RunAfterTx(hctx *types.HookContext, point types.HookPoint, result any) error {
+func (d *recordingDispatcher) RunAfterTx(hctx *core.HookContext, point core.HookPoint, result any) error {
 	d.after = append(d.after, hctx)
 	return d.afterErr
 }
-func (d *recordingDispatcher) Fail(*types.HookContext, types.HookPoint, types.FailureReason) error {
+func (d *recordingDispatcher) Fail(*core.HookContext, core.HookPoint, core.FailureReason) error {
 	return nil
 }
 
 func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
 	d := &recordingDispatcher{rewrite: behemoth.M{models.UserFirstname: "from-hook"}}
-	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	h := dataHooks{ac: &core.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	ctx := context.Background()
 
 	row, err := h.BeforeCreate(ctx, nil, "users", behemoth.M{models.UserEmail: "a@example.com"})
@@ -52,7 +52,7 @@ func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
 		t.Errorf("BeforeCreate did not return the dispatcher's rewrite: %v", row)
 	}
 	h.AfterCreate(ctx, store.New(nil), "users", &models.User{})
-	if len(d.before) != 1 || d.before[0].Point != hooks.HookUserBeforeCreate || d.before[0].Phase != types.BeforeHookPhase {
+	if len(d.before) != 1 || d.before[0].Point != hooks.HookUserBeforeCreate || d.before[0].Phase != core.BeforeHookPhase {
 		t.Fatalf("before dispatch = %+v", d.before)
 	}
 	if len(d.after) != 1 || d.after[0].Point != hooks.HookUserAfterCreate {
@@ -73,7 +73,7 @@ func TestDataHooksDispatchMappedTablesOnly(t *testing.T) {
 
 func TestDataHooksUpdatePublishesTheID(t *testing.T) {
 	d := &recordingDispatcher{}
-	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	h := dataHooks{ac: &core.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	ctx := context.Background()
 
 	if _, err := h.BeforeUpdate(ctx, nil, "users", "u1", behemoth.M{models.UserFirstname: "Ada"}); err != nil {
@@ -97,10 +97,10 @@ func TestDataHooksUpdatePublishesTheID(t *testing.T) {
 // its own chain-scoped Values; one made outside a request has none.
 func TestDataHooksCarryTheRequest(t *testing.T) {
 	d := &recordingDispatcher{}
-	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	h := dataHooks{ac: &core.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 
-	rc := &types.RequestContext{Request: httptest.NewRequest("POST", "/sign-up", nil), Values: behemoth.M{"request-only": true}}
-	ctx := types.ContextWithRequest(context.Background(), rc)
+	rc := &core.RequestContext{Request: httptest.NewRequest("POST", "/sign-up", nil), Values: behemoth.M{"request-only": true}}
+	ctx := core.ContextWithRequest(context.Background(), rc)
 	if _, err := h.BeforeCreate(ctx, nil, "users", behemoth.M{}); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestDataHooksCarryTheRequest(t *testing.T) {
 // hook's error goes back to that store.
 func TestDataHooksPublishTheStoreAndReturnAfterErrors(t *testing.T) {
 	d := &recordingDispatcher{afterErr: errors.New("rejected by hook")}
-	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	h := dataHooks{ac: &core.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	ctx := context.Background()
 	tx := store.New(nil)
 
@@ -158,7 +158,7 @@ func TestDataHooksPublishTheStoreAndReturnAfterErrors(t *testing.T) {
 // carries the row's id, and a failed after hook queues nothing.
 func TestDataHooksDispatchCommittedPoints(t *testing.T) {
 	d := &recordingDispatcher{}
-	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	h := dataHooks{ac: &core.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	ctx := context.Background()
 	// A store that is not bound to a transaction runs AfterCommit callbacks
 	// at once, which stands in for the commit here.
@@ -197,11 +197,11 @@ func TestDataHooksDispatchCommittedPoints(t *testing.T) {
 // enclosing operation's, and what the write's handlers add stays out of it.
 func TestDataHooksShareValuesAcrossOneWrite(t *testing.T) {
 	d := &recordingDispatcher{}
-	h := dataHooks{ac: &types.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
+	h := dataHooks{ac: &core.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 	tx := store.New(nil)
 
 	flow := behemoth.M{"invite.id": "inv-1"}
-	outer := types.ContextWithHookValues(context.Background(), flow)
+	outer := core.ContextWithHookValues(context.Background(), flow)
 	ctx := h.Begin(outer, "users")
 
 	if _, err := h.BeforeCreate(ctx, tx, "users", behemoth.M{}); err != nil {
@@ -211,7 +211,7 @@ func TestDataHooksShareValuesAcrossOneWrite(t *testing.T) {
 	if err := h.AfterCreate(ctx, tx, "users", &models.User{ID: "u1"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, hctx := range []*types.HookContext{d.before[0], d.after[0], d.committed[0]} {
+	for _, hctx := range []*core.HookContext{d.before[0], d.after[0], d.committed[0]} {
 		if hctx.Values["invite.id"] != "inv-1" {
 			t.Errorf("%s does not see the enclosing operation's values: %v", hctx.Point, hctx.Values)
 		}
@@ -237,7 +237,7 @@ func TestDataHooksShareValuesAcrossOneWrite(t *testing.T) {
 		t.Error("Begin changed the context of a table that fires no hooks")
 	}
 	// Outside any operation a write starts empty.
-	if got := types.HookValuesFrom(h.Begin(context.Background(), "users")); got == nil || len(got) != 0 {
+	if got := core.HookValuesFrom(h.Begin(context.Background(), "users")); got == nil || len(got) != 0 {
 		t.Errorf("a write outside any operation should start with empty values: %v", got)
 	}
 }

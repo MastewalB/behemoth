@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -13,7 +13,7 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 	r := chi.NewRouter()
 	r.Get("/api/auth/taken", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
 
-	echoParam := types.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *types.RequestContext) error {
+	echoParam := core.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *core.RequestContext) error {
 		return rctx.Response.JSON(http.StatusOK, map[string]string{"id": rctx.Param("id")})
 	}}
 	if err := New(r).Mount(echoParam); err != nil {
@@ -26,7 +26,7 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 		t.Errorf("got %d %s, want 200 {\"id\":\"42\"}", w.Code, w.Body.String())
 	}
 
-	conflict := types.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: func(*types.RequestContext) error { return nil }}
+	conflict := core.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: func(*core.RequestContext) error { return nil }}
 	if err := New(r).Mount(conflict); err == nil {
 		t.Error("expected an error for a route the router already has")
 	}
@@ -39,10 +39,10 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 }
 
 func TestMountRejectsDuplicatesWithinOneCall(t *testing.T) {
-	ok := func(*types.RequestContext) error { return nil }
+	ok := func(*core.RequestContext) error { return nil }
 	err := New(chi.NewRouter()).Mount(
-		types.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
-		types.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
+		core.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
+		core.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
 	)
 	if err == nil {
 		t.Error("expected an error for the same route twice")
@@ -50,7 +50,7 @@ func TestMountRejectsDuplicatesWithinOneCall(t *testing.T) {
 }
 
 func TestInvalidRouteIsErrorNotPanic(t *testing.T) {
-	err := New(chi.NewRouter()).Mount(types.Route{Method: http.MethodGet, Path: "no-leading-slash", Handler: func(*types.RequestContext) error { return nil }})
+	err := New(chi.NewRouter()).Mount(core.Route{Method: http.MethodGet, Path: "no-leading-slash", Handler: func(*core.RequestContext) error { return nil }})
 	if err == nil {
 		t.Error("expected an error for a pattern chi rejects")
 	}
@@ -58,7 +58,7 @@ func TestInvalidRouteIsErrorNotPanic(t *testing.T) {
 
 func TestHandlerFailureIsInternalServerError(t *testing.T) {
 	r := chi.NewRouter()
-	if err := New(r).Mount(types.Route{Method: http.MethodGet, Path: "/api/auth/fail", Handler: func(*types.RequestContext) error {
+	if err := New(r).Mount(core.Route{Method: http.MethodGet, Path: "/api/auth/fail", Handler: func(*core.RequestContext) error {
 		return http.ErrHandlerTimeout
 	}}); err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestHandlerFailureIsInternalServerError(t *testing.T) {
 func TestMountConflictsWithAllMethodsRoute(t *testing.T) {
 	r := chi.NewRouter()
 	r.Handle("/api/auth/any", http.NotFoundHandler()) // registered for every method
-	err := New(r).Mount(types.Route{Method: http.MethodPost, Path: "/api/auth/any", Handler: func(*types.RequestContext) error { return nil }})
+	err := New(r).Mount(core.Route{Method: http.MethodPost, Path: "/api/auth/any", Handler: func(*core.RequestContext) error { return nil }})
 	if err == nil {
 		t.Error("expected a conflict with a route registered for all methods")
 	}

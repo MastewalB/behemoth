@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -137,7 +137,7 @@ func (p *Plugin) Begin(ctx context.Context, req BeginRequest) (*BeginResult, err
 		return nil, err
 	}
 	// One operation: the three points and the token write share Values.
-	hctx = types.AsOperation(hctx)
+	hctx = core.AsOperation(hctx)
 	dispatcher := p.authContext.Dispatcher
 
 	payload, err := req.ToMap()
@@ -146,7 +146,7 @@ func (p *Plugin) Begin(ctx context.Context, req BeginRequest) (*BeginResult, err
 	}
 	payload, err = dispatcher.RunBefore(hctx, HookBeginBefore, payload)
 	if err != nil {
-		return nil, types.FailIfRejected(dispatcher, hctx, HookBeginFailed, err, types.FailureReason{})
+		return nil, core.FailIfRejected(dispatcher, hctx, HookBeginFailed, err, core.FailureReason{})
 	}
 	if err := req.FromMap(payload); err != nil {
 		return nil, err
@@ -166,7 +166,7 @@ func (p *Plugin) Begin(ctx context.Context, req BeginRequest) (*BeginResult, err
 	return result, nil
 }
 
-func (p *Plugin) beginBody(hctx *types.HookContext, req BeginRequest) (*BeginResult, error) {
+func (p *Plugin) beginBody(hctx *core.HookContext, req BeginRequest) (*BeginResult, error) {
 	const op = "oauth.Begin"
 	ac := hctx.Auth
 
@@ -174,7 +174,7 @@ func (p *Plugin) beginBody(hctx *types.HookContext, req BeginRequest) (*BeginRes
 	if !ok {
 		return nil, errs.NewInvalidInputError(op, keyProvider, "unknown provider", nil)
 	}
-	if req.RedirectURL != "" && !types.TrustedRedirect(ac.Origins, req.RedirectURL) {
+	if req.RedirectURL != "" && !core.TrustedRedirect(ac.Origins, req.RedirectURL) {
 		return nil, errs.NewInvalidInputError(op, keyRedirectURL, "redirect URL is not allowed", nil)
 	}
 
@@ -205,10 +205,10 @@ func (p *Plugin) beginBody(hctx *types.HookContext, req BeginRequest) (*BeginRes
 	// The raw token is the state. The token has no subject: nobody is
 	// signed in yet. Not built: a sign-in that links a provider account to
 	// the signed-in user, whose token would name that user.
-	token, state, err := ac.TokenManager.Issue(hctx.Ctx, types.TokenKindOAuthState, nil, meta)
+	token, state, err := ac.TokenManager.Issue(hctx.Ctx, core.TokenKindOAuthState, nil, meta)
 	if err != nil {
 		// A handler or a rate limit on token.beforeIssue may have refused.
-		return nil, types.FailIfRejected(ac.Dispatcher, hctx, HookBeginFailed, err, types.FailureReason{})
+		return nil, core.FailIfRejected(ac.Dispatcher, hctx, HookBeginFailed, err, core.FailureReason{})
 	}
 
 	authorizationURL, err := provider.AuthorizationURL(hctx.Ctx, AuthorizationRequest{

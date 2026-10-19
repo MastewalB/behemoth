@@ -4,21 +4,21 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 )
 
 type DefaultHookCatalog struct {
 	mu     sync.RWMutex
-	points map[types.HookPoint]types.HookPointDef
+	points map[core.HookPoint]core.HookPointDef
 	frozen bool
 }
 
 func NewDefaultHookCatalog() *DefaultHookCatalog {
-	return &DefaultHookCatalog{points: map[types.HookPoint]types.HookPointDef{}}
+	return &DefaultHookCatalog{points: map[core.HookPoint]core.HookPointDef{}}
 }
 
-func (c *DefaultHookCatalog) Declare(def types.HookPointDef) error {
+func (c *DefaultHookCatalog) Declare(def core.HookPointDef) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.frozen {
@@ -30,7 +30,7 @@ func (c *DefaultHookCatalog) Declare(def types.HookPointDef) error {
 	if def.Owner == "" {
 		return errs.NewConfigurationError("HookCatalog.Declare", fmt.Sprintf("point %q missing Owner", def.Point), nil)
 	}
-	if def.Phase != types.BeforeHookPhase && def.Phase != types.AfterHookPhase && def.Phase != types.FailedHookPhase {
+	if def.Phase != core.BeforeHookPhase && def.Phase != core.AfterHookPhase && def.Phase != core.FailedHookPhase {
 		return errs.NewConfigurationError("HookCatalog.Declare", fmt.Sprintf("point %q declared with invalid or missing Phase %q", def.Point, def.Phase), nil)
 	}
 	if existing, dup := c.points[def.Point]; dup {
@@ -40,7 +40,7 @@ func (c *DefaultHookCatalog) Declare(def types.HookPointDef) error {
 	return nil
 }
 
-func (c *DefaultHookCatalog) Lookup(point types.HookPoint) (types.HookPointDef, bool) {
+func (c *DefaultHookCatalog) Lookup(point core.HookPoint) (core.HookPointDef, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	def, ok := c.points[point]
@@ -52,10 +52,10 @@ func (c *DefaultHookCatalog) Freeze() { c.mu.Lock(); c.frozen = true; c.mu.Unloc
 // All is consumed only by freezeAllHookChains, to know the full universe of
 // declared points, including ones with zero registered handlers, which
 // still need an empty (not missing) entry in frozenChains.
-func (c *DefaultHookCatalog) All() []types.HookPointDef {
+func (c *DefaultHookCatalog) All() []core.HookPointDef {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]types.HookPointDef, 0, len(c.points))
+	out := make([]core.HookPointDef, 0, len(c.points))
 	for _, def := range c.points {
 		out = append(out, def)
 	}

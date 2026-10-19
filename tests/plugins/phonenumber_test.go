@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -20,8 +22,6 @@ import (
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/phonenumber"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,11 +35,11 @@ CREATE UNIQUE INDEX users_phone_number_key ON users (phone_number);`
 // when told to.
 type texts struct {
 	mu   sync.Mutex
-	sent []types.SMSMessage
+	sent []core.SMSMessage
 	fail error
 }
 
-func (s *texts) Send(_ context.Context, msg types.SMSMessage) error {
+func (s *texts) Send(_ context.Context, msg core.SMSMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fail != nil {
@@ -56,7 +56,7 @@ func (s *texts) count() int {
 }
 
 // last returns the newest message, which has to be the n-th.
-func (s *texts) last(t *testing.T, n int) types.SMSMessage {
+func (s *texts) last(t *testing.T, n int) core.SMSMessage {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -65,7 +65,7 @@ func (s *texts) last(t *testing.T, n int) types.SMSMessage {
 }
 
 type phoneApp struct {
-	ac        *types.AuthContext
+	ac        *core.AuthContext
 	passwords *emailpassword.Plugin
 	phones    *phonenumber.Plugin
 	routes    mountedRoutes
@@ -82,7 +82,7 @@ const (
 // bootPhones boots the email/password and phone number plugins. The sender
 // is waited for unless opts say otherwise, so a test reads the code right
 // after the call.
-func bootPhones(t *testing.T, opts phonenumber.Options, hookFn func(reg types.HookRegistry) error) *phoneApp {
+func bootPhones(t *testing.T, opts phonenumber.Options, hookFn func(reg core.HookRegistry) error) *phoneApp {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "phone.db")+"?_busy_timeout=10000&_txlock=immediate")
 	require.NoError(t, err)
@@ -93,14 +93,14 @@ func bootPhones(t *testing.T, opts phonenumber.Options, hookFn func(reg types.Ho
 	app := &phoneApp{routes: mountedRoutes{}, sms: &texts{}, db: db}
 	app.passwords = emailpassword.New(emailpassword.Options{})
 	app.phones = phonenumber.New(app.passwords, opts)
-	prepared, err := engine.Prepare([]types.Plugin{app.passwords, app.phones}, engine.PrepareConfig{})
+	prepared, err := engine.Prepare([]core.Plugin{app.passwords, app.phones}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	app.ac, err = engine.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session: types.SessionConfig{Transport: types.TransportHeader},
-		SMS:     types.SMSConfig{Sender: app.sms},
+		Session: core.SessionConfig{Transport: core.TransportHeader},
+		SMS:     core.SMSConfig{Sender: app.sms},
 		HTTP:    app.routes,
 		Hooks:   hookFn,
 	})
@@ -161,8 +161,8 @@ func wrongCode(code string) string {
 func TestPhoneNumberIsAddedByCode(t *testing.T) {
 	ctx := context.Background()
 	var payloads []behemoth.M
-	app := bootPhones(t, waited(phonenumber.Options{SendLimit: types.Limit{Max: 20, Window: time.Minute}}), func(reg types.HookRegistry) error {
-		return reg.OnBefore(phonenumber.HookSendBefore, func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+	app := bootPhones(t, waited(phonenumber.Options{SendLimit: core.Limit{Max: 20, Window: time.Minute}}), func(reg core.HookRegistry) error {
+		return reg.OnBefore(phonenumber.HookSendBefore, func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) {
 			payloads = append(payloads, p)
 			return nil, nil
 		}, nil)
@@ -180,7 +180,7 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 	assert.Equal(t, behemoth.M{"phone_number": adaNumber, "purpose": "verify", "userID": ada.ID}, payloads[0])
 
 	msg := app.sms.last(t, 1)
-	assert.Equal(t, types.SMSPhoneVerification, msg.Kind)
+	assert.Equal(t, core.SMSPhoneVerification, msg.Kind)
 	assert.Equal(t, adaNumber, msg.To)
 	assert.Len(t, msg.Code, 6)
 	assert.Equal(t, ada.ID, msg.User.ID)
@@ -246,7 +246,7 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 // the old one.
 func TestPhoneCodeAttemptsAndReplacement(t *testing.T) {
 	ctx := context.Background()
-	app := bootPhones(t, waited(phonenumber.Options{SendLimit: types.Limit{Max: 10, Window: time.Minute}}), nil)
+	app := bootPhones(t, waited(phonenumber.Options{SendLimit: core.Limit{Max: 10, Window: time.Minute}}), nil)
 	ada := app.signUp(t, "ada@example.com")
 	send := func(n int) string {
 		t.Helper()
@@ -281,7 +281,7 @@ func TestCodeManager(t *testing.T) {
 	codes := app.ac.Codes
 	const kind models.CodeKind = "test.kind"
 
-	code, issued, err := codes.Issue(ctx, kind, "subject", types.CodeOptions{Length: 8, Metadata: behemoth.M{"note": "x"}})
+	code, issued, err := codes.Issue(ctx, kind, "subject", core.CodeOptions{Length: 8, Metadata: behemoth.M{"note": "x"}})
 	require.NoError(t, err)
 	assert.Len(t, code, 8)
 	assert.Equal(t, 5, issued.AttemptsLeft)
@@ -295,7 +295,7 @@ func TestCodeManager(t *testing.T) {
 	_, err = codes.Consume(ctx, kind, "subject", code)
 	assert.True(t, errs.IsCodeRejection(err), "used: %v", err)
 
-	code, _, err = codes.Issue(ctx, kind, "subject", types.CodeOptions{TTL: time.Millisecond})
+	code, _, err = codes.Issue(ctx, kind, "subject", core.CodeOptions{TTL: time.Millisecond})
 	require.NoError(t, err)
 	time.Sleep(20 * time.Millisecond)
 	_, err = codes.Consume(ctx, kind, "subject", code)
@@ -307,7 +307,7 @@ func TestCodeManager(t *testing.T) {
 
 	// Guesses arriving together each take a try: with three tries and the
 	// right code sent eight times, one succeeds and no more than three ran.
-	code, _, err = codes.Issue(ctx, kind, "subject", types.CodeOptions{MaxAttempts: 3})
+	code, _, err = codes.Issue(ctx, kind, "subject", core.CodeOptions{MaxAttempts: 3})
 	require.NoError(t, err)
 	var wg sync.WaitGroup
 	results := make([]error, 8)
@@ -329,14 +329,14 @@ func TestCodeManager(t *testing.T) {
 	}
 	assert.Equal(t, 1, won, "the code is used once")
 
-	for _, opts := range []types.CodeOptions{{Length: 3}, {Length: 13}, {MaxAttempts: -1}, {TTL: -time.Second}} {
+	for _, opts := range []core.CodeOptions{{Length: 3}, {Length: 13}, {MaxAttempts: -1}, {TTL: -time.Second}} {
 		_, _, err := codes.Issue(ctx, kind, "subject", opts)
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%+v: %v", opts, err)
 	}
 
 	// A user's codes go with the user.
 	ada := app.signUp(t, "ada@example.com")
-	_, _, err = codes.Issue(ctx, kind, ada.ID, types.CodeOptions{})
+	_, _, err = codes.Issue(ctx, kind, ada.ID, core.CodeOptions{})
 	require.NoError(t, err)
 	require.NoError(t, app.ac.Store.DeleteUser(ctx, ada.ID))
 	require.NoError(t, app.db.QueryRow(`SELECT COUNT(*) FROM verification_codes WHERE subject = ?`, ada.ID).Scan(&rows))
@@ -349,14 +349,14 @@ func TestPhoneNumberSignIn(t *testing.T) {
 	ctx := context.Background()
 	var before []behemoth.M
 	var failed []string
-	app := bootPhones(t, waited(phonenumber.Options{}), func(reg types.HookRegistry) error {
-		if err := reg.OnBefore(hooks.HookSignInBefore, func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+	app := bootPhones(t, waited(phonenumber.Options{}), func(reg core.HookRegistry) error {
+		if err := reg.OnBefore(hooks.HookSignInBefore, func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) {
 			before = append(before, p)
 			return nil, nil
 		}, nil); err != nil {
 			return err
 		}
-		return reg.OnFailed(hooks.HookSignInFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+		return reg.OnFailed(hooks.HookSignInFailed, func(_ *core.HookContext, reason core.FailureReason) error {
 			failed = append(failed, reason.Code)
 			return nil
 		}, nil)
@@ -369,7 +369,7 @@ func TestPhoneNumberSignIn(t *testing.T) {
 	require.True(t, sent.Sent)
 	assert.Equal(t, phonenumber.PurposeSignIn, sent.Purpose)
 	msg := app.sms.last(t, 2)
-	assert.Equal(t, types.SMSSignIn, msg.Kind)
+	assert.Equal(t, core.SMSSignIn, msg.Kind)
 
 	_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "a sign-in code adds no number: %v", err)
@@ -421,8 +421,8 @@ func TestPhoneNumberSignIn(t *testing.T) {
 // by code.
 func TestPhoneCodeSignInPassesTheSecondFactorCheckpoint(t *testing.T) {
 	ctx := context.Background()
-	app := bootPhones(t, waited(phonenumber.Options{}), func(reg types.HookRegistry) error {
-		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+	app := bootPhones(t, waited(phonenumber.Options{}), func(reg core.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) {
 			p["requireStepUp"] = true
 			return p, nil
 		}, nil)
@@ -563,8 +563,8 @@ func TestPhoneCodeSending(t *testing.T) {
 func TestPhonePasswordReset(t *testing.T) {
 	ctx := context.Background()
 	var failed []string
-	app := bootPhones(t, waited(phonenumber.Options{PasswordReset: true}), func(reg types.HookRegistry) error {
-		return reg.OnFailed(phonenumber.HookResetFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+	app := bootPhones(t, waited(phonenumber.Options{PasswordReset: true}), func(reg core.HookRegistry) error {
+		return reg.OnFailed(phonenumber.HookResetFailed, func(_ *core.HookContext, reason core.FailureReason) error {
 			failed = append(failed, reason.Code)
 			return nil
 		}, nil)
@@ -581,7 +581,7 @@ func TestPhonePasswordReset(t *testing.T) {
 	require.True(t, sent.Sent)
 	assert.Equal(t, phonenumber.PurposePasswordReset, sent.Purpose)
 	msg := app.sms.last(t, 2)
-	assert.Equal(t, types.SMSPasswordReset, msg.Kind)
+	assert.Equal(t, core.SMSPasswordReset, msg.Kind)
 
 	_, err = app.phones.SignInWithCode(ctx, adaNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "a reset code does not sign in: %v", err)
@@ -628,7 +628,7 @@ func TestPhonePasswordReset(t *testing.T) {
 func TestPhoneNumberRoutes(t *testing.T) {
 	ctx := context.Background()
 	app := bootPhones(t, waited(phonenumber.Options{PasswordReset: true}), nil)
-	route := func(path string) types.Route {
+	route := func(path string) core.Route {
 		r, ok := app.routes["/api/auth"+path]
 		require.True(t, ok, path)
 		return r
@@ -657,7 +657,7 @@ func TestPhoneNumberRoutes(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.JSONEq(t, ok, w.Body.String())
 	msg := app.sms.last(t, 1)
-	assert.Equal(t, types.SMSPhoneVerification, msg.Kind)
+	assert.Equal(t, core.SMSPhoneVerification, msg.Kind)
 	assert.Equal(t, behemoth.M{"locale": "en"}, msg.Metadata)
 
 	w = callAs(t, app.ac, route(phonenumber.PathVerify), `{"phone_number":"`+adaNumber+`","code":"`+wrongCode(msg.Code)+`"}`, session)
@@ -677,7 +677,7 @@ func TestPhoneNumberRoutes(t *testing.T) {
 		assert.JSONEq(t, ok, w.Body.String(), number)
 	}
 	msg = app.sms.last(t, 2)
-	assert.Equal(t, types.SMSSignIn, msg.Kind)
+	assert.Equal(t, core.SMSSignIn, msg.Kind)
 	w = callAs(t, app.ac, route(phonenumber.PathVerify), `{"phone_number":"`+graceNumber+`","code":"`+msg.Code+`"}`, "")
 	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 	assert.Equal(t, phonenumber.ErrorCodeInvalidCode, read(w.Body.Bytes()).Code)
@@ -740,7 +740,7 @@ func TestPhoneNumberOptionsAndWiring(t *testing.T) {
 
 	meta := phonenumber.New(passwords, phonenumber.Options{}).Meta()
 	assert.Equal(t, phonenumber.PluginName, meta.Name)
-	assert.Equal(t, []types.PluginDependency{{Name: emailpassword.PluginName}}, meta.Dependencies)
+	assert.Equal(t, []core.PluginDependency{{Name: emailpassword.PluginName}}, meta.Dependencies)
 
 	// Boot fails without an SMS sender.
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "nosms.db"))
@@ -748,7 +748,7 @@ func TestPhoneNumberOptionsAndWiring(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(phoneSchema)
 	require.NoError(t, err)
-	prepared, err := engine.Prepare([]types.Plugin{passwords, phonenumber.New(passwords, phonenumber.Options{})}, engine.PrepareConfig{})
+	prepared, err := engine.Prepare([]core.Plugin{passwords, phonenumber.New(passwords, phonenumber.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	_, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{

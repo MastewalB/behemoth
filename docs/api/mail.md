@@ -6,8 +6,8 @@ Some plugins have to send a message: a sign-in link, a link that confirms an add
 
 ```go
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Mail: types.MailConfig{
-		Sender: types.MailSenderFunc(func(ctx context.Context, msg types.MailMessage) error {
+	Mail: core.MailConfig{
+		Sender: core.MailSenderFunc(func(ctx context.Context, msg core.MailMessage) error {
 			return mailQueue.Enqueue(ctx, msg.To, subjectFor(msg.Kind), msg.URL)
 		}),
 	},
@@ -16,7 +16,7 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 defer ac.Mailer.Close(context.Background())
 ```
 
-`Sender` is a `types.MailSender`, an interface with one method, `Send(ctx, msg) error`. `types.MailSenderFunc` turns a function into one. Return an error when the message was not delivered or handed off.
+`Sender` is a `core.MailSender`, an interface with one method, `Send(ctx, msg) error`. `core.MailSenderFunc` turns a function into one. Return an error when the message was not delivered or handed off.
 
 A plugin that needs a sender (`magiclink`, `emailverification`, `emailpassword` with password reset on) makes `Boot` fail with a configuration error when none is set. Without such a plugin, `Mail` can stay empty.
 
@@ -24,9 +24,9 @@ A plugin that needs a sender (`magiclink`, `emailverification`, `emailpassword` 
 
 | Field | Content |
 | --- | --- |
-| `Kind` | what the message is for: `types.MailMagicLink`, `types.MailEmailVerification`, `types.MailEmailChange`, `types.MailEmailChangeNotice`, `types.MailPasswordReset`, `types.MailPasswordChanged`. Pick the subject and template by it. |
+| `Kind` | what the message is for: `core.MailMagicLink`, `core.MailEmailVerification`, `core.MailEmailChange`, `core.MailEmailChangeNotice`, `core.MailPasswordReset`, `core.MailPasswordChanged`. Pick the subject and template by it. |
 | `To` | the address, trimmed and lowercased |
-| `URL` | the link to put in the message, with the token in it. Empty for `types.MailPasswordChanged`, a notice without a link, as are `Token` and `ExpiresAt`. |
+| `URL` | the link to put in the message, with the token in it. Empty for `core.MailPasswordChanged`, a notice without a link, as are `Token` and `ExpiresAt`. |
 | `Token` | the raw token, if you build the URL yourself. It is a credential: don't log it. |
 | `ExpiresAt` | when the link stops working |
 | `User` | the `*models.User` the message is about |
@@ -34,12 +34,12 @@ A plugin that needs a sender (`magiclink`, `emailverification`, `emailpassword` 
 | `Metadata` | whatever the request carried under `metadata`: a locale, a template name |
 
 ```go
-func send(ctx context.Context, msg types.MailMessage) error {
+func send(ctx context.Context, msg core.MailMessage) error {
 	locale, _ := msg.Metadata["locale"].(string)
 	switch msg.Kind {
-	case types.MailMagicLink:
+	case core.MailMagicLink:
 		return mailQueue.Enqueue(ctx, msg.To, templates.SignIn(locale), msg.URL)
-	case types.MailEmailVerification:
+	case core.MailEmailVerification:
 		return mailQueue.Enqueue(ctx, msg.To, templates.Verify(locale), msg.URL)
 	}
 	return fmt.Errorf("no template for mail kind %q", msg.Kind)
@@ -84,15 +84,15 @@ Background sends behave as follows:
 A plugin takes the mailer from the `AuthContext`:
 
 ```go
-func (p *Plugin) Init(ac *types.AuthContext) error {
+func (p *Plugin) Init(ac *core.AuthContext) error {
 	if !ac.Mailer.Configured() {
 		return errs.NewConfigurationError("myplugin.Init", "no mail sender is configured", nil)
 	}
 	// ...
 }
 
-err := ac.Mailer.Send(ctx, types.MailMessage{Kind: "myplugin.invite", To: email, URL: link})      // waits
-err = ac.Mailer.SendAsync(ctx, types.MailMessage{Kind: "myplugin.invite", To: email, URL: link})  // does not
+err := ac.Mailer.Send(ctx, core.MailMessage{Kind: "myplugin.invite", To: email, URL: link})      // waits
+err = ac.Mailer.SendAsync(ctx, core.MailMessage{Kind: "myplugin.invite", To: email, URL: link})  // does not
 ```
 
-Define your own `types.MailKind` for a message of your own, and document it so the application can add a template. Use `Send` when your code does something about a failure. Use `SendAsync` when a failed send costs the user a retry and nothing else. The error `SendAsync` returns means the message was not queued.
+Define your own `core.MailKind` for a message of your own, and document it so the application can add a template. Use `Send` when your code does something about a failure. Use `SendAsync` when a failed send costs the user a retry and nothing else. The error `SendAsync` returns means the message was not queued.

@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -90,7 +90,7 @@ func serve(ctx context.Context) error {
 // tel is the application's telemetry (telemetry.go). The same logger goes to
 // the database adapter, so SQL statements are logged at debug with the
 // request ID of the request that ran them.
-func boot(ctx context.Context, driver types.FrameworkDriver, tel *telemetry.Telemetry) (*types.AuthContext, *emailpassword.Plugin, *sql.DB, error) {
+func boot(ctx context.Context, driver core.FrameworkDriver, tel *telemetry.Telemetry) (*core.AuthContext, *emailpassword.Plugin, *sql.DB, error) {
 	// 1. Declarations: plugins, hooks, tokens, rate limits, schema -> resolver.
 	all, ep := plugins()
 	app, err := engine.Prepare(all, prepareConfig())
@@ -117,15 +117,15 @@ func boot(ctx context.Context, driver types.FrameworkDriver, tel *telemetry.Tele
 		Telemetry: tel,
 		// The one mail sender every plugin goes through (mail.go). The magic
 		// link plugin and password reset fail Boot without one.
-		Mail: types.MailConfig{Sender: types.MailSenderFunc(printMail)},
+		Mail: core.MailConfig{Sender: core.MailSenderFunc(printMail)},
 		// The application's hook handlers (hooks.go). The plugins registered
 		// theirs in Register.
 		Hooks: appHooks,
-		Session: types.SessionConfig{
+		Session: core.SessionConfig{
 			ExpiresIn:         24 * time.Hour,
 			PendingExpiresIn:  10 * time.Minute,
 			CaptureIPAndAgent: true, // sessions record the client's address and user agent
-			Transport:         types.TransportHeader,
+			Transport:         core.TransportHeader,
 		},
 		// KV, RateLimit, Token and Router left at their defaults: no KV
 		// store (sessions and rate limits use the DB), routes under

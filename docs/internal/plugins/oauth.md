@@ -15,12 +15,12 @@ The code lives in:
 - `plugins/oauth/protocol.go`: what the built-in providers share: the HTTP client, the code exchange, client authentication
 - `plugins/oauth/oidc.go`: the OpenID Connect provider: discovery, the key set, the ID token
 - `plugins/oauth/github.go`: the GitHub provider
-- `types/auth-context.go`: `AuthContext.SessionConfig`, which the routes read
+- `core/auth-context.go`: `AuthContext.SessionConfig`, which the routes read
 - `store/seal.go`: `Store.Seal` and `Store.Open`, which `Begin` uses for the PKCE verifier
 
 ## What the plugin contributes
 
-| `types.Plugin` method | Result |
+| `core.Plugin` method | Result |
 | --- | --- |
 | `Meta` | name `oauth`, no dependencies, no mount path |
 | `Declare` | the `oauth_state` token kind, three hook points, and two rate-limit rules |
@@ -31,7 +31,7 @@ The code lives in:
 
 | Declared | Value |
 | --- | --- |
-| token kind | `types.TokenKindOAuthState`, single use, `Options.StateTTL` (10 minutes by default), database backend |
+| token kind | `core.TokenKindOAuthState`, single use, `Options.StateTTL` (10 minutes by default), database backend |
 | hook points | `auth.oauth.beforeBegin` (before), `.afterBegin` (after), `.beginFailed` (failed). None is audited. |
 | route rules | `oauth.begin.route` and `oauth.complete.route`: 10 a minute per client address |
 
@@ -75,7 +75,7 @@ Each failure is a configuration error from `Boot`.
 | --- | --- | --- |
 | 1 | `RunBefore(auth.oauth.beforeBegin)` on `provider`, `redirect_url`, and the extra fields | `FailIfRejected`: `auth.oauth.beginFailed` with `rejected_by_hook` for a rejection |
 | 2 | find the provider by its id | a validation error, code `provider_invalid_input` |
-| 3 | check `RedirectURL` with `types.TrustedRedirect(ac.Origins, url)`, if one was given | a validation error, code `redirect_url_invalid_input` |
+| 3 | check `RedirectURL` with `core.TrustedRedirect(ac.Origins, url)`, if one was given | a validation error, code `redirect_url_invalid_input` |
 | 4 | create the PKCE verifier, the nonce, and the binding value: 32 random bytes each | a security error |
 | 5 | `Store.Seal(verifier)` | the error is returned |
 | 6 | `TokenManager.Issue(oauth_state, no subject, metadata)` | `FailIfRejected`, for a refusal on `token.beforeIssue` |
@@ -124,7 +124,7 @@ It then reads the state's token without consuming it (`TokenManager.Verify`). Th
 | 7 | `resolveUser`: find or create the user | see below |
 | 8 | `RunBefore(auth.signIn.credentialsVerified)`; `requireStepUp` makes the session pending | `FailIfRejected`: `Fail` with `rejected_by_hook` for a rejection |
 | 9 | `SessionManager.Create` | the error is returned |
-| 10 | return a `*types.SignInResult` with `Method: "oauth"` | |
+| 10 | return a `*core.SignInResult` with `Method: "oauth"` | |
 
 Every `Fail` of steps 1 to 5 answers with one typed unauthorized error, code `invalid_oauth_callback`. The audit event of `auth.signIn.failed` has the real code, and the provider in its metadata.
 
@@ -169,7 +169,7 @@ Both routes are JSON `POST`s, so the origin check and the refusal of form conten
 | Route | Flow | Answer |
 | --- | --- | --- |
 | `POST /sign-in/oauth` (`PathBegin`) | `Begin` | `{"authorization_url": ...}`, plus `binding` for a client without cookies, with `Cache-Control: no-store` |
-| `POST /oauth/complete` (`PathComplete`) | `Complete` | `types.WriteSignIn` with `redirect_url` as the extra key |
+| `POST /oauth/complete` (`PathComplete`) | `Complete` | `core.WriteSignIn` with `redirect_url` as the extra key |
 
 Each has a route rule per client address, 10 a minute: `oauth.begin.route` and `oauth.complete.route`.
 
@@ -315,7 +315,7 @@ An ID token without a `kid` is checked against every key of the set that fits it
 
 ### Handlers on the after point do not get the URL or the binding value
 
-**Context:** `types.WithLifecycle` hands the flow's result to the after point as it is. `Begin`'s result holds the authorization URL, which holds the state, and the binding value. Hook handlers are planned to be reachable in other processes, as `service_ready_components.md` describes.
+**Context:** `core.WithLifecycle` hands the flow's result to the after point as it is. `Begin`'s result holds the authorization URL, which holds the state, and the binding value. Hook handlers are planned to be reachable in other processes, as `service_ready_components.md` describes.
 
 **Options considered:**
 

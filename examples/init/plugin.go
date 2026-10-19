@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -25,17 +25,17 @@ import (
 // that table. It imports neither: the point names are all it shares with
 // them.
 type ActivityPlugin struct {
-	ac *types.AuthContext
+	ac *core.AuthContext
 }
 
-var _ types.Plugin = (*ActivityPlugin)(nil)
+var _ core.Plugin = (*ActivityPlugin)(nil)
 
-func (p *ActivityPlugin) Meta() types.PluginMeta {
-	return types.PluginMeta{Name: "activity", MountPath: "/activity"}
+func (p *ActivityPlugin) Meta() core.PluginMeta {
+	return core.PluginMeta{Name: "activity", MountPath: "/activity"}
 }
 func (p *ActivityPlugin) Version() string { return "0.1.0" }
 
-func (p *ActivityPlugin) Declare(ic *types.PluginInitContext) error {
+func (p *ActivityPlugin) Declare(ic *core.PluginInitContext) error {
 	return ic.Schemas.Declare(&ActivityEvent{}, schema.Table{
 		Name: "activity_events",
 		Columns: []schema.Column{
@@ -61,11 +61,11 @@ const (
 //     back with the user.
 //   - Handlers take the event type from HookContext.Point, which the
 //     dispatcher sets.
-func (p *ActivityPlugin) Register(reg types.HookRegistry) error {
+func (p *ActivityPlugin) Register(reg core.HookRegistry) error {
 	// PriorityHighest: the clock starts before any other handler runs,
 	// including the application's invite check.
-	first := &types.HookOptions{Priority: types.PriorityHighest}
-	if err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	first := &core.HookOptions{Priority: core.PriorityHighest}
+	if err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 		hctx.Values[valueStarted] = time.Now()
 		trace("activity", hctx, "clock started")
 		return payload, nil
@@ -76,7 +76,7 @@ func (p *ActivityPlugin) Register(reg types.HookRegistry) error {
 	// Tier 1, inside the user's transaction. The write is its own operation
 	// and starts with a copy of the sign-up's Values, so valueStarted is
 	// visible here. A failure would roll the user back.
-	if err := reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, _ any) error {
+	if err := reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, _ any) error {
 		trace("activity", hctx, "activity row written in the user's transaction")
 		return hctx.Tx.DB().Create(hctx.Ctx, newActivityEvent(hctx.Point))
 	}, nil); err != nil {
@@ -84,7 +84,7 @@ func (p *ActivityPlugin) Register(reg types.HookRegistry) error {
 	}
 
 	// Tier 2, after commit. The same map the before handler wrote to.
-	if err := reg.OnAfter(hooks.HookSignUpAfter, func(hctx *types.HookContext, _ any) error {
+	if err := reg.OnAfter(hooks.HookSignUpAfter, func(hctx *core.HookContext, _ any) error {
 		took := "unknown"
 		if started, ok := hctx.Values[valueStarted].(time.Time); ok {
 			took = time.Since(started).Round(time.Millisecond).String()
@@ -97,7 +97,7 @@ func (p *ActivityPlugin) Register(reg types.HookRegistry) error {
 
 	// Rejections of both flows. No transaction here, so the row goes
 	// through the root adapter.
-	failed := func(hctx *types.HookContext, reason types.FailureReason) error {
+	failed := func(hctx *core.HookContext, reason core.FailureReason) error {
 		trace("activity", hctx, "rejected: "+reason.Code)
 		return hctx.Auth.DB.Create(hctx.Ctx, newActivityEvent(hctx.Point))
 	}
@@ -107,21 +107,21 @@ func (p *ActivityPlugin) Register(reg types.HookRegistry) error {
 	return reg.OnFailed(hooks.HookSignInFailed, failed, nil)
 }
 
-func (p *ActivityPlugin) Middlewares() []types.Middleware { return nil }
+func (p *ActivityPlugin) Middlewares() []core.Middleware { return nil }
 
 // Routes are mounted under BasePath + MountPath: GET /api/auth/activity/status.
-func (p *ActivityPlugin) Routes() []types.Route {
-	return []types.Route{{Method: http.MethodGet, Path: "/status", Handler: p.status}}
+func (p *ActivityPlugin) Routes() []core.Route {
+	return []core.Route{{Method: http.MethodGet, Path: "/status", Handler: p.status}}
 }
 
-func (p *ActivityPlugin) status(rctx *types.RequestContext) error {
+func (p *ActivityPlugin) status(rctx *core.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{
 		"plugin":       "activity",
 		"auth_context": rctx.Auth != nil && rctx.Auth.SessionManager != nil,
 	})
 }
 
-func (p *ActivityPlugin) Init(ac *types.AuthContext) error {
+func (p *ActivityPlugin) Init(ac *core.AuthContext) error {
 	p.ac = ac
 	return nil
 }
@@ -134,7 +134,7 @@ type ActivityEvent struct {
 	CreatedAt time.Time
 }
 
-func newActivityEvent(point types.HookPoint) *ActivityEvent {
+func newActivityEvent(point core.HookPoint) *ActivityEvent {
 	return &ActivityEvent{ID: utils.GenerateUUID(), Type: string(point), CreatedAt: time.Now().UTC()}
 }
 

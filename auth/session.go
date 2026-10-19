@@ -1,7 +1,7 @@
 // Package auth implements Behemoth's credential services: the session manager,
 // the token and code managers with the token catalog, session tokens for
 // other services, and the key set route those tokens are checked against.
-// The contracts it implements are in package types.
+// The contracts it implements are in package core.
 package auth
 
 import (
@@ -14,13 +14,13 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -28,11 +28,11 @@ type DefaultSessionManager struct {
 	st     *store.Store
 	kv     behemoth.KeyValueStorage
 	crypto crypto.Services
-	cfg    types.SessionConfig
-	disp   types.Dispatcher
+	cfg    core.SessionConfig
+	disp   core.Dispatcher
 	tel    *telemetry.Telemetry
-	auth   *types.AuthContext
-	ipCfg  *types.ClientIPConfig // how the client's address is resolved from a request; see requestMeta
+	auth   *core.AuthContext
+	ipCfg  *core.ClientIPConfig // how the client's address is resolved from a request; see requestMeta
 }
 
 func cacheKey(lookupHash string) string { return "session:" + lookupHash }
@@ -49,14 +49,14 @@ func NewSessionManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
 	crypto crypto.Services,
-	cfg types.SessionConfig,
-	disp types.Dispatcher,
+	cfg core.SessionConfig,
+	disp core.Dispatcher,
 	tel *telemetry.Telemetry,
-	auth *types.AuthContext,
-	ipCfg *types.ClientIPConfig,
-) types.SessionManager {
+	auth *core.AuthContext,
+	ipCfg *core.ClientIPConfig,
+) core.SessionManager {
 	if ipCfg == nil {
-		ipCfg = &types.ClientIPConfig{}
+		ipCfg = &core.ClientIPConfig{}
 	}
 	return &DefaultSessionManager{
 		st:     st,
@@ -72,17 +72,17 @@ func NewSessionManager(
 
 // requestMeta returns the IP address and user agent a new session records.
 // A value the caller set in meta is used as it is. An empty one is taken from
-// the request being handled (types.RequestFrom), and stays empty when ctx
+// the request being handled (core.RequestFrom), and stays empty when ctx
 // carries none: a CLI, a job, or a caller that did not pass on the request's
 // context.
-func (sm *DefaultSessionManager) requestMeta(ctx context.Context, meta types.SessionMeta) (ip, ua string) {
+func (sm *DefaultSessionManager) requestMeta(ctx context.Context, meta core.SessionMeta) (ip, ua string) {
 	ip, ua = meta.IPAddress, meta.UserAgent
-	rc := types.RequestFrom(ctx)
+	rc := core.RequestFrom(ctx)
 	if rc == nil || rc.Request == nil {
 		return ip, ua
 	}
 	if ip == "" {
-		ip = types.ClientIP(rc.Request, sm.ipCfg)
+		ip = core.ClientIP(rc.Request, sm.ipCfg)
 	}
 	if ua == "" {
 		ua = rc.Request.UserAgent()
@@ -90,7 +90,7 @@ func (sm *DefaultSessionManager) requestMeta(ctx context.Context, meta types.Ses
 	return ip, ua
 }
 
-func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta types.SessionMeta) (*models.Session, string, error) {
+func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta core.SessionMeta) (*models.Session, string, error) {
 	ctx, span := sm.tel.StartSpan(ctx, telemetry.SpanSessionCreate, nil)
 	session, rawToken, err := sm.create(ctx, userID, meta)
 	telemetry.FinishSpan(span, err)
@@ -98,14 +98,14 @@ func (sm *DefaultSessionManager) Create(ctx context.Context, userID any, meta ty
 }
 
 // create is Create without its span.
-func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta types.SessionMeta) (*models.Session, string, error) {
+func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta core.SessionMeta) (*models.Session, string, error) {
 	const op = "SessionManager.Create"
-	ctx = types.BeginOperation(ctx) // beforeCreate and afterCreate share Values
+	ctx = core.BeginOperation(ctx) // beforeCreate and afterCreate share Values
 
 	// The user is also published in Values, where a rate-limit rule on
 	// auth.session.beforeCreate keys on it: HookRateLimitRule.KeyFunc gets
 	// the HookContext and not the payload.
-	types.HookValuesFrom(ctx)[hooks.HookValueUserID] = fmt.Sprint(userID)
+	core.HookValuesFrom(ctx)[hooks.HookValueUserID] = fmt.Sprint(userID)
 
 	if meta.State != models.SessionActive && meta.State != models.SessionPending {
 		return nil, "", errs.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
@@ -152,7 +152,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 	}
 
 	now := time.Now()
-	payload, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeCreate, types.BeforeHookPhase), hooks.HookSessionBeforeCreate, behemoth.M{
+	payload, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeCreate, core.BeforeHookPhase), hooks.HookSessionBeforeCreate, behemoth.M{
 		hooks.HookValueUserID: fmt.Sprint(userID), hooks.HookValueState: string(meta.State),
 		hooks.HookValueIPAddress: ip, hooks.HookValueUserAgent: ua,
 	})
@@ -191,7 +191,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 	}
 
 	sm.cacheSet(ctx, m)
-	if err := sm.disp.RunAfter(hookContext(ctx, sm.auth, hooks.HookSessionAfterCreate, types.AfterHookPhase), hooks.HookSessionAfterCreate, m); err != nil {
+	if err := sm.disp.RunAfter(hookContext(ctx, sm.auth, hooks.HookSessionAfterCreate, core.AfterHookPhase), hooks.HookSessionAfterCreate, m); err != nil {
 		return nil, "", err
 	}
 
@@ -335,7 +335,7 @@ func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) 
 	return promoted, nil
 }
 
-// Touch implements [types.SessionManager]. It returns the session only when
+// Touch implements [core.SessionManager]. It returns the session only when
 // it extended it, so the caller knows to extend the client's cookie too.
 //
 // It runs on every authenticated request, so the usual case has to cost
@@ -389,7 +389,7 @@ func (sm *DefaultSessionManager) extensionDue(m *models.Session) bool {
 	return !time.Now().Before(m.ExpiresAt.Add(-sm.cfg.UpdateAge))
 }
 
-// ListForUser implements [types.SessionManager].
+// ListForUser implements [core.SessionManager].
 func (sm *DefaultSessionManager) ListForUser(ctx context.Context, userID any) ([]*models.Session, error) {
 	sessions, err := sm.st.ListSessionsForUser(ctx, fmt.Sprint(userID))
 	if err != nil {
@@ -398,7 +398,7 @@ func (sm *DefaultSessionManager) ListForUser(ctx context.Context, userID any) ([
 	return sessions, nil
 }
 
-// Revoke implements [types.SessionManager].
+// Revoke implements [core.SessionManager].
 func (sm *DefaultSessionManager) Revoke(ctx context.Context, sessionID string, reason string) error {
 	ctx, span := sm.tel.StartSpan(ctx, telemetry.SpanSessionRevoke, nil)
 	err := sm.revoke(ctx, sessionID, reason)
@@ -421,7 +421,7 @@ func (sm *DefaultSessionManager) revoke(ctx context.Context, sessionID string, r
 	return nil
 }
 
-// RevokeAllForUser implements [types.SessionManager].
+// RevokeAllForUser implements [core.SessionManager].
 func (sm *DefaultSessionManager) RevokeAllForUser(ctx context.Context, userID any, reason string, except string) error {
 	const op = "SessionManager.RevokeAllForUser"
 
@@ -437,7 +437,7 @@ func (sm *DefaultSessionManager) RevokeAllForUser(ctx context.Context, userID an
 	return nil
 }
 
-// IsFresh implements [types.SessionManager].
+// IsFresh implements [core.SessionManager].
 func (sm *DefaultSessionManager) IsFresh(session *models.Session) bool {
 	if session == nil || session.State != models.SessionActive || session.FreshAt.IsZero() {
 		return false
@@ -445,14 +445,14 @@ func (sm *DefaultSessionManager) IsFresh(session *models.Session) bool {
 	return time.Since(session.FreshAt) <= sm.cfg.FreshAge
 }
 
-// Evict implements [types.SessionManager].
+// Evict implements [core.SessionManager].
 func (sm *DefaultSessionManager) Evict(ctx context.Context, sessions []*models.Session) {
 	for _, m := range sessions {
 		sm.cacheDelete(ctx, m.LookupHash)
 	}
 }
 
-// Discard implements [types.SessionManager]. Each session that was live is
+// Discard implements [core.SessionManager]. Each session that was live is
 // handed to the handlers as a revoked one, with the time and the reason,
 // although no row holds that state: the row is gone. sessions is not
 // modified.
@@ -465,15 +465,15 @@ func (sm *DefaultSessionManager) Discard(ctx context.Context, sessions []*models
 		}
 		ended := *m
 		ended.State, ended.RevokedAt, ended.RevokedReason = models.SessionRevoked, &now, reason
-		opCtx := types.BeginOperation(ctx)
-		if err := sm.disp.RunAfter(hookContext(opCtx, sm.auth, hooks.HookSessionAfterRevoke, types.AfterHookPhase), hooks.HookSessionAfterRevoke, &ended); err != nil {
+		opCtx := core.BeginOperation(ctx)
+		if err := sm.disp.RunAfter(hookContext(opCtx, sm.auth, hooks.HookSessionAfterRevoke, core.AfterHookPhase), hooks.HookSessionAfterRevoke, &ended); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// SupportsRevocation implements [types.SessionManager].
+// SupportsRevocation implements [core.SessionManager].
 func (sm *DefaultSessionManager) SupportsRevocation() bool { return true }
 
 // sessionCookie is the cookie the session token travels in. WriteToken,
@@ -483,9 +483,9 @@ func (sm *DefaultSessionManager) SupportsRevocation() bool { return true }
 func (sm *DefaultSessionManager) sessionCookie(value string, expires time.Time) *http.Cookie {
 	sameSite := http.SameSiteLaxMode
 	switch sm.cfg.CookieSameSite {
-	case types.SameSiteStrict:
+	case core.SameSiteStrict:
 		sameSite = http.SameSiteStrictMode
-	case types.SameSiteNone:
+	case core.SameSiteNone:
 		sameSite = http.SameSiteNoneMode
 	}
 	return &http.Cookie{
@@ -500,7 +500,7 @@ func (sm *DefaultSessionManager) sessionCookie(value string, expires time.Time) 
 // RequireSession extends the cookie, and the sign-out route behind it then
 // removes it. A response should not set a cookie twice (RFC 6265, section
 // 4.1.1), so the last write is the only one sent.
-func (sm *DefaultSessionManager) setCookie(rctx *types.RequestContext, cookie *http.Cookie) {
+func (sm *DefaultSessionManager) setCookie(rctx *core.RequestContext, cookie *http.Cookie) {
 	headers := rctx.Response.Headers
 	headers["Set-Cookie"] = slices.DeleteFunc(headers["Set-Cookie"], func(queued string) bool {
 		return strings.HasPrefix(queued, cookie.Name+"=")
@@ -508,19 +508,19 @@ func (sm *DefaultSessionManager) setCookie(rctx *types.RequestContext, cookie *h
 	rctx.Response.Cookie(cookie)
 }
 
-// WriteToken implements [types.SessionManager].
-func (sm *DefaultSessionManager) WriteToken(rctx *types.RequestContext, rawToken string, session *models.Session) (inBody bool) {
+// WriteToken implements [core.SessionManager].
+func (sm *DefaultSessionManager) WriteToken(rctx *core.RequestContext, rawToken string, session *models.Session) (inBody bool) {
 	switch sm.cfg.Transport {
-	case types.TransportCookie, types.TransportBoth:
+	case core.TransportCookie, core.TransportBoth:
 		sm.setCookie(rctx, sm.sessionCookie(rawToken, session.ExpiresAt))
 	}
 	switch sm.cfg.Transport {
-	case types.TransportHeader, types.TransportBoth:
-		rctx.Response.SetHeader(types.SessionTokenHeader, rawToken)
+	case core.TransportHeader, core.TransportBoth:
+		rctx.Response.SetHeader(core.SessionTokenHeader, rawToken)
 	}
 	// The body is the route's to write, so for TransportBody the caller is
 	// told to put the token there.
-	return sm.cfg.Transport == types.TransportBody
+	return sm.cfg.Transport == core.TransportBody
 }
 
 // cookieCarries reports whether r sent rawToken in the session cookie. It
@@ -533,10 +533,10 @@ func (sm *DefaultSessionManager) cookieCarries(r *http.Request, rawToken string)
 	return err == nil && sent.Value == rawToken
 }
 
-// ClearToken implements [types.SessionManager].
-func (sm *DefaultSessionManager) ClearToken(rctx *types.RequestContext) {
+// ClearToken implements [core.SessionManager].
+func (sm *DefaultSessionManager) ClearToken(rctx *core.RequestContext) {
 	switch sm.cfg.Transport {
-	case types.TransportCookie, types.TransportBoth:
+	case core.TransportCookie, core.TransportBoth:
 		// The cookie is removed for the request that presented its token
 		// in it. Another cookie is left alone: its session is still live.
 		token, ok := sm.ExtractToken(rctx.Request)
@@ -552,10 +552,10 @@ func (sm *DefaultSessionManager) ClearToken(rctx *types.RequestContext) {
 	}
 }
 
-// ExtendToken implements [types.SessionManager].
-func (sm *DefaultSessionManager) ExtendToken(rctx *types.RequestContext, rawToken string, session *models.Session) (written bool) {
+// ExtendToken implements [core.SessionManager].
+func (sm *DefaultSessionManager) ExtendToken(rctx *core.RequestContext, rawToken string, session *models.Session) (written bool) {
 	switch sm.cfg.Transport {
-	case types.TransportCookie, types.TransportBoth:
+	case core.TransportCookie, core.TransportBoth:
 		// Only a client that sent the token in the cookie depends on the
 		// cookie's date.
 		if sm.cookieCarries(rctx.Request, rawToken) {
@@ -566,18 +566,18 @@ func (sm *DefaultSessionManager) ExtendToken(rctx *types.RequestContext, rawToke
 	return false
 }
 
-// ExtractToken implements [types.SessionManager]. A client of
+// ExtractToken implements [core.SessionManager]. A client of
 // TransportHeader and of TransportBody sends the token the same way, as a
 // bearer token; the two differ only in how the sign-in delivered it.
 func (sm *DefaultSessionManager) ExtractToken(r *http.Request) (string, bool) {
 	switch sm.cfg.Transport {
-	case types.TransportHeader, types.TransportBody, types.TransportBoth:
+	case core.TransportHeader, core.TransportBody, core.TransportBoth:
 		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && token != "" {
 			return token, true
 		}
 	}
 	switch sm.cfg.Transport {
-	case types.TransportCookie, types.TransportBoth:
+	case core.TransportCookie, core.TransportBoth:
 		if c, err := r.Cookie(sm.cfg.CookieName); err == nil && c.Value != "" {
 			return c.Value, true
 		}
@@ -592,11 +592,11 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	if m.State == models.SessionRevoked {
 		return nil // already revoked
 	}
-	ctx = types.BeginOperation(ctx) // beforeRevoke and afterRevoke share Values
+	ctx = core.BeginOperation(ctx) // beforeRevoke and afterRevoke share Values
 
 	// The returned payload is not read: a handler can stop the revoke, but
 	// it can't point it at another session or change the reason.
-	if _, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeRevoke, types.BeforeHookPhase), hooks.HookSessionBeforeRevoke,
+	if _, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeRevoke, core.BeforeHookPhase), hooks.HookSessionBeforeRevoke,
 		behemoth.M{hooks.HookValueSessionID: m.ID, hooks.HookValueReason: reason}); err != nil {
 		return err
 	}
@@ -618,7 +618,7 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 	// and an explicit Delete is required instead.
 	sm.cacheDelete(ctx, m.LookupHash)
 
-	return sm.disp.RunAfter(hookContext(ctx, sm.auth, hooks.HookSessionAfterRevoke, types.AfterHookPhase), hooks.HookSessionAfterRevoke, m)
+	return sm.disp.RunAfter(hookContext(ctx, sm.auth, hooks.HookSessionAfterRevoke, core.AfterHookPhase), hooks.HookSessionAfterRevoke, m)
 }
 
 func (sm *DefaultSessionManager) fetchByLookupHash(ctx context.Context, lookupHash string) (*models.Session, bool, error) {
@@ -672,20 +672,20 @@ func (sm *DefaultSessionManager) cacheDelete(ctx context.Context, lookupHash str
 //
 // The managers' points are Tier 2, so Tx stays nil. Values are the
 // operation's: each manager method that fires points calls
-// types.BeginOperation first, so its before and after points share one map,
+// core.BeginOperation first, so its before and after points share one map,
 // which starts as a copy of the caller's operation (a sign-in's). Request is
 // the request being handled, or nil outside one (a CLI, a job).
-func hookContext(ctx context.Context, auth *types.AuthContext, point types.HookPoint, phase types.HookPhase) *types.HookContext {
-	values := types.HookValuesFrom(ctx)
+func hookContext(ctx context.Context, auth *core.AuthContext, point core.HookPoint, phase core.HookPhase) *core.HookContext {
+	values := core.HookValuesFrom(ctx)
 	if values == nil {
 		values = behemoth.M{}
 	}
-	return &types.HookContext{
+	return &core.HookContext{
 		Ctx: ctx, Point: point, Phase: phase,
 		Auth:    auth,
 		Values:  values,
-		Request: types.RequestFrom(ctx),
+		Request: core.RequestFrom(ctx),
 	}
 }
 
-var _ types.SessionManager = (*DefaultSessionManager)(nil)
+var _ core.SessionManager = (*DefaultSessionManager)(nil)

@@ -218,7 +218,7 @@ Each step is one commit. It builds every module and passes the suite: the root m
 | 7 | The implementations leave `types/init` for `dispatch`, `ratelimit` (which takes in `types/ratelimit`), and `messaging`, and the token catalog moves to `transport`. | Done |
 | 8 | `transport` becomes `auth`. | Done |
 | 9 | `types/init` becomes `engine`. | Done |
-| 10 | `types` becomes `core`, and `types/hooks` becomes `core/hooks`. The repository table in `CLAUDE.md` follows. | Not started |
+| 10 | `types` becomes `core`, and `types/hooks` becomes `core/hooks`. The repository table in `CLAUDE.md` follows. | Done |
 | 11 | A test over `go list` checks [the rows](#rows): it fails when a package imports a package of a later row, or when a plugin imports a package of row 10. | Not started |
 
 The order moves code out of `types` before `types` gets its new name, so that no identifier is renamed twice. A plugin's `types.PasswordHasher`, for example, becomes `crypto.PasswordHasher` in step 5, and step 10 doesn't touch it.

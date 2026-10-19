@@ -7,7 +7,7 @@ Logs say what happened to one request and audit events say what happened to one 
 The code lives in:
 
 - `telemetry/metrics.go`: `Metrics`, `NoOpMetrics`, the metric names and attribute keys, `Telemetry.MetricsEnabled`, `Count`, `ObserveSince`
-- `types/router.go`: `Router.withMetrics`
+- `core/router.go`: `Router.withMetrics`
 - `store/instrument.go`: `WithTelemetry`, `instrumentedDB`
 - `dispatch/dispatcher.go`: `DefaultDispatcher.observeHandler`, `countPoint`, `corePointMetrics`
 - `ratelimit/limiter.go`: `DefaultRateLimiter.countCheck`

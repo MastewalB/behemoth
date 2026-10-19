@@ -6,20 +6,20 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // These tests cover what a flow reports when a hook chain stops it
-// (types.FailIfRejected): a typed refusal fires the failed point with
-// types.FailureRejectedByHook, whichever handler refused, and a failure of
+// (core.FailIfRejected): a typed refusal fires the failed point with
+// core.FailureRejectedByHook, whichever handler refused, and a failure of
 // the system inside a handler fires nothing.
 
 // A sign-in the email verification plugin refuses at
@@ -37,7 +37,7 @@ func TestSignInRefusedByAHookIsAuditedAsRejectedByHook(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, models.UserTable, events[0].SubjectType)
 	assert.Equal(t, user.ID, events[0].SubjectID)
-	assert.Equal(t, types.FailureRejectedByHook, events[0].Metadata["code"])
+	assert.Equal(t, core.FailureRejectedByHook, events[0].Metadata["code"])
 	assert.Contains(t, events[0].Metadata["cause"], "email address is not verified")
 	assert.Equal(t, emailverification.ErrorCodeEmailNotVerified, events[0].Metadata["causeCode"], "the handler's own code")
 }
@@ -50,12 +50,12 @@ func TestSignInRefusedByAHookIsAuditedAsRejectedByHook(t *testing.T) {
 func TestHandlerSystemErrorFiresNoFailedPoint(t *testing.T) {
 	ctx := context.Background()
 	errDown := errors.New("lookup: connection refused")
-	var failAt types.HookPoint
-	var failed []types.FailureReason
+	var failAt core.HookPoint
+	var failed []core.FailureReason
 	app := bootVerification(t, emailverification.Options{}, func(cfg *engine.BootConfig) {
-		cfg.Hooks = func(reg types.HookRegistry) error {
-			for _, point := range []types.HookPoint{hooks.HookSignInCredentialsVerified, hooks.HookSignUpBefore} {
-				if err := reg.OnBefore(point, func(hctx *types.HookContext, _ behemoth.M) (behemoth.M, error) {
+		cfg.Hooks = func(reg core.HookRegistry) error {
+			for _, point := range []core.HookPoint{hooks.HookSignInCredentialsVerified, hooks.HookSignUpBefore} {
+				if err := reg.OnBefore(point, func(hctx *core.HookContext, _ behemoth.M) (behemoth.M, error) {
 					if hctx.Point == failAt {
 						return nil, errDown
 					}
@@ -64,8 +64,8 @@ func TestHandlerSystemErrorFiresNoFailedPoint(t *testing.T) {
 					return err
 				}
 			}
-			for _, point := range []types.HookPoint{hooks.HookSignInFailed, hooks.HookSignUpFailed} {
-				if err := reg.OnFailed(point, func(_ *types.HookContext, reason types.FailureReason) error {
+			for _, point := range []core.HookPoint{hooks.HookSignInFailed, hooks.HookSignUpFailed} {
+				if err := reg.OnFailed(point, func(_ *core.HookContext, reason core.FailureReason) error {
 					failed = append(failed, reason)
 					return nil
 				}, nil); err != nil {

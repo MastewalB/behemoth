@@ -8,7 +8,7 @@ This page covers the whole hook system: the two tiers of hooks, the three phases
 
 | Term | Meaning |
 | --- | --- |
-| Hook point | A named place where handlers run, such as `data.user.beforeCreate`. The type is `types.HookPoint`. The constants live in `types/hooks`. |
+| Hook point | A named place where handlers run, such as `data.user.beforeCreate`. The type is `core.HookPoint`. The constants live in `core/hooks`. |
 | Phase | When the point fires relative to its operation: `before`, `after`, or `failed`. A point has exactly one phase. |
 | Handler | Your function. Its signature depends on the phase. |
 | Chain | All handlers registered on one point, in their resolved order. |
@@ -58,7 +58,7 @@ A before handler receives the payload as a `behemoth.M` and returns the payload 
 - A panic is caught, logged, and treated as an error that stops the operation.
 
 ```go
-func requireCompanyEmail(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+func requireCompanyEmail(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 	email, _ := payload[models.UserEmail].(string)
 	if !strings.HasSuffix(email, "@example.com") {
 		return nil, errs.NewValidationError("requireCompanyEmail", "users",
@@ -95,25 +95,25 @@ A failed handler follows these rules:
 - `Code` is snake case, like the error codes a client receives. A flow of your own picks its codes the same way.
 - It can't change the outcome. Its error is logged and later handlers still run.
 - It does not fire for system errors such as a database timeout. Those are returned to the caller as ordinary errors.
-- When a before handler refuses a flow with a typed error, the flow's failed point fires with code `rejected_by_hook` (`types.FailureRejectedByHook`) and your error as `Cause`. The code is the same whichever handler refused, at any point of the flow: a refusal on `auth.signIn.credentialsVerified` is reported this way too. Read `Cause` for the reason. The audit event has your error's code as `causeCode` in its metadata.
+- When a before handler refuses a flow with a typed error, the flow's failed point fires with code `rejected_by_hook` (`core.FailureRejectedByHook`) and your error as `Cause`. The code is the same whichever handler refused, at any point of the flow: a refusal on `auth.signIn.credentialsVerified` is reported this way too. Read `Cause` for the reason. The audit event has your error's code as `causeCode` in its metadata.
 - A handler's untyped error, or a typed one that is not a rejection (`errs.IsRejection`), counts as a system error. It stops the flow and fires no failed point.
-- A flow of your own that runs a before chain reports the chain's error with `types.FailIfRejected`, which applies both rules.
+- A flow of your own that runs a before chain reports the chain's error with `core.FailIfRejected`, which applies both rules.
 - Tier 1 has no failed points.
 
 ## HookContext
 
-Every handler receives a `*types.HookContext`.
+Every handler receives a `*core.HookContext`.
 
 | Field | Contents |
 | --- | --- |
 | `Ctx` | The `context.Context` of the operation. Pass it to anything that does I/O. |
 | `Point`, `Phase` | The point being dispatched and its phase. |
-| `Auth` | The `*types.AuthContext`: store, session manager, token manager, crypto, telemetry. |
+| `Auth` | The `*core.AuthContext`: store, session manager, token manager, crypto, telemetry. |
 | `Tx` | Tier 1 only: the store bound to the write's transaction. `Tx.DB()` is the database adapter bound to the same transaction, for your own tables. Nil on Tier 2 hooks. See [Data hooks and transactions](#data-hooks-and-transactions). |
 | `Values` | A scratch map for handlers, shared by all the points of one operation. A handler can leave a note for a later handler. It is not the payload. See [Pass data between handlers](#pass-data-between-handlers). |
 | `Request` | The HTTP request being handled, or nil when the operation was started outside a request (a CLI, a background job). Most handlers don't need it. |
 
-Some points publish well-known entries in `Values` or in the payload. The keys are constants in `types/hooks` (for example `HookValueUserID`, `HookValueSessionID`, and `HookValueIPAddress`). Use the constants so that handlers from different authors agree on the names.
+Some points publish well-known entries in `Values` or in the payload. The keys are constants in `core/hooks` (for example `HookValueUserID`, `HookValueSessionID`, and `HookValueIPAddress`). Use the constants so that handlers from different authors agree on the names.
 
 ### Pass data between handlers
 
@@ -124,9 +124,9 @@ An after handler receives the result of an operation, not its input. When a hand
 An invite plugin accepts an `inviteCode` at sign-up and attaches the new user to the invite:
 
 ```go
-func (p *InvitePlugin) Register(reg types.HookRegistry) error {
+func (p *InvitePlugin) Register(reg core.HookRegistry) error {
 	// The code is input: it arrives in the payload.
-	err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 		code, _ := payload["inviteCode"].(string)
 		invite, err := p.find(hctx.Ctx, code)
 		if err != nil {
@@ -140,7 +140,7 @@ func (p *InvitePlugin) Register(reg types.HookRegistry) error {
 	}
 
 	// The user is being written: link it to the invite in the same transaction.
-	return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, result any) error {
+	return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, result any) error {
 		inviteID, ok := hctx.Values["invite.id"].(string)
 		if !ok {
 			return nil // a user created by another path
@@ -169,7 +169,7 @@ Things to know:
 
 ## Register handlers
 
-Handlers are registered on a `types.HookRegistry`:
+Handlers are registered on a `core.HookRegistry`:
 
 ```go
 type HookRegistry interface {
@@ -186,7 +186,7 @@ An application registers its handlers with `BootConfig.Hooks`. No plugin is need
 ```go
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg,
-	Hooks: func(reg types.HookRegistry) error {
+	Hooks: func(reg core.HookRegistry) error {
 		return reg.OnBefore(hooks.HookUserBeforeCreate, requireCompanyEmail, nil)
 	},
 })
@@ -195,7 +195,7 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 A plugin registers its handlers in its `Register` method:
 
 ```go
-func (p *LegacyPlugin) Register(reg types.HookRegistry) error {
+func (p *LegacyPlugin) Register(reg core.HookRegistry) error {
 	return reg.OnAfter(hooks.HookUserAfterCreate, p.linkLegacyAccount, nil)
 }
 ```
@@ -252,7 +252,7 @@ Rules to know:
 ```go
 // Run the domain check before every other handler on the point.
 reg.OnBefore(hooks.HookUserBeforeCreate, requireCompanyEmail,
-	&types.HookOptions{Priority: types.PriorityHighest})
+	&core.HookOptions{Priority: core.PriorityHighest})
 ```
 
 ## Data hooks and transactions
@@ -277,7 +277,7 @@ An error at any step rolls the transaction back and is returned to the caller un
 A core table, through the store:
 
 ```go
-func (p *LegacyPlugin) linkLegacyAccount(hctx *types.HookContext, result any) error {
+func (p *LegacyPlugin) linkLegacyAccount(hctx *core.HookContext, result any) error {
 	user := result.(*models.User)
 	// Committed or rolled back together with the user.
 	return hctx.Tx.CreateAccount(hctx.Ctx, &models.Account{
@@ -289,7 +289,7 @@ func (p *LegacyPlugin) linkLegacyAccount(hctx *types.HookContext, result any) er
 Your own table, through the adapter:
 
 ```go
-func (p *ProfilePlugin) createProfile(hctx *types.HookContext, result any) error {
+func (p *ProfilePlugin) createProfile(hctx *core.HookContext, result any) error {
 	user := result.(*models.User)
 	// Profile is the plugin's own model, declared in Declare.
 	return hctx.Tx.DB().Create(hctx.Ctx, &Profile{UserID: user.ID, Theme: "light"})
@@ -356,7 +356,7 @@ A data hook should only do work that the rollback undoes. A rollback does not un
 | Use it for | rows that belong with the user | reacting to a new user: emails, stats, cache updates, calls to other systems |
 
 ```go
-reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) error {
+reg.OnAfter(hooks.HookUserCreated, func(hctx *core.HookContext, result any) error {
 	user := result.(*models.User)
 	return mailer.SendWelcome(hctx.Ctx, user.Email)
 }, nil)
@@ -390,7 +390,7 @@ reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) err
 - **Delete your own rows in `data.user.beforeDelete`.** A plugin with a table that references users removes its rows there, through `hctx.Tx`. They go in the same transaction, before the user row, so a foreign key of yours without a cascade does not block the delete.
 
 ```go
-reg.OnBefore(hooks.HookUserBeforeDelete, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
+reg.OnBefore(hooks.HookUserBeforeDelete, func(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
 	userID := hctx.Values[hooks.HookValueUserID]
 	where := clause.Expression{Conditions: []clause.Condition{
 		{Field: "user_id", Operator: clause.OpEqual, Value: userID},
@@ -447,11 +447,11 @@ Rules for rewriting the payload:
 A rate-limit rule can be attached to a before point with `HookRateLimitRule`. The dispatcher checks it before the first handler runs.
 
 ```go
-ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 	Name:  "myplugin.profile.updates",
 	Point: hooks.HookUserBeforeUpdate,
-	KeyFunc: types.KeyByValues(hooks.HookValueUserID),
-	Limit:   types.Limit{Max: 20, Window: time.Hour},
+	KeyFunc: core.KeyByValues(hooks.HookValueUserID),
+	Limit:   core.Limit{Max: 20, Window: time.Hour},
 	Owner: "myplugin",
 })
 ```
@@ -460,12 +460,12 @@ A hook rate-limit rule works as follows:
 
 - `KeyFunc` gets the `HookContext`, not the payload. It keys on the entries the operation publishes in `hctx.Values` (next section) and on the request.
 - `KeyFunc` returns the key and whether the rule applies to this call. When it returns `false`, the rule is skipped: nothing is counted and the call is not limited by it.
-- `types.KeyByValues(keys...)` builds a `KeyFunc` from `Values` entries. It joins them with `|`, and returns `false` when one is missing or empty.
+- `core.KeyByValues(keys...)` builds a `KeyFunc` from `Values` entries. It joins them with `|`, and returns `false` when one is missing or empty.
 - `Limit` allows `Max` attempts per key in each `Window`. The window opens with the first attempt, and the count starts again when it has passed (a fixed window, the only algorithm).
 - Every rule declared on the point is checked, and all must pass.
 - A rejected attempt returns a `rate_limited` error with a retry-after. No handler runs, and the caller can't tell it apart from a before handler stopping the operation.
 - Rules can only be attached to before points.
-- `Action` can be left empty or set to `types.ActionReject`. Both refuse the attempt until the window ends. `types.ActionLockout` is not supported, and `Prepare` returns an error for a rule that uses it.
+- `Action` can be left empty or set to `core.ActionReject`. Both refuse the attempt until the window ends. `core.ActionLockout` is not supported, and `Prepare` returns an error for a rule that uses it.
 - The attempt is counted before the operation runs, so one that succeeds counts like one that fails.
 
 A route rule limits an HTTP path. A hook rule limits the operation, whoever calls it: "5 invite tokens a minute per team" on `token.beforeIssue` holds for a route, a CLI command and a background job alike.
@@ -493,24 +493,24 @@ These operations put what they were called with in `hctx.Values` before the firs
 A limit of five sign-in attempts a minute per account:
 
 ```go
-ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 	Name:    "myplugin.signin.email",
 	Point:   hooks.HookSignInBefore,
-	KeyFunc: types.KeyByValues(hooks.HookValueEmail),
-	Limit:   types.Limit{Max: 5, Window: time.Minute},
+	KeyFunc: core.KeyByValues(hooks.HookValueEmail),
+	Limit:   core.Limit{Max: 5, Window: time.Minute},
 })
 ```
 
 A `KeyFunc` of your own says when the rule does not apply. This one counts per client address, and leaves calls from a CLI or a job alone:
 
 ```go
-KeyFunc: func(hctx *types.HookContext) (string, bool) {
+KeyFunc: func(hctx *core.HookContext) (string, bool) {
 	if hctx.Request == nil || hctx.Request.Request == nil {
 		return "", false // no HTTP request: nothing to count per
 	}
 	// The direct peer's address. Behind a proxy, pass your trusted-proxy
 	// configuration instead of an empty one.
-	return types.ClientIP(hctx.Request.Request, &types.ClientIPConfig{}), true
+	return core.ClientIP(hctx.Request.Request, &core.ClientIPConfig{}), true
 },
 ```
 
@@ -537,19 +537,19 @@ Core audits the after and failed points of sign-up, sign-in, sign-out, sessions 
 Two things let your own flow describe its events:
 
 - A failed point's `FailureReason` can name what was targeted (`SubjectType`, `SubjectID`) and add detail (`Metadata`).
-- An after point's result can implement `types.AuditSubject` when it is not a model.
+- An after point's result can implement `core.AuditSubject` when it is not a model.
 
 ## Declare and fire your own points
 
 A plugin can add points of its own for other code to hook into. Declare the point in `Declare`:
 
 ```go
-const HookInviteAccepted types.HookPoint = "invite.accepted"
+const HookInviteAccepted core.HookPoint = "invite.accepted"
 
-func (p *InvitePlugin) Declare(ic *types.PluginInitContext) error {
-	return ic.Hooks.Declare(types.HookPointDef{
+func (p *InvitePlugin) Declare(ic *core.PluginInitContext) error {
+	return ic.Hooks.Declare(core.HookPointDef{
 		Point: HookInviteAccepted,
-		Phase: types.AfterHookPhase,
+		Phase: core.AfterHookPhase,
 	})
 }
 ```
@@ -564,9 +564,9 @@ Declaration follows these rules:
 Fire it through the dispatcher on the `AuthContext`:
 
 ```go
-ctx = types.BeginOperation(ctx) // once per call, before the first dispatch
-hctx := &types.HookContext{Ctx: ctx, Auth: ac,
-	Values: types.HookValuesFrom(ctx), Request: types.RequestFrom(ctx)}
+ctx = core.BeginOperation(ctx) // once per call, before the first dispatch
+hctx := &core.HookContext{Ctx: ctx, Auth: ac,
+	Values: core.HookValuesFrom(ctx), Request: core.RequestFrom(ctx)}
 if err := ac.Dispatcher.RunAfter(hctx, HookInviteAccepted, invite); err != nil {
 	return err // the point is not declared, or not as an after point
 }
@@ -584,10 +584,10 @@ if err := ac.Dispatcher.RunAfter(hctx, HookInviteAccepted, invite); err != nil {
 
 Dispatching a point that was never declared, or with the wrong phase, returns a configuration error from all four methods and runs no handler. That is a mistake in the code that fires the point, not something a handler can cause, so return the error to your caller. For `RunAfter` and `Fail` it is the only error they return.
 
-`types.WithLifecycle` wraps a function with all three points of a flow:
+`core.WithLifecycle` wraps a function with all three points of a flow:
 
 ```go
-signUp := types.WithLifecycle(ac.Dispatcher,
+signUp := core.WithLifecycle(ac.Dispatcher,
 	hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed,
 	signUpBody)
 ```
@@ -623,12 +623,12 @@ Core declares these, so a handler can be registered on any of them.
 | `auth.signUp.failed` | failed | email/password sign-up | codes `user_exists`, `rejected_by_hook` (a handler on `auth.signUp.before` or on a `data.user.*` create point rejected the sign-up) |
 | `auth.signIn.before` | before | email/password sign-in | `email`, the plaintext `password`, and any other field of the request (the keys of `EmailAndPasswordCredentials.Extra` for a call from code). The returned payload becomes the sign-in's input. An `email` or `password` that is not a string is a validation error. A sign-in by username has `username` in place of `email`. |
 | `auth.signIn.credentialsVerified` | before | sign-in, after the password check | `HookValueUserID`. A second-factor plugin stops the sign-in here, or sets `requireStepUp` to `true` to make the session pending. No other key is read back. |
-| `auth.signIn.after` | after | email/password sign-in, magic link verify | a `*types.SignInResult`: the user, the session, the raw session token, and `Method`, the name of the plugin that signed the user in (`"emailpassword"`, `"magiclink"`, `"username"`, `"phonenumber"`, `"oauth"`) |
+| `auth.signIn.after` | after | email/password sign-in, magic link verify | a `*core.SignInResult`: the user, the session, the raw session token, and `Method`, the name of the plugin that signed the user in (`"emailpassword"`, `"magiclink"`, `"username"`, `"phonenumber"`, `"oauth"`) |
 | `auth.signIn.failed` | failed | email/password sign-in | codes `user_not_found`, `no_credential_account`, `invalid_credentials`, `rejected_by_hook` |
 | `auth.signOut.before` | before | sign-out | `sessionID`. Veto only. |
 | `auth.signOut.after` | after | sign-out | nil |
 | `auth.sessionToken.beforeIssue` | before | session token flow | `userID`, `sessionID`, `audience`, and `claims`, an empty object. Only `claims` is read back; its keys go into the token under `custom`. See [Session tokens](session-tokens.md#hooks). |
-| `auth.sessionToken.afterIssue` | after | session token flow | a `*types.SessionToken` without the token |
+| `auth.sessionToken.afterIssue` | after | session token flow | a `*core.SessionToken` without the token |
 | `auth.sessionToken.issueFailed` | failed | session token flow | code `rejected_by_hook` |
 | `auth.session.beforeCreate` | before | session manager | user id, state, IP address, user agent. The last two come from the request being handled unless the caller of `SessionManager.Create` set them, and are empty when `CaptureIPAndAgent` is off or there is no request. A handler can rewrite the IP address and the user agent (`HookValueIPAddress`, `HookValueUserAgent`), for example to mask the address. The rewrite is stored only when `CaptureIPAndAgent` is on. The user id and state are not read back. |
 | `auth.session.afterCreate` | after | session manager | the created `*models.Session` |

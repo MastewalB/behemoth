@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -22,8 +24,6 @@ import (
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,14 +45,14 @@ func sessionTokenConfig() crypto.JWTConfig {
 // tokenApp is core alone, booted with session tokens, and a user with an
 // active session whose raw token travels as a bearer token.
 type tokenApp struct {
-	ac      *types.AuthContext
+	ac      *core.AuthContext
 	mounted mountedRoutes
 	user    *models.User
 	session *models.Session
 	raw     string
 }
 
-func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg types.HookRegistry) error, configure ...func(*engine.BootConfig)) (*tokenApp, error) {
+func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg core.HookRegistry) error, configure ...func(*engine.BootConfig)) (*tokenApp, error) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "tokens.db"))
@@ -66,7 +66,7 @@ func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg ty
 	require.NoError(t, err)
 	cfg := engine.BootConfig{
 		Crypto:  crypto.Config{Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1}},
-		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
 		JWT:     jwtCfg,
 		Hooks:   hookFn,
 		HTTP:    app.mounted,
@@ -82,7 +82,7 @@ func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg ty
 
 	app.user = &models.User{Email: "ada@example.com"}
 	require.NoError(t, app.ac.Store.CreateUser(ctx, app.user))
-	app.session, app.raw, err = app.ac.SessionManager.Create(ctx, app.user.ID, types.SessionMeta{State: models.SessionActive})
+	app.session, app.raw, err = app.ac.SessionManager.Create(ctx, app.user.ID, core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	return app, nil
 }
@@ -106,8 +106,8 @@ func (app *tokenApp) call(t *testing.T, method, path, body, raw string) answer {
 	if raw != "" {
 		req.Header.Set("Authorization", "Bearer "+raw)
 	}
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: app.ac}
-	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: app.ac}
+	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	w := httptest.NewRecorder()
 	if err := route.Handler(rctx); err != nil {
 		status, errBody := (&errs.DefaultErrorMapper{}).Map(err)
@@ -126,7 +126,7 @@ func (app *tokenApp) call(t *testing.T, method, path, body, raw string) answer {
 
 func (app *tokenApp) issue(t *testing.T, body string) answer {
 	t.Helper()
-	return app.call(t, http.MethodPost, "/api/auth"+types.PathSessionToken, body, app.raw)
+	return app.call(t, http.MethodPost, "/api/auth"+core.PathSessionToken, body, app.raw)
 }
 
 // verifyElsewhere checks token the way another service does: with the keys
@@ -168,7 +168,7 @@ func TestSessionTokenIsVerifiedWithVerifyJWT(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	issued, err := app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: app.session, Audience: reportsAudience})
+	issued, err := app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: app.session, Audience: reportsAudience})
 	require.NoError(t, err)
 
 	source, err := keysource.NewJWKSet(nil, srv.URL+"/.well-known/jwks.json")
@@ -228,7 +228,7 @@ func TestSessionTokenIsVerifiedElsewhere(t *testing.T) {
 	assert.Error(t, err, "a service that is not the token's audience refuses it")
 
 	// The token is for other services: it is not a session of behemoth.
-	asSession := app.call(t, http.MethodPost, "/api/auth"+types.PathSessionToken, "", token)
+	asSession := app.call(t, http.MethodPost, "/api/auth"+core.PathSessionToken, "", token)
 	assert.Equal(t, http.StatusUnauthorized, asSession.status)
 	assert.Equal(t, errs.CodeSessionInvalid, asSession.body["code"])
 }
@@ -262,13 +262,13 @@ func TestSessionTokenNeedsASignedInSession(t *testing.T) {
 	ctx := context.Background()
 	app, err := bootSessionTokens(t, sessionTokenConfig(), nil)
 	require.NoError(t, err)
-	path := "/api/auth" + types.PathSessionToken
+	path := "/api/auth" + core.PathSessionToken
 
 	none := app.call(t, http.MethodPost, path, "", "")
 	assert.Equal(t, http.StatusUnauthorized, none.status)
 	assert.Equal(t, errs.CodeSessionMissing, none.body["code"])
 
-	_, pendingRaw, err := app.ac.SessionManager.Create(ctx, app.user.ID, types.SessionMeta{State: models.SessionPending})
+	_, pendingRaw, err := app.ac.SessionManager.Create(ctx, app.user.ID, core.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
 	pending := app.call(t, http.MethodPost, path, "", pendingRaw)
 	assert.Equal(t, http.StatusUnauthorized, pending.status)
@@ -281,11 +281,11 @@ func TestSessionTokenNeedsASignedInSession(t *testing.T) {
 	// The flow refuses the same when it is called from code.
 	expired := *app.session
 	expired.RevokedAt, expired.State, expired.ExpiresAt = nil, models.SessionActive, time.Now().Add(-time.Minute)
-	_, err = app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: &expired})
+	_, err = app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: &expired})
 	assert.True(t, errs.IsCode(err, errs.CodeSessionExpired), "%v", err)
 	stillPending := *app.session
 	stillPending.State = models.SessionPending
-	_, err = app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: &stillPending})
+	_, err = app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: &stillPending})
 	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
 }
 
@@ -294,11 +294,11 @@ func TestSessionTokenNeedsASignedInSession(t *testing.T) {
 // token. The after point gets the record without the token.
 func TestSessionTokenHooks(t *testing.T) {
 	var values []behemoth.M
-	var records []*types.SessionToken
-	var failures []types.FailureReason
+	var records []*core.SessionToken
+	var failures []core.FailureReason
 	refuse := false
-	app, err := bootSessionTokens(t, sessionTokenConfig(), func(reg types.HookRegistry) error {
-		if err := reg.OnBefore(hooks.HookSessionTokenBeforeIssue, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	app, err := bootSessionTokens(t, sessionTokenConfig(), func(reg core.HookRegistry) error {
+		if err := reg.OnBefore(hooks.HookSessionTokenBeforeIssue, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			values = append(values, behemoth.M{"userID": hctx.Values[hooks.HookValueUserID], "sessionID": hctx.Values[hooks.HookValueSessionID]})
 			if refuse {
 				return nil, errs.NewUnauthorized("test", "plan_required", "a paid plan is required")
@@ -310,13 +310,13 @@ func TestSessionTokenHooks(t *testing.T) {
 		}, nil); err != nil {
 			return err
 		}
-		if err := reg.OnAfter(hooks.HookSessionTokenAfterIssue, func(_ *types.HookContext, result any) error {
-			records = append(records, result.(*types.SessionToken))
+		if err := reg.OnAfter(hooks.HookSessionTokenAfterIssue, func(_ *core.HookContext, result any) error {
+			records = append(records, result.(*core.SessionToken))
 			return nil
 		}, nil); err != nil {
 			return err
 		}
-		return reg.OnFailed(hooks.HookSessionTokenIssueFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+		return reg.OnFailed(hooks.HookSessionTokenIssueFailed, func(_ *core.HookContext, reason core.FailureReason) error {
 			failures = append(failures, reason)
 			return nil
 		}, nil)
@@ -342,7 +342,7 @@ func TestSessionTokenHooks(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, refused.status)
 	assert.Equal(t, "plan_required", refused.body["code"])
 	require.Len(t, failures, 1)
-	assert.Equal(t, types.FailureRejectedByHook, failures[0].Code)
+	assert.Equal(t, core.FailureRejectedByHook, failures[0].Code)
 	assert.Len(t, records, 1, "no record for a refused token")
 }
 
@@ -352,10 +352,10 @@ func TestSessionTokensOff(t *testing.T) {
 	ctx := context.Background()
 	app, err := bootSessionTokens(t, crypto.JWTConfig{}, nil)
 	require.NoError(t, err)
-	assert.NotContains(t, app.mounted, "/api/auth"+types.PathSessionToken)
+	assert.NotContains(t, app.mounted, "/api/auth"+core.PathSessionToken)
 	assert.NotContains(t, app.mounted, "/.well-known/jwks.json")
 
-	_, err = app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: app.session})
+	_, err = app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: app.session})
 	assert.True(t, errs.IsCode(err, errs.CodeJWTExternalNotConfigured), "%v", err)
 
 	token, err := app.ac.JWT.Sign(ctx, crypto.JWTInternal, crypto.JWTRequest{Subject: app.user.ID})

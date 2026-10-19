@@ -28,12 +28,12 @@ plugin := magiclink.New(magiclink.Options{
 	LinkURL: "https://app.example.com/auth/magic",
 })
 
-app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
+app, err := engine.Prepare([]core.Plugin{plugin}, engine.PrepareConfig{})
 // ...
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Router: types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
-	Mail: types.MailConfig{
-		Sender: types.MailSenderFunc(func(ctx context.Context, msg types.MailMessage) error {
+	Router: core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+	Mail: core.MailConfig{
+		Sender: core.MailSenderFunc(func(ctx context.Context, msg core.MailMessage) error {
 			return mailQueue.Enqueue(ctx, msg.To, "Your sign-in link", msg.URL)
 		}),
 	},
@@ -51,7 +51,7 @@ The plugin's name is `magiclink` (`magiclink.PluginName`). It works next to the 
 | --- | --- | --- |
 | `WaitForSend` | false | Whether the request waits for the mail sender. See [Send the link](#send-the-link). |
 | `LinkURL` | required | The page of your application the link points to. Absolute, `http` or `https`. The plugin adds the token as the `token` query parameter and keeps any query the URL already has. |
-| `TTL` | 15 minutes | How long a link works. `TokenConfig.TTLOverrides[types.TokenKindMagicLink]` takes precedence. |
+| `TTL` | 15 minutes | How long a link works. `TokenConfig.TTLOverrides[core.TokenKindMagicLink]` takes precedence. |
 | `RequestLimit` | 5 per 15 minutes | Link requests allowed per email. See [Rate limits](#rate-limits). |
 | `LeaveEmailUnverified` | false | Set it to stop a verified link from marking the email as verified. See [What a link does](#what-a-link-does). |
 
@@ -59,7 +59,7 @@ A missing mail sender (`BootConfig.Mail.Sender`), a `LinkURL` that is not an abs
 
 ## Send the link
 
-The link is handed to your mail sender as a `types.MailMessage` with `Kind` set to `types.MailMagicLink`. [Mail](mail.md) describes the message and the sender.
+The link is handed to your mail sender as a `core.MailMessage` with `Kind` set to `core.MailMagicLink`. [Mail](mail.md) describes the message and the sender.
 
 `Metadata` on the message is whatever the request carried under `metadata`. The plugin passes it through without reading or storing it. Use it for what your message needs: a locale, a template name, the name of the device that asked.
 
@@ -136,7 +136,7 @@ signIn, err := plugin.Verify(ctx, rawToken)
 The flows behave as follows:
 
 - `RequestLink` reports what the route hides. It returns `magiclink.ErrNoAccount` for an unknown email (check with `errors.Is`), and the error of a failed issue or send.
-- `Verify` returns the raw session token and delivers nothing. From a route of your own, hand `signIn.SignInResult` to `types.WriteSignIn`, which is what the plugin's route does.
+- `Verify` returns the raw session token and delivers nothing. From a route of your own, hand `signIn.SignInResult` to `core.WriteSignIn`, which is what the plugin's route does.
 - Pass the context of the request being handled when there is one, so sessions record the client's address and handlers get the request.
 - Called before `Boot`, both return a configuration error.
 
@@ -148,7 +148,7 @@ Verifying a link is a sign-in. It fires the same points as a password sign-in, s
 | --- | --- |
 | `auth.signIn.before` | payload `method` (`"magiclink"`) and, when the token names one, `email`. Veto only. The token is not in the payload. |
 | `auth.signIn.credentialsVerified` | `HookValueUserID`. Set `requireStepUp` to make the session pending. |
-| `auth.signIn.after` | a `*types.SignInResult` with `Method` set to `"magiclink"` |
+| `auth.signIn.after` | a `*core.SignInResult` with `Method` set to `"magiclink"` |
 | `auth.signIn.failed` | codes `invalid_magic_link`, `user_not_found`, `email_changed`, `rejected_by_hook` |
 
 The plugin declares three points of its own around a link request:

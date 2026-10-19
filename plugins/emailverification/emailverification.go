@@ -23,12 +23,12 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -48,22 +48,22 @@ const DefaultTTL = 24 * time.Hour
 const (
 	// HookSendBefore runs before a link is sent, on "email", "redirect_url"
 	// and "metadata". A handler may rewrite the last two or stop the send.
-	HookSendBefore types.HookPoint = "auth.emailVerification.beforeSend"
+	HookSendBefore core.HookPoint = "auth.emailVerification.beforeSend"
 	// HookSendAfter runs once the message has been queued, with a
 	// *SendResult.
-	HookSendAfter types.HookPoint = "auth.emailVerification.afterSend"
+	HookSendAfter core.HookPoint = "auth.emailVerification.afterSend"
 	// HookSendFailed fires for a send that queued nothing: codes
 	// "user_not_found", "issue_failed", "send_failed" and "rejected_by_hook".
-	HookSendFailed types.HookPoint = "auth.emailVerification.sendFailed"
+	HookSendFailed core.HookPoint = "auth.emailVerification.sendFailed"
 
 	// HookVerifyBefore runs before a link is verified. Veto only.
-	HookVerifyBefore types.HookPoint = "auth.emailVerification.beforeVerify"
+	HookVerifyBefore core.HookPoint = "auth.emailVerification.beforeVerify"
 	// HookVerifyAfter runs once the user is marked verified, with the
 	// *models.User.
-	HookVerifyAfter types.HookPoint = "auth.emailVerification.afterVerify"
+	HookVerifyAfter core.HookPoint = "auth.emailVerification.afterVerify"
 	// HookVerifyFailed fires for a link that was refused: codes
 	// "invalid_link", "user_not_found", "email_changed" and "rejected_by_hook".
-	HookVerifyFailed types.HookPoint = "auth.emailVerification.verifyFailed"
+	HookVerifyFailed core.HookPoint = "auth.emailVerification.verifyFailed"
 )
 
 // Names of the rate-limit rules the plugin declares.
@@ -202,7 +202,7 @@ type SendResult struct {
 	ExpiresAt time.Time
 }
 
-// AuditSubject implements [types.AuditSubject]: a verification is about the
+// AuditSubject implements [core.AuditSubject]: a verification is about the
 // user whose address it confirms.
 func (r *SendResult) AuditSubject() (subjectType, subjectID string) {
 	if r == nil {
@@ -240,7 +240,7 @@ func (v *verifyInput) FromMap(map[string]any) error { return nil }
 
 // Options configures the plugin. LinkURL is required, and so is a mail
 // sender in BootConfig.Mail: the plugin sends nothing itself. The link goes
-// out as a types.MailMessage of kind types.MailEmailVerification.
+// out as a core.MailMessage of kind core.MailEmailVerification.
 type Options struct {
 	// LinkURL is the page of the application the link points to, such as
 	// "https://app.example.com/auth/verify-email". Required, absolute, http
@@ -250,14 +250,14 @@ type Options struct {
 	LinkURL string
 
 	// TTL is how long a link works. Zero means DefaultTTL.
-	// TokenConfig.TTLOverrides for types.TokenKindEmailVerification takes
+	// TokenConfig.TTLOverrides for core.TokenKindEmailVerification takes
 	// precedence.
 	TTL time.Duration
 
 	// SendLimit bounds the links sent per email, from any caller: the
 	// route, the automatic send for a new user, a CLI. Zero means 5 per 15
 	// minutes.
-	SendLimit types.Limit
+	SendLimit core.Limit
 
 	// RequireVerified refuses the sign-in of a user whose email is not
 	// verified, with a forbidden error (ErrorCodeEmailNotVerified). It
@@ -286,7 +286,7 @@ type Options struct {
 
 	// ChangeLimit bounds change requests per user, from any caller. Each
 	// request sends a notice to the current address. Zero means 3 an hour.
-	ChangeLimit types.Limit
+	ChangeLimit core.Limit
 }
 
 // Plugin is the email verification plugin. It adds the send and verify
@@ -301,15 +301,15 @@ type Plugin struct {
 	linkURL     *url.URL
 	changeURL   *url.URL // nil when the change flow is off
 	revertURL   *url.URL
-	authContext *types.AuthContext
+	authContext *core.AuthContext
 	log         telemetry.Logger
-	send        func(hctx *types.HookContext, in SendRequest) (*SendResult, error)
-	verify      func(hctx *types.HookContext, in verifyInput) (*models.User, error)
+	send        func(hctx *core.HookContext, in SendRequest) (*SendResult, error)
+	verify      func(hctx *core.HookContext, in verifyInput) (*models.User, error)
 
 	// the email change flow (change.go)
-	changeRequest func(hctx *types.HookContext, in ChangeRequest) (*ChangeResult, error)
-	changeConfirm func(hctx *types.HookContext, in changeTokenInput) (*models.User, error)
-	changeRevert  func(hctx *types.HookContext, in changeTokenInput) (*models.User, error)
+	changeRequest func(hctx *core.HookContext, in ChangeRequest) (*ChangeResult, error)
+	changeConfirm func(hctx *core.HookContext, in changeTokenInput) (*models.User, error)
+	changeRevert  func(hctx *core.HookContext, in changeTokenInput) (*models.User, error)
 }
 
 // New returns the plugin configured with opts. Values left at zero take
@@ -319,8 +319,8 @@ func New(opts Options) *Plugin {
 	if opts.TTL == 0 {
 		opts.TTL = DefaultTTL
 	}
-	if opts.SendLimit == (types.Limit{}) {
-		opts.SendLimit = types.Limit{Max: 5, Window: 15 * time.Minute}
+	if opts.SendLimit == (core.Limit{}) {
+		opts.SendLimit = core.Limit{Max: 5, Window: 15 * time.Minute}
 	}
 	if opts.ChangeTTL == 0 {
 		opts.ChangeTTL = DefaultChangeTTL
@@ -328,44 +328,44 @@ func New(opts Options) *Plugin {
 	if opts.RevertTTL == 0 {
 		opts.RevertTTL = DefaultRevertTTL
 	}
-	if opts.ChangeLimit == (types.Limit{}) {
-		opts.ChangeLimit = types.Limit{Max: 3, Window: time.Hour}
+	if opts.ChangeLimit == (core.Limit{}) {
+		opts.ChangeLimit = core.Limit{Max: 3, Window: time.Hour}
 	}
 	return &Plugin{opts: opts}
 }
 
-// Meta implements [types.Plugin]. The plugin depends on no other plugin: it
+// Meta implements [core.Plugin]. The plugin depends on no other plugin: it
 // works with any plugin that creates users, and without one.
-func (p *Plugin) Meta() types.PluginMeta {
-	return types.PluginMeta{Name: PluginName}
+func (p *Plugin) Meta() core.PluginMeta {
+	return core.PluginMeta{Name: PluginName}
 }
 
-// Version implements [types.Plugin].
+// Version implements [core.Plugin].
 func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
-// Declare implements [types.Plugin]. The plugin declares:
-//   - the token kind types.TokenKindEmailVerification: single use, kept in
+// Declare implements [core.Plugin]. The plugin declares:
+//   - the token kind core.TokenKindEmailVerification: single use, kept in
 //     the database, so that a new link can revoke the user's earlier ones
 //     and a deleted user's links go with the user;
 //   - the auth.emailVerification.* points around a send and a verify;
 //   - three rate-limit rules: send requests and verify attempts per client
 //     address, and links sent per email.
-func (p *Plugin) Declare(ic *types.PluginInitContext) error {
-	if err := ic.Tokens.Declare(types.TokenKindDef{
-		Kind: types.TokenKindEmailVerification, SingleUse: true, DefaultTTL: p.opts.TTL, Backend: types.TokenBackendDB,
+func (p *Plugin) Declare(ic *core.PluginInitContext) error {
+	if err := ic.Tokens.Declare(core.TokenKindDef{
+		Kind: core.TokenKindEmailVerification, SingleUse: true, DefaultTTL: p.opts.TTL, Backend: core.TokenBackendDB,
 	}); err != nil {
 		return err
 	}
 
-	for _, def := range []types.HookPointDef{
-		{Point: HookSendBefore, Phase: types.BeforeHookPhase},
-		{Point: HookSendAfter, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookSendFailed, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookVerifyBefore, Phase: types.BeforeHookPhase},
-		{Point: HookVerifyAfter, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookVerifyFailed, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+	for _, def := range []core.HookPointDef{
+		{Point: HookSendBefore, Phase: core.BeforeHookPhase},
+		{Point: HookSendAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookSendFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookVerifyBefore, Phase: core.BeforeHookPhase},
+		{Point: HookVerifyAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookVerifyFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 	} {
 		if err := ic.Hooks.Declare(def); err != nil {
 			return err
@@ -373,9 +373,9 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	}
 
 	byAddress := func(_ *http.Request, ip string) string { return ip }
-	for _, rule := range []types.RouteRateLimitRule{
-		{Name: RuleSendRoute, Method: http.MethodPost, Path: PathSend, KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute}},
-		{Name: RuleVerifyRoute, Method: http.MethodPost, Path: PathVerify, KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute}},
+	for _, rule := range []core.RouteRateLimitRule{
+		{Name: RuleSendRoute, Method: http.MethodPost, Path: PathSend, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
+		{Name: RuleVerifyRoute, Method: http.MethodPost, Path: PathVerify, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
 	} {
 		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
 			return err
@@ -384,9 +384,9 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	// Per email on the send itself, so it also bounds the automatic sends
 	// and SendVerification called from code. From the route it counts
 	// requests for unknown emails too, and so answers the same for both.
-	if err := ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+	if err := ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 		Name: RuleSendEmail, Point: HookSendBefore,
-		KeyFunc: types.KeyByValues(hooks.HookValueEmail), Limit: p.opts.SendLimit,
+		KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.SendLimit,
 	}); err != nil {
 		return err
 	}
@@ -396,7 +396,7 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	return nil
 }
 
-// Register implements [types.Plugin]. This is how the plugin serves every
+// Register implements [core.Plugin]. This is how the plugin serves every
 // way of creating a user without knowing any of them:
 //   - data.user.created: a user who was created unverified is sent a link;
 //   - data.user.beforeUpdate: an update that changes the address clears
@@ -415,15 +415,15 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 // keep the old address until the new one confirms. RequestChange does that,
 // and its own writes pass these handlers untouched, because they set the
 // address and the flag together.
-func (p *Plugin) Register(reg types.HookRegistry) error {
-	if err := reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, result any) error {
+func (p *Plugin) Register(reg core.HookRegistry) error {
+	if err := reg.OnAfter(hooks.HookUserCreated, func(hctx *core.HookContext, result any) error {
 		user, _ := result.(*models.User)
 		return p.sendTo(hctx.Ctx, user)
 	}, nil); err != nil {
 		return err
 	}
 
-	if err := reg.OnBefore(hooks.HookUserBeforeUpdate, func(hctx *types.HookContext, changes behemoth.M) (behemoth.M, error) {
+	if err := reg.OnBefore(hooks.HookUserBeforeUpdate, func(hctx *core.HookContext, changes behemoth.M) (behemoth.M, error) {
 		newEmail, ok := changes[models.UserEmail].(string)
 		if !ok {
 			return nil, nil // the address is not being changed
@@ -447,7 +447,7 @@ func (p *Plugin) Register(reg types.HookRegistry) error {
 		return err
 	}
 
-	if err := reg.OnAfter(hooks.HookUserUpdated, func(hctx *types.HookContext, result any) error {
+	if err := reg.OnAfter(hooks.HookUserUpdated, func(hctx *core.HookContext, result any) error {
 		if changed, _ := hctx.Values[valueEmailChanged].(bool); !changed {
 			return nil
 		}
@@ -460,7 +460,7 @@ func (p *Plugin) Register(reg types.HookRegistry) error {
 	if !p.opts.RequireVerified {
 		return nil
 	}
-	return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 		id, _ := payload[hooks.HookValueUserID].(string)
 		user, err := hctx.Auth.Store.FindUserByID(hctx.Ctx, id)
 		if err != nil {
@@ -490,14 +490,14 @@ func (p *Plugin) sendTo(ctx context.Context, user *models.User) error {
 	return err
 }
 
-// Middlewares implements [types.Plugin]. The plugin has no middleware.
-func (p *Plugin) Middlewares() []types.Middleware {
+// Middlewares implements [core.Plugin]. The plugin has no middleware.
+func (p *Plugin) Middlewares() []core.Middleware {
 	return nil
 }
 
-// Init implements [types.Plugin]. It checks the options, keeps the
+// Init implements [core.Plugin]. It checks the options, keeps the
 // AuthContext and wraps the two flows with their hook points.
-func (p *Plugin) Init(ac *types.AuthContext) error {
+func (p *Plugin) Init(ac *core.AuthContext) error {
 	const op = "emailverification.Init"
 	if ac.Mailer == nil || !ac.Mailer.Configured() {
 		return errs.NewConfigurationError(op, "no mail sender is configured; set BootConfig.Mail.Sender: the plugin does not send email itself", nil)
@@ -515,8 +515,8 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	if ac.Telemetry != nil {
 		p.log = telemetry.Named(ac.Telemetry.Logger, PluginName)
 	}
-	p.send = types.WithLifecycle(ac.Dispatcher, HookSendBefore, HookSendAfter, HookSendFailed, p.sendBody)
-	p.verify = types.WithLifecycle(ac.Dispatcher, HookVerifyBefore, HookVerifyAfter, HookVerifyFailed, p.verifyBody)
+	p.send = core.WithLifecycle(ac.Dispatcher, HookSendBefore, HookSendAfter, HookSendFailed, p.sendBody)
+	p.verify = core.WithLifecycle(ac.Dispatcher, HookVerifyBefore, HookVerifyAfter, HookVerifyFailed, p.verifyBody)
 	if p.changeEnabled() {
 		return p.initChange(ac)
 	}
@@ -543,12 +543,12 @@ func withToken(page *url.URL, rawToken string) string {
 	return link.String()
 }
 
-// Routes implements [types.Plugin]. The send and verify routes need no
+// Routes implements [core.Plugin]. The send and verify routes need no
 // session: with Options.RequireVerified a user who has to verify can't sign
 // in to get one. With the email change flow on, its three routes are added
 // (changeRoutes).
-func (p *Plugin) Routes() []types.Route {
-	routes := []types.Route{
+func (p *Plugin) Routes() []core.Route {
+	routes := []core.Route{
 		{Method: http.MethodPost, Path: PathSend, Handler: p.handleSend},
 		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify},
 	}
@@ -612,7 +612,7 @@ func (p *Plugin) sendVerification(ctx context.Context, req SendRequest) (*SendRe
 	return p.send(hctx, req)
 }
 
-func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult, error) {
+func (p *Plugin) sendBody(hctx *core.HookContext, req SendRequest) (*SendResult, error) {
 	const op = "emailverification.SendVerification"
 	ac := hctx.Auth
 
@@ -622,7 +622,7 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 	if !utils.IsValidEmail(email) {
 		return nil, errs.NewInvalidInputError(op, keyEmail, "invalid email", nil)
 	}
-	if req.RedirectURL != "" && !types.TrustedRedirect(ac.Origins, req.RedirectURL) {
+	if req.RedirectURL != "" && !core.TrustedRedirect(ac.Origins, req.RedirectURL) {
 		return nil, errs.NewInvalidInputError(op, "redirect_url", "redirect URL is not allowed", nil)
 	}
 
@@ -633,7 +633,7 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 			if !errs.IsNotFound(err) {
 				return nil, err // infra error (DB down): not "no such user"
 			}
-			if failErr := ac.Dispatcher.Fail(hctx, HookSendFailed, types.FailureReason{
+			if failErr := ac.Dispatcher.Fail(hctx, HookSendFailed, core.FailureReason{
 				Code: "user_not_found", Metadata: behemoth.M{hooks.HookValueEmail: email},
 			}); failErr != nil {
 				return nil, failErr
@@ -649,7 +649,7 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 	}
 
 	failed := func(code string, cause error) error {
-		if failErr := ac.Dispatcher.Fail(hctx, HookSendFailed, types.FailureReason{
+		if failErr := ac.Dispatcher.Fail(hctx, HookSendFailed, core.FailureReason{
 			Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID,
 		}); failErr != nil {
 			return failErr
@@ -660,22 +660,22 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 	// One live link per user. The subject is the user's id, so
 	// Store.DeleteUser removes the links with the user. The address the
 	// link was sent to is kept next to it and checked at verify.
-	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, types.TokenKindEmailVerification, user.ID); err != nil {
+	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, core.TokenKindEmailVerification, user.ID); err != nil {
 		return nil, failed("issue_failed", err)
 	}
 	meta := behemoth.M{keyEmail: email}
 	if req.RedirectURL != "" {
 		meta[keyRedirectURL] = req.RedirectURL
 	}
-	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, types.TokenKindEmailVerification, user.ID, meta)
+	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, core.TokenKindEmailVerification, user.ID, meta)
 	if err != nil {
 		return nil, failed("issue_failed", err)
 	}
 
 	// In the background: the request, often a sign-up, does not wait for
 	// the mail provider. An error here means the message was not queued.
-	err = ac.Mailer.SendAsync(hctx.Ctx, types.MailMessage{
-		Kind: types.MailEmailVerification, To: email, URL: withToken(p.linkURL, rawToken), Token: rawToken,
+	err = ac.Mailer.SendAsync(hctx.Ctx, core.MailMessage{
+		Kind: core.MailEmailVerification, To: email, URL: withToken(p.linkURL, rawToken), Token: rawToken,
 		ExpiresAt: token.ExpiresAt, User: user, Metadata: req.Metadata,
 	})
 	if err != nil {
@@ -723,7 +723,7 @@ func (p *Plugin) Verify(ctx context.Context, rawToken string) (*VerifyResult, er
 	// point.
 	in := verifyInput{token: rawToken}
 	var redirect string
-	token, err := p.authContext.TokenManager.Verify(ctx, types.TokenKindEmailVerification, rawToken)
+	token, err := p.authContext.TokenManager.Verify(ctx, core.TokenKindEmailVerification, rawToken)
 	switch {
 	case err == nil:
 		in.email, _ = token.MetadataJSON[keyEmail].(string)
@@ -740,16 +740,16 @@ func (p *Plugin) Verify(ctx context.Context, rawToken string) (*VerifyResult, er
 	return &VerifyResult{User: user, RedirectURL: redirect}, nil
 }
 
-func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.User, error) {
+func (p *Plugin) verifyBody(hctx *core.HookContext, in verifyInput) (*models.User, error) {
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
 
-	token, err := ac.TokenManager.Consume(hctx.Ctx, types.TokenKindEmailVerification, in.token)
+	token, err := ac.TokenManager.Consume(hctx.Ctx, core.TokenKindEmailVerification, in.token)
 	if err != nil {
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad link
 		}
-		if failErr := dispatcher.Fail(hctx, HookVerifyFailed, types.FailureReason{Code: "invalid_link", Cause: err}); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, HookVerifyFailed, core.FailureReason{Code: "invalid_link", Cause: err}); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidLink()
@@ -757,7 +757,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 
 	userID := fmt.Sprint(token.Subject)
 	refuse := func(code string) error {
-		if failErr := dispatcher.Fail(hctx, HookVerifyFailed, types.FailureReason{
+		if failErr := dispatcher.Fail(hctx, HookVerifyFailed, core.FailureReason{
 			Code: code, SubjectType: models.UserTable, SubjectID: userID,
 		}); failErr != nil {
 			return failErr
@@ -789,15 +789,15 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 // operation builds the HookContext one flow call runs with. Its Values start
 // as a copy of the operation ctx already belongs to, if any, and Request is
 // the request ctx carries, or nil.
-func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, error) {
+func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
-	return &types.HookContext{
+	return &core.HookContext{
 		Ctx:     ctx,
 		Auth:    p.authContext,
-		Values:  types.NestedHookValues(ctx),
-		Request: types.RequestFrom(ctx),
+		Values:  core.NestedHookValues(ctx),
+		Request: core.RequestFrom(ctx),
 	}, nil
 }
 
@@ -805,7 +805,7 @@ func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, 
 // Values, under hooks.HookValueEmail, where a rate-limit rule on the flow's
 // before point keys on it. A call without an email leaves no entry and
 // removes an inherited one, so a rule per email does not apply to it.
-func publishEmail(hctx *types.HookContext, email string) {
+func publishEmail(hctx *core.HookContext, email string) {
 	if email = store.NormalizeEmail(email); email == "" {
 		delete(hctx.Values, hooks.HookValueEmail)
 		return
@@ -818,7 +818,7 @@ func publishEmail(hctx *types.HookContext, email string) {
 // queued are all a 200, so the response does not tell which addresses have
 // an account. A validation error and a rate limit are reported, since they
 // do not depend on the account.
-func (p *Plugin) handleSend(rctx *types.RequestContext) error {
+func (p *Plugin) handleSend(rctx *core.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("emailverification.SendVerification", "request", err)
@@ -842,7 +842,7 @@ func (p *Plugin) handleSend(rctx *types.RequestContext) error {
 
 // handleVerify returns Verify's error unchanged, and the router maps it: a
 // refused link is a typed unauthorized error (401).
-func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
+func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("emailverification.Verify", "request", err)
@@ -860,7 +860,7 @@ func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{types.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
+	return rctx.Response.JSON(http.StatusOK, behemoth.M{core.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
 }
 
-var _ types.Plugin = (*Plugin)(nil)
+var _ core.Plugin = (*Plugin)(nil)
