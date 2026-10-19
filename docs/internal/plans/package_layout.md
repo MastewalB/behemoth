@@ -2,7 +2,7 @@
 
 This document describes the layout Behemoth's packages move to: which package holds what, the order in which packages may import each other, and where each exported identifier of a moving package ends up. It also lists the steps of the move, which leaves behavior unchanged.
 
-**Status:** planned, as of 2026-10-19. Nothing has moved. [Implementation steps](#implementation-steps) lists the work.
+**Status:** part 1 done, as of 2026-10-19. Part 2 waits for step 6 of [`caller.md`](caller.md). [Implementation steps](#implementation-steps) lists the work.
 
 The documents it builds on are:
 
@@ -32,7 +32,7 @@ The packages around it have problems of their own:
 - `types.SessionState` duplicates `models.SessionState`.
 - `types/database.go`, `types/models.go`, the root `main.go`, `session.go`, and `transport.go`, and `middleware/` hold no code.
 
-"`types` mixes contracts, implementations and HTTP, and its layering forces aliases" in `docs/ongoing.md` records these.
+"`types` mixes contracts, implementations and HTTP, and its layering forces aliases" in `docs/ongoing.md` recorded these until part 1 resolved them.
 
 ## Goals
 
@@ -63,7 +63,7 @@ The table lists the packages in the order they may import each other. A package 
 | 4 | `telemetry` | the root package, `errs`, `identity` |
 | 5 | `schema`, `outbound`, `telemetry/telemetrytest`, `telemetry/adapters/otel` | earlier rows |
 | 6 | `models`, `crypto` | earlier rows |
-| 7 | `store`, `migration`, `keysource`, `storage/adapters` and the storage adapter modules | earlier rows. The SQL storage adapter modules also import `migration`. |
+| 7 | `store`, `migration`, `keysource`, `storage/adapters` and the storage adapter modules | earlier rows. The storage adapter modules also import `storage/adapters`, and the SQL ones `migration`. |
 | 8 | `core` | earlier rows |
 | 9 | `core/hooks` | `core` and earlier rows |
 | 10 | `auth`, `dispatch`, `ratelimit`, `messaging` | rows 1 to 9 |
@@ -219,7 +219,7 @@ Each step is one commit. It builds every module and passes the suite: the root m
 | 8 | `transport` becomes `auth`. | Done |
 | 9 | `types/init` becomes `engine`. | Done |
 | 10 | `types` becomes `core`, and `types/hooks` becomes `core/hooks`. The repository table in `CLAUDE.md` follows. | Done |
-| 11 | A test over `go list` checks [the rows](#rows): it fails when a package imports a package of a later row, or when a plugin imports a package of row 10. | Not started |
+| 11 | `layout_test.go` parses the imports of every package in every module and checks [the rows](#rows): it fails when a package imports a package of a later row, when a plugin imports a package of row 10, or when a package has no row. | Done |
 
 The order moves code out of `types` before `types` gets its new name, so that no identifier is renamed twice. A plugin's `types.PasswordHasher`, for example, becomes `crypto.PasswordHasher` in step 5, and step 10 doesn't touch it.
 
@@ -243,6 +243,6 @@ Part 2 waits for step 6 of [`caller.md`](caller.md). Until then, `HookContext.Re
 
 These entries in `docs/ongoing.md` are resolved by this plan:
 
-- **"`types` mixes contracts, implementations and HTTP, and its layering forces aliases".** Part 1 resolves all of it except the HTTP types, which part 2 resolves.
+- **"`types` mixes contracts, implementations and HTTP, and its layering forces aliases".** Part 1 resolved it and removed the entry. The HTTP types that remain in `core` are part 2, which the next entry tracks.
 - **"`Plugin` requires HTTP routes, and the request pipeline lives in the router".** Steps 12 and 13.
 - **"Trusted origins match exactly".** Step 5 removes `CSRFProtector`, which the entry also covered. The point about wildcards stays open.
