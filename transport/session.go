@@ -664,7 +664,7 @@ func (sm *DefaultSessionManager) cacheDelete(ctx context.Context, lookupHash str
 }
 
 // hookContext builds the context the session and token managers dispatch
-// one hook point with, the way dataHooks.hookContext does for data points.
+// one hook point with, the way the data hooks of package dispatch do for data points.
 //
 // The managers' points are Tier 2, so Tx stays nil. Values are the
 // operation's: each manager method that fires points calls

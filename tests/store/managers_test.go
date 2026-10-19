@@ -658,7 +658,7 @@ func createWithRewrite(t *testing.T, cfg types.SessionConfig, ctx context.Contex
 // The token manager's hooks get the same: issue, a consume, and a failed
 // second consume each dispatch with their own point and phase.
 func TestTokenHooksGetACompleteContext(t *testing.T) {
-	catalog := bmth.NewDefaultTokenCatalog()
+	catalog := transport.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	d := &passDispatcher{}
 	tm := transport.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), d, types.TokenConfig{}, managersAuth)
@@ -696,7 +696,7 @@ const kindAPI models.TokenKind = "api_key"
 
 func newTokenManager(t *testing.T) (types.TokenManager, *store.Store) {
 	t.Helper()
-	catalog := bmth.NewDefaultTokenCatalog()
+	catalog := transport.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindAPI, Backend: types.TokenBackendDB, Owner: "core"}))
 	st := store.New(sessionsTokensDB(t))
@@ -781,7 +781,7 @@ func TestTokenRevoke(t *testing.T) {
 // another subject's and another kind's.
 func TestTokenListForSubject(t *testing.T) {
 	ctx := context.Background()
-	catalog := bmth.NewDefaultTokenCatalog()
+	catalog := transport.NewDefaultTokenCatalog()
 	const kindShort models.TokenKind = "short_lived"
 	for _, def := range []types.TokenKindDef{
 		{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"},

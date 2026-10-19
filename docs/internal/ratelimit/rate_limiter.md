@@ -5,8 +5,9 @@ This document explains how rate limiting works: how a rule becomes a check, the 
 The code lives in:
 
 - `types/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `Limit`, the rule types, `AtomicIncrementer`, `RateLimiter`
-- `types/ratelimit/ratelimiter.go`: `FixedWindow`, the one algorithm
-- `types/init/init.go`: `DefaultRateLimiter`, `DefaultRateLimitCatalog`, `resolveRateLimitStore`, `dbCounterStore`, `CoreDeclareRateLimitRules`
+- `ratelimit/fixed_window.go`: `FixedWindow`, the one algorithm
+- `ratelimit/limiter.go`, `ratelimit/catalog.go`: `DefaultRateLimiter`, `NewDefaultRateLimiter`, `DefaultRateLimitCatalog`, `resolveRateLimitStore`, `dbCounterStore`
+- `types/init/init.go`: `CoreDeclareRateLimitRules`
 - `store/rate_limits.go`: `IncrementRateLimit`, `PurgeExpiredRateLimits`
 - `storage/adapters/redis/redis.go`: `RedisAdapter.Increment`
 - `models/rate_limit.go`: the `rate_limits` table
@@ -34,7 +35,7 @@ The code lives in:
 A check passes through these steps:
 
 1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
-2. At `Boot`, `resolveRateLimitStore` picks the counter storage and `newLimiters` builds one `Limiter` per algorithm over it.
+2. At `Boot`, `NewDefaultRateLimiter` picks the counter storage (`resolveRateLimitStore`) and builds one `Limiter` per algorithm over it (`newLimiters`).
 3. At request time `DefaultRateLimiter` builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.route:1.2.3.4`, and `limiterFor` picks the rule's limiter. A hook rule's `KeyFunc` also returns whether the rule applies; when it does not, the rule is skipped and the steps below don't run for it.
 4. `evaluate` calls `limiter.Allow(ctx, key, limit)`.
 5. If the attempt is not allowed, it records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) and returns a `rate_limited` error with a retry-after: the time left in the window. The router answers `429` and sets `Retry-After` to that time in whole seconds, rounded up.
@@ -295,7 +296,7 @@ These limits apply:
 
 | Test | File | Covers |
 | --- | --- | --- |
-| `TestFixedWindow` | `types/ratelimit/ratelimiter_test.go` | allowed up to `Max`, refused after, retry-after from the window's end and its caps, a failing counter |
+| `TestFixedWindow` | `ratelimit/fixed_window_test.go` | allowed up to `Max`, refused after, retry-after from the window's end and its caps, a failing counter |
 | `TestRateLimitRulesNameTheirAlgorithm` | `types/init/dispatcher_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on route and hook rules, also when the rule has its own `Limiter` |
 | `TestRateLimiterMetrics` | `types/init/dispatcher_test.go` | `evaluate`: the three results, the audit event |
 | `TestStoreContract/*/RateLimits` | `tests/store/contract_test.go` | the database counter on every backend: concurrent counts, the window's end, the reset |

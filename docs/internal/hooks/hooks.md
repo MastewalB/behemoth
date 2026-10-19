@@ -20,8 +20,9 @@ The code lives in:
 - `types/plugins.go`: the public types (`HookPoint`, `HookPhase`, `HookPointDef`, `HookCatalog`, `HookRegistry`, `HookOptions`, `HookContext`, the handler function types, `Dispatcher`, `WithLifecycle`)
 - `types/hooks/hooks.go`: the names of the points core declares and the shared payload keys
 - `utils/graph.go`: `KahnSort`, the topological sort behind plugin order and handler order
-- `types/init/init.go`: the implementations (`DefaultHookCatalog`, `DefaultHookRegistry`, the scoped wrappers, `freezeAllHookChains`, `DefaultDispatcher`) and `Prepare` and `Boot`, which run them
-- `types/init/datahooks.go`: `dataHooks`, the adapter between the store and the dispatcher
+- `dispatch/catalog.go`, `dispatch/registry.go`, `dispatch/dispatcher.go`: the implementations (`DefaultHookCatalog`, `DefaultHookRegistry` and its scoped registry, `FreezeChains`, `DefaultDispatcher`)
+- `types/init/init.go`: `Prepare` and `Boot`, which run them, and the scoped catalogs
+- `dispatch/datahooks.go`: `dataHooks`, the adapter between the store and the dispatcher
 - `store/store.go` and `store/create.go`: `store.Hooks` and the write paths that call it
 
 ---
@@ -34,7 +35,7 @@ A hook goes through four stages. The first three happen once, at startup. The fo
 | --- | --- | --- | --- |
 | Declare | `Prepare` | core and each plugin add `HookPointDef`s to the `HookCatalog` | a frozen catalog: the set of points that exist, each with one phase and one owner |
 | Register | `Boot` | each plugin, then the application, attach handlers through a `HookRegistry` | an unordered list of handlers per point |
-| Freeze | `Boot` | `freezeAllHookChains` orders each point's handlers | `frozenChains`: one ordered slice per declared point |
+| Freeze | `Boot` | `FreezeChains` orders each point's handlers | `frozenChains`: one ordered slice per declared point |
 | Dispatch | request time | firing code calls a `Dispatcher` method with a point | the point's chain runs |
 
 Nothing is added or reordered after the freeze. A dispatch reads the catalog and the frozen chains and writes neither.
@@ -53,7 +54,7 @@ The example follows `POST /sign-up/email` from the email/password plugin with on
 
 4. A `DefaultHookRegistry` is created over the catalog.
 5. Each plugin's `Register` runs with a registry scoped to the plugin's name. `profile` calls `OnAfter(data.user.afterCreate, ...)` and `OnAfter(auth.signUp.after, ...)`. The registry checks that each point exists and is an after point.
-6. `freezeAllHookChains` builds the chain of every declared point. `data.user.afterCreate` and `auth.signUp.after` get a chain of one handler. The other 21 get an empty chain.
+6. `FreezeChains` builds the chain of every declared point. `data.user.afterCreate` and `auth.signUp.after` get a chain of one handler. The other 21 get an empty chain.
 7. The `DefaultDispatcher` is built from the catalog and the chains and put on the `AuthContext`.
 8. The store is built with `dataHooks` as its `store.Hooks`.
 9. The email/password plugin's `Init` wraps `signUpBody` with `WithLifecycle` and the three sign-up points.

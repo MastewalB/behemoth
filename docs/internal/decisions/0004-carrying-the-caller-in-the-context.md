@@ -104,7 +104,7 @@ The context is Go's place for request-scoped data that crosses API boundaries. T
 - [`../plans/caller.md`](../plans/caller.md): the caller, its principals, the authenticator, and the permissions
 - [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md): "Learn about the caller from the context"
 - `types/plugins.go`: `ContextWithRequest`, `ContextWithHookValues`
-- `types/init/sendqueue.go`: the send queue keeps the context's values with `context.WithoutCancel`
+- `messaging/sendqueue.go`: the send queue keeps the context's values with `context.WithoutCancel`
 - [The `context` package documentation](https://pkg.go.dev/context)
 - [Go Concurrency Patterns: Context](https://go.dev/blog/context), on the Go blog
 - grpc-go: `peer.FromContext` and `metadata.FromIncomingContext`
