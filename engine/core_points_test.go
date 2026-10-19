@@ -12,7 +12,7 @@ import (
 // fired in, and the data points the store fires pass the Boot check.
 func TestCoreDeclaresTheHookPointsItFires(t *testing.T) {
 	catalog := dispatch.NewDefaultHookCatalog()
-	ic := newScopedInitContext(catalog, nil, nil, nil, coreOwner)
+	ic := newScopedInitContext(catalog, nil, nil, nil, nil, coreOwner)
 	if err := CoreDeclareHookPoints(ic); err != nil {
 		t.Fatal(err)
 	}

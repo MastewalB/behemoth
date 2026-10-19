@@ -1,6 +1,7 @@
 package behemoth_test
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -54,23 +55,10 @@ const modulePath = "github.com/MastewalB/behemoth"
 // files are left out: a test may import whatever it exercises.
 func TestPackageLayout(t *testing.T) {
 	imports := map[string]map[string]bool{} // directory -> imported directories
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if path != "." && (strings.HasPrefix(name, ".") || name == "docs" || name == "testdata" || name == "vendor") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+	for _, path := range goFiles(t) {
 		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
 		dir := filepath.ToSlash(filepath.Dir(path))
 		if imports[dir] == nil {
@@ -89,10 +77,6 @@ func TestPackageLayout(t *testing.T) {
 				imports[dir][imported] = true
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 
 	for dir, imported := range imports {
@@ -152,4 +136,71 @@ func containsInt(list []int, n int) bool {
 		}
 	}
 	return false
+}
+
+// goFiles returns the path of every Go file of the repository that isn't a
+// test, in every module. Directories that hold no packages of Behemoth are
+// left out.
+func goFiles(t *testing.T) []string {
+	t.Helper()
+	var files []string
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if path != "." && (strings.HasPrefix(name, ".") || name == "docs" || name == "testdata" || name == "vendor") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+// signedInBuilders are the packages that may build a signed-in caller. Such a
+// caller holds a user's rights, so a package that builds one without an
+// authenticator bypasses authentication. See ADR-0005.
+var signedInBuilders = map[string]bool{"auth": true}
+
+// TestOnlyAuthBuildsSignedInCallers checks that identity.SignedIn is called
+// from the packages of signedInBuilders only. Test files are left out.
+func TestOnlyAuthBuildsSignedInCallers(t *testing.T) {
+	for _, path := range goFiles(t) {
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		local := "" // the name the file imports identity by
+		for _, spec := range f.Imports {
+			if p, _ := strconv.Unquote(spec.Path.Value); p == modulePath+"/identity" {
+				local = "identity"
+				if spec.Name != nil {
+					local = spec.Name.Name
+				}
+			}
+		}
+		if local == "" {
+			continue
+		}
+		dir := filepath.ToSlash(filepath.Dir(path))
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "SignedIn" {
+				return true
+			}
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == local && !signedInBuilders[dir] {
+				t.Errorf("%s calls identity.SignedIn: only an authenticator, in package auth, builds a signed-in caller", path)
+			}
+			return true
+		})
+	}
 }

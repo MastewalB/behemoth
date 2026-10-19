@@ -69,6 +69,10 @@ type AuthContext struct {
 	// Codes issues and checks one-time codes: short numeric secrets sent by
 	// text message. See CodeManager for how they differ from tokens.
 	Codes CodeManager
+	// Access answers whether the caller on a context may run a flow: a
+	// self-service flow requires a user and a permission, and an admin
+	// operation a privileged caller. Never nil on an AuthContext Boot returns.
+	Access Access
 	// Telemetry is never nil on an AuthContext Boot returns, and neither are
 	// its fields. Plugins take their logger from here, usually through
 	// telemetry.Named.

@@ -75,10 +75,13 @@ type PreparedApp struct {
 	Hooks      core.HookCatalog
 	Tokens     core.TokenCatalog
 	RateLimits core.RateLimitCatalog
-	Schemas    schema.Registry
-	Resolver   behemoth.SchemaResolver
-	Migration  migration.MigrationConfig
-	Custom     []migration.CustomMigration
+	// Permissions holds the permissions core and the plugins declared, which
+	// Boot gives to AuthContext.Access.
+	Permissions core.PermissionCatalog
+	Schemas     schema.Registry
+	Resolver    behemoth.SchemaResolver
+	Migration   migration.MigrationConfig
+	Custom      []migration.CustomMigration
 
 	plugins []core.Plugin // kept so Boot runs exactly the set that was prepared
 }
@@ -111,11 +114,12 @@ func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	hookCatalog := dispatch.NewDefaultHookCatalog()
 	tokenCatalog := auth.NewDefaultTokenCatalog()
 	rateLimitCatalog := ratelimit.NewRateLimitCatalog(hookCatalog)
+	permissionCatalog := auth.NewDefaultPermissionCatalog()
 	schemaRegistry := schema.NewRegistry()
 
 	// Core declares first, under owner "core" via the scoped
 	// wrappers all plugins get, to enforce uniform validation process
-	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, coreOwner)
+	coreIC := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, permissionCatalog, schemaRegistry, coreOwner)
 	if err := CoreDeclareHookPoints(coreIC); err != nil {
 		return nil, err
 	}
@@ -132,7 +136,7 @@ func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 		if p == nil {
 			return nil, errs.NewConfigurationError("Prepare", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
 		}
-		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, name)
+		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, permissionCatalog, schemaRegistry, name)
 		if err := p.Declare(ic); err != nil {
 			return nil, fmt.Errorf("plugin %q Declare failed: %w", name, err)
 		}
@@ -149,6 +153,7 @@ func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	hookCatalog.Freeze()
 	tokenCatalog.Freeze()
 	rateLimitCatalog.Freeze()
+	permissionCatalog.Freeze()
 	if err := schemaRegistry.Freeze(); err != nil {
 		return nil, err
 	}
@@ -160,16 +165,17 @@ func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	resolver.Freeze(migration.BuildSchemaResolverTable(schemaRegistry, migrationCfg))
 
 	return &PreparedApp{
-		Order:      order,
-		AppName:    appName,
-		Hooks:      hookCatalog,
-		Tokens:     tokenCatalog,
-		RateLimits: rateLimitCatalog,
-		Schemas:    schemaRegistry,
-		Resolver:   resolver,
-		Migration:  migrationCfg,
-		Custom:     cfg.Migrations,
-		plugins:    plugins,
+		Order:       order,
+		AppName:     appName,
+		Hooks:       hookCatalog,
+		Tokens:      tokenCatalog,
+		RateLimits:  rateLimitCatalog,
+		Permissions: permissionCatalog,
+		Schemas:     schemaRegistry,
+		Resolver:    resolver,
+		Migration:   migrationCfg,
+		Custom:      cfg.Migrations,
+		plugins:     plugins,
 	}, nil
 }
 
@@ -396,6 +402,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	ac.SessionManager = auth.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
+	ac.Access = auth.NewAccess(app.Permissions, ac.SessionManager.IsFresh)
 
 	// JWTs: internal ones always, external ones and session tokens when an
 	// external audience is named. The external keys are derived from the
@@ -638,6 +645,22 @@ func (s *scopedRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {
 
 // scopedSchemaRegistry injects the declaring owner into every table and
 // contribution, the same way the catalog wrappers above do.
+// scopedPermissionCatalog is the PermissionCatalog a declarer receives: it
+// records the declarer as the owner of what it declares.
+type scopedPermissionCatalog struct {
+	inner core.PermissionCatalog
+	owner string
+}
+
+func (s *scopedPermissionCatalog) Declare(def core.PermissionDef) error {
+	def.Owner = s.owner
+	return s.inner.Declare(def)
+}
+func (s *scopedPermissionCatalog) Lookup(p core.Permission) (core.PermissionDef, bool) {
+	return s.inner.Lookup(p)
+}
+func (s *scopedPermissionCatalog) All() []core.PermissionDef { return s.inner.All() }
+
 type scopedSchemaRegistry struct {
 	inner schema.Registry
 	owner string
@@ -677,14 +700,16 @@ func newScopedInitContext(
 	hooks *dispatch.DefaultHookCatalog,
 	tokens *auth.DefaultTokenCatalog,
 	rl *ratelimit.DefaultRateLimitCatalog,
+	permissions *auth.DefaultPermissionCatalog,
 	schemas schema.Registry,
 	owner string,
 ) *core.PluginInitContext {
 	return &core.PluginInitContext{
-		Hooks:      &scopedHookCatalog{inner: hooks, owner: owner},
-		Tokens:     &scopedTokenCatalog{inner: tokens, owner: owner},
-		RateLimits: &scopedRateLimitCatalog{inner: rl, owner: owner},
-		Schemas:    &scopedSchemaRegistry{inner: schemas, owner: owner},
+		Hooks:       &scopedHookCatalog{inner: hooks, owner: owner},
+		Tokens:      &scopedTokenCatalog{inner: tokens, owner: owner},
+		RateLimits:  &scopedRateLimitCatalog{inner: rl, owner: owner},
+		Permissions: &scopedPermissionCatalog{inner: permissions, owner: owner},
+		Schemas:     &scopedSchemaRegistry{inner: schemas, owner: owner},
 	}
 }
 

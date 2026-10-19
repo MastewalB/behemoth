@@ -143,6 +143,26 @@ func NewUnauthorized(op, code, message string) error {
 	}
 }
 
+// CodeInsufficientScope is the code of a forbidden error for a caller that is
+// authenticated and doesn't hold the permission an operation requires. It is
+// the code RFC 6750 gives a bearer token that lacks a scope.
+const CodeInsufficientScope = "insufficient_scope"
+
+// NewForbidden reports that the caller is authenticated and not allowed what
+// it asked for, such as a credential without the permission an operation
+// requires (CodeInsufficientScope). message is sent to the client. It maps to
+// 403. A caller that could not be authenticated gets NewUnauthorized or a
+// session error instead.
+func NewForbidden(op, code, message string) error {
+	return &DomainError{
+		Category:        CategoryForbidden,
+		Op:              op,
+		Code:            code,
+		PublicMessage:   message,
+		InternalMessage: fmt.Sprintf("%s: %s", op, message),
+	}
+}
+
 // NewInternalError classifies an unexpected failure inside the system
 func NewInternalError(op string, original error) *DomainError {
 	return &DomainError{
