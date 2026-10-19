@@ -1,6 +1,6 @@
 package models
 
-import "github.com/MastewalB/behemoth/types/schema"
+import "github.com/MastewalB/behemoth/schema"
 
 // The tables core declares (CoreDeclareSchema), built from the same column
 // constants as each model's ToMap/FromMap. Other declarers may extend them
@@ -10,7 +10,7 @@ import "github.com/MastewalB/behemoth/types/schema"
 // stores and returns them as the string the models hold.
 
 // UserTableSchema declares users. Its own columns are all public: they are
-// what a route answers with when it returns a user (types.PublicView). A
+// what a route answers with when it returns a user (schema.PublicView). A
 // column another declarer contributes is private unless that declarer marks
 // it Public.
 //

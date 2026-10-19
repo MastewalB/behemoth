@@ -1,15 +1,14 @@
-package types
+package schema
 
 import (
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types/schema"
 )
 
 // PublicView builds what a client is sent of a row: the columns its table
-// declares Public (schema.Column), and no others. A route that returns a
+// declares Public (Column), and no others. A route that returns a
 // user answers with PublicView.Of(user) and never with the model itself,
 // which as JSON carries every column a plugin contributed.
 //
@@ -33,16 +32,16 @@ type PublicView interface {
 type schemaPublicView struct {
 	// tables maps a canonical table name to its public columns by name. A
 	// declared table with no public column has an empty entry.
-	tables map[string]map[string]schema.Column
+	tables map[string]map[string]Column
 }
 
 // NewPublicView returns the view of tables: the merged tables of a frozen
-// schema.Registry (Registry.All), contributions included. Boot builds
+// [Registry] (Registry.All), contributions included. Boot builds
 // AuthContext.Public with it.
-func NewPublicView(tables []schema.Table) PublicView {
-	v := &schemaPublicView{tables: make(map[string]map[string]schema.Column, len(tables))}
+func NewPublicView(tables []Table) PublicView {
+	v := &schemaPublicView{tables: make(map[string]map[string]Column, len(tables))}
 	for _, t := range tables {
-		public := map[string]schema.Column{}
+		public := map[string]Column{}
 		for _, c := range t.Columns {
 			if c.Public {
 				public[c.Name] = c
@@ -75,7 +74,7 @@ func (v *schemaPublicView) Of(m behemoth.Model) (behemoth.M, error) {
 	view := make(behemoth.M, len(public))
 	for name, col := range public {
 		if raw, ok := row[name]; ok {
-			view[name] = schema.Normalize(col, raw)
+			view[name] = Normalize(col, raw)
 		}
 	}
 	return view, nil

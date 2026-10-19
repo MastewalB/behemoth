@@ -10,7 +10,7 @@ import (
 
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // pgTypeMapping implements Tier 0 (same-family native types collapse to one

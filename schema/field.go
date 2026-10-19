@@ -112,7 +112,7 @@ func (f Field[T]) check(m behemoth.Extensible) error {
 // text, the document itself for a JSON column. A value it can't convert is
 // returned as it is, and nil stays nil.
 //
-// It is for encoding a row for a client (types.PublicView), where the value
+// It is for encoding a row for a client ([PublicView]), where the value
 // has to look the same on every database. Typed access to one column goes
 // through Field.
 func Normalize(col Column, raw any) any {

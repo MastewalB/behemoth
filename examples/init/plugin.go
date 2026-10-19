@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/MastewalB/behemoth/utils"
 )
 

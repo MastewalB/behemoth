@@ -13,8 +13,8 @@ import (
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration"
+	"github.com/MastewalB/behemoth/schema"
 	bmth "github.com/MastewalB/behemoth/types/init"
-	"github.com/MastewalB/behemoth/types/schema"
 )
 
 // note is an application table, declared the way an application does it:

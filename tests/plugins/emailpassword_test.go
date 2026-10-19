@@ -21,6 +21,7 @@ import (
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
+	dbschema "github.com/MastewalB/behemoth/schema"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -29,7 +30,6 @@ import (
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	bmth "github.com/MastewalB/behemoth/types/init"
-	dbschema "github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -87,7 +87,7 @@ func authContext(t *testing.T) *types.AuthContext {
 		Store:      st,
 		Crypto:     c,
 		Dispatcher: passDispatcher{},
-		Public:     types.NewPublicView([]dbschema.Table{models.UserTableSchema()}),
+		Public:     dbschema.NewPublicView([]dbschema.Table{models.UserTableSchema()}),
 		SessionManager: transport.NewSessionManager(st, nil, c,
 			types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
 			passDispatcher{}, nil, nil, nil),

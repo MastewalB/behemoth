@@ -67,7 +67,7 @@ Both carry every column. A route answers with a third form, `AuthContext.Public.
 
 1. `schema.Column` has a `Public` flag. It is false unless the declarer sets it, for a table's own columns and for a contribution alike.
 2. `models.UserTableSchema` marks the eight user columns. No other core table marks any.
-3. `Boot` builds `types.NewPublicView(app.Schemas.All())`: for each merged table, the public columns by name.
+3. `Boot` builds `schema.NewPublicView(app.Schemas.All())`: for each merged table, the public columns by name.
 4. `Of(m)` calls `m.ToMap()`, keeps the public columns of `m.SchemaName()`, and passes each value through `schema.Normalize`.
 
 `schema.Normalize(col, raw)` returns a value as the type its column declares. Contributed columns reach the model as the driver returned them (`schema.Field` exists for the same reason), so without it a public boolean would be `1` in a response from SQLite and `true` from PostgreSQL. A value it can't convert is passed through.

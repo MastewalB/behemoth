@@ -18,13 +18,13 @@ import (
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/outbound"
+	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/types/ratelimit"
-	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -371,7 +371,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		SessionConfig: cfg.Session.WithDefaults(),
 		Mailer:        NewMailer(cfg.Mail, tel),
 		SMS:           NewSMS(cfg.SMS, tel),
-		Public:        types.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
+		Public:        schema.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
 	}
 	if err := checkDataHookPoints(app.Hooks, coreDataHookPoints); err != nil {
 		return nil, err

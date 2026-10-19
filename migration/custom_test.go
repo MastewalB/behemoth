@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 func addIndexOp(id, table, index string) SchemaOperation {

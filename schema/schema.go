@@ -48,7 +48,7 @@ type Column struct {
 	AutoInc bool
 
 	// Public says the column may be sent to a client: a route that returns
-	// the row includes it (types.PublicView). The default is private, for a
+	// the row includes it ([PublicView]). The default is private, for a
 	// table's own columns and for columns contributed to it alike, so a
 	// column reaches a client only because its declarer said so.
 	//

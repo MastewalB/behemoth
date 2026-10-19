@@ -8,7 +8,7 @@ The code it refers to lives in:
 
 - `types/plugins.go`: `Route`, `RequestContext`, `ResponseRecorder`
 - `types/signin.go`: `WriteSignIn`, the body every sign-in answers with
-- `types/public_view.go`: the user a response carries
+- `schema/public_view.go: the user a response carries
 - `errs/errors.go`, `errs/session.go`: `DomainError`, `DefaultErrorMapper`
 - `plugins/*`: each plugin's routes, body keys and error codes
 

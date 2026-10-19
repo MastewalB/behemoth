@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // A column's default has two forms: Column.Default, a literal value, and

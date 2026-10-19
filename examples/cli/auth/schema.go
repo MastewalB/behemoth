@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // Plan is a column the application adds to behemoth's users table. The

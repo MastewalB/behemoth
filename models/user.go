@@ -35,7 +35,7 @@ var userColumns = columnSet(UserID, UserEmail, UserFirstname, UserLastname,
 // As JSON a user is keyed by its column names, the names a request uses for
 // the same fields: "email_verified", "image_url". Columns a plugin added are
 // under "extra", all of them, so a route does not encode a user directly: it
-// answers with types.PublicView, which has the public columns only.
+// answers with schema.PublicView, which has the public columns only.
 type User struct {
 	Extension
 	ID            string    `db:"id" json:"id"`

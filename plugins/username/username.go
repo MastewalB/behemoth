@@ -24,10 +24,10 @@ import (
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
+	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	"github.com/MastewalB/behemoth/types/schema"
 )
 
 // PluginName is the name the plugin registers under (PluginMeta.Name). It

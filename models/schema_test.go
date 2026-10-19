@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // Each declared table lists exactly its model's own columns — the ones its
