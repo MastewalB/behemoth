@@ -284,7 +284,7 @@ func TestDeleteUserRemovesSessionsAndAccounts(t *testing.T) {
 			sessions := map[*models.User]*models.Session{}
 			for _, u := range []*models.User{ada, grace} {
 				require.NoError(t, st.CreateUser(ctx, u))
-				sess, raw, err := sm.Create(ctx, u.ID, types.SessionMeta{State: types.SessionActive})
+				sess, raw, err := sm.Create(ctx, u.ID, types.SessionMeta{State: models.SessionActive})
 				require.NoError(t, err)
 				sessions[u], tokens[u] = sess, raw
 				require.NoError(t, st.CreateAccount(ctx, &models.Account{
@@ -512,7 +512,7 @@ func sessionsContract(t *testing.T, st *store.Store) {
 	sm := transport.NewSessionManager(st, nil, testCrypto(t),
 		types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil, nil)
 
-	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: types.SessionPending})
+	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
 	got, err := sm.Get(ctx, raw)
 	require.NoError(t, err)

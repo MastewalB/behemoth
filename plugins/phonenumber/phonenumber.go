@@ -141,9 +141,9 @@ const (
 // The kinds of the codes the plugin issues, one per purpose, so that a code
 // sent for one can't be used for another. The subject of each is a user id.
 const (
-	codeVerify types.CodeKind = PluginName + ".verify"
-	codeSignIn types.CodeKind = PluginName + ".sign_in"
-	codeReset  types.CodeKind = PluginName + ".password_reset"
+	codeVerify models.CodeKind = PluginName + ".verify"
+	codeSignIn models.CodeKind = PluginName + ".sign_in"
+	codeReset  models.CodeKind = PluginName + ".password_reset"
 )
 
 // valueConfirmed is the note the plugin's flows leave in the operation's
@@ -623,7 +623,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 	// Who the code is for. Its subject is always a user id, so that the
 	// code goes when the user is deleted.
 	var user *models.User
-	var kind types.CodeKind
+	var kind models.CodeKind
 	var message types.SMSKind
 	holder, err := p.findHolder(hctx.Ctx, number)
 	if err != nil && !errs.IsNotFound(err) {
@@ -865,9 +865,9 @@ func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.Sig
 		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
 			types.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
-	state := types.SessionActive
+	state := models.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
-		state = types.SessionPending
+		state = models.SessionPending
 	}
 
 	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{State: state})

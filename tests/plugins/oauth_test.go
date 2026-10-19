@@ -16,6 +16,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
@@ -167,7 +168,7 @@ func TestOAuthBeginStartsASignIn(t *testing.T) {
 	app, err := bootOAuth(t, oauth.Options{}, func(reg types.HookRegistry) error {
 		// What a handler on the token points gets to see of the sign-in.
 		return reg.OnAfter(hooks.HookTokenAfterIssue, func(_ *types.HookContext, result any) error {
-			issued = append(issued, result.(*types.Token).MetadataJSON)
+			issued = append(issued, result.(*models.Token).MetadataJSON)
 			return nil
 		}, nil)
 	})

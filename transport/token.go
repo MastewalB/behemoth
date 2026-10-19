@@ -9,6 +9,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
@@ -68,7 +69,7 @@ func (tm *DefaultTokenManager) log() telemetry.Logger {
 	return telemetry.Named(tm.auth.Telemetry.Logger, "token")
 }
 
-func kvKey(kind types.TokenKind, lookupHash string) string {
+func kvKey(kind models.TokenKind, lookupHash string) string {
 	return "token:" + string(kind) + ":" + lookupHash
 }
 
@@ -79,7 +80,7 @@ func resolveTTL(def types.TokenKindDef, cfg types.TokenConfig) time.Duration {
 	return def.DefaultTTL
 }
 
-func checkConsumable(tok *types.Token) error {
+func checkConsumable(tok *models.Token) error {
 	const op = "TokenManager.checkConsumable"
 	if tok.RevokedAt != nil {
 		return errs.NewTokenError(op, "token_revoked", nil)
@@ -95,10 +96,10 @@ func checkConsumable(tok *types.Token) error {
 
 func (tm *DefaultTokenManager) Issue(
 	ctx context.Context,
-	kind types.TokenKind,
+	kind models.TokenKind,
 	subject any,
 	meta behemoth.M,
-) (*types.Token, string, error) {
+) (*models.Token, string, error) {
 	var spanAttrs behemoth.M
 	if tm.telemetry().TracingEnabled() {
 		spanAttrs = behemoth.M{telemetry.AttrKind: string(kind)}
@@ -112,10 +113,10 @@ func (tm *DefaultTokenManager) Issue(
 // issue is Issue without its span.
 func (tm *DefaultTokenManager) issue(
 	ctx context.Context,
-	kind types.TokenKind,
+	kind models.TokenKind,
 	subject any,
 	meta behemoth.M,
-) (*types.Token, string, error) {
+) (*models.Token, string, error) {
 	const op = "TokenManager.Issue"
 	ctx = types.BeginOperation(ctx) // beforeIssue and afterIssue share Values
 
@@ -160,7 +161,7 @@ func (tm *DefaultTokenManager) issue(
 		expiresAt = time.Now().Add(ttl)
 	}
 
-	tok := &types.Token{
+	tok := &models.Token{
 		Kind:         kind,
 		Subject:      subjectString(subject),
 		LookupHash:   utils.LookupHashOf(rawToken),
@@ -196,7 +197,7 @@ func subjectString(subject any) string {
 	return fmt.Sprint(subject)
 }
 
-func (tm *DefaultTokenManager) persist(ctx context.Context, def types.TokenKindDef, token *types.Token, ttl time.Duration) error {
+func (tm *DefaultTokenManager) persist(ctx context.Context, def types.TokenKindDef, token *models.Token, ttl time.Duration) error {
 	const op = "TokenManager.persist"
 	switch def.Backend {
 	case types.TokenBackendKV:
@@ -214,7 +215,7 @@ func (tm *DefaultTokenManager) persist(ctx context.Context, def types.TokenKindD
 			// a real DefaultTTL), but guard rather than silently persist forever.
 			return errs.NewConfigurationError(op, "BackendKV token kind must have a positive TTL", nil)
 		}
-		return tm.kv.Set(ctx, kvKey(types.TokenKind(token.Kind), token.LookupHash), string(data), ttlSeconds)
+		return tm.kv.Set(ctx, kvKey(models.TokenKind(token.Kind), token.LookupHash), string(data), ttlSeconds)
 	default: // BackendDB
 		return tm.st.CreateToken(ctx, token)
 	}
@@ -223,18 +224,18 @@ func (tm *DefaultTokenManager) persist(ctx context.Context, def types.TokenKindD
 // fetch is the shared lookup & authenticity check path used by Verify and
 // Consume, so the two entry points can never drift on that logic. A DB token
 // is read through st — Consume passes its transaction's store.
-func (tm *DefaultTokenManager) fetch(ctx context.Context, st *store.Store, def types.TokenKindDef, kind types.TokenKind, rawToken string) (*types.Token, error) {
+func (tm *DefaultTokenManager) fetch(ctx context.Context, st *store.Store, def types.TokenKindDef, kind models.TokenKind, rawToken string) (*models.Token, error) {
 	const op = "TokenManager.fetch"
 	lookupHash := utils.LookupHashOf(rawToken)
 
-	var m *types.Token
+	var m *models.Token
 	switch def.Backend {
 	case types.TokenBackendKV:
 		raw, err := tm.kv.Get(ctx, kvKey(kind, lookupHash))
 		if err != nil {
 			return nil, errs.NewTokenError(op, errs.CodeTokenNotFound, err)
 		}
-		m = &types.Token{}
+		m = &models.Token{}
 		if err := json.Unmarshal([]byte(raw), m); err != nil {
 			// A corrupted entry is treated as absent, so the caller sees an
 			// ordinary "not found". The line is the only sign of it.
@@ -261,7 +262,7 @@ func (tm *DefaultTokenManager) fetch(ctx context.Context, st *store.Store, def t
 	return m, nil
 }
 
-func (tm *DefaultTokenManager) Verify(ctx context.Context, kind types.TokenKind, rawToken string) (*types.Token, error) {
+func (tm *DefaultTokenManager) Verify(ctx context.Context, kind models.TokenKind, rawToken string) (*models.Token, error) {
 	const op = "TokenManager.Verify"
 
 	def, ok := tm.catalog.Lookup(kind)
@@ -279,7 +280,7 @@ func (tm *DefaultTokenManager) Verify(ctx context.Context, kind types.TokenKind,
 	return m, nil
 }
 
-func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind, rawToken string) (*types.Token, error) {
+func (tm *DefaultTokenManager) Consume(ctx context.Context, kind models.TokenKind, rawToken string) (*models.Token, error) {
 	var spanAttrs behemoth.M
 	if tm.telemetry().TracingEnabled() {
 		spanAttrs = behemoth.M{telemetry.AttrKind: string(kind)}
@@ -291,7 +292,7 @@ func (tm *DefaultTokenManager) Consume(ctx context.Context, kind types.TokenKind
 }
 
 // consume is Consume without its span.
-func (tm *DefaultTokenManager) consume(ctx context.Context, kind types.TokenKind, rawToken string) (*types.Token, error) {
+func (tm *DefaultTokenManager) consume(ctx context.Context, kind models.TokenKind, rawToken string) (*models.Token, error) {
 	const op = "TokenManager.Consume"
 	ctx = types.BeginOperation(ctx) // one operation for the consume and its consumed or failed point
 
@@ -306,7 +307,7 @@ func (tm *DefaultTokenManager) consume(ctx context.Context, kind types.TokenKind
 		return nil, errs.NewTokenError(op, errs.CodeTokenInvalidUsage, nil)
 	}
 
-	var result *types.Token
+	var result *models.Token
 	var consumeErr error
 
 	switch def.Backend {
@@ -381,7 +382,7 @@ func (tm *DefaultTokenManager) Revoke(ctx context.Context, tokenID string) error
 }
 
 // RevokeAllForSubject implements [types.TokenManager].
-func (tm *DefaultTokenManager) RevokeAllForSubject(ctx context.Context, kind types.TokenKind, subject any) error {
+func (tm *DefaultTokenManager) RevokeAllForSubject(ctx context.Context, kind models.TokenKind, subject any) error {
 	const op = "TokenManager.RevokeAllForSubject"
 
 	def, ok := tm.catalog.Lookup(kind)
@@ -398,7 +399,7 @@ func (tm *DefaultTokenManager) RevokeAllForSubject(ctx context.Context, kind typ
 }
 
 // ListForSubject implements [types.TokenManager].
-func (tm *DefaultTokenManager) ListForSubject(ctx context.Context, kind types.TokenKind, subject any) ([]*types.Token, error) {
+func (tm *DefaultTokenManager) ListForSubject(ctx context.Context, kind models.TokenKind, subject any) ([]*models.Token, error) {
 	const op = "TokenManager.ListForSubject"
 
 	def, ok := tm.catalog.Lookup(kind)

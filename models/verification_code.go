@@ -24,6 +24,7 @@ const (
 )
 
 // CodeKind says what a one-time code is for, such as "phonenumber.sign_in".
+// A plugin defines the kinds it issues, prefixed with its name.
 type CodeKind string
 
 // VerificationCode is one live one-time code: a short numeric secret sent to

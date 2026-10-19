@@ -591,9 +591,9 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*types.Sig
 		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
 			types.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
 	}
-	state := types.SessionActive
+	state := models.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
-		state = types.SessionPending
+		state = models.SessionPending
 	}
 
 	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{State: state})

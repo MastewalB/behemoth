@@ -1080,9 +1080,9 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 
 	u := &models.User{Email: "ada@example.com"}
 	require.NoError(t, ac.Store.CreateUser(ctx, u))
-	_, live, err := ac.SessionManager.Create(ctx, u.ID, types.SessionMeta{State: types.SessionActive})
+	_, live, err := ac.SessionManager.Create(ctx, u.ID, types.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	old, _, err := ac.SessionManager.Create(ctx, u.ID, types.SessionMeta{State: types.SessionActive})
+	old, _, err := ac.SessionManager.Create(ctx, u.ID, types.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	require.NoError(t, ac.SessionManager.Revoke(ctx, old.ID, "user_logout"))
 	_, err = ac.SessionManager.Validate(ctx, live)

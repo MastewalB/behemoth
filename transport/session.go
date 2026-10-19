@@ -103,7 +103,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 	// the HookContext and not the payload.
 	types.HookValuesFrom(ctx)[hooks.HookValueUserID] = fmt.Sprint(userID)
 
-	if meta.State != types.SessionActive && meta.State != types.SessionPending {
+	if meta.State != models.SessionActive && meta.State != models.SessionPending {
 		return nil, "", errs.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
 	}
 
@@ -139,7 +139,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 
 	// SessionConfig: expiry selection, IP/UA capture toggle
 	ttl := sm.cfg.ExpiresIn
-	if meta.State == types.SessionPending {
+	if meta.State == models.SessionPending {
 		ttl = sm.cfg.PendingExpiresIn
 	}
 	ip, ua := sm.requestMeta(ctx, meta)
@@ -175,7 +175,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 		LookupHash:   lookupHash,
 		TokenHash:    tokenHash,
 		KeyVersion:   keyVersion,
-		State:        models.SessionState(meta.State),
+		State:        meta.State,
 		ExpiresAt:    now.Add(ttl),
 		LastActiveAt: now,
 		FreshAt:      now,

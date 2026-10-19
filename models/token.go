@@ -9,8 +9,8 @@ import (
 )
 
 // TokenKind names what a token is for (email verification, password reset,
-// API key, …). The kinds behemoth defines, and the catalog plugins declare
-// theirs in, live in package types; types.TokenKind is this type.
+// API key, …). The kinds Behemoth names, and the catalog plugins declare
+// theirs in, live in package types.
 type TokenKind string
 
 // Canonical names of the tokens table and its columns — the single source for

@@ -570,9 +570,9 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 			types.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
 
-	state := types.SessionActive
+	state := models.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
-		state = types.SessionPending
+		state = models.SessionPending
 	}
 
 	// The session manager reads the IP address and user agent from the

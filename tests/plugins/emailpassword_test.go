@@ -722,7 +722,7 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 // site that publishes a value to key on.
 type limitsPlugin struct{}
 
-const kindInvite types.TokenKind = "limits.invite"
+const kindInvite models.TokenKind = "limits.invite"
 
 func (limitsPlugin) Meta() types.PluginMeta            { return types.PluginMeta{Name: "limits"} }
 func (limitsPlugin) Version() string                   { return "0.0.0" }
@@ -815,7 +815,7 @@ CREATE TABLE tokens (
 
 	// Session create: three per user. Ada's two sign-ins above made two.
 	create := func(userID string) error {
-		_, _, err := ac.SessionManager.Create(ctx, userID, types.SessionMeta{State: types.SessionActive})
+		_, _, err := ac.SessionManager.Create(ctx, userID, types.SessionMeta{State: models.SessionActive})
 		return err
 	}
 	require.NoError(t, create(user.ID))

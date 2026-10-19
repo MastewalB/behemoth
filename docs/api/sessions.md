@@ -298,7 +298,7 @@ To tell another service who a request is from, exchange the session for a short-
 A plugin that signs users in builds a `types.SignInResult` and hands it to `types.WriteSignIn`:
 
 ```go
-session, rawToken, err := ac.SessionManager.Create(rctx.Ctx, user.ID, types.SessionMeta{State: types.SessionActive})
+session, rawToken, err := ac.SessionManager.Create(rctx.Ctx, user.ID, types.SessionMeta{State: models.SessionActive})
 if err != nil {
 	return err
 }
