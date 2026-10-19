@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
@@ -211,21 +211,21 @@ func (h *SQLiteTestManager) LedgerIDs(ctx context.Context, ledgerTable string) (
 	return h.strings(ctx, "SELECT id FROM "+quote(ledgerTable)+" ORDER BY id")
 }
 
-func (h *SQLiteTestManager) Snapshot(ctx context.Context, snapshotTable string) (core.SchemaSnapshot, bool, error) {
+func (h *SQLiteTestManager) Snapshot(ctx context.Context, snapshotTable string) (migration.SchemaSnapshot, bool, error) {
 	if exists, err := h.TableExists(ctx, snapshotTable); err != nil || !exists {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
-	var snap core.SchemaSnapshot
+	var snap migration.SchemaSnapshot
 	var tables string
 	err := h.db.QueryRowContext(ctx, "SELECT version, tables FROM "+quote(snapshotTable)+" WHERE id = 1").Scan(&snap.Version, &tables)
 	if errors.Is(err, sql.ErrNoRows) {
-		return core.SchemaSnapshot{}, false, nil
+		return migration.SchemaSnapshot{}, false, nil
 	}
 	if err != nil {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
 	if err := json.Unmarshal([]byte(tables), &snap.Tables); err != nil {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
 	return snap, true, nil
 }
@@ -324,14 +324,14 @@ func scanRows(rows *sql.Rows, err error) ([]map[string]any, error) {
 // The agnostic suite covers every operation; these pin down details only the
 // SQLite table-rebuild path can get wrong.
 
-func newSQLiteFixture(t *testing.T) (context.Context, *sql.DB, *sqlite.SQLiteDriver, func(...core.SchemaOperation) error) {
+func newSQLiteFixture(t *testing.T) (context.Context, *sql.DB, *sqlite.SQLiteDriver, func(...migration.SchemaOperation) error) {
 	ctx := context.Background()
 	db := openSQLite(t)
 	driver := sqlite.NewSQLiteDriver(db, nil)
 	seq := 0
-	apply := func(ops ...core.SchemaOperation) error {
+	apply := func(ops ...migration.SchemaOperation) error {
 		seq++
-		return driver.ApplyMigration(ctx, request(core.Migration{ID: fmt.Sprintf("%04d_test", seq), Up: ops}, nil))
+		return driver.ApplyMigration(ctx, request(migration.Migration{ID: fmt.Sprintf("%04d_test", seq), Up: ops}, nil))
 	}
 	return ctx, db, driver, apply
 }
@@ -477,8 +477,8 @@ func schemaDump(t *testing.T, ctx context.Context, db *sql.DB) map[string]string
 // identical one — including the statements of a table rebuild.
 func TestSQLiteRenderedScriptReproducesApply(t *testing.T) {
 	ctx := context.Background()
-	seed := []core.SchemaOperation{createTableOp(usersTable()), createTableOp(postsTable())}
-	m := core.Migration{ID: "0002_test", Name: "test", Up: []core.SchemaOperation{
+	seed := []migration.SchemaOperation{createTableOp(usersTable()), createTableOp(postsTable())}
+	m := migration.Migration{ID: "0002_test", Name: "test", Up: []migration.SchemaOperation{
 		addForeignKeyOp("posts", postsUserFK(schema.FKCascade)),
 		alterColumnOp("users", schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Default: "it's"}),
 		addIndexOp("users", schema.Index{Name: "idx_users_status", Columns: []string{"status"}}),
@@ -487,7 +487,7 @@ func TestSQLiteRenderedScriptReproducesApply(t *testing.T) {
 
 	applied, scripted := openSQLite(t), openSQLite(t)
 	for _, db := range []*sql.DB{applied, scripted} {
-		require.NoError(t, sqlite.NewSQLiteDriver(db, nil).ApplyMigration(ctx, request(core.Migration{ID: "0001_seed", Up: seed}, nil)))
+		require.NoError(t, sqlite.NewSQLiteDriver(db, nil).ApplyMigration(ctx, request(migration.Migration{ID: "0001_seed", Up: seed}, nil)))
 		_, err := db.ExecContext(ctx, `INSERT INTO users (id, email) VALUES (1, 'a@example.com'); INSERT INTO posts (id, user_id, title) VALUES (1, 1, 't')`)
 		require.NoError(t, err)
 	}
@@ -523,7 +523,7 @@ func TestSQLiteRenderBaselineDumpsExistingSchema(t *testing.T) {
 	))
 
 	users, posts := usersTable(), postsTable()
-	baseline := core.BuildBaselineMigration(map[string]schema.Table{"users": users, "posts": posts})
+	baseline := migration.BuildBaselineMigration(map[string]schema.Table{"users": users, "posts": posts})
 	script, err := driver.RenderMigration(ctx, baseline)
 	require.NoError(t, err)
 

@@ -4,7 +4,7 @@ This document explains how `behemoth generate` reaches an application's declarat
 
 The code lives in:
 
-- `migration/core/backend.go`: `Backend`, `Generate`, `Migrate`, `RunOptions`, `DraftPath`
+- `migration/backend.go`: `Backend`, `Generate`, `Migrate`, `RunOptions`, `DraftPath`
 - `storage/adapters/postgres/backend.go`: `MigrationBackend`
 - `cli/`: the commands, as a library
 - `cmd/behemoth/`: the launcher, the program a developer installs
@@ -35,19 +35,19 @@ Two inputs can't be derived: how to prepare, and how to reach the database. Go l
 behemoth generate
   cmd/behemoth        finds the setup package, builds a main for it, runs it
     cli.Main          parses the command, calls the application's two functions
-      core.Generate   picks the path's entry point, builds the dependencies
+      migration.Generate   picks the path's entry point, builds the dependencies
         RunGenerateCLI  introspect, plan, resolve, generate, write
 
-behemoth migrate takes the same route to core.Migrate and RunManagedApply.
+behemoth migrate takes the same route to migration.Migrate and RunManagedApply.
 ```
 
-**`core.Backend`, `core.Generate`, and `core.Migrate`.** `Backend` holds what the pipeline needs from one database: `Introspector`, `Renderer`, `Driver`, `DB`, and `Close`. `Generate` and `Migrate` take it with the configuration and the declarations, and do the wiring. They are described in the design document under *Entry points*. `postgres.MigrationBackend(db, resolver)` fills a `Backend` from one `*sql.DB`.
+**`migration.Backend`, `migration.Generate`, and `migration.Migrate`.** `Backend` holds what the pipeline needs from one database: `Introspector`, `Renderer`, `Driver`, `DB`, and `Close`. `Generate` and `Migrate` take it with the configuration and the declarations, and do the wiring. They are described in the design document under *Entry points*. `postgres.MigrationBackend(db, resolver)` fills a `Backend` from one `*sql.DB`.
 
 **The `cli` package.** The commands as a library. An application gives it two functions:
 
 ```go
 type PrepareFunc func() (*bmth.PreparedApp, error)
-type BackendFunc func(ctx context.Context, app *bmth.PreparedApp) (core.Backend, error)
+type BackendFunc func(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error)
 
 func Main(prepare PrepareFunc, backend BackendFunc)                                             // os.Args, exits
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, prepare PrepareFunc, backend BackendFunc) int
@@ -61,7 +61,7 @@ Both commands are one `command` value and run the same steps (`command.exec`):
 2. Call the `PrepareFunc`.
 3. Ask the command whether it applies to `app.Migration.Path` (`refuse`), before the database is opened. `generate` always does. `migrate` refuses `PathGenerateOnly`, with a message that names `generate`.
 4. Call the `BackendFunc`, and call the backend's `Close` when the command ends.
-5. Call `core.Generate` or `core.Migrate`. Warnings of the managed path go to stderr through a text logger.
+5. Call `migration.Generate` or `migration.Migrate`. Warnings of the managed path go to stderr through a text logger.
 6. Print core's message, then one line per operation of the migration (`describe`), then a note when answers were read from the draft file.
 
 Exit codes are 0 when the command ran, with or without changes, 1 when it failed and 2 for a usage error.
@@ -201,7 +201,7 @@ When a command fails with `unresolved_issues`, the command adds a line that name
 
 | Test | Covers |
 | --- | --- |
-| `migration/core/backend_test.go` | The checks of `Generate` and `Migrate`, the path checks of the entry points below them, the generate-only path from preview to "no changes", and the managed path through both: a new database, an existing one with its baseline, and a baseline that went stale. `memoryDatabase` is an introspector, a driver and a ledger in memory. |
+| `migration/backend_test.go` | The checks of `Generate` and `Migrate`, the path checks of the entry points below them, the generate-only path from preview to "no changes", and the managed path through both: a new database, an existing one with its baseline, and a baseline that went stale. `memoryDatabase` is an introspector, a driver and a ledger in memory. |
 | `cli/cli_test.go` | Usage and exit codes, `generate` with and without `-confirm`, `generate` then `migrate` on the managed path, `migrate` refused on `PathGenerateOnly`, failures of the two functions, the draft note, `describe`. The application is a real `Prepare` with an application table; the database is a map. |
 | `cmd/behemoth/main_test.go` | `findApp`, `checkEntryPoints`, the generated source, and `TestLauncherRunsAnApplication`, which writes a module to a temporary directory, runs the launcher in it and checks the migration file, the untouched tree and the exit code. It is skipped with `-short`. |
 | `tests/storage/migrations/backend_test.go` | `postgres.MigrationBackend` in a container: physical names in the script, the script applied, a second run without changes, and the driver and the adapter agreeing on the ledger. |
@@ -212,5 +212,5 @@ These parts are deferred:
 
 - **Asking the questions.** `ResolveIssues` has an empty `if interactive` branch that leaves a prompt to this layer. The design document requires a prompt to write every answer through to the draft file. Showing the questions needs an exported view of the draft's entries.
 - **`--previous <id>` and `behemoth schema snapshot`,** which the design document names for `PathGenerateOnly`.
-- **Constructors for SQLite, MySQL, and SQL Server.** Each is the five lines of `postgres.MigrationBackend`. Until then an application on one of them fills `core.Backend` itself.
+- **Constructors for SQLite, MySQL, and SQL Server.** Each is the five lines of `postgres.MigrationBackend`. Until then an application on one of them fills `migration.Backend` itself.
 - **The audit event of an applied migration.** `migrate` sets no audit recorder, so none is written. The audit table may be created by the very migration being applied.

@@ -28,7 +28,7 @@ package auth
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types"
@@ -39,16 +39,16 @@ import (
 func Prepare() (*bmth.PreparedApp, error) {
 	plugins := []types.Plugin{emailpassword.New(emailpassword.Options{})}
 	return bmth.Prepare(plugins, bmth.PrepareConfig{
-		Migration: core.MigrationConfig{FolderPath: "migrations"},
+		Migration: migration.MigrationConfig{FolderPath: "migrations"},
 		Schema:    declareSchema, // your own tables, if you have any
 	})
 }
 
 // MigrationBackend opens the database the command compares with.
-func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (core.Backend, error) {
+func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error) {
 	db, err := OpenDB(ctx) // your own function: sql.Open and a ping
 	if err != nil {
-		return core.Backend{}, err
+		return migration.Backend{}, err
 	}
 	return postgres.MigrationBackend(db, app.Resolver), nil
 }
@@ -155,7 +155,7 @@ Set `chosen` to `0` and run `behemoth generate` again to get the alter. Read the
 
 ## `migrate`
 
-`migrate` is for an application whose `MigrationConfig.Path` is `core.PathManaged`. There Behemoth applies the migrations itself and keeps a record of them in two tables of its own.
+`migrate` is for an application whose `MigrationConfig.Path` is `migration.PathManaged`. There Behemoth applies the migrations itself and keeps a record of them in two tables of its own.
 
 ```bash
 behemoth generate -confirm   # write the next migration, for you to review
@@ -247,16 +247,16 @@ The launcher returns the command's own exit code. It returns 1 itself when it ca
 
 ## Other databases
 
-`postgres.MigrationBackend` is available for PostgreSQL only. For MySQL, SQLite, or SQL Server, fill `core.Backend` yourself from the module's driver. `generate` needs `Introspector`, and `Renderer` for the script. `migrate` also needs `Driver` and `DB`: the module's driver and its adapter:
+`postgres.MigrationBackend` is available for PostgreSQL only. For MySQL, SQLite, or SQL Server, fill `migration.Backend` yourself from the module's driver. `generate` needs `Introspector`, and `Renderer` for the script. `migrate` also needs `Driver` and `DB`: the module's driver and its adapter:
 
 ```go
-func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (core.Backend, error) {
+func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error) {
 	db, err := OpenDB(ctx)
 	if err != nil {
-		return core.Backend{}, err
+		return migration.Backend{}, err
 	}
 	driver := mysql.NewMySQLDriver(db, app.Resolver)
-	return core.Backend{Introspector: driver, Renderer: driver, Close: db.Close}, nil
+	return migration.Backend{Introspector: driver, Renderer: driver, Close: db.Close}, nil
 }
 ```
 
@@ -266,11 +266,11 @@ MongoDB has no migrations. See [MongoDB](./mongodb.md).
 
 ## Without the command line
 
-`core.Generate` and `core.Migrate` are what the commands call. Use them from your own code, for example in a test that fails when a migration is missing:
+`migration.Generate` and `migration.Migrate` are what the commands call. Use them from your own code, for example in a test that fails when a migration is missing:
 
 ```go
-res, err := core.Generate(ctx, app.Migration, app.Declared(), backend, core.RunOptions{Confirm: false})
-// res.Status is core.StatusNoChanges when the database matches
+res, err := migration.Generate(ctx, app.Migration, app.Declared(), backend, migration.RunOptions{Confirm: false})
+// res.Status is migration.StatusNoChanges when the database matches
 ```
 
 ## Limits

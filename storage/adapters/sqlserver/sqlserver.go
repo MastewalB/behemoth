@@ -2,8 +2,8 @@
 // module so the core module does not depend on go-mssqldb:
 //
 //   - SQLServerAdapter implements behemoth.Database (application reads/writes).
-//   - SQLServerDriver implements the migration interfaces: core.SchemaDriver,
-//     core.MigrationRenderer, core.SchemaIntrospector and core.ColumnNormalizer.
+//   - SQLServerDriver implements the migration interfaces: migration.SchemaDriver,
+//     migration.MigrationRenderer, migration.SchemaIntrospector and migration.ColumnNormalizer.
 //
 // Both take the same behemoth.SchemaResolver, so application queries and
 // migrations agree on physical table and column names.

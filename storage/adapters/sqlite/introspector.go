@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -52,8 +52,8 @@ var declaredTypePattern = regexp.MustCompile(`^\s*([A-Za-z][A-Za-z0-9 ]*?)\s*(?:
 // a guess. SQLite accepts any type name and derives an affinity from it, but
 // an affinity says how values are stored, not what the column means (DATE
 // gets NUMERIC affinity), so unrecognized names are not mapped by affinity.
-// As for Postgres, an ambiguity stops generation (core.RejectAmbiguousTypes).
-func mapSQLiteType(declared string) (schema.ColumnType, int, *core.ColumnAmbiguity) {
+// As for Postgres, an ambiguity stops generation (migration.RejectAmbiguousTypes).
+func mapSQLiteType(declared string) (schema.ColumnType, int, *migration.ColumnAmbiguity) {
 	if m := declaredTypePattern.FindStringSubmatch(declared); m != nil {
 		name := strings.ToUpper(strings.Join(strings.Fields(m[1]), " "))
 		if ct, ok := sqliteTypeMapping[name]; ok {
@@ -67,12 +67,12 @@ func mapSQLiteType(declared string) (schema.ColumnType, int, *core.ColumnAmbigui
 		}
 	}
 	if strings.TrimSpace(declared) == "" {
-		return schema.ColTypeText, 0, &core.ColumnAmbiguity{Reason: "column has no declared type (any value is accepted); defaulted to text — verify manually"}
+		return schema.ColTypeText, 0, &migration.ColumnAmbiguity{Reason: "column has no declared type (any value is accepted); defaulted to text — verify manually"}
 	}
-	return schema.ColTypeText, 0, &core.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized SQLite type %q — defaulted to text; verify manually", declared)}
+	return schema.ColTypeText, 0, &migration.ColumnAmbiguity{Reason: fmt.Sprintf("unrecognized SQLite type %q — defaulted to text; verify manually", declared)}
 }
 
-// NormalizeColumn implements [core.ColumnNormalizer]: col as Introspect
+// NormalizeColumn implements [migration.ColumnNormalizer]: col as Introspect
 // reports it once renderColumnDefinition has created it. It replays every
 // change the DDL makes to a declaration, so it must change together with
 // renderColumnDefinition and renderSQLiteType:
@@ -119,7 +119,7 @@ func (d *SQLiteDriver) NormalizeColumn(_ string, col schema.Column) schema.Colum
 	return col
 }
 
-// TableExists implements [core.SchemaIntrospector]. Tables, views and indexes
+// TableExists implements [migration.SchemaIntrospector]. Tables, views and indexes
 // share SQLite's namespace, so any of them counts — Introspect then reports a
 // view or index of the same name as an incompatible object rather than hiding it.
 func (d *SQLiteDriver) TableExists(ctx context.Context, name string) (bool, error) {
@@ -133,7 +133,7 @@ func (d *SQLiteDriver) TableExists(ctx context.Context, name string) (bool, erro
 	return exists, nil
 }
 
-// Introspect implements [core.SchemaIntrospector]: a best-effort reverse
+// Introspect implements [migration.SchemaIntrospector]: a best-effort reverse
 // mapping of one live table into the canonical model.
 //
 // Column names are returned as their physical names: SchemaResolver maps
@@ -143,7 +143,7 @@ func (d *SQLiteDriver) TableExists(ctx context.Context, name string) (bool, erro
 // Most structure comes from SQLite's pragmas; what they don't report —
 // foreign-key constraint names and AUTOINCREMENT — is read from the table's
 // stored CREATE TABLE statement with the same parser table rebuilds use.
-func (d *SQLiteDriver) Introspect(ctx context.Context, name string) (core.IntrospectedTable, error) {
+func (d *SQLiteDriver) Introspect(ctx context.Context, name string) (migration.IntrospectedTable, error) {
 	physical := d.resolver.Resolve(name)
 
 	var objType string
@@ -151,39 +151,39 @@ func (d *SQLiteDriver) Introspect(ctx context.Context, name string) (core.Intros
 	err := d.db.QueryRowContext(ctx,
 		`SELECT type, sql FROM sqlite_master WHERE name = ? AND type IN ('table', 'view', 'index')`, physical).Scan(&objType, &createSQL)
 	if errors.Is(err, sql.ErrNoRows) {
-		return core.IntrospectedTable{}, nil
+		return migration.IntrospectedTable{}, nil
 	}
 	if err != nil {
-		return core.IntrospectedTable{}, errs.NewMigrationError("SQLiteIntrospector.Introspect", errs.CodeMigrationQueryFailed, err)
+		return migration.IntrospectedTable{}, errs.NewMigrationError("SQLiteIntrospector.Introspect", errs.CodeMigrationQueryFailed, err)
 	}
 	switch {
 	case objType == "view":
-		return core.IntrospectedTable{Kind: core.ObjectView, Exists: true}, nil
+		return migration.IntrospectedTable{Kind: migration.ObjectView, Exists: true}, nil
 	case objType != "table", isVirtualTable(createSQL.String):
-		return core.IntrospectedTable{Kind: core.ObjectOther, Exists: true}, nil // caller checks Kind before touching Schema
+		return migration.IntrospectedTable{Kind: migration.ObjectOther, Exists: true}, nil // caller checks Kind before touching Schema
 	}
 
 	parsed, err := parseCreateTable(createSQL.String)
 	if err != nil {
-		return core.IntrospectedTable{}, errs.NewMigrationError("SQLiteIntrospector.Introspect", errs.CodeMigrationIntrospectionFailed,
+		return migration.IntrospectedTable{}, errs.NewMigrationError("SQLiteIntrospector.Introspect", errs.CodeMigrationIntrospectionFailed,
 			fmt.Errorf("table %q: %w", physical, err))
 	}
 
 	uniqueSingle, indexes, err := d.introspectIndexes(ctx, physical, parsed)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 	cols, ambiguities, err := d.introspectColumns(ctx, physical, parsed, uniqueSingle)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 	fks, err := d.introspectForeignKeys(ctx, physical, parsed)
 	if err != nil {
-		return core.IntrospectedTable{}, err
+		return migration.IntrospectedTable{}, err
 	}
 
-	return core.IntrospectedTable{
-		Kind:        core.ObjectTable,
+	return migration.IntrospectedTable{
+		Kind:        migration.ObjectTable,
 		Exists:      true,
 		Schema:      schema.Table{Name: name, PhysicalName: physical, Columns: cols, Indexes: indexes, ForeignKeys: fks},
 		Ambiguities: ambiguities,
@@ -195,7 +195,7 @@ func isVirtualTable(createSQL string) bool {
 	return len(toks) > 1 && toks[1].isKeyword("VIRTUAL")
 }
 
-func (d *SQLiteDriver) introspectColumns(ctx context.Context, physical string, parsed *tableSQL, uniqueCols map[string]bool) ([]schema.Column, []core.ColumnAmbiguity, error) {
+func (d *SQLiteDriver) introspectColumns(ctx context.Context, physical string, parsed *tableSQL, uniqueCols map[string]bool) ([]schema.Column, []migration.ColumnAmbiguity, error) {
 	rows, err := d.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", quoteIdent(physical)))
 	if err != nil {
 		return nil, nil, errs.NewMigrationError("SQLiteIntrospector.columns", errs.CodeMigrationQueryFailed, err)
@@ -226,7 +226,7 @@ func (d *SQLiteDriver) introspectColumns(ctx context.Context, physical string, p
 	}
 
 	cols := make([]schema.Column, 0, len(live))
-	var ambiguities []core.ColumnAmbiguity
+	var ambiguities []migration.ColumnAmbiguity
 	for _, c := range live {
 		ct, length, ambig := mapSQLiteType(c.declType)
 		// The renderer declares every AUTOINCREMENT column INTEGER (the only

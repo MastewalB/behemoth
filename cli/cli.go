@@ -36,7 +36,7 @@ import (
 	"os/signal"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/telemetry"
 	bmth "github.com/MastewalB/behemoth/types/init"
 )
@@ -63,7 +63,7 @@ type PrepareFunc func() (*bmth.PreparedApp, error)
 // backend, for example postgres.MigrationBackend(db, app.Resolver). The
 // backend has to be built with app.Resolver. Its Close, when set, is called
 // when the command ends.
-type BackendFunc func(ctx context.Context, app *bmth.PreparedApp) (core.Backend, error)
+type BackendFunc func(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error)
 
 // Main runs the command named by os.Args and exits the process with its
 // exit code. An interrupt cancels the command's context.
@@ -106,9 +106,9 @@ type command struct {
 
 	// refuse returns why the command does not apply to an application on
 	// path, or "". It is asked before the database is opened.
-	refuse func(path core.MigrationPath) string
+	refuse func(path migration.MigrationPath) string
 
-	run func(context.Context, core.MigrationConfig, core.Declared, core.Backend, core.RunOptions) (*core.RunResult, error)
+	run func(context.Context, migration.MigrationConfig, migration.Declared, migration.Backend, migration.RunOptions) (*migration.RunResult, error)
 }
 
 func commands() []command {
@@ -117,21 +117,21 @@ func commands() []command {
 			name:    "generate",
 			summary: "Show the next migration. With -confirm, write it to the migrations folder.",
 			confirm: "write the migration to the migrations folder",
-			refuse:  func(core.MigrationPath) string { return "" },
-			run:     core.Generate,
+			refuse:  func(migration.MigrationPath) string { return "" },
+			run:     migration.Generate,
 		},
 		{
 			name:    "migrate",
 			summary: "Show the migration that is waiting to be applied. With -confirm, apply it.",
 			confirm: "apply the migration to the database",
-			refuse: func(path core.MigrationPath) string {
-				if path == core.PathManaged {
+			refuse: func(path migration.MigrationPath) string {
+				if path == migration.PathManaged {
 					return ""
 				}
 				return fmt.Sprintf("MigrationConfig.Path is %q: this application applies its migrations with its own tool, from the files \"%s generate\" writes. Set the path to %q to have %s apply them",
-					path, program, core.PathManaged, program)
+					path, program, migration.PathManaged, program)
 			},
-			run: core.Migrate,
+			run: migration.Migrate,
 		},
 	}
 }
@@ -141,7 +141,7 @@ func usage(w io.Writer) {
 	for _, cmd := range commands() {
 		fmt.Fprintf(w, "  %-9s %s\n", cmd.name, cmd.summary)
 	}
-	fmt.Fprintf(w, "\ngenerate never changes the database. migrate does, and is for applications\nwhose MigrationConfig.Path is %q.\n", core.PathManaged)
+	fmt.Fprintf(w, "\ngenerate never changes the database. migrate does, and is for applications\nwhose MigrationConfig.Path is %q.\n", migration.PathManaged)
 }
 
 func (cmd command) exec(ctx context.Context, args []string, stdout, stderr io.Writer, prepare PrepareFunc, backend BackendFunc) int {
@@ -193,7 +193,7 @@ func (cmd command) exec(ctx context.Context, args []string, stdout, stderr io.Wr
 		defer be.Close()
 	}
 
-	res, err := cmd.run(ctx, app.Migration, app.Declared(), be, core.RunOptions{
+	res, err := cmd.run(ctx, app.Migration, app.Declared(), be, migration.RunOptions{
 		Confirm: *confirm,
 		// The managed path's warnings (a script that could not be written, a
 		// driver that is not fully atomic) are lines on stderr. No audit
@@ -204,7 +204,7 @@ func (cmd command) exec(ctx context.Context, args []string, stdout, stderr io.Wr
 	if err != nil {
 		code := fail(err)
 		if errs.IsCode(err, errs.CodeMigrationUnresolvedIssues) {
-			fmt.Fprintf(stderr, "Answer the open questions in %s, then run the command again.\n", core.DraftPath(app.Migration))
+			fmt.Fprintf(stderr, "Answer the open questions in %s, then run the command again.\n", migration.DraftPath(app.Migration))
 		}
 		return code
 	}
@@ -216,7 +216,7 @@ func (cmd command) exec(ctx context.Context, args []string, stdout, stderr io.Wr
 // report prints a run's outcome: core's message, the operations of the
 // migration it concerns, and a pointer to the draft when answers were read
 // from it.
-func report(ctx context.Context, w io.Writer, cfg core.MigrationConfig, res *core.RunResult) {
+func report(ctx context.Context, w io.Writer, cfg migration.MigrationConfig, res *migration.RunResult) {
 	fmt.Fprintln(w, res.Message)
 
 	if m := res.Migration; m != nil && len(m.Up) > 0 {
@@ -230,45 +230,45 @@ func report(ctx context.Context, w io.Writer, cfg core.MigrationConfig, res *cor
 	// change behind it out of the migration. This line is how the developer
 	// learns that an answer exists. Showing the questions themselves needs
 	// the draft's format, which core does not export yet.
-	draft := core.DraftPath(cfg)
-	if answers, err := core.NewFilePresenter(draft).Collect(ctx); err == nil && len(answers) > 0 {
+	draft := migration.DraftPath(cfg)
+	if answers, err := migration.NewFilePresenter(draft).Collect(ctx); err == nil && len(answers) > 0 {
 		fmt.Fprintf(w, "\n%d answer(s) were read from %s. A new question starts with its default answer, which changes nothing. Edit the file and run the command again to choose another.\n",
 			len(answers), draft)
 	}
 }
 
 // describe is one operation as a line of the report.
-func describe(op core.SchemaOperation) string {
+func describe(op migration.SchemaOperation) string {
 	switch op.Kind {
-	case core.OpCreateTable:
+	case migration.OpCreateTable:
 		return "create table " + op.Table
-	case core.OpDropTable:
+	case migration.OpDropTable:
 		return "drop table " + op.Table
-	case core.OpAddColumn:
+	case migration.OpAddColumn:
 		return "add column " + op.Table + "." + columnName(op)
-	case core.OpAlterColumn:
+	case migration.OpAlterColumn:
 		return "alter column " + op.Table + "." + columnName(op)
-	case core.OpDropColumn:
+	case migration.OpDropColumn:
 		return "drop column " + op.Table + "." + op.ColumnName
-	case core.OpRenameColumn:
+	case migration.OpRenameColumn:
 		return "rename column " + op.Table + "." + op.ColumnName + " to " + op.NewColumnName
-	case core.OpAddIndex:
+	case migration.OpAddIndex:
 		if op.Index != nil {
 			return "add index " + op.Index.Name + " on " + op.Table
 		}
-	case core.OpDropIndex:
+	case migration.OpDropIndex:
 		return "drop index " + op.IndexName + " on " + op.Table
-	case core.OpAddForeignKey:
+	case migration.OpAddForeignKey:
 		if op.ForeignKey != nil {
 			return "add foreign key " + op.ForeignKey.Name + " on " + op.Table
 		}
-	case core.OpDropForeignKey:
+	case migration.OpDropForeignKey:
 		return "drop foreign key " + op.ForeignKeyName + " on " + op.Table
 	}
 	return string(op.Kind) + " " + op.Table
 }
 
-func columnName(op core.SchemaOperation) string {
+func columnName(op migration.SchemaOperation) string {
 	if op.Column != nil {
 		return op.Column.Name
 	}

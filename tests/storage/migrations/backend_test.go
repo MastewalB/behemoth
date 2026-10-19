@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +15,7 @@ import (
 )
 
 // migrationBackendPostgres drives postgres.MigrationBackend the way the
-// behemoth command line does, through core.Generate, and then checks the two
+// behemoth command line does, through migration.Generate, and then checks the two
 // halves of it that only the managed path uses.
 //
 // The table has a physical name of its own and a renamed column. Rendering,
@@ -35,23 +35,23 @@ func migrationBackendPostgres(t *testing.T, db *sql.DB) {
 	require.NoError(t, registry.Declare(tableModel{name: members.Name}, members))
 	require.NoError(t, registry.Freeze())
 
-	cfg := core.NewMigrationConfig(core.MigrationConfig{FolderPath: filepath.Join(t.TempDir(), "migrations")})
-	resolver := core.NewSchemaResolver()
-	resolver.Freeze(core.BuildSchemaResolverTable(registry, cfg))
+	cfg := migration.NewMigrationConfig(migration.MigrationConfig{FolderPath: filepath.Join(t.TempDir(), "migrations")})
+	resolver := migration.NewSchemaResolver()
+	resolver.Freeze(migration.BuildSchemaResolverTable(registry, cfg))
 
 	// Close is left uncalled: db belongs to the test.
 	backend := postgres.MigrationBackend(db, resolver)
-	declared := core.Declared{Schemas: registry}
+	declared := migration.Declared{Schemas: registry}
 
 	// Without Confirm the migration is reported and nothing is written.
-	res, err := core.Generate(ctx, cfg, declared, backend, core.RunOptions{})
+	res, err := migration.Generate(ctx, cfg, declared, backend, migration.RunOptions{})
 	require.NoError(t, err)
-	require.Equal(t, core.StatusAwaitingConfirmation, res.Status)
+	require.Equal(t, migration.StatusAwaitingConfirmation, res.Status)
 	require.NoFileExists(t, filepath.Join(cfg.FolderPath, "0001_create_members.json"))
 
-	res, err = core.Generate(ctx, cfg, declared, backend, core.RunOptions{Confirm: true})
+	res, err = migration.Generate(ctx, cfg, declared, backend, migration.RunOptions{Confirm: true})
 	require.NoError(t, err)
-	require.Equal(t, core.StatusGenerated, res.Status)
+	require.Equal(t, migration.StatusGenerated, res.Status)
 	require.FileExists(t, filepath.Join(cfg.FolderPath, "0001_create_members.json"))
 
 	script, err := os.ReadFile(filepath.Join(cfg.FolderPath, "0001_create_members.sql"))
@@ -65,21 +65,21 @@ func migrationBackendPostgres(t *testing.T, db *sql.DB) {
 
 	// The introspector reads the physical names back as the declared ones,
 	// so the database now matches.
-	res, err = core.Generate(ctx, cfg, declared, backend, core.RunOptions{Confirm: true})
+	res, err = migration.Generate(ctx, cfg, declared, backend, migration.RunOptions{Confirm: true})
 	require.NoError(t, err)
-	assert.Equal(t, core.StatusNoChanges, res.Status, res.Message)
+	assert.Equal(t, migration.StatusNoChanges, res.Status, res.Message)
 
 	// The managed path's halves: what Driver records, DB reads back.
-	runner := core.NewMigrationRunner(backend.DB, backend.Driver, cfg, nil)
-	next := core.Migration{ID: "0002", Up: []core.SchemaOperation{
+	runner := migration.NewMigrationRunner(backend.DB, backend.Driver, cfg, nil)
+	next := migration.Migration{ID: "0002", Up: []migration.SchemaOperation{
 		addColumnOp(members.Name, schema.Column{Name: "nickname", Type: schema.ColTypeString, Length: 64, Nullable: true}),
 	}}
-	pending, err := runner.Pending(ctx, []core.Migration{next})
+	pending, err := runner.Pending(ctx, []migration.Migration{next})
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	require.NoError(t, runner.Apply(ctx, pending))
 
-	pending, err = runner.Pending(ctx, []core.Migration{next})
+	pending, err = runner.Pending(ctx, []migration.Migration{next})
 	require.NoError(t, err)
 	assert.Empty(t, pending, "the adapter reads the ledger the driver wrote")
 	snapshot, err := runner.LoadSnapshot(ctx)

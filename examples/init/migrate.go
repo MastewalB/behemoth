@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	bmth "github.com/MastewalB/behemoth/types/init"
 )
@@ -27,10 +27,10 @@ func migrate(ctx context.Context, confirm bool) error {
 	defer sqlDB.Close()
 
 	driver := postgres.NewPostgreSQLDriver(sqlDB, app.Resolver)
-	res, err := core.RunGenerateCLI(ctx, app.Migration, app.Declared(), core.GenerateDeps{
+	res, err := migration.RunGenerateCLI(ctx, app.Migration, app.Declared(), migration.GenerateDeps{
 		Introspector: driver,
-		Presenter:    core.NewFilePresenter(filepath.Join(app.Migration.FolderPath, "draft.json")),
-		Generator:    &core.DefaultMigrationGenerator{},
+		Presenter:    migration.NewFilePresenter(filepath.Join(app.Migration.FolderPath, "draft.json")),
+		Generator:    &migration.DefaultMigrationGenerator{},
 		Renderer:     driver,
 	}, confirm)
 	if err != nil {

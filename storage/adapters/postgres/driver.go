@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -18,8 +18,8 @@ import (
 // DriverName is the key used for per-database Column.Overrides lookups.
 const DriverName = "postgres"
 
-// PostgreSQLDriver implements [core.SchemaDriver], [core.MigrationRenderer]
-// and [core.SchemaIntrospector] for PostgreSQL.
+// PostgreSQLDriver implements [migration.SchemaDriver], [migration.MigrationRenderer]
+// and [migration.SchemaIntrospector] for PostgreSQL.
 //
 // Every operation is rendered by pure SQL builders (buildOperationSQL);
 // ApplyMigration executes their output and RenderMigration prints it, so the
@@ -29,29 +29,29 @@ const DriverName = "postgres"
 // (lib/pq, pgx/stdlib, ...) and hands over an opened *sql.DB.
 type PostgreSQLDriver struct {
 	db       *sql.DB
-	resolver core.SchemaResolver
+	resolver migration.SchemaResolver
 }
 
 // NewPostgreSQLDriver returns a driver bound to db, operating in the
 // connection's current_schema(). A nil resolver maps every canonical
 // table/column name to itself.
-func NewPostgreSQLDriver(db *sql.DB, resolver core.SchemaResolver) *PostgreSQLDriver {
+func NewPostgreSQLDriver(db *sql.DB, resolver migration.SchemaResolver) *PostgreSQLDriver {
 	return &PostgreSQLDriver{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
 }
 
 var (
-	_ core.SchemaDriver       = (*PostgreSQLDriver)(nil)
-	_ core.MigrationRenderer  = (*PostgreSQLDriver)(nil)
-	_ core.SchemaIntrospector = (*PostgreSQLDriver)(nil)
-	_ core.ColumnNormalizer   = (*PostgreSQLDriver)(nil)
+	_ migration.SchemaDriver       = (*PostgreSQLDriver)(nil)
+	_ migration.MigrationRenderer  = (*PostgreSQLDriver)(nil)
+	_ migration.SchemaIntrospector = (*PostgreSQLDriver)(nil)
+	_ migration.ColumnNormalizer   = (*PostgreSQLDriver)(nil)
 )
 
-// AtomicityLevel implements [core.SchemaDriver]. Postgres DDL is fully transactional.
-func (d *PostgreSQLDriver) AtomicityLevel() core.AtomicityLevel { return core.AtomicityFull }
+// AtomicityLevel implements [migration.SchemaDriver]. Postgres DDL is fully transactional.
+func (d *PostgreSQLDriver) AtomicityLevel() migration.AtomicityLevel { return migration.AtomicityFull }
 
-// ApplyMigration implements [core.SchemaDriver]: every Up operation, the
+// ApplyMigration implements [migration.SchemaDriver]: every Up operation, the
 // ledger row and the snapshot upsert commit or roll back together.
-func (d *PostgreSQLDriver) ApplyMigration(ctx context.Context, req core.MigrationRequest) error {
+func (d *PostgreSQLDriver) ApplyMigration(ctx context.Context, req migration.MigrationRequest) error {
 	return d.inMigrationTx(ctx, "PostgresDriver.ApplyMigration", req, func(tx *sql.Tx) error {
 		for _, op := range req.Migration.Up {
 			if err := d.applyOperationTx(ctx, tx, op); err != nil {
@@ -62,9 +62,9 @@ func (d *PostgreSQLDriver) ApplyMigration(ctx context.Context, req core.Migratio
 	})
 }
 
-// RecordBaseline implements [core.SchemaDriver]: the same ledger+snapshot
+// RecordBaseline implements [migration.SchemaDriver]: the same ledger+snapshot
 // write as ApplyMigration, with no DDL executed.
-func (d *PostgreSQLDriver) RecordBaseline(ctx context.Context, req core.MigrationRequest) error {
+func (d *PostgreSQLDriver) RecordBaseline(ctx context.Context, req migration.MigrationRequest) error {
 	return d.inMigrationTx(ctx, "PostgresDriver.RecordBaseline", req, func(*sql.Tx) error { return nil })
 }
 
@@ -74,7 +74,7 @@ func (d *PostgreSQLDriver) RecordBaseline(ctx context.Context, req core.Migratio
 // concurrent migrators (e.g. several app instances booting at once): the
 // second one blocks until the first commits, then fails on the duplicate
 // ledger row instead of applying the same DDL twice.
-func (d *PostgreSQLDriver) inMigrationTx(ctx context.Context, op string, req core.MigrationRequest, fn func(tx *sql.Tx) error) error {
+func (d *PostgreSQLDriver) inMigrationTx(ctx context.Context, op string, req migration.MigrationRequest, fn func(tx *sql.Tx) error) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errs.NewMigrationError(op, errs.CodeMigrationBeginTxFailed, err)
@@ -111,7 +111,7 @@ func advisoryLockKey(ledgerTable string) int64 {
 	return int64(h.Sum64())
 }
 
-func (d *PostgreSQLDriver) applyOperationTx(ctx context.Context, tx *sql.Tx, op core.SchemaOperation) error {
+func (d *PostgreSQLDriver) applyOperationTx(ctx context.Context, tx *sql.Tx, op migration.SchemaOperation) error {
 	stmts, err := d.buildOperationSQL(op)
 	if err != nil {
 		return err
@@ -126,7 +126,7 @@ func (d *PostgreSQLDriver) applyOperationTx(ctx context.Context, tx *sql.Tx, op 
 
 // ---- Ledger & snapshot ----
 
-func (d *PostgreSQLDriver) recordTx(ctx context.Context, tx *sql.Tx, req core.MigrationRequest) error {
+func (d *PostgreSQLDriver) recordTx(ctx context.Context, tx *sql.Tx, req migration.MigrationRequest) error {
 	if err := d.ensureBookkeepingTables(ctx, tx, req.LedgerTable, req.SnapshotTable); err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (d *PostgreSQLDriver) ensureBookkeepingTables(ctx context.Context, tx *sql.
 	return nil
 }
 
-func (d *PostgreSQLDriver) insertLedgerTx(ctx context.Context, tx *sql.Tx, table string, entry core.MigrationLedgerEntry) error {
+func (d *PostgreSQLDriver) insertLedgerTx(ctx context.Context, tx *sql.Tx, table string, entry migration.MigrationLedgerEntry) error {
 	query := fmt.Sprintf("INSERT INTO %s (id, applied_at) VALUES ($1, $2)", quoteIdent(table))
 	if _, err := tx.ExecContext(ctx, query, entry.ID, entry.AppliedAt); err != nil {
 		return errs.NewMigrationError("PostgresDriver.insertLedger", errs.CodeMigrationExecFailed, err)
@@ -162,7 +162,7 @@ func (d *PostgreSQLDriver) insertLedgerTx(ctx context.Context, tx *sql.Tx, table
 	return nil
 }
 
-func (d *PostgreSQLDriver) upsertSnapshotTx(ctx context.Context, tx *sql.Tx, table string, snap core.SchemaSnapshot) error {
+func (d *PostgreSQLDriver) upsertSnapshotTx(ctx context.Context, tx *sql.Tx, table string, snap migration.SchemaSnapshot) error {
 	data, err := json.Marshal(snap.Tables)
 	if err != nil {
 		return errs.NewMigrationError("PostgresDriver.upsertSnapshot", errs.CodeMigrationMarshalFailed, err)
@@ -176,14 +176,14 @@ func (d *PostgreSQLDriver) upsertSnapshotTx(ctx context.Context, tx *sql.Tx, tab
 	return nil
 }
 
-// ---- core.MigrationRenderer ----
+// ---- migration.MigrationRenderer ----
 
-// RenderMigration implements [core.MigrationRenderer]. It flattens every
+// RenderMigration implements [migration.MigrationRenderer]. It flattens every
 // operation's statement(s) in Up order, each individually terminated, in the
 // EXACT order ApplyMigration executes them, so the file is a truthful
 // preview/record of what ran or will run. Postgres rendering is pure — no
 // live schema is consulted — so ctx is unused.
-func (d *PostgreSQLDriver) RenderMigration(_ context.Context, m core.Migration) (string, error) {
+func (d *PostgreSQLDriver) RenderMigration(_ context.Context, m migration.Migration) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "-- Migration: %s\n-- Generated: %s\n", m.ID, m.CreatedAt.Format(time.RFC3339))
 	if m.IsBaseline {
@@ -202,7 +202,7 @@ func (d *PostgreSQLDriver) RenderMigration(_ context.Context, m core.Migration) 
 	return b.String(), nil
 }
 
-// FileExtension implements [core.MigrationRenderer].
+// FileExtension implements [migration.MigrationRenderer].
 func (d *PostgreSQLDriver) FileExtension() string { return ".sql" }
 
 // ---- Pure SQL builders ----
@@ -210,7 +210,7 @@ func (d *PostgreSQLDriver) FileExtension() string { return ".sql" }
 // buildOperationSQL is the one switch over op.Kind. It is pure — no
 // execution, no side effects — and an operation missing its required
 // payload is an Internal error, never a silent no-op.
-func (d *PostgreSQLDriver) buildOperationSQL(op core.SchemaOperation) ([]string, error) {
+func (d *PostgreSQLDriver) buildOperationSQL(op migration.SchemaOperation) ([]string, error) {
 	missing := func(field string) ([]string, error) {
 		return nil, errs.NewInternalError("PostgresDriver.buildOperationSQL", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
 	}
@@ -222,40 +222,40 @@ func (d *PostgreSQLDriver) buildOperationSQL(op core.SchemaOperation) ([]string,
 	}
 
 	switch op.Kind {
-	case core.OpCreateTable:
+	case migration.OpCreateTable:
 		if op.NewTable == nil {
 			return missing("NewTable")
 		}
 		return one(d.buildCreateTable(*op.NewTable))
-	case core.OpDropTable:
+	case migration.OpDropTable:
 		return []string{d.buildDropTable(op.Table)}, nil
-	case core.OpAddColumn:
+	case migration.OpAddColumn:
 		if op.Column == nil {
 			return missing("Column")
 		}
 		return one(d.buildAddColumn(op.Table, *op.Column))
-	case core.OpDropColumn:
+	case migration.OpDropColumn:
 		return []string{d.buildDropColumn(op.Table, op.ColumnName)}, nil
-	case core.OpRenameColumn:
+	case migration.OpRenameColumn:
 		return []string{d.buildRenameColumn(op.Table, op.ColumnName, op.NewColumnName)}, nil
-	case core.OpAlterColumn:
+	case migration.OpAlterColumn:
 		if op.Column == nil {
 			return missing("Column")
 		}
 		return d.buildAlterColumn(op.Table, *op.Column, op.PrevColumn)
-	case core.OpAddIndex:
+	case migration.OpAddIndex:
 		if op.Index == nil {
 			return missing("Index")
 		}
 		return one(d.buildAddIndex(op.Table, *op.Index))
-	case core.OpDropIndex:
+	case migration.OpDropIndex:
 		return []string{d.buildDropIndex(op.IndexName)}, nil
-	case core.OpAddForeignKey:
+	case migration.OpAddForeignKey:
 		if op.ForeignKey == nil {
 			return missing("ForeignKey")
 		}
 		return one(d.buildAddForeignKey(op.Table, *op.ForeignKey))
-	case core.OpDropForeignKey:
+	case migration.OpDropForeignKey:
 		return []string{d.buildDropForeignKey(op.Table, op.ForeignKeyName)}, nil
 	default:
 		return nil, errs.NewInternalError("PostgresDriver.buildOperationSQL", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))

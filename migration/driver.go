@@ -1,4 +1,4 @@
-package core
+package migration
 
 import (
 	"context"
@@ -34,7 +34,7 @@ type SchemaDriver interface {
 // migration's .json file. Drivers that can't express migrations as a script
 // simply don't implement it; callers discover it via type assertion, e.g.
 //
-//	renderer, _ := driver.(core.MigrationRenderer)
+//	renderer, _ := driver.(migration.MigrationRenderer)
 type MigrationRenderer interface {
 	// RenderMigration returns the statements that applying m's Up would
 	// execute. It must be called against the database state m will be applied
@@ -56,7 +56,7 @@ type MigrationRenderer interface {
 // normalized declaration instead lets an unchanged column match. Callers
 // discover it via type assertion, e.g.
 //
-//	normalizer, _ := introspector.(core.ColumnNormalizer)
+//	normalizer, _ := introspector.(migration.ColumnNormalizer)
 type ColumnNormalizer interface {
 	// NormalizeColumn returns col as Introspect would report it after the
 	// driver created it in table (canonical name): the same lossy mapping the

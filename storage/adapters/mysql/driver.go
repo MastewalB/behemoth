@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -32,8 +32,8 @@ const (
 	keyPrefixLength = 255
 )
 
-// MySQLDriver implements [core.SchemaDriver], [core.MigrationRenderer],
-// [core.SchemaIntrospector] and [core.ColumnNormalizer] for MySQL 8.0.13 and
+// MySQLDriver implements [migration.SchemaDriver], [migration.MigrationRenderer],
+// [migration.SchemaIntrospector] and [migration.ColumnNormalizer] for MySQL 8.0.13 and
 // later (the first version with expression defaults).
 //
 // It is the migration counterpart of MySQLAdapter: build both with the same
@@ -49,37 +49,37 @@ const (
 // and hands over an opened *sql.DB.
 type MySQLDriver struct {
 	db       *sql.DB
-	resolver core.SchemaResolver
+	resolver migration.SchemaResolver
 }
 
 // NewMySQLDriver returns a driver bound to db, operating in the connection's
 // default database (DATABASE()). A nil resolver maps every canonical
 // table/column name to itself.
-func NewMySQLDriver(db *sql.DB, resolver core.SchemaResolver) *MySQLDriver {
+func NewMySQLDriver(db *sql.DB, resolver migration.SchemaResolver) *MySQLDriver {
 	return &MySQLDriver{db: db, resolver: adapters.ResolverOrIdentity(resolver)}
 }
 
 var (
-	_ core.SchemaDriver       = (*MySQLDriver)(nil)
-	_ core.MigrationRenderer  = (*MySQLDriver)(nil)
-	_ core.SchemaIntrospector = (*MySQLDriver)(nil)
-	_ core.ColumnNormalizer   = (*MySQLDriver)(nil)
+	_ migration.SchemaDriver       = (*MySQLDriver)(nil)
+	_ migration.MigrationRenderer  = (*MySQLDriver)(nil)
+	_ migration.SchemaIntrospector = (*MySQLDriver)(nil)
+	_ migration.ColumnNormalizer   = (*MySQLDriver)(nil)
 )
 
-// AtomicityLevel implements [core.SchemaDriver]. MySQL commits every DDL
+// AtomicityLevel implements [migration.SchemaDriver]. MySQL commits every DDL
 // statement as it runs, so a migration that fails midway keeps the statements
 // that already ran. Only the ledger row and the snapshot are written in a
 // transaction.
-func (d *MySQLDriver) AtomicityLevel() core.AtomicityLevel { return core.AtomicityBestEffort }
+func (d *MySQLDriver) AtomicityLevel() migration.AtomicityLevel { return migration.AtomicityBestEffort }
 
-// ApplyMigration implements [core.SchemaDriver]. It runs every Up operation,
+// ApplyMigration implements [migration.SchemaDriver]. It runs every Up operation,
 // then writes the ledger row and the snapshot in one transaction.
 //
 // Nothing is executed when the migration is malformed or already recorded:
 // both are checked before the first statement. A failure after that leaves the
 // earlier operations applied and the migration unrecorded; the error names
 // them.
-func (d *MySQLDriver) ApplyMigration(ctx context.Context, req core.MigrationRequest) error {
+func (d *MySQLDriver) ApplyMigration(ctx context.Context, req migration.MigrationRequest) error {
 	const op = "MySQLDriver.ApplyMigration"
 	return d.withMigrationLock(ctx, op, req, func(conn *sql.Conn) error {
 		steps, err := d.plan(ctx, conn, req.Migration.Up)
@@ -109,9 +109,9 @@ func (d *MySQLDriver) ApplyMigration(ctx context.Context, req core.MigrationRequ
 	})
 }
 
-// RecordBaseline implements [core.SchemaDriver]: the same ledger and snapshot
+// RecordBaseline implements [migration.SchemaDriver]: the same ledger and snapshot
 // write as ApplyMigration, with no DDL executed.
-func (d *MySQLDriver) RecordBaseline(ctx context.Context, req core.MigrationRequest) error {
+func (d *MySQLDriver) RecordBaseline(ctx context.Context, req migration.MigrationRequest) error {
 	const op = "MySQLDriver.RecordBaseline"
 	return d.withMigrationLock(ctx, op, req, func(conn *sql.Conn) error {
 		if err := d.prepareLedger(ctx, conn, op, req); err != nil {
@@ -130,7 +130,7 @@ func (d *MySQLDriver) RecordBaseline(ctx context.Context, req core.MigrationRequ
 // hold one across DDL anyway. GET_LOCK belongs to the session, which is why
 // everything runs on a single *sql.Conn. The server releases the lock itself
 // if the session dies.
-func (d *MySQLDriver) withMigrationLock(ctx context.Context, op string, req core.MigrationRequest, fn func(conn *sql.Conn) error) error {
+func (d *MySQLDriver) withMigrationLock(ctx context.Context, op string, req migration.MigrationRequest, fn func(conn *sql.Conn) error) error {
 	if req.LedgerTable == "" || req.SnapshotTable == "" {
 		return errs.NewInternalError(op, fmt.Errorf("ledger table %q / snapshot table %q must both be set", req.LedgerTable, req.SnapshotTable))
 	}
@@ -191,7 +191,7 @@ func (d *MySQLDriver) runStep(ctx context.Context, conn *sql.Conn, st step) erro
 // rejects a migration that is already recorded. It runs before any DDL of the
 // migration, because that DDL could not be rolled back when the ledger insert
 // fails on the duplicate afterwards.
-func (d *MySQLDriver) prepareLedger(ctx context.Context, conn *sql.Conn, op string, req core.MigrationRequest) error {
+func (d *MySQLDriver) prepareLedger(ctx context.Context, conn *sql.Conn, op string, req migration.MigrationRequest) error {
 	stmts := []string{
 		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id VARCHAR(255) NOT NULL, applied_at DATETIME(6) NOT NULL, PRIMARY KEY (id))", quoteIdent(req.LedgerTable)),
 		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id INT NOT NULL, version VARCHAR(255) NOT NULL, tables JSON NOT NULL, PRIMARY KEY (id))", quoteIdent(req.SnapshotTable)),
@@ -215,7 +215,7 @@ func (d *MySQLDriver) prepareLedger(ctx context.Context, conn *sql.Conn, op stri
 }
 
 // record writes the ledger row and replaces the snapshot in one transaction.
-func (d *MySQLDriver) record(ctx context.Context, conn *sql.Conn, op string, req core.MigrationRequest) error {
+func (d *MySQLDriver) record(ctx context.Context, conn *sql.Conn, op string, req migration.MigrationRequest) error {
 	data, err := json.Marshal(req.SnapshotUpdate.Tables)
 	if err != nil {
 		return errs.NewMigrationError(op, errs.CodeMigrationMarshalFailed, err)
@@ -243,9 +243,9 @@ func (d *MySQLDriver) record(ctx context.Context, conn *sql.Conn, op string, req
 	return nil
 }
 
-// ---- core.MigrationRenderer ----
+// ---- migration.MigrationRenderer ----
 
-// RenderMigration implements [core.MigrationRenderer]. It prints every
+// RenderMigration implements [migration.MigrationRenderer]. It prints every
 // operation's statements in Up order, as ApplyMigration executes them.
 //
 // It reads the live schema for the type of an indexed column the migration
@@ -254,7 +254,7 @@ func (d *MySQLDriver) record(ctx context.Context, conn *sql.Conn, op string, req
 //
 // The check ApplyMigration makes before adding a NOT NULL column without a
 // default (see buildAddColumn) is not a statement and is not in the script.
-func (d *MySQLDriver) RenderMigration(ctx context.Context, m core.Migration) (string, error) {
+func (d *MySQLDriver) RenderMigration(ctx context.Context, m migration.Migration) (string, error) {
 	steps, err := d.plan(ctx, d.db, m.Up)
 	if err != nil {
 		return "", err
@@ -273,14 +273,14 @@ func (d *MySQLDriver) RenderMigration(ctx context.Context, m core.Migration) (st
 	return b.String(), nil
 }
 
-// FileExtension implements [core.MigrationRenderer].
+// FileExtension implements [migration.MigrationRenderer].
 func (d *MySQLDriver) FileExtension() string { return ".sql" }
 
 // ---- Planning ----
 
 // step is one operation with the statements that apply it.
 type step struct {
-	op    core.SchemaOperation
+	op    migration.SchemaOperation
 	stmts []string
 	// guard, when set, runs right before stmts and stops the migration by
 	// returning an error. It covers a case MySQL accepts silently and the
@@ -290,7 +290,7 @@ type step struct {
 
 // plan turns ops into statements without executing anything. An operation
 // missing its required payload is an Internal error, never a silent no-op.
-func (d *MySQLDriver) plan(ctx context.Context, q adapters.Querier, ops []core.SchemaOperation) ([]step, error) {
+func (d *MySQLDriver) plan(ctx context.Context, q adapters.Querier, ops []migration.SchemaOperation) ([]step, error) {
 	prefixes := &keyPrefixes{ctx: ctx, q: q, resolver: d.resolver, known: map[string]map[string]bool{}}
 	steps := make([]step, 0, len(ops))
 	for _, op := range ops {
@@ -303,7 +303,7 @@ func (d *MySQLDriver) plan(ctx context.Context, q adapters.Querier, ops []core.S
 	return steps, nil
 }
 
-func (d *MySQLDriver) planOperation(op core.SchemaOperation, prefixes *keyPrefixes) (step, error) {
+func (d *MySQLDriver) planOperation(op migration.SchemaOperation, prefixes *keyPrefixes) (step, error) {
 	missing := func(field string) (step, error) {
 		return step{}, errs.NewInternalError("MySQLDriver.planOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
 	}
@@ -315,7 +315,7 @@ func (d *MySQLDriver) planOperation(op core.SchemaOperation, prefixes *keyPrefix
 	}
 
 	switch op.Kind {
-	case core.OpCreateTable:
+	case migration.OpCreateTable:
 		if op.NewTable == nil {
 			return missing("NewTable")
 		}
@@ -323,10 +323,10 @@ func (d *MySQLDriver) planOperation(op core.SchemaOperation, prefixes *keyPrefix
 			prefixes.set(op.NewTable.Name, col)
 		}
 		return one(d.buildCreateTable(*op.NewTable))
-	case core.OpDropTable:
+	case migration.OpDropTable:
 		prefixes.forgetTable(op.Table)
 		return one(d.buildDropTable(op.Table), nil)
-	case core.OpAddColumn:
+	case migration.OpAddColumn:
 		if op.Column == nil {
 			return missing("Column")
 		}
@@ -336,32 +336,32 @@ func (d *MySQLDriver) planOperation(op core.SchemaOperation, prefixes *keyPrefix
 			st.guard = d.emptyTableGuard(op.Table, op.Column.Name)
 		}
 		return st, err
-	case core.OpDropColumn:
+	case migration.OpDropColumn:
 		return one(d.buildDropColumn(op.Table, op.ColumnName), nil)
-	case core.OpRenameColumn:
+	case migration.OpRenameColumn:
 		if err := prefixes.rename(op.Table, op.ColumnName, op.NewColumnName); err != nil {
 			return step{}, err
 		}
 		return one(d.buildRenameColumn(op.Table, op.ColumnName, op.NewColumnName), nil)
-	case core.OpAlterColumn:
+	case migration.OpAlterColumn:
 		if op.Column == nil {
 			return missing("Column")
 		}
 		prefixes.set(op.Table, *op.Column)
 		return one(d.buildAlterColumn(op.Table, *op.Column, op.PrevColumn))
-	case core.OpAddIndex:
+	case migration.OpAddIndex:
 		if op.Index == nil {
 			return missing("Index")
 		}
 		return one(d.buildAddIndex(op.Table, *op.Index, prefixes))
-	case core.OpDropIndex:
+	case migration.OpDropIndex:
 		return one(d.buildDropIndex(op.Table, op.IndexName), nil)
-	case core.OpAddForeignKey:
+	case migration.OpAddForeignKey:
 		if op.ForeignKey == nil {
 			return missing("ForeignKey")
 		}
 		return one(d.buildAddForeignKey(op.Table, *op.ForeignKey))
-	case core.OpDropForeignKey:
+	case migration.OpDropForeignKey:
 		return one(d.buildDropForeignKey(op.Table, op.ForeignKeyName), nil)
 	default:
 		return step{}, errs.NewInternalError("MySQLDriver.planOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
@@ -377,7 +377,7 @@ func (d *MySQLDriver) planOperation(op core.SchemaOperation, prefixes *keyPrefix
 type keyPrefixes struct {
 	ctx      context.Context
 	q        adapters.Querier
-	resolver core.SchemaResolver
+	resolver migration.SchemaResolver
 	known    map[string]map[string]bool // canonical table -> canonical column -> needs a prefix
 }
 

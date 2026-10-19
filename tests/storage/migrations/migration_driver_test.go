@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters/mysql"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -21,7 +21,7 @@ import (
 func TestSQLiteDriver(t *testing.T) {
 	db := openSQLite(t)
 	RunDriverTests(t,
-		func(r core.SchemaResolver) core.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
+		func(r migration.SchemaResolver) migration.SchemaDriver { return sqlite.NewSQLiteDriver(db, r) },
 		NewSQLiteTestManager(db),
 	)
 }
@@ -41,7 +41,7 @@ func TestPostgreSQLDriver(t *testing.T) {
 
 	tm := NewPostgresTestManager(db, nil) // the container is torn down by t.Cleanup, after every subtest
 	RunDriverTests(t,
-		func(r core.SchemaResolver) core.SchemaDriver { return postgres.NewPostgreSQLDriver(db, r) },
+		func(r migration.SchemaResolver) migration.SchemaDriver { return postgres.NewPostgreSQLDriver(db, r) },
 		tm,
 	)
 	runPostgresIntrospectorTests(t, db, tm)
@@ -49,7 +49,7 @@ func TestPostgreSQLDriver(t *testing.T) {
 	t.Run("RunnerUsesConfiguredTables", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		runnerUsesConfiguredTables(t,
-			func(r behemoth.SchemaResolver) core.SchemaDriver { return postgres.NewPostgreSQLDriver(db, r) },
+			func(r behemoth.SchemaResolver) migration.SchemaDriver { return postgres.NewPostgreSQLDriver(db, r) },
 			func(r behemoth.SchemaResolver) behemoth.Database { return postgres.NewPostgresAdapter(db, r) },
 			tm,
 		)
@@ -78,7 +78,7 @@ func TestMySQLDriver(t *testing.T) {
 
 	tm := NewMySQLTestManager(db) // the container is torn down by t.Cleanup, after every subtest
 	RunDriverTests(t,
-		func(r core.SchemaResolver) core.SchemaDriver { return mysql.NewMySQLDriver(db, r) },
+		func(r migration.SchemaResolver) migration.SchemaDriver { return mysql.NewMySQLDriver(db, r) },
 		tm,
 	)
 	runMySQLDriverTests(t, db, tm)
@@ -86,7 +86,7 @@ func TestMySQLDriver(t *testing.T) {
 	t.Run("RunnerUsesConfiguredTables", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		runnerUsesConfiguredTables(t,
-			func(r behemoth.SchemaResolver) core.SchemaDriver { return mysql.NewMySQLDriver(db, r) },
+			func(r behemoth.SchemaResolver) migration.SchemaDriver { return mysql.NewMySQLDriver(db, r) },
 			func(r behemoth.SchemaResolver) behemoth.Database { return mysql.NewMySQLAdapter(db, r) },
 			tm,
 		)
@@ -113,7 +113,7 @@ func TestSQLServerDriver(t *testing.T) {
 
 	tm := NewSQLServerTestManager(db) // the container is torn down by t.Cleanup, after every subtest
 	RunDriverTests(t,
-		func(r core.SchemaResolver) core.SchemaDriver { return sqlserver.NewSQLServerDriver(db, r) },
+		func(r migration.SchemaResolver) migration.SchemaDriver { return sqlserver.NewSQLServerDriver(db, r) },
 		tm,
 	)
 	runSQLServerDriverTests(t, db, tm)
@@ -121,7 +121,7 @@ func TestSQLServerDriver(t *testing.T) {
 	t.Run("RunnerUsesConfiguredTables", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		runnerUsesConfiguredTables(t,
-			func(r behemoth.SchemaResolver) core.SchemaDriver { return sqlserver.NewSQLServerDriver(db, r) },
+			func(r behemoth.SchemaResolver) migration.SchemaDriver { return sqlserver.NewSQLServerDriver(db, r) },
 			func(r behemoth.SchemaResolver) behemoth.Database { return sqlserver.NewSQLServerAdapter(db, r) },
 			tm,
 		)

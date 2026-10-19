@@ -15,7 +15,7 @@ import (
 	"database/sql"
 	"os"
 
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types"
@@ -29,7 +29,7 @@ import (
 func Prepare() (*bmth.PreparedApp, error) {
 	plugins := []types.Plugin{emailpassword.New(emailpassword.Options{})}
 	return bmth.Prepare(plugins, bmth.PrepareConfig{
-		Migration: core.MigrationConfig{
+		Migration: migration.MigrationConfig{
 			FolderPath: "migrations",
 			// Path is left empty: PathGenerateOnly. behemoth writes the
 			// migration files, and the application applies them with its
@@ -42,10 +42,10 @@ func Prepare() (*bmth.PreparedApp, error) {
 // MigrationBackend opens the database the command line compares the
 // declarations with. The backend takes the resolver Prepare built, the one
 // the server gives its adapter.
-func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (core.Backend, error) {
+func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error) {
 	db, err := OpenDB(ctx)
 	if err != nil {
-		return core.Backend{}, err
+		return migration.Backend{}, err
 	}
 	return postgres.MigrationBackend(db, app.Resolver), nil
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/models"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
 	gormAdapter "github.com/MastewalB/behemoth/storage/adapters/gorm"
@@ -82,8 +82,8 @@ func coreSchemaWithForeignKeys(t *testing.T) ([]schema.Table, behemoth.SchemaRes
 	require.NoError(t, reg.ExtendColumn(p))
 	require.NoError(t, reg.Freeze())
 
-	resolver := core.NewSchemaResolver()
-	resolver.Freeze(core.BuildSchemaResolverTable(reg, core.NewMigrationConfig(core.MigrationConfig{})))
+	resolver := migration.NewSchemaResolver()
+	resolver.Freeze(migration.BuildSchemaResolverTable(reg, migration.NewMigrationConfig(migration.MigrationConfig{})))
 	var tables []schema.Table
 	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable, models.AccountTable, models.RateLimitTable, models.AuditLogTable, models.VerificationCodeTable} {
 		t, _ := reg.Lookup(name)
@@ -92,25 +92,25 @@ func coreSchemaWithForeignKeys(t *testing.T) ([]schema.Table, behemoth.SchemaRes
 	return tables, resolver
 }
 
-func createTables(t *testing.T, driver core.SchemaDriver, tables []schema.Table) {
+func createTables(t *testing.T, driver migration.SchemaDriver, tables []schema.Table) {
 	t.Helper()
-	m := core.Migration{ID: "0001"}
-	snapshot := core.SchemaSnapshot{Version: m.ID, Tables: map[string]schema.Table{}}
+	m := migration.Migration{ID: "0001"}
+	snapshot := migration.SchemaSnapshot{Version: m.ID, Tables: map[string]schema.Table{}}
 	for _, table := range tables {
-		m.Up = append(m.Up, core.SchemaOperation{ID: "create_" + table.Name, Kind: core.OpCreateTable, Table: table.Name, NewTable: &table})
+		m.Up = append(m.Up, migration.SchemaOperation{ID: "create_" + table.Name, Kind: migration.OpCreateTable, Table: table.Name, NewTable: &table})
 		for _, idx := range table.Indexes { // CreateTable doesn't: a generated migration adds them as their own operations
-			m.Up = append(m.Up, core.SchemaOperation{ID: "add_" + idx.Name, Kind: core.OpAddIndex, Table: table.Name, Index: &idx})
+			m.Up = append(m.Up, migration.SchemaOperation{ID: "add_" + idx.Name, Kind: migration.OpAddIndex, Table: table.Name, Index: &idx})
 		}
 		snapshot.Tables[table.Name] = table
 	}
 	for _, table := range tables { // after every table exists, as their own operations too
 		for _, fk := range table.ForeignKeys {
-			m.Up = append(m.Up, core.SchemaOperation{ID: "add_" + fk.Name, Kind: core.OpAddForeignKey, Table: table.Name, ForeignKey: &fk})
+			m.Up = append(m.Up, migration.SchemaOperation{ID: "add_" + fk.Name, Kind: migration.OpAddForeignKey, Table: table.Name, ForeignKey: &fk})
 		}
 	}
-	require.NoError(t, driver.ApplyMigration(context.Background(), core.MigrationRequest{
+	require.NoError(t, driver.ApplyMigration(context.Background(), migration.MigrationRequest{
 		Migration:      m,
-		LedgerEntry:    core.MigrationLedgerEntry{ID: m.ID, AppliedAt: time.Now()},
+		LedgerEntry:    migration.MigrationLedgerEntry{ID: m.ID, AppliedAt: time.Now()},
 		SnapshotUpdate: snapshot,
 		LedgerTable:    "behemoth_auth_schema",
 		SnapshotTable:  "behemoth_auth_schema_snapshot",

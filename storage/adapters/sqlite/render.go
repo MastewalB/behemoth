@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 )
 
-// FileExtension implements [core.MigrationRenderer].
+// FileExtension implements [migration.MigrationRenderer].
 func (d *SQLiteDriver) FileExtension() string { return ".sql" }
 
-// RenderMigration implements [core.MigrationRenderer].
+// RenderMigration implements [migration.MigrationRenderer].
 //
 // SQLite's table rebuilds derive their statements from the live schema, so
 // rendering can't be a pure function of the Migration. Instead Up is executed
@@ -24,7 +24,7 @@ func (d *SQLiteDriver) FileExtension() string { return ".sql" }
 //
 // A baseline's Up is never executed; it renders the existing definitions of
 // the tables it records, straight from sqlite_master.
-func (d *SQLiteDriver) RenderMigration(ctx context.Context, m core.Migration) (string, error) {
+func (d *SQLiteDriver) RenderMigration(ctx context.Context, m migration.Migration) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "-- Migration: %s\n-- Generated: %s\n", m.ID, m.CreatedAt.Format(time.RFC3339))
 
@@ -54,7 +54,7 @@ func (d *SQLiteDriver) RenderMigration(ctx context.Context, m core.Migration) (s
 	return b.String(), nil
 }
 
-func (d *SQLiteDriver) renderDryRun(ctx context.Context, m core.Migration) ([]string, error) {
+func (d *SQLiteDriver) renderDryRun(ctx context.Context, m migration.Migration) ([]string, error) {
 	var rec *recordingTx
 	err := d.inMigrationTx(ctx, "SQLiteDriver.RenderMigration", true, func(tx *sql.Tx) error {
 		rec = &recordingTx{execQuerier: tx}
@@ -71,10 +71,10 @@ func (d *SQLiteDriver) renderDryRun(ctx context.Context, m core.Migration) ([]st
 	return rec.stmts, nil
 }
 
-func (d *SQLiteDriver) renderBaseline(ctx context.Context, m core.Migration) ([]string, error) {
+func (d *SQLiteDriver) renderBaseline(ctx context.Context, m migration.Migration) ([]string, error) {
 	var stmts []string
 	for _, op := range m.Up {
-		if op.Kind != core.OpCreateTable {
+		if op.Kind != migration.OpCreateTable {
 			continue // the table's indexes, triggers and FKs come with its sqlite_master entries
 		}
 		phys := d.resolver.Resolve(op.Table)

@@ -12,7 +12,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
@@ -201,21 +201,21 @@ func (m *PostgresTestManager) LedgerIDs(ctx context.Context, ledgerTable string)
 	return ids, rows.Err()
 }
 
-func (m *PostgresTestManager) Snapshot(ctx context.Context, snapshotTable string) (core.SchemaSnapshot, bool, error) {
+func (m *PostgresTestManager) Snapshot(ctx context.Context, snapshotTable string) (migration.SchemaSnapshot, bool, error) {
 	if exists, err := m.TableExists(ctx, snapshotTable); err != nil || !exists {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
-	var snap core.SchemaSnapshot
+	var snap migration.SchemaSnapshot
 	var tables []byte
 	err := m.db.QueryRowContext(ctx, "SELECT version, tables FROM "+quote(snapshotTable)+" WHERE id = 1").Scan(&snap.Version, &tables)
 	if errors.Is(err, sql.ErrNoRows) {
-		return core.SchemaSnapshot{}, false, nil
+		return migration.SchemaSnapshot{}, false, nil
 	}
 	if err != nil {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
 	if err := json.Unmarshal(tables, &snap.Tables); err != nil {
-		return core.SchemaSnapshot{}, false, err
+		return migration.SchemaSnapshot{}, false, err
 	}
 	return snap, true, nil
 }
@@ -231,7 +231,7 @@ func (m *PostgresTestManager) CleanupDatabase(ctx context.Context) {
 	}
 }
 
-// ---- Postgres-specific: core.SchemaIntrospector ----
+// ---- Postgres-specific: migration.SchemaIntrospector ----
 
 // tableModel is the minimal behemoth.Model the schema.Registry needs to accept
 // a declaration; only SchemaName is ever called.
@@ -280,7 +280,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 	// generated migration would: tables, then indexes and FKs as own operations.
 	setup := func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
-		var ops []core.SchemaOperation
+		var ops []migration.SchemaOperation
 		for _, table := range []schema.Table{usersTable(), allTypesTable()} {
 			bare := table
 			bare.Indexes, bare.ForeignKeys = nil, nil
@@ -292,7 +292,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 				ops = append(ops, addForeignKeyOp(table.Name, fk))
 			}
 		}
-		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: ops}, nil)))
+		require.NoError(t, driver.ApplyMigration(ctx, request(migration.Migration{ID: "0001_test", Up: ops}, nil)))
 	}
 
 	t.Run("IntrospectRoundTripsDeclaredSchema", func(t *testing.T) {
@@ -301,7 +301,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		live, err := driver.Introspect(ctx, "all_types")
 		require.NoError(t, err)
 		require.True(t, live.Exists)
-		assert.Equal(t, core.ObjectTable, live.Kind)
+		assert.Equal(t, migration.ObjectTable, live.Kind)
 		assert.Empty(t, live.Ambiguities)
 
 		require.Len(t, live.Schema.Columns, len(declared.Columns))
@@ -341,27 +341,27 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		}
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		require.NoError(t, core.RejectAmbiguousTypes(report))
+		require.NoError(t, migration.RejectAmbiguousTypes(report))
 		require.Len(t, report.Tables, 2)
 		for name, ti := range report.Tables {
 			assert.True(t, ti.ExistsLive, name)
 			assert.Empty(t, ti.Renames, name)
 			for _, f := range ti.Columns {
-				assert.Equal(t, core.ColMatch, f.Kind, "%s.%s", name, f.Name)
+				assert.Equal(t, migration.ColMatch, f.Kind, "%s.%s", name, f.Name)
 			}
 			for _, f := range ti.Indexes {
-				assert.Equal(t, core.IdxMatch, f.Kind, "%s index %s", name, f.Name)
+				assert.Equal(t, migration.IdxMatch, f.Kind, "%s index %s", name, f.Name)
 			}
 			for _, f := range ti.ForeignKeys {
-				assert.Equal(t, core.FKMatch, f.Kind, "%s fk %s", name, f.Name)
+				assert.Equal(t, migration.FKMatch, f.Kind, "%s fk %s", name, f.Name)
 			}
 		}
 	})
 
 	// Declarations the DDL can't preserve exactly — each reads back changed —
-	// still match once normalized (core.ColumnNormalizer).
+	// still match once normalized (migration.ColumnNormalizer).
 	t.Run("NormalizedDeclarationsMatch", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
 		normalized := schema.Table{Name: "normalized", Columns: []schema.Column{
@@ -372,26 +372,26 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 			{Name: "o", Type: schema.ColTypeString, Length: 40, Nullable: true, // override: TEXT
 				Overrides: map[string]schema.ColumnOverride{postgres.DriverName: {Type: schema.ColTypeText}}},
 		}}
-		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: []core.SchemaOperation{createTableOp(normalized)}}, nil)))
+		require.NoError(t, driver.ApplyMigration(ctx, request(migration.Migration{ID: "0001_test", Up: []migration.SchemaOperation{createTableOp(normalized)}}, nil)))
 		registry := schema.NewRegistry()
 		require.NoError(t, registry.Declare(tableModel{name: "normalized"}, normalized))
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		require.NoError(t, core.RejectAmbiguousTypes(report))
+		require.NoError(t, migration.RejectAmbiguousTypes(report))
 		require.Len(t, report.Tables["normalized"].Columns, len(normalized.Columns))
 		for _, f := range report.Tables["normalized"].Columns {
-			assert.Equal(t, core.ColMatch, f.Kind, f.Name)
+			assert.Equal(t, migration.ColMatch, f.Kind, f.Name)
 		}
 
 		// Normalization is what makes them match: hidden from the type
 		// assertion, every one of these columns differs.
-		unnormalized := struct{ core.SchemaIntrospector }{driver}
-		report, err = core.RunIntrospection(ctx, registry, unnormalized, true)
+		unnormalized := struct{ migration.SchemaIntrospector }{driver}
+		report, err = migration.RunIntrospection(ctx, registry, unnormalized, true)
 		require.NoError(t, err)
 		for _, f := range report.Tables["normalized"].Columns {
-			assert.Equal(t, core.ColDiffers, f.Kind, "%s should differ without normalization", f.Name)
+			assert.Equal(t, migration.ColDiffers, f.Kind, "%s should differ without normalization", f.Name)
 		}
 	})
 
@@ -410,14 +410,14 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		}}))
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		kinds := map[string]core.ColumnDivergenceKind{}
+		kinds := map[string]migration.ColumnDivergenceKind{}
 		for _, f := range report.Tables["changed"].Columns {
 			kinds[f.Name] = f.Kind
 		}
-		assert.Equal(t, map[string]core.ColumnDivergenceKind{
-			"id": core.ColMatch, "s": core.ColDiffers, "n": core.ColDiffers, "b": core.ColDiffers,
+		assert.Equal(t, map[string]migration.ColumnDivergenceKind{
+			"id": migration.ColMatch, "s": migration.ColDiffers, "n": migration.ColDiffers, "b": migration.ColDiffers,
 		}, kinds)
 	})
 
@@ -444,16 +444,16 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 			{Name: "sum", Type: schema.ColTypeInteger, Overrides: expr("(1+1)")},
 			{Name: "none", Type: schema.ColTypeText, Nullable: true},
 		}}
-		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: []core.SchemaOperation{createTableOp(defaults)}}, nil)))
+		require.NoError(t, driver.ApplyMigration(ctx, request(migration.Migration{ID: "0001_test", Up: []migration.SchemaOperation{createTableOp(defaults)}}, nil)))
 		registry := schema.NewRegistry()
 		require.NoError(t, registry.Declare(tableModel{name: "defaults"}, defaults))
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
 		require.Len(t, report.Tables["defaults"].Columns, len(defaults.Columns))
 		for _, f := range report.Tables["defaults"].Columns {
-			assert.Equal(t, core.ColMatch, f.Kind, "%s: declared %#v %v, live %#v %v", f.Name, f.Declared.Default, f.Declared.Overrides, f.Live.Default, f.Live.Overrides)
+			assert.Equal(t, migration.ColMatch, f.Kind, "%s: declared %#v %v, live %#v %v", f.Name, f.Declared.Default, f.Declared.Overrides, f.Live.Default, f.Live.Overrides)
 		}
 	})
 
@@ -470,14 +470,14 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		}}))
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		kinds := map[string]core.ColumnDivergenceKind{}
+		kinds := map[string]migration.ColumnDivergenceKind{}
 		for _, f := range report.Tables["changed"].Columns {
 			kinds[f.Name] = f.Kind
 		}
-		assert.Equal(t, map[string]core.ColumnDivergenceKind{
-			"id": core.ColMatch, "kept": core.ColMatch, "changed": core.ColDiffers, "removed": core.ColDiffers,
+		assert.Equal(t, map[string]migration.ColumnDivergenceKind{
+			"id": migration.ColMatch, "kept": migration.ColMatch, "changed": migration.ColDiffers, "removed": migration.ColDiffers,
 		}, kinds)
 	})
 
@@ -525,12 +525,12 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 			CREATE TABLE feelings (id INTEGER PRIMARY KEY, m mood, p POINT, note TEXT)`)
 		require.NoError(t, err)
 
-		introspect := func(t *testing.T, cols []schema.Column, trackExtra bool) (*core.IntrospectionReport, error) {
+		introspect := func(t *testing.T, cols []schema.Column, trackExtra bool) (*migration.IntrospectionReport, error) {
 			registry := schema.NewRegistry()
 			require.NoError(t, registry.Declare(tableModel{name: "feelings"}, schema.Table{Name: "feelings", Columns: cols}))
-			report, err := core.RunIntrospection(ctx, registry, driver, trackExtra)
+			report, err := migration.RunIntrospection(ctx, registry, driver, trackExtra)
 			require.NoError(t, err)
-			return report, core.RejectAmbiguousTypes(report)
+			return report, migration.RejectAmbiguousTypes(report)
 		}
 		id := schema.Column{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true}
 		note := schema.Column{Name: "note", Type: schema.ColTypeText, Nullable: true}
@@ -586,13 +586,13 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		require.NoError(t, registry.Declare(tableModel{name: "users"}, users))
 		require.NoError(t, registry.Declare(tableModel{name: "posts"}, posts))
 		require.NoError(t, registry.Freeze())
-		resolver := core.NewSchemaResolver()
-		resolver.Freeze(core.BuildSchemaResolverTable(registry, core.NewMigrationConfig(core.MigrationConfig{})))
+		resolver := migration.NewSchemaResolver()
+		resolver.Freeze(migration.BuildSchemaResolverTable(registry, migration.NewMigrationConfig(migration.MigrationConfig{})))
 		mapped := postgres.NewPostgreSQLDriver(db, resolver)
 
 		bareUsers, barePosts := users, posts
 		bareUsers.Indexes, barePosts.ForeignKeys = nil, nil
-		require.NoError(t, mapped.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: []core.SchemaOperation{
+		require.NoError(t, mapped.ApplyMigration(ctx, request(migration.Migration{ID: "0001_test", Up: []migration.SchemaOperation{
 			createTableOp(bareUsers), createTableOp(barePosts),
 			addIndexOp("users", users.Indexes[0]),
 			addForeignKeyOp("posts", posts.ForeignKeys[0]),
@@ -606,20 +606,20 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		require.NoError(t, err)
 		assert.Equal(t, "author_id", cols[1].Name)
 
-		report, err := core.RunIntrospection(ctx, registry, mapped, true)
+		report, err := migration.RunIntrospection(ctx, registry, mapped, true)
 		require.NoError(t, err)
 		require.Len(t, report.Tables, 2)
 		for name, ti := range report.Tables {
 			assert.True(t, ti.ExistsLive, name)
 			assert.Empty(t, ti.Renames, "%s: a physical name must not look like a rename", name)
 			for _, f := range ti.Columns {
-				assert.Equal(t, core.ColMatch, f.Kind, "%s.%s", name, f.Name)
+				assert.Equal(t, migration.ColMatch, f.Kind, "%s.%s", name, f.Name)
 			}
 			for _, f := range ti.Indexes {
-				assert.Equal(t, core.IdxMatch, f.Kind, "%s index %s", name, f.Name)
+				assert.Equal(t, migration.IdxMatch, f.Kind, "%s index %s", name, f.Name)
 			}
 			for _, f := range ti.ForeignKeys {
-				assert.Equal(t, core.FKMatch, f.Kind, "%s fk %s", name, f.Name)
+				assert.Equal(t, migration.FKMatch, f.Kind, "%s fk %s", name, f.Name)
 			}
 		}
 
@@ -641,7 +641,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		assert.True(t, exists)
 		live, err := driver.Introspect(ctx, "active_users")
 		require.NoError(t, err)
-		assert.Equal(t, core.ObjectView, live.Kind)
+		assert.Equal(t, migration.ObjectView, live.Kind)
 
 		exists, err = driver.TableExists(ctx, "nope")
 		require.NoError(t, err)
@@ -669,14 +669,14 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		next := schema.Column{Name: "name", Type: schema.ColTypeText, Nullable: true, Unique: true}
 		op := alterColumnOp("users", next)
 		op.PrevColumn = &prev
-		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0002_test", Up: []core.SchemaOperation{op}}, nil)))
+		require.NoError(t, driver.ApplyMigration(ctx, request(migration.Migration{ID: "0002_test", Up: []migration.SchemaOperation{op}}, nil)))
 
 		require.NoError(t, tm.Insert(ctx, "users", map[string]any{"id": 1, "email": "a@example.com", "name": "Ada"}))
 		assert.Error(t, tm.Insert(ctx, "users", map[string]any{"id": 2, "email": "b@example.com", "name": "Ada"}), "UNIQUE added")
 
 		back := alterColumnOp("users", prev)
 		back.PrevColumn = &next
-		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0003_test", Up: []core.SchemaOperation{back}}, nil)))
+		require.NoError(t, driver.ApplyMigration(ctx, request(migration.Migration{ID: "0003_test", Up: []migration.SchemaOperation{back}}, nil)))
 		assert.NoError(t, tm.Insert(ctx, "users", map[string]any{"id": 4, "email": "d@example.com", "name": "Ada"}), "UNIQUE dropped")
 	})
 }

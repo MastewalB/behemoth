@@ -15,7 +15,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/store"
@@ -32,7 +32,7 @@ import (
 // it touches a live connection: Prepare must stay runnable from a migration
 // CLI that never boots the application.
 type PrepareConfig struct {
-	Migration core.MigrationConfig
+	Migration migration.MigrationConfig
 
 	// AppName is the owner name of everything the application itself
 	// declares or registers: its tables (Schema) and its hook handlers
@@ -50,7 +50,7 @@ type PrepareConfig struct {
 	// operations by their DependsOn. Each is emitted into exactly one
 	// generated migration, recorded there by Name; names are therefore
 	// permanent and must never be reused.
-	Migrations []core.CustomMigration
+	Migrations []migration.CustomMigration
 }
 
 // Owner names that are not plugins. coreOwner owns what behemoth itself
@@ -75,8 +75,8 @@ type PreparedApp struct {
 	RateLimits types.RateLimitCatalog
 	Schemas    schema.Registry
 	Resolver   behemoth.SchemaResolver
-	Migration  core.MigrationConfig
-	Custom     []core.CustomMigration
+	Migration  migration.MigrationConfig
+	Custom     []migration.CustomMigration
 
 	plugins []types.Plugin // kept so Boot runs exactly the set that was prepared
 }
@@ -96,7 +96,7 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	if err := checkOwnerNames(plugins, appName); err != nil {
 		return nil, err
 	}
-	if err := core.ValidateCustomMigrations(cfg.Migrations); err != nil {
+	if err := migration.ValidateCustomMigrations(cfg.Migrations); err != nil {
 		return nil, err
 	}
 
@@ -153,9 +153,9 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 
 	// The resolver is derived from the frozen registry, never authored
 	// separately, so it is complete before any adapter or driver exists.
-	migrationCfg := core.NewMigrationConfig(cfg.Migration)
-	resolver := core.NewSchemaResolver()
-	resolver.Freeze(core.BuildSchemaResolverTable(schemaRegistry, migrationCfg))
+	migrationCfg := migration.NewMigrationConfig(cfg.Migration)
+	resolver := migration.NewSchemaResolver()
+	resolver.Freeze(migration.BuildSchemaResolverTable(schemaRegistry, migrationCfg))
 
 	return &PreparedApp{
 		Order:      order,
@@ -173,8 +173,8 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 
 // Declared is what migration tooling converges the database on: every
 // declared table plus the application's custom migrations.
-func (a *PreparedApp) Declared() core.Declared {
-	return core.Declared{Schemas: a.Schemas, Custom: a.Custom}
+func (a *PreparedApp) Declared() migration.Declared {
+	return migration.Declared{Schemas: a.Schemas, Custom: a.Custom}
 }
 
 // BootConfig is everything Boot needs beyond the prepared app and the

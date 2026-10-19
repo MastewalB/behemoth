@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// ---- SQLite-specific: core.SchemaIntrospector ----
+// ---- SQLite-specific: migration.SchemaIntrospector ----
 
 // sqliteAllTypesTable exercises every canonical type the SQLite renderer keeps
 // distinct, plus the column features the introspector has to map back. uuid,
@@ -65,7 +65,7 @@ func TestSQLiteIntrospector(t *testing.T) {
 	setup := func(t *testing.T, tables ...schema.Table) {
 		t.Helper()
 		require.NoError(t, tm.DropAllTables(ctx))
-		var ops []core.SchemaOperation
+		var ops []migration.SchemaOperation
 		for _, table := range tables {
 			bare := table
 			bare.Indexes, bare.ForeignKeys = nil, nil
@@ -77,7 +77,7 @@ func TestSQLiteIntrospector(t *testing.T) {
 				ops = append(ops, addForeignKeyOp(table.Name, fk))
 			}
 		}
-		require.NoError(t, driver.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: ops}, nil)))
+		require.NoError(t, driver.ApplyMigration(ctx, request(migration.Migration{ID: "0001_test", Up: ops}, nil)))
 	}
 
 	t.Run("IntrospectRoundTripsDeclaredSchema", func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestSQLiteIntrospector(t *testing.T) {
 		live, err := driver.Introspect(ctx, "all_types")
 		require.NoError(t, err)
 		require.True(t, live.Exists)
-		assert.Equal(t, core.ObjectTable, live.Kind)
+		assert.Equal(t, migration.ObjectTable, live.Kind)
 		assert.Empty(t, live.Ambiguities)
 
 		require.Len(t, live.Schema.Columns, len(declared.Columns))
@@ -124,27 +124,27 @@ func TestSQLiteIntrospector(t *testing.T) {
 		}
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		require.NoError(t, core.RejectAmbiguousTypes(report))
+		require.NoError(t, migration.RejectAmbiguousTypes(report))
 		require.Len(t, report.Tables, 2)
 		for name, ti := range report.Tables {
 			assert.True(t, ti.ExistsLive, name)
 			assert.Empty(t, ti.Renames, name)
 			for _, f := range ti.Columns {
-				assert.Equal(t, core.ColMatch, f.Kind, "%s.%s", name, f.Name)
+				assert.Equal(t, migration.ColMatch, f.Kind, "%s.%s", name, f.Name)
 			}
 			for _, f := range ti.Indexes {
-				assert.Equal(t, core.IdxMatch, f.Kind, "%s index %s", name, f.Name)
+				assert.Equal(t, migration.IdxMatch, f.Kind, "%s index %s", name, f.Name)
 			}
 			for _, f := range ti.ForeignKeys {
-				assert.Equal(t, core.FKMatch, f.Kind, "%s fk %s", name, f.Name)
+				assert.Equal(t, migration.FKMatch, f.Kind, "%s fk %s", name, f.Name)
 			}
 		}
 	})
 
 	// Declarations the DDL can't preserve exactly — each reads back changed —
-	// still match once normalized (core.ColumnNormalizer).
+	// still match once normalized (migration.ColumnNormalizer).
 	t.Run("NormalizedDeclarationsMatch", func(t *testing.T) {
 		normalized := schema.Table{Name: "normalized", Columns: []schema.Column{
 			{Name: "id", Type: schema.ColTypeBigInt, PrimaryKey: true, AutoInc: true, Nullable: true, Unique: true}, // INTEGER rowid alias: integer, never NULL, not UNIQUE
@@ -161,21 +161,21 @@ func TestSQLiteIntrospector(t *testing.T) {
 		require.NoError(t, registry.Declare(tableModel{name: "normalized"}, normalized))
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		require.NoError(t, core.RejectAmbiguousTypes(report))
+		require.NoError(t, migration.RejectAmbiguousTypes(report))
 		require.Len(t, report.Tables["normalized"].Columns, len(normalized.Columns))
 		for _, f := range report.Tables["normalized"].Columns {
-			assert.Equal(t, core.ColMatch, f.Kind, f.Name)
+			assert.Equal(t, migration.ColMatch, f.Kind, f.Name)
 		}
 
 		// Normalization is what makes them match: hidden from the type
 		// assertion, every one of these columns differs.
-		unnormalized := struct{ core.SchemaIntrospector }{driver}
-		report, err = core.RunIntrospection(ctx, registry, unnormalized, true)
+		unnormalized := struct{ migration.SchemaIntrospector }{driver}
+		report, err = migration.RunIntrospection(ctx, registry, unnormalized, true)
 		require.NoError(t, err)
 		for _, f := range report.Tables["normalized"].Columns {
-			assert.Equal(t, core.ColDiffers, f.Kind, "%s should differ without normalization", f.Name)
+			assert.Equal(t, migration.ColDiffers, f.Kind, "%s should differ without normalization", f.Name)
 		}
 	})
 
@@ -193,14 +193,14 @@ func TestSQLiteIntrospector(t *testing.T) {
 		}}))
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		kinds := map[string]core.ColumnDivergenceKind{}
+		kinds := map[string]migration.ColumnDivergenceKind{}
 		for _, f := range report.Tables["changed"].Columns {
 			kinds[f.Name] = f.Kind
 		}
-		assert.Equal(t, map[string]core.ColumnDivergenceKind{
-			"id": core.ColMatch, "s": core.ColDiffers, "n": core.ColDiffers, "b": core.ColDiffers,
+		assert.Equal(t, map[string]migration.ColumnDivergenceKind{
+			"id": migration.ColMatch, "s": migration.ColDiffers, "n": migration.ColDiffers, "b": migration.ColDiffers,
 		}, kinds)
 	})
 
@@ -230,11 +230,11 @@ func TestSQLiteIntrospector(t *testing.T) {
 		require.NoError(t, registry.Declare(tableModel{name: "defaults"}, defaults))
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
 		require.Len(t, report.Tables["defaults"].Columns, len(defaults.Columns))
 		for _, f := range report.Tables["defaults"].Columns {
-			assert.Equal(t, core.ColMatch, f.Kind, "%s: declared %#v %v, live %#v %v", f.Name, f.Declared.Default, f.Declared.Overrides, f.Live.Default, f.Live.Overrides)
+			assert.Equal(t, migration.ColMatch, f.Kind, "%s: declared %#v %v, live %#v %v", f.Name, f.Declared.Default, f.Declared.Overrides, f.Live.Default, f.Live.Overrides)
 		}
 	})
 
@@ -250,14 +250,14 @@ func TestSQLiteIntrospector(t *testing.T) {
 		}}))
 		require.NoError(t, registry.Freeze())
 
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		kinds := map[string]core.ColumnDivergenceKind{}
+		kinds := map[string]migration.ColumnDivergenceKind{}
 		for _, f := range report.Tables["changed"].Columns {
 			kinds[f.Name] = f.Kind
 		}
-		assert.Equal(t, map[string]core.ColumnDivergenceKind{
-			"id": core.ColMatch, "kept": core.ColMatch, "changed": core.ColDiffers, "removed": core.ColDiffers,
+		assert.Equal(t, map[string]migration.ColumnDivergenceKind{
+			"id": migration.ColMatch, "kept": migration.ColMatch, "changed": migration.ColDiffers, "removed": migration.ColDiffers,
 		}, kinds)
 	})
 
@@ -336,9 +336,9 @@ func TestSQLiteIntrospector(t *testing.T) {
 		require.NoError(t, registry.Declare(tableModel{name: "odd"}, schema.Table{Name: "odd", Columns: []schema.Column{
 			{Name: "id", Type: schema.ColTypeInteger, PrimaryKey: true},
 		}}))
-		report, err := core.RunIntrospection(ctx, registry, driver, true)
+		report, err := migration.RunIntrospection(ctx, registry, driver, true)
 		require.NoError(t, err)
-		err = core.RejectAmbiguousTypes(report)
+		err = migration.RejectAmbiguousTypes(report)
 		require.Error(t, err)
 		assert.True(t, errs.IsCode(err, errs.CodeMigrationUnmappableColumnType))
 	})
@@ -348,7 +348,7 @@ func TestSQLiteIntrospector(t *testing.T) {
 		exec(t, `CREATE VIEW active_users AS SELECT * FROM users`, `CREATE INDEX idx_users_name ON users (name)`)
 		t.Cleanup(func() { db.ExecContext(ctx, `DROP VIEW IF EXISTS active_users`) })
 
-		for name, kind := range map[string]core.ObjectKind{"active_users": core.ObjectView, "idx_users_name": core.ObjectOther} {
+		for name, kind := range map[string]migration.ObjectKind{"active_users": migration.ObjectView, "idx_users_name": migration.ObjectOther} {
 			exists, err := driver.TableExists(ctx, name)
 			require.NoError(t, err)
 			assert.True(t, exists, name)
@@ -392,13 +392,13 @@ func TestSQLiteIntrospector(t *testing.T) {
 		require.NoError(t, registry.Declare(tableModel{name: "users"}, users))
 		require.NoError(t, registry.Declare(tableModel{name: "posts"}, posts))
 		require.NoError(t, registry.Freeze())
-		resolver := core.NewSchemaResolver()
-		resolver.Freeze(core.BuildSchemaResolverTable(registry, core.NewMigrationConfig(core.MigrationConfig{})))
+		resolver := migration.NewSchemaResolver()
+		resolver.Freeze(migration.BuildSchemaResolverTable(registry, migration.NewMigrationConfig(migration.MigrationConfig{})))
 		mapped := sqlite.NewSQLiteDriver(db, resolver)
 
 		bareUsers, barePosts := users, posts
 		bareUsers.Indexes, barePosts.ForeignKeys = nil, nil
-		require.NoError(t, mapped.ApplyMigration(ctx, request(core.Migration{ID: "0001_test", Up: []core.SchemaOperation{
+		require.NoError(t, mapped.ApplyMigration(ctx, request(migration.Migration{ID: "0001_test", Up: []migration.SchemaOperation{
 			createTableOp(bareUsers), createTableOp(barePosts),
 			addIndexOp("users", users.Indexes[0]),
 			addForeignKeyOp("posts", posts.ForeignKeys[0]),
@@ -408,20 +408,20 @@ func TestSQLiteIntrospector(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists, "physically, only the physical names exist")
 
-		report, err := core.RunIntrospection(ctx, registry, mapped, true)
+		report, err := migration.RunIntrospection(ctx, registry, mapped, true)
 		require.NoError(t, err)
 		require.Len(t, report.Tables, 2)
 		for name, ti := range report.Tables {
 			assert.True(t, ti.ExistsLive, name)
 			assert.Empty(t, ti.Renames, "%s: a physical name must not look like a rename", name)
 			for _, f := range ti.Columns {
-				assert.Equal(t, core.ColMatch, f.Kind, "%s.%s", name, f.Name)
+				assert.Equal(t, migration.ColMatch, f.Kind, "%s.%s", name, f.Name)
 			}
 			for _, f := range ti.Indexes {
-				assert.Equal(t, core.IdxMatch, f.Kind, "%s index %s", name, f.Name)
+				assert.Equal(t, migration.IdxMatch, f.Kind, "%s index %s", name, f.Name)
 			}
 			for _, f := range ti.ForeignKeys {
-				assert.Equal(t, core.FKMatch, f.Kind, "%s fk %s", name, f.Name)
+				assert.Equal(t, migration.FKMatch, f.Kind, "%s fk %s", name, f.Name)
 			}
 		}
 	})
@@ -431,7 +431,7 @@ func TestSQLiteIntrospector(t *testing.T) {
 	// what ApplyMigration would — read back through the introspector.
 	t.Run("RenderedScriptMatchesApply", func(t *testing.T) {
 		require.NoError(t, tm.DropAllTables(ctx))
-		var ops []core.SchemaOperation
+		var ops []migration.SchemaOperation
 		for _, table := range []schema.Table{usersTable(), sqliteAllTypesTable()} {
 			bare := table
 			bare.Indexes, bare.ForeignKeys = nil, nil
@@ -443,7 +443,7 @@ func TestSQLiteIntrospector(t *testing.T) {
 				ops = append(ops, addForeignKeyOp(table.Name, fk))
 			}
 		}
-		m := core.Migration{ID: "0001_test", Up: ops}
+		m := migration.Migration{ID: "0001_test", Up: ops}
 		script, err := driver.RenderMigration(ctx, m)
 		require.NoError(t, err)
 		assert.Equal(t, ".sql", driver.FileExtension())

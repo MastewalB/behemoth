@@ -211,24 +211,24 @@ func TestLauncherRunsAnApplication(t *testing.T) {
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	bmth "github.com/MastewalB/behemoth/types/init"
 )
 
 func Prepare() (*bmth.PreparedApp, error) {
-	return bmth.Prepare(nil, bmth.PrepareConfig{Migration: core.MigrationConfig{FolderPath: "migrations"}})
+	return bmth.Prepare(nil, bmth.PrepareConfig{Migration: migration.MigrationConfig{FolderPath: "migrations"}})
 }
 
-func MigrationBackend(context.Context, *bmth.PreparedApp) (core.Backend, error) {
-	return core.Backend{Introspector: empty{}}, nil
+func MigrationBackend(context.Context, *bmth.PreparedApp) (migration.Backend, error) {
+	return migration.Backend{Introspector: empty{}}, nil
 }
 
 // empty is a database without tables.
 type empty struct{}
 
 func (empty) TableExists(context.Context, string) (bool, error) { return false, nil }
-func (empty) Introspect(context.Context, string) (core.IntrospectedTable, error) {
-	return core.IntrospectedTable{}, nil
+func (empty) Introspect(context.Context, string) (migration.IntrospectedTable, error) {
+	return migration.IntrospectedTable{}, nil
 }
 `,
 	})

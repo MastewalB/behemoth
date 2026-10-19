@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"os"
 
-	"github.com/MastewalB/behemoth/migration/core"
+	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/magiclink"
 	"github.com/MastewalB/behemoth/types"
@@ -36,7 +36,7 @@ func plugins() ([]types.Plugin, *emailpassword.Plugin) {
 
 func prepareConfig() bmth.PrepareConfig {
 	return bmth.PrepareConfig{
-		Migration: core.MigrationConfig{
+		Migration: migration.MigrationConfig{
 			FolderPath: "migrations",
 			// Path is left empty: PathGenerateOnly, behemoth writes files
 			// and never touches the database schema on its own.
