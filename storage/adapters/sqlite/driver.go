@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -62,7 +62,7 @@ func (d *SQLiteDriver) ApplyMigration(ctx context.Context, req core.MigrationReq
 	return d.inMigrationTx(ctx, "SQLiteDriver.ApplyMigration", false, func(tx *sql.Tx) error {
 		for _, op := range req.Migration.Up {
 			if err := d.applyOperation(ctx, tx, op); err != nil {
-				return behemotherr.WrapOp("SQLiteDriver.ApplyMigration", fmt.Sprintf("operation %q (%s on %s)", op.ID, op.Kind, op.Table), err)
+				return errs.WrapOp("SQLiteDriver.ApplyMigration", fmt.Sprintf("operation %q (%s on %s)", op.ID, op.Kind, op.Table), err)
 			}
 		}
 		return d.recordTx(ctx, tx, req)
@@ -90,30 +90,30 @@ func (d *SQLiteDriver) RecordBaseline(ctx context.Context, req core.MigrationReq
 func (d *SQLiteDriver) inMigrationTx(ctx context.Context, op string, dryRun bool, fn func(tx *sql.Tx) error) (err error) {
 	conn, err := d.db.Conn(ctx)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationConnFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationConnFailed, err)
 	}
 	defer conn.Close()
 
 	var fkEnabled bool
 	if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fkEnabled); err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationPragmaFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationPragmaFailed, err)
 	}
 	if fkEnabled {
 		if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
-			return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationPragmaFailed, err)
+			return errs.NewMigrationError(op, errs.CodeMigrationPragmaFailed, err)
 		}
 		defer func() {
 			// context.Background: the connection returns to the pool either way,
 			// and must never go back with enforcement silently disabled.
 			if _, restoreErr := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON"); restoreErr != nil && err == nil {
-				err = behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationPragmaFailed, restoreErr)
+				err = errs.NewMigrationError(op, errs.CodeMigrationPragmaFailed, restoreErr)
 			}
 		}()
 	}
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationBeginTxFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationBeginTxFailed, err)
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -128,18 +128,18 @@ func (d *SQLiteDriver) inMigrationTx(ctx context.Context, op string, dryRun bool
 	}
 	if dryRun {
 		if err := tx.Rollback(); err != nil {
-			return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationRollbackFailed, err)
+			return errs.NewMigrationError(op, errs.CodeMigrationRollbackFailed, err)
 		}
 		return nil
 	}
 	if fkEnabled {
 		if err := checkForeignKeys(ctx, tx); err != nil {
 			tx.Rollback()
-			return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationForeignKeyViolation, err)
+			return errs.NewMigrationError(op, errs.CodeMigrationForeignKeyViolation, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationCommitFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationCommitFailed, err)
 	}
 	return nil
 }
@@ -179,7 +179,7 @@ func (d *SQLiteDriver) recordTx(ctx context.Context, tx *sql.Tx, req core.Migrat
 // migration and the tables recording it appear atomically.
 func (d *SQLiteDriver) ensureBookkeepingTables(ctx context.Context, tx *sql.Tx, ledgerTable, snapshotTable string) error {
 	if ledgerTable == "" || snapshotTable == "" {
-		return behemotherr.NewInternalError("SQLiteDriver.ensureBookkeepingTables", fmt.Errorf("ledger table %q / snapshot table %q must both be set", ledgerTable, snapshotTable))
+		return errs.NewInternalError("SQLiteDriver.ensureBookkeepingTables", fmt.Errorf("ledger table %q / snapshot table %q must both be set", ledgerTable, snapshotTable))
 	}
 	stmts := []string{
 		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id TEXT PRIMARY KEY NOT NULL, applied_at TIMESTAMP NOT NULL)", quoteIdent(ledgerTable)),
@@ -187,7 +187,7 @@ func (d *SQLiteDriver) ensureBookkeepingTables(ctx context.Context, tx *sql.Tx, 
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return behemotherr.NewMigrationError("SQLiteDriver.ensureBookkeepingTables", behemotherr.ErrorCodeMigrationExecFailed, err)
+			return errs.NewMigrationError("SQLiteDriver.ensureBookkeepingTables", errs.CodeMigrationExecFailed, err)
 		}
 	}
 	return nil
@@ -196,7 +196,7 @@ func (d *SQLiteDriver) ensureBookkeepingTables(ctx context.Context, tx *sql.Tx, 
 func (d *SQLiteDriver) insertLedger(ctx context.Context, tx *sql.Tx, table string, entry core.MigrationLedgerEntry) error {
 	query := fmt.Sprintf("INSERT INTO %s (id, applied_at) VALUES (?, ?)", quoteIdent(table))
 	if _, err := tx.ExecContext(ctx, query, entry.ID, entry.AppliedAt.UTC()); err != nil {
-		return behemotherr.NewMigrationError("SQLiteDriver.insertLedger", behemotherr.ErrorCodeMigrationExecFailed, err)
+		return errs.NewMigrationError("SQLiteDriver.insertLedger", errs.CodeMigrationExecFailed, err)
 	}
 	return nil
 }
@@ -204,12 +204,12 @@ func (d *SQLiteDriver) insertLedger(ctx context.Context, tx *sql.Tx, table strin
 func (d *SQLiteDriver) upsertSnapshot(ctx context.Context, tx *sql.Tx, table string, snap core.SchemaSnapshot) error {
 	data, err := json.Marshal(snap.Tables)
 	if err != nil {
-		return behemotherr.NewMigrationError("SQLiteDriver.upsertSnapshot", behemotherr.ErrorCodeMigrationMarshalFailed, err)
+		return errs.NewMigrationError("SQLiteDriver.upsertSnapshot", errs.CodeMigrationMarshalFailed, err)
 	}
 	query := fmt.Sprintf(`INSERT INTO %s (id, version, tables) VALUES (1, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET version = excluded.version, tables = excluded.tables`, quoteIdent(table))
 	if _, err := tx.ExecContext(ctx, query, snap.Version, string(data)); err != nil {
-		return behemotherr.NewMigrationError("SQLiteDriver.upsertSnapshot", behemotherr.ErrorCodeMigrationExecFailed, err)
+		return errs.NewMigrationError("SQLiteDriver.upsertSnapshot", errs.CodeMigrationExecFailed, err)
 	}
 	return nil
 }
@@ -220,7 +220,7 @@ func (d *SQLiteDriver) upsertSnapshot(ctx context.Context, tx *sql.Tx, table str
 // Internal error, never a silent no-op.
 func (d *SQLiteDriver) applyOperation(ctx context.Context, tx execQuerier, op core.SchemaOperation) error {
 	missing := func(field string) error {
-		return behemotherr.NewInternalError("SQLiteDriver.applyOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
+		return errs.NewInternalError("SQLiteDriver.applyOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
 	}
 
 	switch op.Kind {
@@ -260,13 +260,13 @@ func (d *SQLiteDriver) applyOperation(ctx context.Context, tx execQuerier, op co
 	case core.OpDropForeignKey:
 		return d.dropForeignKey(ctx, tx, op.Table, op.ForeignKeyName)
 	default:
-		return behemotherr.NewInternalError("SQLiteDriver.applyOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
+		return errs.NewInternalError("SQLiteDriver.applyOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
 	}
 }
 
 func execDDL(ctx context.Context, tx execQuerier, op, query string) error {
 	if _, err := tx.ExecContext(ctx, query); err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationExecFailed, fmt.Errorf("%w (sql: %s)", err, query))
+		return errs.NewMigrationError(op, errs.CodeMigrationExecFailed, fmt.Errorf("%w (sql: %s)", err, query))
 	}
 	return nil
 }
@@ -384,7 +384,7 @@ func (d *SQLiteDriver) alterColumn(ctx context.Context, tx execQuerier, table st
 
 func (d *SQLiteDriver) addIndex(ctx context.Context, tx execQuerier, table string, idx schema.Index) error {
 	if len(idx.Columns) == 0 {
-		return behemotherr.NewMigrationError("SQLiteDriver.AddIndex", behemotherr.ErrorCodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
+		return errs.NewMigrationError("SQLiteDriver.AddIndex", errs.CodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
 	}
 	cols := make([]string, len(idx.Columns))
 	for i, c := range idx.Columns {
@@ -408,7 +408,7 @@ func (d *SQLiteDriver) dropIndex(ctx context.Context, tx execQuerier, indexName 
 // doesn't report constraint names.
 func (d *SQLiteDriver) addForeignKey(ctx context.Context, tx execQuerier, table string, fk schema.ForeignKey) error {
 	if len(fk.Columns) == 0 || len(fk.Columns) != len(fk.RefColumns) {
-		return behemotherr.NewMigrationError("SQLiteDriver.AddForeignKey", behemotherr.ErrorCodeMigrationInvalidForeignKey,
+		return errs.NewMigrationError("SQLiteDriver.AddForeignKey", errs.CodeMigrationInvalidForeignKey,
 			fmt.Errorf("foreign key %q: %d column(s) vs %d referenced column(s)", fk.Name, len(fk.Columns), len(fk.RefColumns)))
 	}
 	cols := make([]string, len(fk.Columns))
@@ -488,11 +488,11 @@ func (d *SQLiteDriver) renderColumnDefinition(table string, raw schema.Column, i
 	if col.AutoInc {
 		// SQLite only supports AUTOINCREMENT on a lone INTEGER PRIMARY KEY.
 		if !col.PrimaryKey || !inlinePK {
-			return "", behemotherr.NewMigrationError("SQLiteDriver.renderColumnDefinition", behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
+			return "", errs.NewMigrationError("SQLiteDriver.renderColumnDefinition", errs.CodeMigrationUnsupportedAutoIncrement,
 				fmt.Errorf("column %q: SQLite supports AUTOINCREMENT only on a single-column primary key", col.Name))
 		}
 		if col.Type != schema.ColTypeInteger && col.Type != schema.ColTypeBigInt {
-			return "", behemotherr.NewMigrationError("SQLiteDriver.renderColumnDefinition", behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
+			return "", errs.NewMigrationError("SQLiteDriver.renderColumnDefinition", errs.CodeMigrationUnsupportedAutoIncrement,
 				fmt.Errorf("column %q: AUTOINCREMENT requires an integer column, got %q", col.Name, col.Type))
 		}
 		nativeType = "INTEGER"
@@ -547,7 +547,7 @@ func renderDefault(v any) (string, error) {
 	case float32, float64:
 		return fmt.Sprintf("DEFAULT %v", val), nil
 	default:
-		return "", behemotherr.NewMigrationError("SQLiteDriver.renderDefault", behemotherr.ErrorCodeMigrationUnsupportedDefaultType, fmt.Errorf("cannot render default value of type %T", v))
+		return "", errs.NewMigrationError("SQLiteDriver.renderDefault", errs.CodeMigrationUnsupportedDefaultType, fmt.Errorf("cannot render default value of type %T", v))
 	}
 }
 
@@ -585,7 +585,7 @@ func renderSQLiteType(ct schema.ColumnType, length int) (string, error) {
 	case schema.ColTypeBlob, schema.ColTypeBytes:
 		return "BLOB", nil
 	default:
-		return "", behemotherr.NewMigrationError("SQLiteDriver.renderSQLiteType", behemotherr.ErrorCodeMigrationUnsupportedCanonicalType, fmt.Errorf("no SQLite rendering for canonical type %q", ct))
+		return "", errs.NewMigrationError("SQLiteDriver.renderSQLiteType", errs.CodeMigrationUnsupportedCanonicalType, fmt.Errorf("no SQLite rendering for canonical type %q", ct))
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -538,7 +538,7 @@ func runPostgresIntrospectorTests(t *testing.T, db *sql.DB, tm *PostgresTestMana
 		// m is declared (as text), p is not.
 		_, err = introspect(t, []schema.Column{id, {Name: "m", Type: schema.ColTypeText, Nullable: true}, note}, true)
 		require.Error(t, err)
-		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationUnmappableColumnType))
+		assert.True(t, errs.IsCode(err, errs.CodeMigrationUnmappableColumnType))
 		assert.Contains(t, err.Error(), "feelings.m")
 		assert.Contains(t, err.Error(), "feelings.p", "undeclared column recorded by a baseline is rejected too")
 

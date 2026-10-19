@@ -16,7 +16,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/magiclink"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -118,8 +118,8 @@ func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg types.H
 }
 
 func invalidLink(err error) bool {
-	de, ok := errors.AsType[*behemotherr.DomainError](err)
-	return ok && de.Category == behemotherr.CategoryUnauthorized && de.Code == magiclink.ErrorCodeInvalidLink
+	de, ok := errors.AsType[*errs.DomainError](err)
+	return ok && de.Category == errs.CategoryUnauthorized && de.Code == magiclink.ErrorCodeInvalidLink
 }
 
 // The two flows called from code, without an HTTP request: a link is sent
@@ -147,10 +147,10 @@ func TestMagicLinkRequestAndVerify(t *testing.T) {
 	_, err := p.RequestLink(ctx, magiclink.LinkRequest{Email: "nobody@example.com"})
 	assert.ErrorIs(t, err, magiclink.ErrNoAccount, "the plugin does not sign users up")
 	_, err = p.RequestLink(ctx, magiclink.LinkRequest{Email: "not an email"})
-	assert.True(t, behemotherr.IsValidationError(err), "%v", err)
+	assert.True(t, errs.IsValidationError(err), "%v", err)
 	for _, redirect := range []string{"https://evil.example.com/", "//evil.example.com", "http://app.example.com/"} {
 		_, err = p.RequestLink(ctx, magiclink.LinkRequest{Email: "ada@example.com", RedirectURL: redirect})
-		assert.True(t, behemotherr.IsValidationError(err), "redirect %q: %v", redirect, err)
+		assert.True(t, errs.IsValidationError(err), "redirect %q: %v", redirect, err)
 	}
 	require.Zero(t, app.outbox.count(), "none of these sent a link")
 
@@ -289,7 +289,7 @@ func TestMagicLinkRequestsAreLimitedPerEmail(t *testing.T) {
 	app, _ := bootMagicLink(t, magiclink.Options{WaitForSend: true, RequestLimit: types.Limit{Max: 2, Window: time.Minute}}, nil)
 	limited := func(email string) bool {
 		_, err := app.plugin.RequestLink(ctx, magiclink.LinkRequest{Email: email})
-		return behemotherr.Is(err, behemotherr.CategoryRateLimited)
+		return errs.IsCategory(err, errs.CategoryRateLimited)
 	}
 	for _, email := range []string{"ada@example.com", "nobody@example.com"} {
 		assert.False(t, limited(email), email)
@@ -368,7 +368,7 @@ func TestMagicLinkOptions(t *testing.T) {
 
 		p := magiclink.New(tc.opts)
 		_, err = p.RequestLink(context.Background(), magiclink.LinkRequest{Email: "ada@example.com"})
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
 
 		prepared, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 		require.NoError(t, err, name)

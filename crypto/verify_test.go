@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +35,7 @@ func (s *staticKeys) PublicKey(_ context.Context, kid string) (types.PublishedKe
 			return k, nil
 		}
 	}
-	return types.PublishedKey{}, behemotherr.NewJWTError("staticKeys", behemotherr.ErrorCodeJWTUnknownKey, nil)
+	return types.PublishedKey{}, errs.NewJWTError("staticKeys", errs.CodeJWTUnknownKey, nil)
 }
 
 func (s *staticKeys) PublicKeys(context.Context) ([]types.PublishedKey, error) {
@@ -101,9 +101,9 @@ func tokenWith(t *testing.T, method jwt.SigningMethod, key any, kid string, clai
 func refused(t *testing.T, err error, code string, msgAndArgs ...any) {
 	t.Helper()
 	require.Error(t, err, msgAndArgs...)
-	var domain *behemotherr.DomainError
+	var domain *errs.DomainError
 	require.True(t, errors.As(err, &domain), "a DomainError: %v", err)
-	assert.Equal(t, behemotherr.CategoryToken, domain.Category, msgAndArgs...)
+	assert.Equal(t, errs.CategoryToken, domain.Category, msgAndArgs...)
 	assert.Equal(t, code, domain.Code, msgAndArgs...)
 }
 
@@ -166,13 +166,13 @@ func TestVerifyJWTPinsTheAlgorithm(t *testing.T) {
 	}
 	for name, token := range cases {
 		_, err := crypto.VerifyJWT(ctx, token, f.keys, f.options)
-		refused(t, err, behemotherr.ErrorCodeJWTAlgorithmMismatch, name)
+		refused(t, err, errs.CodeJWTAlgorithmMismatch, name)
 	}
 
 	onlyRSA := f.options
 	onlyRSA.Algorithms = []string{"RS256"}
 	_, err = crypto.VerifyJWT(ctx, tokenWith(t, jwt.SigningMethodEdDSA, f.ed, "ed", validClaims()), f.keys, onlyRSA)
-	refused(t, err, behemotherr.ErrorCodeJWTAlgorithmMismatch, "an algorithm the caller does not list")
+	refused(t, err, errs.CodeJWTAlgorithmMismatch, "an algorithm the caller does not list")
 	_, err = crypto.VerifyJWT(ctx, tokenWith(t, jwt.SigningMethodRS256, f.rsa, "rsa", validClaims()), f.keys, onlyRSA)
 	assert.NoError(t, err)
 }
@@ -191,13 +191,13 @@ func TestVerifyJWTChecksTheSignature(t *testing.T) {
 	f := newVerifyFixture(t)
 	ctx := context.Background()
 	_, err := crypto.VerifyJWT(ctx, tokenWith(t, jwt.SigningMethodRS256, newRSAKey(t, 2048), "rsa", validClaims()), f.keys, f.options)
-	refused(t, err, behemotherr.ErrorCodeJWTInvalidSignature, "signed by another key")
+	refused(t, err, errs.CodeJWTInvalidSignature, "signed by another key")
 
 	token := tokenWith(t, jwt.SigningMethodES256, f.ec256, "ec", validClaims())
 	parts := strings.Split(token, ".")
 	other := strings.Split(tokenWith(t, jwt.SigningMethodES256, f.ec256, "ec", validClaims(func(c jwt.MapClaims) { c["sub"] = "admin" })), ".")
 	_, err = crypto.VerifyJWT(ctx, parts[0]+"."+other[1]+"."+parts[2], f.keys, f.options)
-	refused(t, err, behemotherr.ErrorCodeJWTInvalidSignature, "claims that were not signed")
+	refused(t, err, errs.CodeJWTInvalidSignature, "claims that were not signed")
 }
 
 // The registered claims are checked once the signature is.
@@ -212,16 +212,16 @@ func TestVerifyJWTChecksTheClaims(t *testing.T) {
 		token string
 		code  string
 	}{
-		"another issuer":         {sign(func(c jwt.MapClaims) { c["iss"] = "https://evil.example.com" }), behemotherr.ErrorCodeJWTIssuerMismatch},
-		"no issuer":              {sign(func(c jwt.MapClaims) { delete(c, "iss") }), behemotherr.ErrorCodeJWTIssuerMismatch},
-		"another audience":       {sign(func(c jwt.MapClaims) { c["aud"] = "https://billing.example.com" }), behemotherr.ErrorCodeJWTAudienceMismatch},
-		"no audience":            {sign(func(c jwt.MapClaims) { delete(c, "aud") }), behemotherr.ErrorCodeJWTMissingClaim},
-		"expired":                {sign(func(c jwt.MapClaims) { c["exp"] = now.Add(-time.Second).Unix() }), behemotherr.ErrorCodeTokenExpired},
-		"no expiry":              {sign(func(c jwt.MapClaims) { delete(c, "exp") }), behemotherr.ErrorCodeJWTMissingClaim},
-		"not valid yet":          {sign(func(c jwt.MapClaims) { c["nbf"] = now.Add(time.Minute).Unix() }), behemotherr.ErrorCodeJWTNotYetValid},
-		"a subject of numbers":   {sign(func(c jwt.MapClaims) { c["sub"] = 42 }), behemotherr.ErrorCodeJWTInvalidClaims},
-		"an id of numbers":       {sign(func(c jwt.MapClaims) { c["jti"] = 42 }), behemotherr.ErrorCodeJWTInvalidClaims},
-		"an expiry that is text": {sign(func(c jwt.MapClaims) { c["exp"] = "tomorrow" }), behemotherr.ErrorCodeJWTInvalidClaims},
+		"another issuer":         {sign(func(c jwt.MapClaims) { c["iss"] = "https://evil.example.com" }), errs.CodeJWTIssuerMismatch},
+		"no issuer":              {sign(func(c jwt.MapClaims) { delete(c, "iss") }), errs.CodeJWTIssuerMismatch},
+		"another audience":       {sign(func(c jwt.MapClaims) { c["aud"] = "https://billing.example.com" }), errs.CodeJWTAudienceMismatch},
+		"no audience":            {sign(func(c jwt.MapClaims) { delete(c, "aud") }), errs.CodeJWTMissingClaim},
+		"expired":                {sign(func(c jwt.MapClaims) { c["exp"] = now.Add(-time.Second).Unix() }), errs.CodeTokenExpired},
+		"no expiry":              {sign(func(c jwt.MapClaims) { delete(c, "exp") }), errs.CodeJWTMissingClaim},
+		"not valid yet":          {sign(func(c jwt.MapClaims) { c["nbf"] = now.Add(time.Minute).Unix() }), errs.CodeJWTNotYetValid},
+		"a subject of numbers":   {sign(func(c jwt.MapClaims) { c["sub"] = 42 }), errs.CodeJWTInvalidClaims},
+		"an id of numbers":       {sign(func(c jwt.MapClaims) { c["jti"] = 42 }), errs.CodeJWTInvalidClaims},
+		"an expiry that is text": {sign(func(c jwt.MapClaims) { c["exp"] = "tomorrow" }), errs.CodeJWTInvalidClaims},
 	}
 	for name, c := range cases {
 		_, err := crypto.VerifyJWT(ctx, c.token, f.keys, f.options)
@@ -247,7 +247,7 @@ func TestVerifyJWTChecksTheClaims(t *testing.T) {
 	checked := f.options
 	checked.CheckIssuedAt = true
 	_, err = crypto.VerifyJWT(ctx, issuedLater, f.keys, checked)
-	refused(t, err, behemotherr.ErrorCodeJWTInvalidClaims, "an iat in the future")
+	refused(t, err, errs.CodeJWTInvalidClaims, "an iat in the future")
 
 	justExpired := sign(func(c jwt.MapClaims) { c["exp"] = now.Add(-30 * time.Second).Unix() })
 	lenient := f.options
@@ -258,7 +258,7 @@ func TestVerifyJWTChecksTheClaims(t *testing.T) {
 	clock := f.options
 	clock.Now = func() time.Time { return now.Add(time.Hour) }
 	_, err = crypto.VerifyJWT(ctx, sign(func(jwt.MapClaims) {}), f.keys, clock)
-	refused(t, err, behemotherr.ErrorCodeTokenExpired, "the caller's clock")
+	refused(t, err, errs.CodeTokenExpired, "the caller's clock")
 }
 
 // A token names its key. One that names none is checked against every key
@@ -267,11 +267,11 @@ func TestVerifyJWTFindsTheKey(t *testing.T) {
 	f := newVerifyFixture(t)
 	ctx := context.Background()
 	_, err := crypto.VerifyJWT(ctx, tokenWith(t, jwt.SigningMethodEdDSA, f.ed, "nope", validClaims()), f.keys, f.options)
-	refused(t, err, behemotherr.ErrorCodeJWTUnknownKey, "a kid the set lacks")
+	refused(t, err, errs.CodeJWTUnknownKey, "a kid the set lacks")
 
 	withoutKID := tokenWith(t, jwt.SigningMethodRS256, f.rsa, "", validClaims())
 	_, err = crypto.VerifyJWT(ctx, withoutKID, f.keys, f.options)
-	refused(t, err, behemotherr.ErrorCodeJWTUnknownKey, "no kid")
+	refused(t, err, errs.CodeJWTUnknownKey, "no kid")
 
 	allow := f.options
 	allow.AllowMissingKID = true
@@ -279,14 +279,14 @@ func TestVerifyJWTFindsTheKey(t *testing.T) {
 	require.NoError(t, err, "every RSA key is tried")
 	assert.Empty(t, verified.KID)
 	_, err = crypto.VerifyJWT(ctx, tokenWith(t, jwt.SigningMethodES512, newECKey(t, elliptic.P521()), "", validClaims()), f.keys, allow)
-	refused(t, err, behemotherr.ErrorCodeJWTUnknownKey, "no key fits")
+	refused(t, err, errs.CodeJWTUnknownKey, "no key fits")
 	_, err = crypto.VerifyJWT(ctx, tokenWith(t, jwt.SigningMethodRS256, newRSAKey(t, 2048), "", validClaims()), f.keys, allow)
-	refused(t, err, behemotherr.ErrorCodeJWTInvalidSignature, "no key that fits signed it")
+	refused(t, err, errs.CodeJWTInvalidSignature, "no key that fits signed it")
 
 	_, err = crypto.VerifyJWT(ctx, fakeHeader(t, `{"alg":"EdDSA","kid":"ed","crit":["exp"]}`), f.keys, f.options)
-	refused(t, err, behemotherr.ErrorCodeJWTMalformed, "a critical extension")
+	refused(t, err, errs.CodeJWTMalformed, "a critical extension")
 	_, err = crypto.VerifyJWT(ctx, "not.a.token", f.keys, f.options)
-	refused(t, err, behemotherr.ErrorCodeJWTMalformed)
+	refused(t, err, errs.CodeJWTMalformed)
 }
 
 // A key set that can't get its keys fails as the system does, and the
@@ -301,7 +301,7 @@ func TestVerifyJWTKeySetFailure(t *testing.T) {
 				continue
 			}
 			require.Error(t, err)
-			assert.False(t, behemotherr.Is(err, behemotherr.CategoryToken), "kid %q: %v", kid, err)
+			assert.False(t, errs.IsCategory(err, errs.CategoryToken), "kid %q: %v", kid, err)
 			assert.ErrorContains(t, err, "the issuer is down")
 		}
 	}
@@ -325,8 +325,8 @@ func TestVerifyJWTOptions(t *testing.T) {
 		opts := f.options
 		change(&opts)
 		_, err := crypto.VerifyJWT(context.Background(), token, f.keys, opts)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%s: %v", name, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: %v", name, err)
 	}
 	_, err := crypto.VerifyJWT(context.Background(), token, nil, f.options)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "no key set: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "no key set: %v", err)
 }

@@ -13,7 +13,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -77,17 +77,17 @@ func (app *verificationApp) sessionWorks(rawSession string) bool {
 	return err == nil
 }
 
-func changeError(err error, category behemotherr.Category, code string) bool {
-	de, ok := errors.AsType[*behemotherr.DomainError](err)
+func changeError(err error, category errs.Category, code string) bool {
+	de, ok := errors.AsType[*errs.DomainError](err)
 	return ok && de.Category == category && de.Code == code
 }
 
 func invalidChangeLink(err error) bool {
-	return changeError(err, behemotherr.CategoryUnauthorized, emailverification.ErrorCodeInvalidChangeLink)
+	return changeError(err, errs.CategoryUnauthorized, emailverification.ErrorCodeInvalidChangeLink)
 }
 
 func emailTaken(err error) bool {
-	return changeError(err, behemotherr.CategoryConflict, emailverification.ErrorCodeEmailTaken)
+	return changeError(err, errs.CategoryConflict, emailverification.ErrorCodeEmailTaken)
 }
 
 // A change request leaves the address alone and sends two messages. The
@@ -301,7 +301,7 @@ func callAs(t *testing.T, ac *types.AuthContext, route types.Route, body, rawSes
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
-		status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+		status, body := (&errs.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(body))
 		return w
@@ -353,7 +353,7 @@ func TestEmailChangeRoutes(t *testing.T) {
 	require.True(t, app.sessionWorks(rawSession))
 	stale := callAs(t, app.ac, change, `{"email":"ada@late.example.com"}`, rawSession)
 	assert.Equal(t, http.StatusUnauthorized, stale.Code)
-	assert.Contains(t, stale.Body.String(), behemotherr.ErrorCodeSessionNotFresh)
+	assert.Contains(t, stale.Body.String(), errs.CodeSessionNotFresh)
 	_, signedInAgain, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: types.SessionActive})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, callAs(t, app.ac, change, `{"email":"ada@late.example.com"}`, signedInAgain).Code, "signing in again makes a fresh session")
@@ -394,7 +394,7 @@ func TestEmailChangeRequestsAreLimitedPerUser(t *testing.T) {
 	app.requestChange(t, user.ID, "ada@one.example.com", 2)
 	app.requestChange(t, user.ID, "ada@two.example.com", 4)
 	_, err := app.plugin.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "ada@three.example.com"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryRateLimited), "the third request of the user: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryRateLimited), "the third request of the user: %v", err)
 	app.requestChange(t, other.ID, "grace@new.example.com", 6)
 
 	events := app.rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
@@ -409,11 +409,11 @@ func TestEmailChangeIsOptIn(t *testing.T) {
 	app := bootVerification(t, emailverification.Options{})
 	user, _ := app.verifiedUser(t, "ada@example.com")
 	_, err := app.plugin.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "ada@new.example.com"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	_, err = app.plugin.ConfirmChange(ctx, "token")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	_, err = app.plugin.RevertChange(ctx, "token")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	assert.Nil(t, app.mounted["/api/auth"+emailverification.PathChange].Handler, "its routes are not mounted")
 
 	for name, opts := range map[string]emailverification.Options{

@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 // Field keys shared by every component's log lines. Call sites use these
@@ -56,8 +56,8 @@ func ErrorFields(err error, extra ...behemoth.M) behemoth.M {
 		return fields
 	}
 	fields[FieldError] = err.Error()
-	fields[FieldErrorCode] = behemotherr.ErrorCodeUnknown
-	if de, ok := errors.AsType[*behemotherr.DomainError](err); ok {
+	fields[FieldErrorCode] = errs.CodeUnknown
+	if de, ok := errors.AsType[*errs.DomainError](err); ok {
 		if de.Code != "" {
 			fields[FieldErrorCode] = de.Code
 		}

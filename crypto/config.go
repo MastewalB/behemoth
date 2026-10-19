@@ -3,7 +3,7 @@ package crypto
 import (
 	"context"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 )
@@ -26,7 +26,7 @@ type Config struct {
 // supports hot rotation, so it should live as long as the application.
 func New(ctx context.Context, cfg Config, tel *telemetry.Telemetry) (types.Crypto, error) {
 	if cfg.Secrets == nil {
-		return types.Crypto{}, behemotherr.NewConfigurationError("crypto.New", "a SecretSource is required", nil)
+		return types.Crypto{}, errs.NewConfigurationError("crypto.New", "a SecretSource is required", nil)
 	}
 	tel = telemetry.OrDefault(tel)
 

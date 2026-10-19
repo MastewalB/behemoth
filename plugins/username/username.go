@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/store"
@@ -256,10 +256,10 @@ func (p *Plugin) Middlewares() []types.Middleware {
 func (p *Plugin) Init(ac *types.AuthContext) error {
 	const op = "username.Init"
 	if p.passwords == nil {
-		return behemotherr.NewConfigurationError(op, "no email/password plugin was given to New; sign-in by username runs through it", nil)
+		return errs.NewConfigurationError(op, "no email/password plugin was given to New; sign-in by username runs through it", nil)
 	}
 	if p.opts.MinLength < 1 || p.opts.MaxLength < p.opts.MinLength || p.opts.MaxLength > MaxColumnLength {
-		return behemotherr.NewConfigurationError(op,
+		return errs.NewConfigurationError(op,
 			fmt.Sprintf("username length limits are invalid: min %d, max %d (the column holds %d)", p.opts.MinLength, p.opts.MaxLength, MaxColumnLength), nil)
 	}
 	p.authContext = ac
@@ -323,19 +323,19 @@ func (p *Plugin) wellFormed(username string) (string, error) {
 // are the plugin's own and describe the rule, so they are sent to the
 // client.
 func errInvalidUsername(message string) error {
-	return behemotherr.NewInvalidInputError("username.Validate", HookValueUsername, message, nil)
+	return errs.NewInvalidInputError("username.Validate", HookValueUsername, message, nil)
 }
 
 // errInvalidDisplay is the validation error (400) for a display username.
 func errInvalidDisplay(message string) error {
-	return behemotherr.NewInvalidInputError("username.Validate", DisplayColumn.Name, message, nil)
+	return errs.NewInvalidInputError("username.Validate", DisplayColumn.Name, message, nil)
 }
 
 // errUsernameTaken is the plugin's typed conflict (409).
 func errUsernameTaken() error {
 	const op, message = "username.Validate", "this username is taken"
-	return &behemotherr.DomainError{
-		Category: behemotherr.CategoryConflict, Op: op, Code: ErrorCodeUsernameTaken,
+	return &errs.DomainError{
+		Category: errs.CategoryConflict, Op: op, Code: ErrorCodeUsernameTaken,
 		PublicMessage: message, InternalMessage: op + ": " + message,
 	}
 }
@@ -506,7 +506,7 @@ func (p *Plugin) free(hctx *types.HookContext, name, ownerID string) error {
 		if holder.ID != ownerID {
 			return errUsernameTaken()
 		}
-	case !behemotherr.IsNotFound(err):
+	case !errs.IsNotFound(err):
 		return err
 	}
 	return nil
@@ -536,7 +536,7 @@ func (c *Credentials) FromMap(data map[string]any) error {
 		case string:
 			return v, nil
 		default:
-			return "", behemotherr.NewInvalidInputError("username.SignIn", key, key+" must be a string", nil)
+			return "", errs.NewInvalidInputError("username.SignIn", key, key+" must be a string", nil)
 		}
 	}
 	name, err := field(HookValueUsername)
@@ -577,7 +577,7 @@ func (c *Credentials) FromMap(data map[string]any) error {
 // deliver. The plugin must have been initialized by Boot.
 func (p *Plugin) SignIn(ctx context.Context, creds Credentials) (*types.SignInResult, error) {
 	if p.authContext == nil {
-		return nil, behemotherr.NewConfigurationError("username.SignIn", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return nil, errs.NewConfigurationError("username.SignIn", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	return p.passwords.SignInWith(ctx, emailpassword.IdentifierCredentials{
 		Key:      HookValueUsername,
@@ -605,7 +605,7 @@ func (p *Plugin) SignIn(ctx context.Context, creds Credentials) (*types.SignInRe
 // takes the username checks again.
 func (p *Plugin) Available(ctx context.Context, username string) (bool, error) {
 	if p.authContext == nil {
-		return false, behemotherr.NewConfigurationError("username.Available", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return false, errs.NewConfigurationError("username.Available", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	name, err := p.wellFormed(username)
 	if err != nil {
@@ -615,7 +615,7 @@ func (p *Plugin) Available(ctx context.Context, username string) (bool, error) {
 		return false, nil
 	}
 	_, err = p.authContext.Store.FindUserBy(ctx, Column.Name, name)
-	if behemotherr.IsNotFound(err) {
+	if errs.IsNotFound(err) {
 		return true, nil
 	}
 	return false, err
@@ -633,7 +633,7 @@ func (p *Plugin) Available(ctx context.Context, username string) (bool, error) {
 // user at once.
 func (p *Plugin) SetUsername(ctx context.Context, userID, username string) (*models.User, error) {
 	if p.authContext == nil {
-		return nil, behemotherr.NewConfigurationError("username.SetUsername", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return nil, errs.NewConfigurationError("username.SetUsername", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	// The data.user.beforeUpdate handler checks and normalizes the value.
 	return p.authContext.Store.UpdateUser(ctx, userID, behemoth.M{Column.Name: username})
@@ -647,7 +647,7 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 	// and password reach the before handlers, in creds.Extra.
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("username.SignIn", "request", err)
+		return errs.NewValidationError("username.SignIn", "request", err)
 	}
 	var creds Credentials
 	if err := creds.FromMap(body); err != nil {
@@ -666,7 +666,7 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 func (p *Plugin) handleAvailable(rctx *types.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("username.Available", "request", err)
+		return errs.NewValidationError("username.Available", "request", err)
 	}
 	name, ok := body[HookValueUsername].(string)
 	if !ok {

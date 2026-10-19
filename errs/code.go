@@ -1,10 +1,10 @@
-package behemotherr
+package errs
 
-// ErrorCodeCodeInvalid is the code of the error for a one-time code that is
+// CodeCodeInvalid is the code of the error for a one-time code that is
 // not accepted: there is none, it expired, the guess was wrong, or it has no
 // attempts left. The four share one code and one message, so the answer does
 // not tell a caller which it was.
-const ErrorCodeCodeInvalid = "code_invalid"
+const CodeCodeInvalid = "code_invalid"
 
 // NewCodeError returns the error for a one-time code that is not accepted.
 // reason says which of the four cases it was, for logs and audit events; it
@@ -14,7 +14,7 @@ func NewCodeError(op, reason string) *DomainError {
 		Category:        CategoryToken,
 		Op:              op,
 		Entity:          "code",
-		Code:            ErrorCodeCodeInvalid,
+		Code:            CodeCodeInvalid,
 		PublicMessage:   "invalid or expired code",
 		InternalMessage: op + ": " + reason,
 	}
@@ -22,4 +22,4 @@ func NewCodeError(op, reason string) *DomainError {
 
 // IsCodeRejection reports whether err says a one-time code was not accepted,
 // as opposed to a failure of the system.
-func IsCodeRejection(err error) bool { return IsCode(err, ErrorCodeCodeInvalid) }
+func IsCodeRejection(err error) bool { return IsCode(err, CodeCodeInvalid) }

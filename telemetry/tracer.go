@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 // Tracer starts spans. It is the tracing counterpart of Logger and Metrics:
@@ -137,8 +137,8 @@ func SpanFrom(ctx context.Context) Span {
 // IsSystemFailure, the same one the router uses for its log level.
 func FinishSpan(span Span, err error) {
 	if err != nil {
-		attrs := behemoth.M{AttrErrorCode: behemotherr.ClassifyCode(err)}
-		if de, ok := errors.AsType[*behemotherr.DomainError](err); ok {
+		attrs := behemoth.M{AttrErrorCode: errs.ClassifyCode(err)}
+		if de, ok := errors.AsType[*errs.DomainError](err); ok {
 			attrs[AttrErrorCategory] = string(de.Category)
 		}
 		span.SetAttributes(attrs)
@@ -157,14 +157,14 @@ func IsSystemFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-	de, ok := errors.AsType[*behemotherr.DomainError](err)
+	de, ok := errors.AsType[*errs.DomainError](err)
 	if !ok {
 		return true
 	}
 	switch de.Category {
-	case behemotherr.CategoryDatabase, behemotherr.CategoryTransaction, behemotherr.CategoryUndefinedTable,
-		behemotherr.CategoryInternal, behemotherr.CategoryConfiguration, behemotherr.CategorySecurity,
-		behemotherr.CategoryNotImplemented, behemotherr.CategoryMigration:
+	case errs.CategoryDatabase, errs.CategoryTransaction, errs.CategoryUndefinedTable,
+		errs.CategoryInternal, errs.CategoryConfiguration, errs.CategorySecurity,
+		errs.CategoryNotImplemented, errs.CategoryMigration:
 		return true
 	}
 	return false

@@ -48,7 +48,7 @@ Data that is not a JSON object with a `keys` array is an error. `{"keys": []}` i
 
 It writes what `ParseJWKSet` would keep, and refuses the rest. A private key is refused: `*rsa.PrivateKey`, `*ecdsa.PrivateKey`, and `ed25519.PrivateKey` are other types than the public ones, and the `jwk` struct has no field for a private member, so none can be written. Each key gets `use: "sig"`, its `kid`, and its `alg` when it names one. EC coordinates are written at the curve's full size (RFC 7518, section 6.2.1.2), from `ecdsa.PublicKey.Bytes`.
 
-`HandleJWKS` turns an error of `MarshalJWKSet` into a security error with `ErrorCodeJWKSReadFailed`, and publishes nothing. A set with one bad key is not published without it: a verifier would refuse every token that key signed, with nothing to say why.
+`HandleJWKS` turns an error of `MarshalJWKSet` into a security error with `CodeJWKSReadFailed`, and publishes nothing. A set with one bad key is not published without it: a verifier would refuse every token that key signed, with nothing to say why.
 
 ## The JWK set source
 
@@ -68,7 +68,7 @@ Errors name the URL without its query: a key set URL may carry a tenant or a tok
 | --- | --- |
 | the first call | fetches |
 | keys older than `TTL` | fetches |
-| a `kid` the keys lack (`PublicKey`) | fetches, then looks again. Still missing, the token is refused with `ErrorCodeJWTUnknownKey`. |
+| a `kid` the keys lack (`PublicKey`) | fetches, then looks again. Still missing, the token is refused with `CodeJWTUnknownKey`. |
 | less than `RefetchInterval` since the last fetch, whatever caused it | does not fetch. After a fetch that worked, the keys decide. After one that failed, a lookup uses stale keys within `MaxStale`, and a `kid` the keys lack gets the failure: it can't be told from a new key. |
 | a fetch failed, keys within `TTL + MaxStale` | uses them, and returns no error |
 | a fetch failed, keys missing or older | returns the error: a failure of the system |
@@ -84,13 +84,13 @@ The checks run in this order, and the first that fails decides the code:
 | # | Check | Refused with |
 | --- | --- | --- |
 | 1 | the options: an issuer, an audience, asymmetric algorithms only, no negative leeway | a configuration error |
-| 2 | the token parses, and its header has no `crit` | `ErrorCodeJWTMalformed` |
-| 3 | `alg` is one of the options' algorithms, by default `asymmetricAlgs` | `ErrorCodeJWTAlgorithmMismatch` |
-| 4 | `candidateKeys`: the key `kid` names, and it fits `alg`; or, with the same `kid`, another key that fits (RFC 7517, section 4.5). Without a `kid`, with `AllowMissingKID`: every key that fits. | the set's error, `ErrorCodeJWTUnknownKey`, or `ErrorCodeJWTAlgorithmMismatch` |
-| 5 | the signature, with each candidate until one matches | `ErrorCodeJWTInvalidSignature` |
+| 2 | the token parses, and its header has no `crit` | `CodeJWTMalformed` |
+| 3 | `alg` is one of the options' algorithms, by default `asymmetricAlgs` | `CodeJWTAlgorithmMismatch` |
+| 4 | `candidateKeys`: the key `kid` names, and it fits `alg`; or, with the same `kid`, another key that fits (RFC 7517, section 4.5). Without a `kid`, with `AllowMissingKID`: every key that fits. | the set's error, `CodeJWTUnknownKey`, or `CodeJWTAlgorithmMismatch` |
+| 5 | the signature, with each candidate until one matches | `CodeJWTInvalidSignature` |
 | 6 | golang-jwt's validator: `exp` required, `nbf`, `aud` holds one of the audiences, `iat` with `CheckIssuedAt`, all with the leeway and the options' clock | `checkClaims`: the code of the check |
-| 7 | `iss` is one of the issuers. golang-jwt checks a single issuer, and Google has two forms. | `ErrorCodeJWTIssuerMismatch` |
-| 8 | `sub`, `aud`, `jti`, and the dates have their types | `ErrorCodeJWTInvalidClaims` |
+| 7 | `iss` is one of the issuers. golang-jwt checks a single issuer, and Google has two forms. | `CodeJWTIssuerMismatch` |
+| 8 | `sub`, `aud`, `jti`, and the dates have their types | `CodeJWTInvalidClaims` |
 
 `fits` is the ADR's rule for the algorithm: a key that names one signs with it alone, and every key signs only with an algorithm of its type (`algorithmsOf`). The second half also catches a `KeySet` that pairs a key with an algorithm of another type.
 

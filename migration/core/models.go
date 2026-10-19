@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -47,11 +47,11 @@ func (m *MigrationLedgerEntry) ToMap() (map[string]any, error) {
 func (m *MigrationLedgerEntry) FromMap(data map[string]any) error {
 	id, err := stringValue(data["id"])
 	if err != nil || id == "" {
-		return behemotherr.NewMigrationError("MigrationLedgerEntry.FromMap", behemotherr.ErrorCodeMigrationInvalidLedgerEntry, fmt.Errorf("id: %v (got %T)", err, data["id"]))
+		return errs.NewMigrationError("MigrationLedgerEntry.FromMap", errs.CodeMigrationInvalidLedgerEntry, fmt.Errorf("id: %v (got %T)", err, data["id"]))
 	}
 	appliedAt, err := timeValue(data["applied_at"])
 	if err != nil {
-		return behemotherr.NewMigrationError("MigrationLedgerEntry.FromMap", behemotherr.ErrorCodeMigrationInvalidLedgerEntry, fmt.Errorf("migration %q applied_at: %w", id, err))
+		return errs.NewMigrationError("MigrationLedgerEntry.FromMap", errs.CodeMigrationInvalidLedgerEntry, fmt.Errorf("migration %q applied_at: %w", id, err))
 	}
 	m.ID, m.AppliedAt = id, appliedAt
 	return nil
@@ -79,7 +79,7 @@ func (s *SchemaSnapshot) ToMap() (map[string]any, error) {
 	}
 	data, err := json.Marshal(tables)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SchemaSnapshot.ToMap", behemotherr.ErrorCodeMigrationMarshalFailed, err)
+		return nil, errs.NewMigrationError("SchemaSnapshot.ToMap", errs.CodeMigrationMarshalFailed, err)
 	}
 	return map[string]any{
 		"id":      snapshotRowID,
@@ -97,13 +97,13 @@ func (s *SchemaSnapshot) ToMap() (map[string]any, error) {
 func (s *SchemaSnapshot) FromMap(data map[string]any) error {
 	version, err := stringValue(data["version"])
 	if err != nil {
-		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("version: %w", err))
+		return errs.NewMigrationError("SchemaSnapshot.FromMap", errs.CodeMigrationInvalidSnapshot, fmt.Errorf("version: %w", err))
 	}
 
 	var raw []byte
 	switch v := data["tables"].(type) {
 	case nil:
-		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("tables is missing"))
+		return errs.NewMigrationError("SchemaSnapshot.FromMap", errs.CodeMigrationInvalidSnapshot, fmt.Errorf("tables is missing"))
 	case string:
 		raw = []byte(v)
 	case []byte:
@@ -112,13 +112,13 @@ func (s *SchemaSnapshot) FromMap(data map[string]any) error {
 		// Already decoded (map[string]any, bson.M, ...): re-encode so the
 		// schema.Table field mapping stays json's, in one place.
 		if raw, err = json.Marshal(v); err != nil {
-			return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("tables (%T): %w", v, err))
+			return errs.NewMigrationError("SchemaSnapshot.FromMap", errs.CodeMigrationInvalidSnapshot, fmt.Errorf("tables (%T): %w", v, err))
 		}
 	}
 
 	var tables map[string]schema.Table
 	if err := json.Unmarshal(raw, &tables); err != nil {
-		return behemotherr.NewMigrationError("SchemaSnapshot.FromMap", behemotherr.ErrorCodeMigrationInvalidSnapshot, fmt.Errorf("tables: %w", err))
+		return errs.NewMigrationError("SchemaSnapshot.FromMap", errs.CodeMigrationInvalidSnapshot, fmt.Errorf("tables: %w", err))
 	}
 	if tables == nil {
 		tables = map[string]schema.Table{} // stored "null"

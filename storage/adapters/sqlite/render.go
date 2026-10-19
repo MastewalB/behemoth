@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 )
 
@@ -60,7 +60,7 @@ func (d *SQLiteDriver) renderDryRun(ctx context.Context, m core.Migration) ([]st
 		rec = &recordingTx{execQuerier: tx}
 		for _, op := range m.Up {
 			if err := d.applyOperation(ctx, rec, op); err != nil {
-				return behemotherr.WrapOp("SQLiteDriver.RenderMigration", fmt.Sprintf("operation %q (%s on %s)", op.ID, op.Kind, op.Table), err)
+				return errs.WrapOp("SQLiteDriver.RenderMigration", fmt.Sprintf("operation %q (%s on %s)", op.ID, op.Kind, op.Table), err)
 			}
 		}
 		return nil
@@ -82,10 +82,10 @@ func (d *SQLiteDriver) renderBaseline(ctx context.Context, m core.Migration) ([]
 			WHERE tbl_name = ? COLLATE NOCASE AND sql IS NOT NULL
 			ORDER BY type = 'table' DESC, type, name`, phys)
 		if err != nil {
-			return nil, behemotherr.NewMigrationError("SQLiteDriver.RenderMigration", behemotherr.ErrorCodeMigrationQueryFailed, err)
+			return nil, errs.NewMigrationError("SQLiteDriver.RenderMigration", errs.CodeMigrationQueryFailed, err)
 		}
 		if len(defs) == 0 {
-			return nil, behemotherr.NewMigrationError("SQLiteDriver.RenderMigration", behemotherr.ErrorCodeMigrationTableNotFound,
+			return nil, errs.NewMigrationError("SQLiteDriver.RenderMigration", errs.CodeMigrationTableNotFound,
 				fmt.Errorf("baseline table %q does not exist", phys))
 		}
 		stmts = append(stmts, defs...)

@@ -4,7 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 )
 
@@ -24,7 +24,7 @@ func (e *AESGCMEncryptor) Encrypt(plaintext []byte) ([]byte, int, error) {
 	}
 	gcm, err := newGCM(key)
 	if err != nil {
-		return nil, 0, behemotherr.NewSecurityError("AESGCMEncryptor.Encrypt", "aes_gcm_error", err)
+		return nil, 0, errs.NewSecurityError("AESGCMEncryptor.Encrypt", "aes_gcm_error", err)
 	}
 
 	nonce, err := e.rnd.SecureRandomBytes(gcm.NonceSize())
@@ -48,13 +48,13 @@ func (e *AESGCMEncryptor) Decrypt(ciphertext []byte, keyVersion int) ([]byte, er
 		return nil, err
 	}
 	if len(ciphertext) < gcm.NonceSize() {
-		return nil, behemotherr.NewSecurityError("AESGCMEncryptor.Decrypt", "short_cipher_length", nil)
+		return nil, errs.NewSecurityError("AESGCMEncryptor.Decrypt", "short_cipher_length", nil)
 	}
 
 	nonce, sealed := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
 	plaintext, err := gcm.Open(nil, nonce, sealed, nil)
 	if err != nil {
-		return nil, behemotherr.NewSecurityError("AESGCMEncryptor.Decrypt", "invalid_payload", err)
+		return nil, errs.NewSecurityError("AESGCMEncryptor.Decrypt", "invalid_payload", err)
 	}
 
 	return plaintext, nil

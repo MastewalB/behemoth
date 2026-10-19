@@ -14,7 +14,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -114,7 +114,7 @@ func consumeConcurrently(t *testing.T, s *store.Store, id string, n int) (wins i
 			switch {
 			case err == nil:
 				wins++
-			case behemotherr.IsCode(err, store.ErrorCodeTokenAlreadyConsumed):
+			case errs.IsCode(err, errs.CodeTokenAlreadyConsumed):
 				lost++
 			default:
 				t.Errorf("unexpected error: %v", err)
@@ -159,9 +159,9 @@ func TestConsumeTokenExactlyOncePostgres(t *testing.T) {
 func TestConsumeAndRevokeUnknownToken(t *testing.T) {
 	s := store.New(sessionsTokensDB(t))
 	_, err := s.ConsumeToken(context.Background(), "no-such-token")
-	assert.True(t, behemotherr.IsNotFound(err), "an unknown token is NotFound, not already consumed: %v", err)
+	assert.True(t, errs.IsNotFound(err), "an unknown token is NotFound, not already consumed: %v", err)
 	err = s.RevokeToken(context.Background(), "no-such-token")
-	assert.True(t, behemotherr.IsNotFound(err), "%v", err)
+	assert.True(t, errs.IsNotFound(err), "%v", err)
 }
 
 // ---- session manager ----
@@ -195,7 +195,7 @@ func TestSessionLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, sess.ID, got.ID)
 	_, err = sm.Validate(ctx, raw)
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionPending), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
 
 	promoted, err := sm.Promote(ctx, sess.ID)
 	require.NoError(t, err)
@@ -206,7 +206,7 @@ func TestSessionLifecycle(t *testing.T) {
 
 	require.NoError(t, sm.Revoke(ctx, sess.ID, "user_logout"))
 	_, err = sm.Get(ctx, raw)
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	listed, err := sm.ListForUser(ctx, "u1")
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
@@ -307,7 +307,7 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 		}
 		rctx = &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
 		if err = handler(rctx); err != nil {
-			status, body = (&behemotherr.DefaultErrorMapper{}).Map(err)
+			status, body = (&errs.DefaultErrorMapper{}).Map(err)
 		}
 		return rctx, status, body, err
 	}
@@ -321,14 +321,14 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 	require.NoError(t, err)
 
 	for name, tc := range map[string]struct{ token, code, message string }{
-		"no token":                    {"", behemotherr.ErrorCodeSessionMissing, "missing session token"},
-		"a token of no session":       {"never-issued", behemotherr.ErrorCodeSessionInvalid, "invalid session"},
-		"a revoked session":           {revokedToken, behemotherr.ErrorCodeSessionRevoked, "session has been revoked"},
-		"waiting for a second factor": {pendingToken, behemotherr.ErrorCodeSessionPending, "additional verification required"},
+		"no token":                    {"", errs.CodeSessionMissing, "missing session token"},
+		"a token of no session":       {"never-issued", errs.CodeSessionInvalid, "invalid session"},
+		"a revoked session":           {revokedToken, errs.CodeSessionRevoked, "session has been revoked"},
+		"waiting for a second factor": {pendingToken, errs.CodeSessionPending, "additional verification required"},
 	} {
 		rctx, status, body, err := request(tc.token)
 		require.Error(t, err, name)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategorySession), "%s: a session error: %v", name, err)
+		assert.True(t, errs.IsCategory(err, errs.CategorySession), "%s: a session error: %v", name, err)
 		assert.Equal(t, http.StatusUnauthorized, status, name)
 		assert.Equal(t, behemoth.M{"error": tc.message, "code": tc.code}, body, name)
 		assert.Equal(t, http.StatusOK, rctx.Response.Code, "%s: the middleware wrote no response of its own", name)
@@ -345,8 +345,8 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 	require.NoError(t, sqlDB.Close())
 	_, status, body, err := request(liveToken)
 	require.Error(t, err)
-	assert.False(t, behemotherr.Is(err, behemotherr.CategorySession), "not a refusal: %v", err)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryDatabase), "the store's error, unchanged: %v", err)
+	assert.False(t, errs.IsCategory(err, errs.CategorySession), "not a refusal: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryDatabase), "the store's error, unchanged: %v", err)
 	assert.Equal(t, http.StatusInternalServerError, status)
 	assert.Equal(t, behemoth.M{"error": "an internal error occurred", "code": "database_error"}, body, "the error's own text stays on the server")
 	assert.Equal(t, 1, reached, "the request did not reach the handler")
@@ -405,37 +405,37 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 
 	// Gone for good: the cookie goes with the refusal.
 	for name, tc := range map[string]struct{ token, code string }{
-		"revoked":      {revokedToken, behemotherr.ErrorCodeSessionRevoked},
-		"expired":      {expiredToken, behemotherr.ErrorCodeSessionExpired},
-		"never issued": {"never-issued", behemotherr.ErrorCodeSessionInvalid},
+		"revoked":      {revokedToken, errs.CodeSessionRevoked},
+		"expired":      {expiredToken, errs.CodeSessionExpired},
+		"never issued": {"never-issued", errs.CodeSessionInvalid},
 	} {
 		rctx, err := request(sm, types.RequireSession, tc.token, "")
-		assert.True(t, behemotherr.IsCode(err, tc.code), "%s: %v", name, err)
+		assert.True(t, errs.IsCode(err, tc.code), "%s: %v", name, err)
 		assert.True(t, removed(rctx), "%s: the cookie is removed: %q", name, rctx.Response.Headers.Values("Set-Cookie"))
 	}
 
 	// Not gone: the client still needs its cookie, or has none.
 	rctx, err := request(sm, types.RequireSession, pendingToken, "")
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionPending), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a session that waits for its second factor keeps its cookie")
 
 	rctx, err = request(sm, types.RequireSession, "", "")
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionMissing), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "no cookie came, none is removed")
 
 	neverFresh := manager(types.SessionConfig{FreshAge: time.Nanosecond})
 	rctx, err = request(neverFresh, types.RequireFreshSession, liveToken, "")
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionNotFresh), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionNotFresh), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a session that is only too old for this route is still live")
 
 	// Both transports: the bearer token is read first. A dead one says
 	// nothing about the cookie next to it, which is another session's.
 	both := manager(types.SessionConfig{Transport: types.TransportBoth})
 	rctx, err = request(both, types.RequireSession, liveToken, revokedToken)
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "the live session's cookie stays")
 	rctx, err = request(both, types.RequireSession, revokedToken, "")
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	assert.True(t, removed(rctx), "the dead session's own cookie goes")
 
 	// The database fails: nothing is known about the session, so nothing
@@ -443,7 +443,7 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 	require.NoError(t, sqlDB.Close())
 	rctx, err = request(sm, types.RequireSession, liveToken, "")
 	require.Error(t, err)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryDatabase), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryDatabase), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a failed lookup removes no cookie")
 }
 
@@ -721,7 +721,7 @@ func TestTokenIssueVerifyConsume(t *testing.T) {
 	require.NotNil(t, consumed.ConsumedAt)
 
 	_, err = tm.Consume(ctx, kindReset, raw)
-	assert.True(t, behemotherr.IsCode(err, "token_already_consumed"), "%v", err)
+	assert.True(t, errs.IsCode(err, "token_already_consumed"), "%v", err)
 	_, err = tm.Verify(ctx, kindReset, raw)
 	assert.Error(t, err, "a consumed token no longer verifies")
 }
@@ -759,7 +759,7 @@ func TestTokenRevoke(t *testing.T) {
 	require.NoError(t, tm.Revoke(ctx, tok.ID))
 	require.NoError(t, tm.Revoke(ctx, tok.ID), "revoking twice is a no-op")
 	_, err = tm.Verify(ctx, kindAPI, raw)
-	assert.True(t, behemotherr.IsCode(err, "token_revoked"), "%v", err)
+	assert.True(t, errs.IsCode(err, "token_revoked"), "%v", err)
 
 	_, a, err := tm.Issue(ctx, kindAPI, "u2", nil)
 	require.NoError(t, err)
@@ -822,7 +822,7 @@ func TestTokenListForSubject(t *testing.T) {
 	assert.Empty(t, none)
 
 	_, err = tm.ListForSubject(ctx, "in_kv", "u1")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "a kind in the key-value storage can't be listed: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "a kind in the key-value storage can't be listed: %v", err)
 	_, err = tm.ListForSubject(ctx, "undeclared", "u1")
 	assert.Error(t, err)
 }
@@ -864,10 +864,10 @@ func TestSessionFreshness(t *testing.T) {
 	require.NoError(t, err, "the session is still valid")
 	assert.False(t, sm.IsFresh(stale))
 	_, err = request("Bearer " + raw)
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionNotFresh), "%v", err)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategorySession), "a session error, answered with 401: %v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionNotFresh), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategorySession), "a session error, answered with 401: %v", err)
 	_, err = request("")
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionMissing), "without a session it answers as RequireSession does: %v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "without a session it answers as RequireSession does: %v", err)
 	assert.Equal(t, 1, reached, "neither request reached the handler")
 
 	promoted, err := sm.Promote(ctx, pending.ID)

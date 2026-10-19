@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types"
@@ -122,21 +122,21 @@ func (s *signUpInput) FromMap(map[string]any) error { return nil }
 // with what a callback presents, so the response does not tell a used state
 // from a wrong binding value. It is typed (unauthorized, 401).
 func errInvalidCallback() error {
-	return behemotherr.NewUnauthorized("oauth.Complete", ErrorCodeInvalidCallback, "the sign-in could not be completed")
+	return errs.NewUnauthorized("oauth.Complete", ErrorCodeInvalidCallback, "the sign-in could not be completed")
 }
 
 func errAccountNotLinked() error {
 	const op, message = "oauth.Complete", "an account with this email already exists"
-	return &behemotherr.DomainError{
-		Category: behemotherr.CategoryConflict, Op: op, Code: ErrorCodeAccountNotLinked,
+	return &errs.DomainError{
+		Category: errs.CategoryConflict, Op: op, Code: ErrorCodeAccountNotLinked,
 		PublicMessage: message, InternalMessage: op + ": " + message,
 	}
 }
 
 func errEmailNotProvided() error {
 	const op, message = "oauth.Complete", "the provider did not share an email address"
-	return &behemotherr.DomainError{
-		Category: behemotherr.CategoryForbidden, Op: op, Code: ErrorCodeEmailNotProvided,
+	return &errs.DomainError{
+		Category: errs.CategoryForbidden, Op: op, Code: ErrorCodeEmailNotProvided,
 		PublicMessage: message, InternalMessage: op + ": " + message,
 	}
 }
@@ -144,7 +144,7 @@ func errEmailNotProvided() error {
 // isTokenRejection reports whether err says the token is not usable (not
 // found, expired, consumed, revoked), as opposed to a failure of the system.
 func isTokenRejection(err error) bool {
-	return behemotherr.Is(err, behemotherr.CategoryToken) || behemotherr.IsNotFound(err)
+	return errs.IsCategory(err, errs.CategoryToken) || errs.IsNotFound(err)
 }
 
 // Complete finishes a sign-in that Begin started. It checks the state and
@@ -184,7 +184,7 @@ func (p *Plugin) Complete(ctx context.Context, req CompleteRequest) (*CompleteRe
 		{keyProvider, req.Provider}, {"code", req.Code}, {"state", req.State},
 	} {
 		if field.value == "" {
-			return nil, behemotherr.NewInvalidInputError(op, field.key, field.key+" is required", nil)
+			return nil, errs.NewInvalidInputError(op, field.key, field.key+" is required", nil)
 		}
 	}
 
@@ -332,14 +332,14 @@ func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identit
 			if err == nil {
 				return user, nil
 			}
-			if !behemotherr.IsNotFound(err) {
+			if !errs.IsNotFound(err) {
 				return nil, err
 			}
 			// The account outlived its user, where no foreign key removed it.
 			return nil, refuse(types.FailureReason{
 				Code: "user_not_found", SubjectType: models.UserTable, SubjectID: account.UserID,
 			}, errInvalidCallback())
-		case !behemotherr.IsNotFound(err):
+		case !errs.IsNotFound(err):
 			return nil, err
 		}
 
@@ -357,7 +357,7 @@ func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identit
 			return nil, refuse(types.FailureReason{
 				Code: "account_not_linked", SubjectType: models.UserTable, SubjectID: existing.ID,
 			}, errAccountNotLinked())
-		case !behemotherr.IsNotFound(err):
+		case !errs.IsNotFound(err):
 			return nil, err
 		}
 
@@ -371,7 +371,7 @@ func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identit
 		switch {
 		case err == nil:
 			return user, nil
-		case attempt == 0 && behemotherr.Is(err, behemotherr.CategoryDuplicateKey):
+		case attempt == 0 && errs.IsCategory(err, errs.CategoryDuplicateKey):
 			continue
 		}
 		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,

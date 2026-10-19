@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
@@ -38,20 +38,20 @@ func NewSessionTokens(jwt types.JWTProvider, disp types.Dispatcher, auth *types.
 func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionTokenRequest) (*types.SessionToken, error) {
 	const op = "SessionTokens.Issue"
 	if !s.cfg.ExternalEnabled() {
-		return nil, behemotherr.NewConfigurationErrorCode(op, behemotherr.ErrorCodeJWTExternalNotConfigured,
+		return nil, errs.NewConfigurationErrorCode(op, errs.CodeJWTExternalNotConfigured,
 			"session tokens need JWTConfig.Audiences[JWTExternal]")
 	}
 	session := req.Session
 	switch {
 	case session == nil:
-		return nil, behemotherr.NewInvalidInputError(op, "session", "a session is required", nil)
+		return nil, errs.NewInvalidInputError(op, "session", "a session is required", nil)
 	case session.State == models.SessionPending:
 		// A second factor is still asked for: not a signed-in user.
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionPending, nil)
+		return nil, errs.NewSessionError(op, errs.CodeSessionPending, nil)
 	case session.State != models.SessionActive || session.RevokedAt != nil:
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionRevoked, nil)
+		return nil, errs.NewSessionError(op, errs.CodeSessionRevoked, nil)
 	case !session.ExpiresAt.IsZero() && time.Now().After(session.ExpiresAt):
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionExpired, nil)
+		return nil, errs.NewSessionError(op, errs.CodeSessionExpired, nil)
 	}
 	allowed := s.cfg.Audiences[types.JWTExternal]
 	audience := req.Audience
@@ -59,7 +59,7 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionToken
 		audience = allowed[0]
 	}
 	if !slices.Contains(allowed, audience) {
-		return nil, behemotherr.NewInvalidInputError(op, types.SessionTokenAudienceKey, "audience is not allowed", nil)
+		return nil, errs.NewInvalidInputError(op, types.SessionTokenAudienceKey, "audience is not allowed", nil)
 	}
 	userID := session.UserID
 
@@ -143,11 +143,11 @@ func (s *DefaultSessionTokens) handleIssue(rctx *types.RequestContext) error {
 	const op = "SessionTokens.Issue"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		return behemotherr.NewValidationError(op, "request", err)
+		return errs.NewValidationError(op, "request", err)
 	}
 	audience, ok := body[types.SessionTokenAudienceKey].(string)
 	if !ok && body[types.SessionTokenAudienceKey] != nil {
-		return behemotherr.NewInvalidInputError(op, types.SessionTokenAudienceKey, "audience must be a string", nil)
+		return errs.NewInvalidInputError(op, types.SessionTokenAudienceKey, "audience must be a string", nil)
 	}
 	session, _ := rctx.Values["session"].(*models.Session)
 

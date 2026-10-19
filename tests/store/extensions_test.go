@@ -9,7 +9,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/models"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
@@ -117,7 +117,7 @@ func TestContributedColumnsReachTheModel(t *testing.T) {
 			assert.True(t, on, "a contributed column can be updated, and converts from the driver's representation")
 
 			_, err = s.UpdateUser(ctx, u.ID, behemoth.M{"two_factor_enabld": true})
-			assert.True(t, behemotherr.IsValidationError(err), "a typo is still rejected: %v", err)
+			assert.True(t, errs.IsValidationError(err), "a typo is still rejected: %v", err)
 
 			many, err := db.FindMany(ctx, &models.User{}, clause.Expression{}, nil)
 			require.NoError(t, err)
@@ -150,11 +150,11 @@ func TestHooksCanSetContributedColumns(t *testing.T) {
 
 	h.rewrite = behemoth.M{"made_up": 1}
 	err = s.CreateUser(ctx, &models.User{Email: "other@example.com"})
-	assert.True(t, behemotherr.IsValidationError(err), "%v", err)
+	assert.True(t, errs.IsValidationError(err), "%v", err)
 
 	// Without the schema, the store only knows the model's own columns.
 	plain := store.New(adapter)
 	changes, _ := plan.Update("free")
 	_, err = plain.UpdateUser(ctx, u.ID, changes)
-	assert.True(t, behemotherr.IsValidationError(err), "without WithSchema a contributed column is unknown: %v", err)
+	assert.True(t, errs.IsValidationError(err), "without WithSchema a contributed column is unknown: %v", err)
 }

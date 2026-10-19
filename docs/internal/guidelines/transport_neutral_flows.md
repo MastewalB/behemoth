@@ -11,7 +11,7 @@ The code it refers to lives in:
 - `types/session.go`: `SessionManager`, `RequireSession`
 - `types/ratelimit.go`: the route and hook rate-limit rules
 - `types/router.go`: the pipeline around a handler
-- `errors/errors.go`: `DomainError` and its categories
+- `errs/errors.go`: `DomainError` and its categories
 
 The other guideline documents are [`http_contract.md`](http_contract.md), about what a client of the HTTP routes depends on, and [`service_ready_components.md`](service_ready_components.md), about options, state, and background work in a component that may run in a standalone service.
 
@@ -29,7 +29,7 @@ The sign-in route shows the wrapper at its size:
 func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("SignIn", "request", err)
+		return errs.NewValidationError("SignIn", "request", err)
 	}
 	var creds EmailAndPasswordCredentials
 	if err := creds.FromMap(body); err != nil {

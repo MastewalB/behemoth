@@ -1,4 +1,4 @@
-package behemotherr
+package errs
 
 import (
 	"errors"
@@ -8,23 +8,23 @@ import (
 )
 
 const (
-	ErrorCodeSessionExpired      = "session_expired"
-	ErrorCodeSessionRevoked      = "session_revoked"
-	ErrorCodeSessionPending      = "session_pending"
-	ErrorCodeSessionLimitReached = "session_limit_reached"
-	ErrorCodeInvalidSessionState = "invalid_state_transition"
-	// ErrorCodeSessionNotFresh is the code of a request refused because it
+	CodeSessionExpired      = "session_expired"
+	CodeSessionRevoked      = "session_revoked"
+	CodeSessionPending      = "session_pending"
+	CodeSessionLimitReached = "session_limit_reached"
+	CodeInvalidSessionState = "invalid_state_transition"
+	// CodeSessionNotFresh is the code of a request refused because it
 	// needs a recent sign-in and the session's is too old
 	// (types.RequireFreshSession). The client asks the user to sign in
 	// again and retries.
-	ErrorCodeSessionNotFresh = "session_not_fresh"
-	// ErrorCodeSessionMissing is the code of a request to a route that needs
+	CodeSessionNotFresh = "session_not_fresh"
+	// CodeSessionMissing is the code of a request to a route that needs
 	// a session (types.RequireSession) and carries no session token.
-	ErrorCodeSessionMissing = "session_missing"
-	// ErrorCodeSessionInvalid is the code of a request to such a route whose
+	CodeSessionMissing = "session_missing"
+	// CodeSessionInvalid is the code of a request to such a route whose
 	// token belongs to no session: it was never issued, or its session no
 	// longer exists.
-	ErrorCodeSessionInvalid = "session_invalid"
+	CodeSessionInvalid = "session_invalid"
 )
 
 func NewSessionError(op, code string, original error) error {
@@ -41,21 +41,21 @@ func NewSessionError(op, code string, original error) error {
 
 func sessionPublicMessage(code string) string {
 	switch code {
-	case ErrorCodeSessionExpired:
+	case CodeSessionExpired:
 		return "session expired"
-	case ErrorCodeSessionRevoked:
+	case CodeSessionRevoked:
 		return "session has been revoked"
-	case ErrorCodeSessionPending:
+	case CodeSessionPending:
 		return "additional verification required"
-	case ErrorCodeSessionLimitReached:
+	case CodeSessionLimitReached:
 		return "maximum number of active sessions reached"
-	case ErrorCodeInvalidSessionState:
+	case CodeInvalidSessionState:
 		return "invalid session state"
-	case ErrorCodeSessionNotFresh:
+	case CodeSessionNotFresh:
 		return "recent sign-in required"
-	case ErrorCodeSessionMissing:
+	case CodeSessionMissing:
 		return "missing session token"
-	case ErrorCodeSessionInvalid:
+	case CodeSessionInvalid:
 		return "invalid session"
 	default:
 		return "invalid session"
@@ -79,9 +79,9 @@ func (dem *DefaultErrorMapper) Map(err error) (status int, body behemoth.M) {
 	return status, behemoth.M{"error": de.PublicMessage, "code": de.Code}
 
 	// switch {
-	// case IsCode(err, ErrorCodeSessionExpired), IsCode(err, ErrorCodeSessionRevoked):
+	// case IsCode(err, CodeSessionExpired), IsCode(err, CodeSessionRevoked):
 	// 	return http.StatusUnauthorized, behemoth.M{"error": err.Error()}
-	// case IsCode(err, ErrorCodeSessionPending):
+	// case IsCode(err, CodeSessionPending):
 	// 	return http.StatusOK, behemoth.M{"status": "requires_second_factor"} // not an error state to the client
 	// case IsNotFound(err):
 	// 	return http.StatusNotFound, behemoth.M{"error": err.Error()}

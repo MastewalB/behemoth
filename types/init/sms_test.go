@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/types"
@@ -26,7 +26,7 @@ func TestSMSSendsWaitingAndInBackground(t *testing.T) {
 		"Send":      none.Send(ctx, types.SMSMessage{}),
 		"SendAsync": none.SendAsync(ctx, types.SMSMessage{}),
 	} {
-		if !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		if !errs.IsCategory(err, errs.CategoryConfiguration) {
 			t.Errorf("%s without a sender: %v", name, err)
 		}
 	}

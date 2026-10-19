@@ -3,7 +3,7 @@ package types
 import (
 	"errors"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 )
@@ -32,7 +32,7 @@ func NewMailer(cfg types.MailConfig, tel *telemetry.Telemetry) *DefaultMailer {
 		kind:    func(msg types.MailMessage) string { return string(msg.Kind) },
 		metric:  telemetry.MetricMailSent,
 		errNoSender: func(op string) error {
-			return behemotherr.NewConfigurationError("Mailer."+op, "no mail sender is configured; set BootConfig.Mail.Sender", nil)
+			return errs.NewConfigurationError("Mailer."+op, "no mail sender is configured; set BootConfig.Mail.Sender", nil)
 		},
 		errFull:   ErrMailQueueFull,
 		errClosed: ErrMailerClosed,

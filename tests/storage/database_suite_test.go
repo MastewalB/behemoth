@@ -10,7 +10,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
 	mysqlAdapter "github.com/MastewalB/behemoth/storage/adapters/mysql"
@@ -199,10 +199,10 @@ func assertConstraintClassification(t *testing.T, adapter behemoth.Database, db 
 	}
 	t.Cleanup(func() { adapter.Delete(context.Background(), user) })
 
-	if err := adapter.Create(ctx, testutils.NewTestUser("fk-parent")); !behemotherr.IsDuplicateKey(err) {
+	if err := adapter.Create(ctx, testutils.NewTestUser("fk-parent")); !errs.IsDuplicateKey(err) {
 		t.Errorf("duplicate primary key: want duplicate_key, got %v", err)
 	}
-	if err := adapter.Create(ctx, &membership{ID: "m1", UserID: "no-such-user"}); !behemotherr.Is(err, behemotherr.CategoryForeignKey) {
+	if err := adapter.Create(ctx, &membership{ID: "m1", UserID: "no-such-user"}); !errs.IsCategory(err, errs.CategoryForeignKey) {
 		t.Errorf("insert referencing a missing row: want foreign_key_violation, got %v", err)
 	}
 
@@ -211,7 +211,7 @@ func assertConstraintClassification(t *testing.T, adapter behemoth.Database, db 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { adapter.Delete(context.Background(), child) }) // registered last, runs first
-	if err := adapter.Delete(ctx, user); !behemotherr.Is(err, behemotherr.CategoryForeignKey) {
+	if err := adapter.Delete(ctx, user); !errs.IsCategory(err, errs.CategoryForeignKey) {
 		t.Errorf("delete of a referenced row: want foreign_key_violation, got %v", err)
 	}
 }
@@ -224,13 +224,13 @@ func assertUndefinedTable(t *testing.T, adapter behemoth.Database) {
 	missing := &core.SchemaSnapshot{} // its table is never created in these databases
 
 	_, err := adapter.FindOne(ctx, missing, clause.Expression{})
-	if !behemotherr.IsUndefinedTable(err) || behemotherr.IsNotFound(err) {
+	if !errs.IsUndefinedTable(err) || errs.IsNotFound(err) {
 		t.Errorf("FindOne on a missing table: want undefined_table, got %v", err)
 	}
-	if _, err := adapter.FindMany(ctx, missing, clause.Expression{}, nil); !behemotherr.IsUndefinedTable(err) {
+	if _, err := adapter.FindMany(ctx, missing, clause.Expression{}, nil); !errs.IsUndefinedTable(err) {
 		t.Errorf("FindMany on a missing table: want undefined_table, got %v", err)
 	}
-	if _, err := adapter.Count(ctx, missing, clause.Expression{}); !behemotherr.IsUndefinedTable(err) {
+	if _, err := adapter.Count(ctx, missing, clause.Expression{}); !errs.IsUndefinedTable(err) {
 		t.Errorf("Count on a missing table: want undefined_table, got %v", err)
 	}
 }
@@ -303,7 +303,7 @@ func TestMongoAdapter(t *testing.T) {
 		if err := adapter.Create(ctx, testutils.NewTestUser("dup")); err != nil {
 			t.Fatal(err)
 		}
-		if err := adapter.Create(ctx, testutils.NewTestUser("dup")); !behemotherr.IsDuplicateKey(err) {
+		if err := adapter.Create(ctx, testutils.NewTestUser("dup")); !errs.IsDuplicateKey(err) {
 			t.Errorf("duplicate on a unique index: want duplicate_key, got %v", err)
 		}
 	})
@@ -763,7 +763,7 @@ func TestMongoAdapterRejectsAStandaloneServer(t *testing.T) {
 	t.Cleanup(func() { _ = client.Disconnect(ctx) })
 
 	err = mongoAdapter.NewMongoAdapter(client, testutils.MongoDBName, nil).CheckTransactions(ctx)
-	if !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+	if !errs.IsCategory(err, errs.CategoryConfiguration) {
 		t.Fatalf("CheckTransactions on a standalone server = %v, want a configuration error", err)
 	}
 	if !strings.Contains(err.Error(), "replica set") {

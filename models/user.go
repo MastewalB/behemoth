@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 // Canonical names of the users table and its columns — the single source for
@@ -201,7 +201,7 @@ func GenerateModelFromRows(m behemoth.Model, columns []string, values []any) (be
 
 		return newModel, nil
 	}
-	return nil, behemotherr.SerializableNotImplemented()
+	return nil, errs.SerializableNotImplemented()
 }
 
 func GenerateColumnValuePairsWithSelectFilter(m behemoth.Model, selected []string) (columns []string, values []any, valuePtrs []any) {

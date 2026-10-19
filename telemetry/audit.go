@@ -216,13 +216,13 @@ func MultiRecorder(recorders ...AuditRecorder) AuditRecorder {
 type multiRecorder []AuditRecorder
 
 func (m multiRecorder) Record(ctx context.Context, event AuditEvent) error {
-	var errs []error
+	var failures []error
 	for _, r := range m {
 		if err := r.Record(ctx, event); err != nil {
-			errs = append(errs, err)
+			failures = append(failures, err)
 		}
 	}
-	return errors.Join(errs...)
+	return errors.Join(failures...)
 }
 
 // Recorders returns the recorders m fans out to.

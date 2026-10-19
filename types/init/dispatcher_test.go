@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
@@ -94,7 +94,7 @@ func TestRunAfterTxSucceedsAndTurnsPanicsIntoErrors(t *testing.T) {
 
 	d, point = afterDispatcher(t, nil, func(*types.HookContext, any) error { panic("boom") })
 	err := d.RunAfterTx(hctx, point, nil)
-	if !behemotherr.Is(err, behemotherr.CategoryInternal) {
+	if !errs.IsCategory(err, errs.CategoryInternal) {
 		t.Errorf("a panicking handler returned %v, want an internal error", err)
 	}
 }
@@ -177,17 +177,17 @@ func TestDispatchOfUndeclaredOrWrongPhasePointIsAConfigurationError(t *testing.T
 	const undeclared types.HookPoint = "data.test.undeclared"
 
 	for _, point := range []types.HookPoint{undeclared, afterPoint} {
-		if _, err := d.RunBefore(hctx, point, nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		if _, err := d.RunBefore(hctx, point, nil); !errs.IsCategory(err, errs.CategoryConfiguration) {
 			t.Errorf("RunBefore(%q) = %v, want a configuration error", point, err)
 		}
-		if err := d.Fail(hctx, point, types.FailureReason{}); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		if err := d.Fail(hctx, point, types.FailureReason{}); !errs.IsCategory(err, errs.CategoryConfiguration) {
 			t.Errorf("Fail(%q) = %v, want a configuration error", point, err)
 		}
 	}
-	if err := d.RunAfter(hctx, undeclared, nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+	if err := d.RunAfter(hctx, undeclared, nil); !errs.IsCategory(err, errs.CategoryConfiguration) {
 		t.Errorf("RunAfter(undeclared) = %v, want a configuration error", err)
 	}
-	if err := d.RunAfterTx(hctx, undeclared, nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+	if err := d.RunAfterTx(hctx, undeclared, nil); !errs.IsCategory(err, errs.CategoryConfiguration) {
 		t.Errorf("RunAfterTx(undeclared) = %v, want a configuration error", err)
 	}
 	if ran {
@@ -259,11 +259,11 @@ func TestCheckDataHookPointsRejectsUndeclaredAndWrongPhase(t *testing.T) {
 		beforeUpdate: "data.t.beforeUpdate", afterUpdate: "data.t.afterUpdate",
 		created: "data.t.created", updated: "data.t.updated",
 	}
-	if err := checkDataHookPoints(catalog, map[string]tableHookPoints{"t": points}); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+	if err := checkDataHookPoints(catalog, map[string]tableHookPoints{"t": points}); !errs.IsCategory(err, errs.CategoryConfiguration) {
 		t.Errorf("wrong phase: %v, want a configuration error", err)
 	}
 	points.afterUpdate = "data.t.missing"
-	if err := checkDataHookPoints(catalog, map[string]tableHookPoints{"t": points}); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+	if err := checkDataHookPoints(catalog, map[string]tableHookPoints{"t": points}); !errs.IsCategory(err, errs.CategoryConfiguration) {
 		t.Errorf("undeclared point: %v, want a configuration error", err)
 	}
 }
@@ -406,7 +406,7 @@ func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
 	if got, err := rl.limiterFor("r", types.AlgorithmFixedWindow, own); err != nil || got != types.Limiter(own) {
 		t.Errorf("a rule's own limiter resolved to (%v, %v), want its own", got, err)
 	}
-	if _, err := rl.limiterFor("r", "token_bucket", nil); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+	if _, err := rl.limiterFor("r", "token_bucket", nil); !errs.IsCategory(err, errs.CategoryConfiguration) {
 		t.Errorf("an algorithm with no limiter returned %v, want a configuration error", err)
 	}
 }
@@ -485,7 +485,7 @@ func TestRateLimiterMetrics(t *testing.T) {
 	if err := check(fixedLimiter{allowed: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := check(fixedLimiter{allowed: false}); !behemotherr.Is(err, behemotherr.CategoryRateLimited) {
+	if err := check(fixedLimiter{allowed: false}); !errs.IsCategory(err, errs.CategoryRateLimited) {
 		t.Fatalf("a rejected check returned %v", err)
 	}
 	if err := check(fixedLimiter{err: errors.New("redis down")}); err != nil {

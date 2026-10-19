@@ -15,7 +15,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/models"
 	bunAdapter "github.com/MastewalB/behemoth/storage/adapters/bun"
@@ -295,13 +295,13 @@ func TestDeleteUserRemovesSessionsAndAccounts(t *testing.T) {
 			require.NoError(t, st.DeleteUser(ctx, ada.ID))
 
 			_, err := st.FindUserByID(ctx, ada.ID)
-			assert.True(t, behemotherr.IsNotFound(err), "the user: %v", err)
+			assert.True(t, errs.IsNotFound(err), "the user: %v", err)
 			_, err = sm.Get(ctx, tokens[ada])
 			assert.Error(t, err, "a deleted user's session token still signs a request in")
 			_, err = st.FindSessionByID(ctx, sessions[ada].ID)
-			assert.True(t, behemotherr.IsNotFound(err), "the deleted user's session row is still there: %v", err)
+			assert.True(t, errs.IsNotFound(err), "the deleted user's session row is still there: %v", err)
 			_, err = st.FindAccount(ctx, models.ProviderCredential, ada.ID)
-			assert.True(t, behemotherr.IsNotFound(err), "the deleted user's account, with its password hash, is still there: %v", err)
+			assert.True(t, errs.IsNotFound(err), "the deleted user's account, with its password hash, is still there: %v", err)
 
 			// Another user loses nothing.
 			_, err = st.FindUserByID(ctx, grace.ID)
@@ -349,7 +349,7 @@ func TestGuardedUpdateInATransactionOnMySQL(t *testing.T) {
 						switch {
 						case err == nil:
 							applied.Add(1)
-						case behemotherr.IsNotFound(err):
+						case errs.IsNotFound(err):
 							lost.Add(1)
 						default:
 							assert.NoError(t, err)
@@ -390,7 +390,7 @@ func TestBootChecksMongoIndexes(t *testing.T) {
 
 	err = boot()
 	require.Error(t, err, "no index exists yet")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	assert.Contains(t, err.Error(), `"users" (email)`)
 	assert.Contains(t, err.Error(), "EnsureIndexes")
 
@@ -467,7 +467,7 @@ func usersContract(t *testing.T, st *store.Store) {
 	require.NoError(t, st.CreateUser(ctx, u))
 	var found *models.User
 	err := st.CreateUser(ctx, &models.User{Email: "ada@example.com"})
-	assert.True(t, behemotherr.IsDuplicateKey(err), "duplicate email: %v", err)
+	assert.True(t, errs.IsDuplicateKey(err), "duplicate email: %v", err)
 
 	found, err = st.FindUserByEmail(ctx, "ada@example.com")
 	require.NoError(t, err)
@@ -500,11 +500,11 @@ func usersContract(t *testing.T, st *store.Store) {
 	assert.True(t, on)
 
 	_, err = st.UpdateUser(ctx, "no-such-user", behemoth.M{models.UserFirstname: "x"})
-	assert.True(t, behemotherr.IsNotFound(err), "update of a missing row: %v", err)
+	assert.True(t, errs.IsNotFound(err), "update of a missing row: %v", err)
 	require.NoError(t, st.DeleteUser(ctx, u.ID))
-	assert.True(t, behemotherr.IsNotFound(st.DeleteUser(ctx, u.ID)), "second delete is NotFound")
+	assert.True(t, errs.IsNotFound(st.DeleteUser(ctx, u.ID)), "second delete is NotFound")
 	_, err = st.FindUserByID(ctx, u.ID)
-	assert.True(t, behemotherr.IsNotFound(err), "%v", err)
+	assert.True(t, errs.IsNotFound(err), "%v", err)
 }
 
 func sessionsContract(t *testing.T, st *store.Store) {
@@ -522,7 +522,7 @@ func sessionsContract(t *testing.T, st *store.Store) {
 	assert.Equal(t, models.SessionActive, promoted.State)
 	require.NoError(t, sm.Revoke(ctx, sess.ID, "user_logout"))
 	_, err = sm.Get(ctx, raw)
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	listed, err := sm.ListForUser(ctx, "u1")
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
@@ -607,7 +607,7 @@ func accountsContract(t *testing.T, st *store.Store, db behemoth.Database) {
 	assert.Nil(t, found.RefreshTokenExpiresAt)
 
 	err = st.CreateAccount(ctx, &models.Account{UserID: "u2", ProviderID: "google", AccountID: "g-123"})
-	assert.True(t, behemotherr.IsDuplicateKey(err), "one account per (provider, account id): %v", err)
+	assert.True(t, errs.IsDuplicateKey(err), "one account per (provider, account id): %v", err)
 
 	updated, err := st.UpdateAccount(ctx, google.ID, behemoth.M{models.AccountAccessToken: "access-2", models.AccountIDToken: ""})
 	require.NoError(t, err)
@@ -627,19 +627,19 @@ func accountsContract(t *testing.T, st *store.Store, db behemoth.Database) {
 
 	noCrypto := store.New(db)
 	err = noCrypto.CreateAccount(ctx, &models.Account{UserID: "u3", ProviderID: "github", AccountID: "gh-1", AccessToken: "t"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "no encryptor, no plaintext token on disk: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "no encryptor, no plaintext token on disk: %v", err)
 	_, err = st.FindAccount(ctx, "github", "gh-1")
-	assert.True(t, behemotherr.IsNotFound(err), "%v", err)
+	assert.True(t, errs.IsNotFound(err), "%v", err)
 
 	// A stored value that isn't a valid ciphertext is an error, not a panic.
 	require.NoError(t, db.UpdateOne(ctx, &models.Account{}, clause.Expression{Conditions: []clause.Condition{
 		{Field: models.AccountID, Operator: clause.OpEqual, Value: google.ID}}}, behemoth.M{models.AccountAccessToken: "v1:AAAA"}))
 	_, err = st.FindAccountByID(ctx, google.ID)
-	assert.True(t, behemotherr.IsCode(err, "short_cipher_length"), "truncated ciphertext: %v", err)
+	assert.True(t, errs.IsCode(err, "short_cipher_length"), "truncated ciphertext: %v", err)
 
 	require.NoError(t, st.DeleteAccount(ctx, google.ID))
 	_, err = st.FindAccountByID(ctx, google.ID)
-	assert.True(t, behemotherr.IsNotFound(err), "%v", err)
+	assert.True(t, errs.IsNotFound(err), "%v", err)
 }
 
 func rateLimitsContract(t *testing.T, db behemoth.Database, resolver behemoth.SchemaResolver) {
@@ -804,7 +804,7 @@ func verificationCodesContract(t *testing.T, st *store.Store) {
 	assert.Equal(t, "+14155550101", found.Metadata["phone_number"], "the metadata round-trips")
 	assert.True(t, found.ExpiresAt.Equal(expires), "expires_at %v, want %v", found.ExpiresAt, expires)
 	_, err = st.FindVerificationCode(ctx, "contract.other", "subject")
-	assert.True(t, behemotherr.IsNotFound(err), "another kind: %v", err)
+	assert.True(t, errs.IsNotFound(err), "another kind: %v", err)
 
 	// A second code for the same kind and subject replaces the first.
 	second := &models.VerificationCode{Kind: kind, Subject: "subject", CodeHash: "hash-2", KeyVersion: 1, AttemptsLeft: 2, ExpiresAt: expires}
@@ -813,7 +813,7 @@ func verificationCodesContract(t *testing.T, st *store.Store) {
 	require.NoError(t, err)
 	assert.Equal(t, "hash-2", found.CodeHash)
 	assert.Nil(t, found.Metadata, "no metadata is stored as none")
-	assert.True(t, behemotherr.IsNotFound(st.DeleteVerificationCode(ctx, first.ID)), "the first code is gone")
+	assert.True(t, errs.IsNotFound(st.DeleteVerificationCode(ctx, first.ID)), "the first code is gone")
 
 	// Two attempts, then none.
 	for want := 2; want > 0; want-- {
@@ -822,12 +822,12 @@ func verificationCodesContract(t *testing.T, st *store.Store) {
 		assert.Equal(t, want, spent.AttemptsLeft, "the code as it was before the attempt")
 	}
 	_, err = st.SpendVerificationCodeAttempt(ctx, kind, "subject")
-	assert.True(t, behemotherr.IsNotFound(err), "no attempts left: %v", err)
+	assert.True(t, errs.IsNotFound(err), "no attempts left: %v", err)
 	_, err = st.SpendVerificationCodeAttempt(ctx, kind, "nobody")
-	assert.True(t, behemotherr.IsNotFound(err), "no code: %v", err)
+	assert.True(t, errs.IsNotFound(err), "no code: %v", err)
 
 	require.NoError(t, st.DeleteVerificationCode(ctx, second.ID))
-	assert.True(t, behemotherr.IsNotFound(st.DeleteVerificationCode(ctx, second.ID)), "a code is deleted once")
+	assert.True(t, errs.IsNotFound(st.DeleteVerificationCode(ctx, second.ID)), "a code is deleted once")
 
 	// An expired code is purged, a live one is kept, and a user's code goes
 	// with the user.
@@ -837,12 +837,12 @@ func verificationCodesContract(t *testing.T, st *store.Store) {
 	require.NoError(t, st.ReplaceVerificationCode(ctx, &models.VerificationCode{Kind: kind, Subject: u.ID, CodeHash: "h", AttemptsLeft: 1, ExpiresAt: expires}))
 	require.NoError(t, st.PurgeExpiredVerificationCodes(ctx))
 	_, err = st.FindVerificationCode(ctx, kind, "expired")
-	assert.True(t, behemotherr.IsNotFound(err), "the expired code was purged: %v", err)
+	assert.True(t, errs.IsNotFound(err), "the expired code was purged: %v", err)
 	_, err = st.FindVerificationCode(ctx, kind, u.ID)
 	require.NoError(t, err, "the live code was kept")
 	require.NoError(t, st.DeleteUser(ctx, u.ID))
 	_, err = st.FindVerificationCode(ctx, kind, u.ID)
-	assert.True(t, behemotherr.IsNotFound(err), "the user's code went with the user: %v", err)
+	assert.True(t, errs.IsNotFound(err), "the user's code went with the user: %v", err)
 
 	require.NoError(t, st.DeleteVerificationCodeFor(ctx, kind, "nobody"), "removing a code that is not there is not an error")
 }

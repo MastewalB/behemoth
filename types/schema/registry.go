@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 type Registry interface {
@@ -63,15 +63,15 @@ func (r *DefaultRegistry) Declare(model behemoth.Model, table Table) error {
 	defer r.mu.Unlock()
 
 	if r.frozen {
-		return behemotherr.NewConfigurationError("SchemaRegistry.Declare", "cannot Declare after boot has completed", nil)
+		return errs.NewConfigurationError("SchemaRegistry.Declare", "cannot Declare after boot has completed", nil)
 	}
 
 	if model.SchemaName() != table.Name {
-		return behemotherr.NewConfigurationError("SchemaRegistry.Declare",
+		return errs.NewConfigurationError("SchemaRegistry.Declare",
 			fmt.Sprintf("model.SchemaName() = %q does not match Table.Name = %q", model.SchemaName(), table.Name), nil)
 	}
 	if existing, dup := r.tables[table.Name]; dup {
-		return behemotherr.NewConfigurationError("SchemaRegistry.Declare",
+		return errs.NewConfigurationError("SchemaRegistry.Declare",
 			fmt.Sprintf("table %q already declared by %q", table.Name, existing.Owner), nil)
 	}
 	// Contributions may have arrived before this Declare — check them against
@@ -102,7 +102,7 @@ func (r *DefaultRegistry) ExtendColumn(c ColumnContribution) error {
 	defer r.mu.Unlock()
 	const op = "SchemaRegistry.ExtendColumn"
 	if r.frozen {
-		return behemotherr.NewConfigurationError(op, "cannot extend after boot has completed", nil)
+		return errs.NewConfigurationError(op, "cannot extend after boot has completed", nil)
 	}
 	// Table need not exist YET at the moment of this call — plugin
 	// dependency order guarantees the owning plugin's Declare ran first if
@@ -115,7 +115,7 @@ func (r *DefaultRegistry) ExtendColumn(c ColumnContribution) error {
 	}
 	for _, existing := range r.columnExts[c.Table] {
 		if existing.Column.Name == c.Column.Name {
-			return behemotherr.NewConfigurationError(op,
+			return errs.NewConfigurationError(op,
 				fmt.Sprintf("table %q column %q already contributed by %q", c.Table, c.Column.Name, existing.Owner), nil)
 		}
 	}
@@ -128,7 +128,7 @@ func (r *DefaultRegistry) ExtendIndex(c IndexContribution) error {
 	defer r.mu.Unlock()
 	const op = "SchemaRegistry.ExtendIndex"
 	if r.frozen {
-		return behemotherr.NewConfigurationError(op, "cannot extend after boot has completed", nil)
+		return errs.NewConfigurationError(op, "cannot extend after boot has completed", nil)
 	}
 	// Same deferred checks as ExtendColumn.
 	if base, ok := r.tables[c.Table]; ok {
@@ -138,7 +138,7 @@ func (r *DefaultRegistry) ExtendIndex(c IndexContribution) error {
 	}
 	for _, existing := range r.indexExts[c.Table] {
 		if existing.Index.Name == c.Index.Name {
-			return behemotherr.NewConfigurationError(op,
+			return errs.NewConfigurationError(op,
 				fmt.Sprintf("table %q index %q already contributed by %q", c.Table, c.Index.Name, existing.Owner), nil)
 		}
 	}
@@ -154,7 +154,7 @@ func (r *DefaultRegistry) ExtendForeignKey(c ForeignKeyContribution) error {
 	defer r.mu.Unlock()
 	const op = "SchemaRegistry.ExtendForeignKey"
 	if r.frozen {
-		return behemotherr.NewConfigurationError(op, "cannot extend after boot has completed", nil)
+		return errs.NewConfigurationError(op, "cannot extend after boot has completed", nil)
 	}
 	// Same deferred checks as ExtendColumn.
 	if base, ok := r.tables[c.Table]; ok {
@@ -164,7 +164,7 @@ func (r *DefaultRegistry) ExtendForeignKey(c ForeignKeyContribution) error {
 	}
 	for _, existing := range r.foreignKeyExts[c.Table] {
 		if existing.ForeignKey.Name == c.ForeignKey.Name {
-			return behemotherr.NewConfigurationError(op,
+			return errs.NewConfigurationError(op,
 				fmt.Sprintf("table %q foreign key %q already contributed by %q", c.Table, c.ForeignKey.Name, existing.Owner), nil)
 		}
 	}
@@ -176,7 +176,7 @@ func (r *DefaultRegistry) ExtendForeignKey(c ForeignKeyContribution) error {
 // already uses on the base table — a contribution may add, never redefine.
 func checkBaseClash(op, kind string, base Table, name, owner string, baseNames []string) error {
 	if slices.Contains(baseNames, name) {
-		return behemotherr.NewConfigurationError(op,
+		return errs.NewConfigurationError(op,
 			fmt.Sprintf("table %q %s %q is declared by %q and cannot also be contributed by %q", base.Name, kind, name, base.Owner, owner), nil)
 	}
 	return nil
@@ -277,7 +277,7 @@ func (r *DefaultRegistry) Freeze() error {
 
 func (r *DefaultRegistry) checkDeclared(table, owner string) error {
 	if _, ok := r.tables[table]; !ok {
-		return behemotherr.NewConfigurationError("SchemaRegistry.Freeze",
+		return errs.NewConfigurationError("SchemaRegistry.Freeze",
 			fmt.Sprintf("table %q was never declared, but %q attempted to extend it", table, owner), nil)
 	}
 	return nil

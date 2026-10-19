@@ -17,7 +17,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/store"
@@ -251,7 +251,7 @@ func TestCreateUserHookErrorAborts(t *testing.T) {
 	err := s.CreateUser(ctx, &models.User{Email: "a@example.com"})
 	assert.ErrorIs(t, err, abort)
 	_, err = s.FindUserByEmail(ctx, "a@example.com")
-	assert.True(t, behemotherr.IsNotFound(err), "nothing was written: %v", err)
+	assert.True(t, errs.IsNotFound(err), "nothing was written: %v", err)
 	assert.Empty(t, h.createdAs, "AfterCreate never ran")
 }
 
@@ -271,7 +271,7 @@ func TestCreateUserAfterHookErrorRollsBack(t *testing.T) {
 	err := s.CreateUser(ctx, &models.User{Email: "a@example.com"})
 	assert.ErrorIs(t, err, abort, "the hook's error is returned as-is")
 	_, err = s.FindUserByEmail(ctx, "a@example.com")
-	assert.True(t, behemotherr.IsNotFound(err), "the insert was rolled back: %v", err)
+	assert.True(t, errs.IsNotFound(err), "the insert was rolled back: %v", err)
 }
 
 // What a hook writes through the store it is given commits or rolls back
@@ -293,7 +293,7 @@ func TestAfterCreateHookWritesShareTheTransaction(t *testing.T) {
 	assert.ErrorIs(t, err, fail)
 	for _, email := range []string{"a@example.com", "shadow@example.com"} {
 		_, err = s.FindUserByEmail(ctx, email)
-		assert.True(t, behemotherr.IsNotFound(err), "%s was rolled back: %v", email, err)
+		assert.True(t, errs.IsNotFound(err), "%s was rolled back: %v", email, err)
 	}
 
 	fail = nil
@@ -330,7 +330,7 @@ func TestHooksJoinTheCallersTransaction(t *testing.T) {
 		assert.Same(t, callers, tx, "hooks get the caller's transaction, not a nested one")
 	}
 	_, err = s.FindUserByEmail(ctx, "a@example.com")
-	assert.True(t, behemotherr.IsNotFound(err), "the user was rolled back: %v", err)
+	assert.True(t, errs.IsNotFound(err), "the user was rolled back: %v", err)
 }
 
 // A hook writes tables the store has no operations for through tx.DB(), the
@@ -412,10 +412,10 @@ func TestCreateHookAddingUnknownColumnIsRejected(t *testing.T) {
 
 	err := s.CreateUser(ctx, &models.User{Email: "a@example.com"})
 	require.Error(t, err)
-	assert.True(t, behemotherr.IsValidationError(err), "%v", err)
+	assert.True(t, errs.IsValidationError(err), "%v", err)
 	assert.Contains(t, errors.Unwrap(err).Error(), "nickname")
 	_, err = s.FindUserByEmail(ctx, "a@example.com")
-	assert.True(t, behemotherr.IsNotFound(err), "nothing was written: %v", err)
+	assert.True(t, errs.IsNotFound(err), "nothing was written: %v", err)
 }
 
 func TestUpdateUserRunsHooks(t *testing.T) {
@@ -459,12 +459,12 @@ func TestUpdateUserHookErrorsAndRewritesAreChecked(t *testing.T) {
 
 	h.updateAbort, h.updateRewrite = nil, behemoth.M{models.UserID: "someone-else"}
 	_, err = s.UpdateUser(ctx, u.ID, behemoth.M{models.UserFirstname: "Grace"})
-	assert.True(t, behemotherr.IsValidationError(err), "a hook can't change the primary key: %v", err)
+	assert.True(t, errs.IsValidationError(err), "a hook can't change the primary key: %v", err)
 	unchanged()
 
 	h.updateRewrite = behemoth.M{"nickname": "x"}
 	_, err = s.UpdateUser(ctx, u.ID, behemoth.M{models.UserFirstname: "Grace"})
-	assert.True(t, behemotherr.IsValidationError(err), "a hook can't add an unknown column: %v", err)
+	assert.True(t, errs.IsValidationError(err), "a hook can't add an unknown column: %v", err)
 	unchanged()
 	assert.Empty(t, h.updatedAs, "AfterUpdate never ran")
 }
@@ -475,7 +475,7 @@ func TestUpdateUserRejectsPrimaryKey(t *testing.T) {
 	u := &models.User{Email: "a@example.com"}
 	require.NoError(t, s.CreateUser(ctx, u))
 	_, err := s.UpdateUser(ctx, u.ID, behemoth.M{models.UserID: "other"})
-	assert.True(t, behemotherr.IsValidationError(err), "%v", err)
+	assert.True(t, errs.IsValidationError(err), "%v", err)
 }
 
 func TestUpdateUser(t *testing.T) {
@@ -494,7 +494,7 @@ func TestUpdateUser(t *testing.T) {
 
 	_, err = s.UpdateUser(ctx, u.ID, behemoth.M{"firstnmae": "typo"})
 	require.Error(t, err)
-	assert.True(t, behemotherr.IsValidationError(err), "an unknown column is a validation error: %v", err)
+	assert.True(t, errs.IsValidationError(err), "an unknown column is a validation error: %v", err)
 	assert.Contains(t, errors.Unwrap(err).Error(), "firstnmae", "the cause names the column")
 	unchanged, err := s.FindUserByID(ctx, u.ID)
 	require.NoError(t, err)
@@ -511,7 +511,7 @@ func TestDeleteUser(t *testing.T) {
 	require.NoError(t, s.CreateUser(ctx, u))
 	require.NoError(t, s.DeleteUser(ctx, u.ID))
 	_, err := s.FindUserByID(ctx, u.ID)
-	assert.True(t, behemotherr.IsNotFound(err), "%v", err)
+	assert.True(t, errs.IsNotFound(err), "%v", err)
 }
 
 // usernamePlugin registers a data.user.beforeCreate handler — the real
@@ -616,7 +616,7 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 	err = ac.Store.CreateUser(ctx, &models.User{Email: "ada@example.com"})
 	assert.ErrorIs(t, err, rejected)
 	_, err = ac.Store.FindUserByEmail(ctx, "ada@example.com")
-	assert.True(t, behemotherr.IsNotFound(err), "the application's after-hook error rolled the user back: %v", err)
+	assert.True(t, errs.IsNotFound(err), "the application's after-hook error rolled the user back: %v", err)
 
 	// A registration error is a boot error.
 	app, err = bmth.Prepare(nil, bmth.PrepareConfig{})
@@ -790,10 +790,10 @@ func TestBootChecksTheDatabaseHasTransactions(t *testing.T) {
 	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
 	require.NoError(t, err)
 
-	standalone := behemotherr.NewConfigurationError("test", "standalone server", nil)
+	standalone := errs.NewConfigurationError("test", "standalone server", nil)
 	_, err = bmth.Boot(ctx, app, noTransactionsDB{Database: usersDB(t), err: standalone}, cfg)
 	require.Error(t, err)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	assert.ErrorIs(t, err, standalone)
 
 	_, err = bmth.Boot(ctx, app, noTransactionsDB{Database: usersDB(t)}, cfg)
@@ -858,7 +858,7 @@ func TestCommittedHooksWaitForTheOutermostTransaction(t *testing.T) {
 	require.ErrorIs(t, err, failed)
 	assert.Empty(t, h.committed)
 	_, err = s.FindUserByEmail(ctx, "ada@example.com")
-	assert.True(t, behemotherr.IsNotFound(err), "%v", err)
+	assert.True(t, errs.IsNotFound(err), "%v", err)
 
 	// Everything succeeds: nothing is reported while the transaction is
 	// open, and everything is, in order, once it has committed.
@@ -1010,7 +1010,7 @@ func TestDeleteUserCallsItsHooksInOneTransaction(t *testing.T) {
 	assert.Equal(t, []int64{0, 0, 0, 1}, []int64{users, sessions, accounts, tokens}, "another subject's token stays")
 
 	err := st.DeleteUser(ctx, u.ID)
-	assert.True(t, behemotherr.IsNotFound(err), "a user that does not exist: %v", err)
+	assert.True(t, errs.IsNotFound(err), "a user that does not exist: %v", err)
 }
 
 // Under Boot a deleted user's sessions end the way a revoked one does: their
@@ -1090,7 +1090,7 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 	require.Equal(t, 1, kv.len(), "the live session is cached")
 
 	// A handler on data.user.beforeDelete refuses: nothing changes.
-	seen, veto = nil, behemotherr.NewInvalidInputError("billing", "user", "the user has an open invoice", nil)
+	seen, veto = nil, errs.NewInvalidInputError("billing", "user", "the user has an open invoice", nil)
 	require.ErrorIs(t, ac.Store.DeleteUser(ctx, u.ID), veto)
 	assert.Equal(t, []string{"beforeDelete tx=true"}, seen)
 	_, err = ac.SessionManager.Validate(ctx, live)
@@ -1106,7 +1106,7 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 	}, seen, "one afterRevoke: the session revoked earlier was reported then, and beforeRevoke does not fire")
 	assert.Zero(t, kv.len(), "the cache entry is gone")
 	_, err = ac.SessionManager.Validate(ctx, live)
-	assert.True(t, behemotherr.IsNotFound(err), "the deleted user's token: %v", err)
+	assert.True(t, errs.IsNotFound(err), "the deleted user's token: %v", err)
 
 	deleted := rec.Audit.OfType(telemetry.AuditUserDeleted)
 	require.Len(t, deleted, 1)

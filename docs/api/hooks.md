@@ -53,7 +53,7 @@ A before handler receives the payload as a `behemoth.M` and returns the payload 
 - Return `(payload, nil)` to continue with that payload.
 - Return `(nil, nil)` to continue without changing it. A handler that only validates can end this way. To continue with an empty payload, return an empty `behemoth.M`.
 - Whether a rewrite has an effect depends on the point. The [hook point reference](#hook-point-reference) lists what each before point reads back.
-- Return `(nil, err)` to stop the operation. No later handler runs, and the operation does not happen. The caller receives your error unchanged, so return one of the `errors` package's types (a validation error, for example) to get a sensible HTTP status.
+- Return `(nil, err)` to stop the operation. No later handler runs, and the operation does not happen. The caller receives your error unchanged, so return one of the `errs` package's types (a validation error, for example) to get a sensible HTTP status.
 - Each handler receives what the previous one returned.
 - A panic is caught, logged, and treated as an error that stops the operation.
 
@@ -61,7 +61,7 @@ A before handler receives the payload as a `behemoth.M` and returns the payload 
 func requireCompanyEmail(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
 	email, _ := payload[models.UserEmail].(string)
 	if !strings.HasSuffix(email, "@example.com") {
-		return nil, behemotherr.NewValidationError("requireCompanyEmail", "users",
+		return nil, errs.NewValidationError("requireCompanyEmail", "users",
 			errors.New("only example.com addresses may register"))
 	}
 	return payload, nil
@@ -96,7 +96,7 @@ A failed handler follows these rules:
 - It can't change the outcome. Its error is logged and later handlers still run.
 - It does not fire for system errors such as a database timeout. Those are returned to the caller as ordinary errors.
 - When a before handler refuses a flow with a typed error, the flow's failed point fires with code `rejected_by_hook` (`types.FailureRejectedByHook`) and your error as `Cause`. The code is the same whichever handler refused, at any point of the flow: a refusal on `auth.signIn.credentialsVerified` is reported this way too. Read `Cause` for the reason. The audit event has your error's code as `causeCode` in its metadata.
-- A handler's untyped error, or a typed one that is not a rejection (`behemotherr.IsRejection`), counts as a system error. It stops the flow and fires no failed point.
+- A handler's untyped error, or a typed one that is not a rejection (`errs.IsRejection`), counts as a system error. It stops the flow and fires no failed point.
 - A flow of your own that runs a before chain reports the chain's error with `types.FailIfRejected`, which applies both rules.
 - Tier 1 has no failed points.
 
@@ -130,7 +130,7 @@ func (p *InvitePlugin) Register(reg types.HookRegistry) error {
 		code, _ := payload["inviteCode"].(string)
 		invite, err := p.find(hctx.Ctx, code)
 		if err != nil {
-			return nil, behemotherr.NewInvalidInputError("invite", "invite", "this invite code is not valid", err)
+			return nil, errs.NewInvalidInputError("invite", "invite", "this invite code is not valid", err)
 		}
 		hctx.Values["invite.id"] = invite.ID // a note for the handlers below
 		return payload, nil

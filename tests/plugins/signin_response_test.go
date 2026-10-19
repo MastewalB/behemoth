@@ -15,7 +15,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
@@ -65,7 +65,7 @@ func callHeaders(t *testing.T, ac *types.AuthContext, route types.Route, body st
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
-		status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+		status, body := (&errs.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(body))
 		return w
@@ -222,7 +222,7 @@ func TestASessionEndedElsewhereLosesItsCookie(t *testing.T) {
 func TestRefusedSignOutKeepsTheCookie(t *testing.T) {
 	refuse := func(reg types.HookRegistry) error {
 		return reg.OnBefore(hooks.HookSignOutBefore, func(*types.HookContext, behemoth.M) (behemoth.M, error) {
-			return nil, behemotherr.NewInvalidInputError("test", "session", "not now", nil)
+			return nil, errs.NewInvalidInputError("test", "session", "not now", nil)
 		}, nil)
 	}
 	ac, mounted, err := bootPasswords(t, types.SessionConfig{}, refuse)
@@ -308,7 +308,7 @@ func TestSignOutOfARollingSessionSetsTheCookieOnce(t *testing.T) {
 func TestBootRefusesAnUnknownSessionTransport(t *testing.T) {
 	_, _, err := bootPasswords(t, types.SessionConfig{Transport: "Header"}, nil)
 	require.Error(t, err)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	assert.Contains(t, err.Error(), "Transport")
 }
 

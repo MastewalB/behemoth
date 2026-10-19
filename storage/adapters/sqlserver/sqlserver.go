@@ -22,7 +22,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -108,7 +108,7 @@ func NewMSSQLClauseOptions(N int) *adapters.ClauseOptions {
 
 func (ms *SQLServerAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -132,7 +132,7 @@ func (ms *SQLServerAdapter) FindOne(
 	whereExpression clause.Expression,
 ) (behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 
 	// columns stay canonical: they key the map handed to FromMap.
@@ -165,7 +165,7 @@ func (ms *SQLServerAdapter) FindMany(
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 
 	var (
@@ -230,7 +230,7 @@ func (ms *SQLServerAdapter) FindMany(
 
 func (ms *SQLServerAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -352,7 +352,7 @@ func (ms *SQLServerAdapter) DeleteOne(
 ) error {
 	whereClause, args := ms.where(m, &expr, defaultMSSQLClauseOptions)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 
 	// TOP (1) and no subquery, for the reason given in UpdateOne.
@@ -379,7 +379,7 @@ func (ms *SQLServerAdapter) DeleteMany(
 ) error {
 	whereClause, args := ms.where(m, &expr, defaultMSSQLClauseOptions)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
@@ -446,7 +446,7 @@ func (ms *SQLServerAdapter) Transaction(ctx context.Context, fn behemoth.Transac
 		_, err := fn(ctx, ms)
 		return err
 	default:
-		return behemotherr.NewTransactionError("Transaction",
+		return errs.NewTransactionError("Transaction",
 			fmt.Errorf("cannot begin a transaction on a %T; the adapter needs a *sql.DB", ms.DB))
 	}
 
@@ -467,7 +467,7 @@ func (ms *SQLServerAdapter) Transaction(ctx context.Context, fn behemoth.Transac
 
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return behemotherr.NewTransactionError("Transaction", rollbackErr)
+			return errs.NewTransactionError("Transaction", rollbackErr)
 		}
 		return err
 	}
@@ -527,11 +527,11 @@ func mapMSSQLError(op, entity string, err error) error {
 		return nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return behemotherr.NewNotFound(op, entity, err)
+		return errs.NewNotFound(op, entity, err)
 	}
 
 	if errors.Is(err, sql.ErrTxDone) {
-		return behemotherr.NewTransactionError(op, err)
+		return errs.NewTransactionError(op, err)
 	}
 
 	if mssqlErr, ok := errors.AsType[mssql.Error](err); ok {
@@ -539,15 +539,15 @@ func mapMSSQLError(op, entity string, err error) error {
 		case 208:
 			return adapters.Classify(op, entity, adapters.SentinelUndefinedTable, err)
 		case 2627, 2601:
-			return behemotherr.NewDuplicateKey(op, entity, err)
+			return errs.NewDuplicateKey(op, entity, err)
 		case 547:
-			return behemotherr.NewForeignKeyViolation(op, entity, err)
+			return errs.NewForeignKeyViolation(op, entity, err)
 		case 515, 245:
-			return behemotherr.NewValidationError(op, entity, err)
+			return errs.NewValidationError(op, entity, err)
 		}
 	}
 
-	return behemotherr.NewDatabaseError(op, err)
+	return errs.NewDatabaseError(op, err)
 
 }
 

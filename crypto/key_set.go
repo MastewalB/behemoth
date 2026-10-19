@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 )
 
@@ -112,10 +112,10 @@ var _ types.KeySet = (*CachedKeySet)(nil)
 func NewCachedKeySet(src KeySource, opts CacheOptions) (*CachedKeySet, error) {
 	const op = "crypto.NewCachedKeySet"
 	if src == nil {
-		return nil, behemotherr.NewConfigurationError(op, "a key source is required", nil)
+		return nil, errs.NewConfigurationError(op, "a key source is required", nil)
 	}
 	if err := opts.Validate(); err != nil {
-		return nil, behemotherr.NewConfigurationError(op, err.Error(), err)
+		return nil, errs.NewConfigurationError(op, err.Error(), err)
 	}
 	return &CachedKeySet{src: src, opts: opts.withDefaults()}, nil
 }
@@ -140,7 +140,7 @@ func (s *CachedKeySet) PublicKey(ctx context.Context, kid string) (types.Publish
 	if key, ok := s.lookup(kid); ok {
 		return key, nil
 	}
-	return types.PublishedKey{}, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTUnknownKey, nil)
+	return types.PublishedKey{}, errs.NewJWTError(op, errs.CodeJWTUnknownKey, nil)
 }
 
 // PublicKeys implements [types.KeySet]. It returns a copy of the keys,

@@ -158,7 +158,7 @@ These limits apply:
 - `[Not built]` Password change for a signed-in user. It needs a way to re-check the current password; see *Nothing refreshes a session in place* in `docs/ongoing.md`.
 - `[Limit]` A reset consumes its token just before it writes the password, outside the write's transaction. If that write fails, the link is spent and the user asks for another. `docs/ongoing.md` has what consuming inside the transaction would need.
 - `[Not built]` Rehash on sign-in. `PasswordHasher.NeedsRehash` exists but sign-in does not call it.
-- Sign-up, sign-in, and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`behemotherr.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
+- Sign-up, sign-in, and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`errs.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
 - `Options.ValidateEmail` and `ValidatePassword` errors are replaced by `invalid email` and `invalid password` in the response, so a custom message does not reach the client. The function's error is the typed error's cause, for logs.
 
 ### The email and password rules belong to the plugin
@@ -195,7 +195,7 @@ These limits apply:
 **Options considered:**
 
 - *Return typed errors from the handlers and keep the untyped refusal.* The router maps an untyped error to `500`, so a wrong password would become a `500`.
-- *Make the refusal a typed error and return everything to the router.* `errInvalidCredentials` is an unauthorized error (`behemotherr.NewUnauthorized`) with the code `invalid_credentials`. After that, every error out of `SignIn` is a typed rejection or a failure of the system, and the handler has nothing to decide.
+- *Make the refusal a typed error and return everything to the router.* `errInvalidCredentials` is an unauthorized error (`errs.NewUnauthorized`) with the code `invalid_credentials`. After that, every error out of `SignIn` is a typed rejection or a failure of the system, and the handler has nothing to decide.
 
 **Decision:** The second, for sign-in. Sign-out needed only the first half: `SignOut` already returned typed errors. Both handlers now end in `return err`.
 

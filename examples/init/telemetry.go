@@ -71,11 +71,11 @@ func newObservability(ctx context.Context) (*observability, error) {
 	obs := &observability{}
 	var shutdowns []func(context.Context) error
 	obs.shutdown = func(ctx context.Context) error {
-		var errs []error
+		var failures []error
 		for _, fn := range shutdowns {
-			errs = append(errs, fn(ctx))
+			failures = append(failures, fn(ctx))
 		}
-		return errors.Join(errs...)
+		return errors.Join(failures...)
 	}
 
 	var opts []telemetry.Option

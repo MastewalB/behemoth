@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 )
 
@@ -192,7 +192,7 @@ const SessionTokenHeader = "Set-Auth-Token"
 
 // RequireFreshSession is RequireSession plus a check that the session is
 // fresh (SessionManager.IsFresh). A session that is valid but too old gets a
-// typed session error with behemotherr.ErrorCodeSessionNotFresh, which the
+// typed session error with errs.CodeSessionNotFresh, which the
 // router answers with 401: the client asks the user to sign in again and
 // retries. Use it on its own; it does what RequireSession does first.
 func RequireFreshSession(sm SessionManager) Middleware {
@@ -200,7 +200,7 @@ func RequireFreshSession(sm SessionManager) Middleware {
 		return RequireSession(sm)(func(rctx *RequestContext) error {
 			session, _ := rctx.Values["session"].(*models.Session)
 			if session == nil || !sm.IsFresh(session) {
-				return behemotherr.NewSessionError("RequireFreshSession", behemotherr.ErrorCodeSessionNotFresh, nil)
+				return errs.NewSessionError("RequireFreshSession", errs.CodeSessionNotFresh, nil)
 			}
 			return next(rctx)
 		})
@@ -244,15 +244,15 @@ func RequireSession(sm SessionManager) Middleware {
 			const op = "RequireSession"
 			token, ok := sm.ExtractToken(rctx.Request)
 			if !ok {
-				return behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionMissing, nil)
+				return errs.NewSessionError(op, errs.CodeSessionMissing, nil)
 			}
 			session, err := sm.Validate(rctx.Ctx, token)
 			if err != nil {
 				// To the lookup, a token that resolves to nothing is "not
 				// found", which the router answers with 404. To a route
 				// that needs a session it is a request without one.
-				if behemotherr.IsNotFound(err) {
-					err = behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionInvalid, err)
+				if errs.IsNotFound(err) {
+					err = errs.NewSessionError(op, errs.CodeSessionInvalid, err)
 				}
 				if sessionIsGone(err) {
 					sm.ClearToken(rctx)
@@ -281,7 +281,7 @@ func RequireSession(sm SessionManager) Middleware {
 // session that waits for a second factor is still live. Any other error says
 // that the lookup failed, not what became of the session.
 func sessionIsGone(err error) bool {
-	return behemotherr.IsCode(err, behemotherr.ErrorCodeSessionInvalid) ||
-		behemotherr.IsCode(err, behemotherr.ErrorCodeSessionRevoked) ||
-		behemotherr.IsCode(err, behemotherr.ErrorCodeSessionExpired)
+	return errs.IsCode(err, errs.CodeSessionInvalid) ||
+		errs.IsCode(err, errs.CodeSessionRevoked) ||
+		errs.IsCode(err, errs.CodeSessionExpired)
 }

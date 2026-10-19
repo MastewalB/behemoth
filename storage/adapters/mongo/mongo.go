@@ -12,7 +12,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsoncodec"
@@ -102,7 +102,7 @@ func (mdb *MongoAdapter) CheckTransactions(ctx context.Context) error {
 		return fmt.Errorf("MongoAdapter.CheckTransactions: hello command failed: %w", err)
 	}
 	if hello.SetName == "" && hello.Msg != "isdbgrid" {
-		return behemotherr.NewConfigurationError("MongoAdapter.CheckTransactions",
+		return errs.NewConfigurationError("MongoAdapter.CheckTransactions",
 			"the MongoDB server is a standalone instance, which has no transactions; "+
 				"run it as a replica set (a single node is enough: start mongod with --replSet and run rs.initiate()) or use a sharded cluster", nil)
 	}
@@ -140,7 +140,7 @@ func (mdb *MongoAdapter) decode(m behemoth.Model, canonical map[string]string, r
 func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	doc, err := ser.ToMap()
@@ -239,7 +239,7 @@ func (mdb *MongoAdapter) physicalQueryOptions(m behemoth.Model, options *behemot
 func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	doc, err := ser.ToMap()
@@ -314,7 +314,7 @@ func (mdb *MongoAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr c
 	filter := mdb.filter(m, &expr)
 
 	if len(filter) == 0 {
-		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 	// The filter is evaluated atomically per document.
 	res, err := mdb.collection(m).DeleteOne(ctx, filter)
@@ -328,7 +328,7 @@ func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr 
 	filter := mdb.filter(m, &expr)
 
 	if len(filter) == 0 {
-		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 	_, err := mdb.collection(m).DeleteMany(ctx, filter)
 	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
@@ -477,7 +477,7 @@ func mapMongoErrors(op, entity string, err error) error {
 	case mongo.IsDuplicateKeyError(err): // E11000, from a unique index
 		return adapters.Classify(op, entity, adapters.SentinelDuplicateKey, err)
 	case errors.Is(err, mongo.ErrEmptySlice) || errors.Is(err, mongo.ErrNilValue) || errors.Is(err, mongo.ErrNilDocument):
-		return behemotherr.NewValidationError(op, entity, err)
+		return errs.NewValidationError(op, entity, err)
 	default:
 		return adapters.Classify(op, entity, adapters.SentinelUnknown, err)
 	}

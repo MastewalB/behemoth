@@ -13,7 +13,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/username"
@@ -91,8 +91,8 @@ func (app *usernameApp) nameOf(t *testing.T, userID string) (string, bool) {
 	return name, ok
 }
 
-func hasCode(err error, category behemotherr.Category, code string) bool {
-	return behemotherr.Is(err, category) && behemotherr.IsCode(err, code)
+func hasCode(err error, category errs.Category, code string) bool {
+	return errs.IsCategory(err, category) && errs.IsCode(err, code)
 }
 
 // A sign-up stores the username in its stored form, and the user signs in
@@ -172,8 +172,8 @@ func TestUsernameSignUpAndSignIn(t *testing.T) {
 		failed = nil
 		_, err := app.names.SignIn(ctx, tc.creds)
 		require.Error(t, err, attempt)
-		assert.True(t, hasCode(err, behemotherr.CategoryUnauthorized, emailpassword.ErrorCodeInvalidCredentials), "%s: %v", attempt, err)
-		var refusal *behemotherr.DomainError
+		assert.True(t, hasCode(err, errs.CategoryUnauthorized, emailpassword.ErrorCodeInvalidCredentials), "%s: %v", attempt, err)
+		var refusal *errs.DomainError
 		require.ErrorAs(t, err, &refusal, attempt)
 		assert.Equal(t, "invalid username or password", refusal.PublicMessage, attempt)
 		assert.Equal(t, []string{tc.code}, failed, "%s: the failed point tells the refusals apart", attempt)
@@ -206,15 +206,15 @@ func TestUsernameRulesAtSignUp(t *testing.T) {
 		failed = nil
 		_, err := app.passwords.SignUp(ctx, behemoth.M{"email": "new@example.com", "password": "correct horse", "username": name})
 		require.Error(t, err, name)
-		assert.True(t, behemotherr.IsCode(err, code), "%q: %v", name, err)
+		assert.True(t, errs.IsCode(err, code), "%q: %v", name, err)
 		assert.Equal(t, []string{"rejected_by_hook"}, failed, "%q: the sign-up's failed point fires", name)
 		_, err = app.ac.Store.FindUserByEmail(ctx, "new@example.com")
-		assert.True(t, behemotherr.IsNotFound(err), "%q: no user was created", name)
+		assert.True(t, errs.IsNotFound(err), "%q: no user was created", name)
 	}
 	_, err := app.passwords.SignUp(ctx, behemoth.M{"email": "new@example.com", "password": "correct horse", "username": 7})
-	assert.True(t, hasCode(err, behemotherr.CategoryValidation, username.ErrorCodeInvalidUsername), "a username that is not a string: %v", err)
+	assert.True(t, hasCode(err, errs.CategoryValidation, username.ErrorCodeInvalidUsername), "a username that is not a string: %v", err)
 	_, err = app.passwords.SignUp(ctx, behemoth.M{"email": "new@example.com", "password": "correct horse", "username": "ADA"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConflict), "a taken username is a conflict: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConflict), "a taken username is a conflict: %v", err)
 
 	// A username is optional, and any number of users go without one.
 	first := app.signUp(t, "one@example.com", "")
@@ -233,7 +233,7 @@ func TestUsernameRequiredAtSignUp(t *testing.T) {
 	app := bootUsernames(t, username.Options{RequireAtSignUp: true}, nil)
 
 	_, err := app.passwords.SignUp(ctx, behemoth.M{"email": "ada@example.com", "password": "correct horse"})
-	assert.True(t, hasCode(err, behemotherr.CategoryValidation, username.ErrorCodeInvalidUsername), "%v", err)
+	assert.True(t, hasCode(err, errs.CategoryValidation, username.ErrorCodeInvalidUsername), "%v", err)
 	app.signUp(t, "ada@example.com", "ada")
 
 	// The option is about sign-up. A user created another way needs none.
@@ -254,11 +254,11 @@ func TestUsernameRulesOnDirectWrites(t *testing.T) {
 	assert.Equal(t, "grace.h", name)
 
 	_, err = app.names.SetUsername(ctx, grace.ID, "ADA")
-	assert.True(t, hasCode(err, behemotherr.CategoryConflict, username.ErrorCodeUsernameTaken), "%v", err)
+	assert.True(t, hasCode(err, errs.CategoryConflict, username.ErrorCodeUsernameTaken), "%v", err)
 	_, err = app.names.SetUsername(ctx, grace.ID, "no spaces")
-	assert.True(t, hasCode(err, behemotherr.CategoryValidation, username.ErrorCodeInvalidUsername), "%v", err)
+	assert.True(t, hasCode(err, errs.CategoryValidation, username.ErrorCodeInvalidUsername), "%v", err)
 	_, err = app.ac.Store.UpdateUser(ctx, grace.ID, behemoth.M{username.Column.Name: "ada"})
-	assert.True(t, behemotherr.IsCode(err, username.ErrorCodeUsernameTaken), "Store.UpdateUser goes through the same handler: %v", err)
+	assert.True(t, errs.IsCode(err, username.ErrorCodeUsernameTaken), "Store.UpdateUser goes through the same handler: %v", err)
 	name, _ = app.nameOf(t, grace.ID)
 	assert.Equal(t, "grace.h", name, "a refused update changes nothing")
 
@@ -275,7 +275,7 @@ func TestUsernameRulesOnDirectWrites(t *testing.T) {
 	direct := &models.User{Email: "linus@example.com"}
 	require.NoError(t, username.Column.Set(direct, "Ada"))
 	err = app.ac.Store.CreateUser(ctx, direct)
-	assert.True(t, behemotherr.IsCode(err, username.ErrorCodeUsernameTaken), "%v", err)
+	assert.True(t, errs.IsCode(err, username.ErrorCodeUsernameTaken), "%v", err)
 
 	// An empty username removes it, and the name is free again.
 	_, err = app.names.SetUsername(ctx, grace.ID, "")
@@ -283,7 +283,7 @@ func TestUsernameRulesOnDirectWrites(t *testing.T) {
 	_, ok := app.nameOf(t, grace.ID)
 	assert.False(t, ok)
 	_, err = app.names.SignIn(ctx, username.Credentials{Username: "grace.h", Password: "correct horse"})
-	assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "%v", err)
+	assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "%v", err)
 	_, err = app.names.SetUsername(ctx, ada.ID, "grace.h")
 	require.NoError(t, err)
 	result, err := app.names.SignIn(ctx, username.Credentials{Username: "grace.h", Password: "correct horse"})
@@ -297,13 +297,13 @@ func TestUsernameIsUniqueUnderConcurrentSignUps(t *testing.T) {
 	app := bootUsernames(t, username.Options{}, nil)
 
 	const racers = 6
-	errs := make([]error, racers)
+	results := make([]error, racers)
 	var wg sync.WaitGroup
 	for i := range racers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = app.passwords.SignUp(ctx, behemoth.M{
+			_, results[i] = app.passwords.SignUp(ctx, behemoth.M{
 				"email": string(rune('a'+i)) + "@example.com", "password": "correct horse", "username": "ada",
 			})
 		}()
@@ -311,12 +311,12 @@ func TestUsernameIsUniqueUnderConcurrentSignUps(t *testing.T) {
 	wg.Wait()
 
 	won := 0
-	for _, err := range errs {
+	for _, err := range results {
 		if err == nil {
 			won++
 			continue
 		}
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConflict) || behemotherr.IsDuplicateKey(err), "a loser is refused as a conflict: %v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConflict) || errs.IsDuplicateKey(err), "a loser is refused as a conflict: %v", err)
 	}
 	assert.Equal(t, 1, won)
 	var holders int
@@ -418,12 +418,12 @@ func TestUsernameSignInsCanBeLimitedPerUsername(t *testing.T) {
 
 	for _, name := range []string{"Nobody", "nobody "} {
 		_, err = names.SignIn(ctx, username.Credentials{Username: name, Password: "x"})
-		assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "%v", err)
+		assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "%v", err)
 	}
 	_, err = names.SignIn(ctx, username.Credentials{Username: "NOBODY", Password: "x"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryRateLimited), "the third attempt on one username, in any casing: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryRateLimited), "the third attempt on one username, in any casing: %v", err)
 	_, err = names.SignIn(ctx, username.Credentials{Username: "someone", Password: "x"})
-	assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "another username has its own count: %v", err)
+	assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "another username has its own count: %v", err)
 }
 
 // perUsernameLimit declares the rule an application would: two sign-in
@@ -454,7 +454,7 @@ func TestUsernameOptionsAndWiring(t *testing.T) {
 	// The email/password plugin has to be installed.
 	_, err := bmth.Prepare([]types.Plugin{username.New(passwords, username.Options{})}, bmth.PrepareConfig{})
 	require.Error(t, err)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 
 	for name, p := range map[string]*username.Plugin{
 		"no email/password plugin": username.New(nil, username.Options{}),
@@ -464,28 +464,28 @@ func TestUsernameOptionsAndWiring(t *testing.T) {
 	} {
 		err := p.Init(&types.AuthContext{})
 		require.Error(t, err, name)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%s: %v", name, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: %v", name, err)
 	}
 
 	// Before Boot the flows report that the plugin is not initialized.
 	unbooted := username.New(passwords, username.Options{})
 	_, err = unbooted.SignIn(ctx, username.Credentials{Username: "ada", Password: "x"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	_, err = unbooted.SetUsername(ctx, "id", "ada")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 
 	// SignInWith refuses credentials that can't name an identifier.
 	app := bootUsernames(t, username.Options{MinLength: 2, MaxLength: 4}, nil)
 	_, err = app.passwords.SignInWith(ctx, emailpassword.IdentifierCredentials{Key: "password", Value: "x"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	_, err = app.passwords.SignInWith(ctx, emailpassword.IdentifierCredentials{Key: "handle", Value: "x"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "no Find: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "no Find: %v", err)
 
 	// The limits are the options'.
 	_, err = app.names.Validate("ab")
 	require.NoError(t, err)
 	_, err = app.names.Validate("abcde")
-	assert.True(t, behemotherr.IsCode(err, username.ErrorCodeInvalidUsername), "%v", err)
+	assert.True(t, errs.IsCode(err, username.ErrorCodeInvalidUsername), "%v", err)
 }
 
 func (app *usernameApp) shownAs(t *testing.T, userID string) (string, bool) {
@@ -504,7 +504,7 @@ func TestDisplayUsername(t *testing.T) {
 	ctx := context.Background()
 	app := bootUsernames(t, username.Options{}, nil)
 	invalidDisplay := func(err error) bool {
-		return hasCode(err, behemotherr.CategoryValidation, username.ErrorCodeInvalidDisplayUsername)
+		return hasCode(err, errs.CategoryValidation, username.ErrorCodeInvalidDisplayUsername)
 	}
 
 	// Given at sign-up next to the username.
@@ -528,7 +528,7 @@ func TestDisplayUsername(t *testing.T) {
 		_, err := app.passwords.SignUp(ctx, in)
 		assert.True(t, invalidDisplay(err), "%s: %v", attempt, err)
 		_, err = app.ac.Store.FindUserByEmail(ctx, "grace@example.com")
-		assert.True(t, behemotherr.IsNotFound(err), "%s: no user was created", attempt)
+		assert.True(t, errs.IsNotFound(err), "%s: no user was created", attempt)
 	}
 
 	// A user without a username has no display form.
@@ -599,9 +599,9 @@ func TestUsernameAvailability(t *testing.T) {
 		assert.Equal(t, want, got, name)
 	}
 	_, err = app.names.Available(ctx, "a b")
-	assert.True(t, hasCode(err, behemotherr.CategoryValidation, username.ErrorCodeInvalidUsername), "%v", err)
+	assert.True(t, hasCode(err, errs.CategoryValidation, username.ErrorCodeInvalidUsername), "%v", err)
 	_, err = username.New(app.passwords, username.Options{}).Available(ctx, "ada")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "before Boot: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "before Boot: %v", err)
 
 	route := app.routes["/api/auth"+username.PathAvailable]
 	require.NotNil(t, route.Handler)

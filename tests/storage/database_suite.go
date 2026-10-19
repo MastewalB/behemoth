@@ -8,7 +8,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -177,7 +177,7 @@ func (s *DatabaseTestSuite) TestUpdate(t *testing.T) {
 	// The convention: NotFound for a missing row, and never an insert.
 	ghost := s.modelManager.Create("ghost")
 	err = s.adapter.Update(s.ctx, ghost)
-	assert.True(t, behemotherr.IsNotFound(err), "updating a missing row: expected NotFound, got %v", err)
+	assert.True(t, errs.IsNotFound(err), "updating a missing row: expected NotFound, got %v", err)
 	count, err := s.adapter.Count(s.ctx, ghost, getWhereExpr("id", clause.OpEqual, "ghost"))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), count, "Update must not insert a missing row")
@@ -226,7 +226,7 @@ func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
 		models := s.PopulateTableWithTestData(t)
 
 		err := s.adapter.UpdateOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, "no-such-id"), behemoth.M{"email": "x@example.com"})
-		assert.True(t, behemotherr.IsNotFound(err), "expected NotFound, got %v", err)
+		assert.True(t, errs.IsNotFound(err), "expected NotFound, got %v", err)
 	})
 
 	// Drivers that report changed rather than matched rows (MySQL) must
@@ -257,7 +257,7 @@ func (s *DatabaseTestSuite) TestUpdateOne(t *testing.T) {
 		}}
 		require.NoError(t, s.adapter.UpdateOne(s.ctx, models[0], guarded, behemoth.M{"email": "claimed@example.com"}))
 		err = s.adapter.UpdateOne(s.ctx, models[0], guarded, behemoth.M{"email": "again@example.com"})
-		assert.True(t, behemotherr.IsNotFound(err), "the guard no longer holds; expected NotFound, got %v", err)
+		assert.True(t, errs.IsNotFound(err), "the guard no longer holds; expected NotFound, got %v", err)
 
 		after, err := s.adapter.FindOne(s.ctx, models[0], getWhereExpr("id", clause.OpEqual, id))
 		require.NoError(t, err)
@@ -373,7 +373,7 @@ func (s *DatabaseTestSuite) TestDelete(t *testing.T) {
 	assert.Nil(t, found)
 
 	err = s.adapter.Delete(s.ctx, model)
-	assert.True(t, behemotherr.IsNotFound(err), "deleting a missing row: expected NotFound, got %v", err)
+	assert.True(t, errs.IsNotFound(err), "deleting a missing row: expected NotFound, got %v", err)
 }
 
 func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
@@ -439,7 +439,7 @@ func (s *DatabaseTestSuite) TestDeleteOne(t *testing.T) {
 		expr := getWhereExpr("id", clause.OpEqual, "nonexistent")
 
 		err := s.adapter.DeleteOne(s.ctx, models[0], expr)
-		assert.True(t, behemotherr.IsNotFound(err), "DeleteOne with no match: expected NotFound, got %v", err)
+		assert.True(t, errs.IsNotFound(err), "DeleteOne with no match: expected NotFound, got %v", err)
 
 		// Verify all records still exist
 		count, err := s.adapter.Count(s.ctx, models[0], clause.Expression{})

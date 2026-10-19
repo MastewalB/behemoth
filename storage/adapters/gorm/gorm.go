@@ -11,7 +11,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"gorm.io/gorm"
@@ -97,7 +97,7 @@ func (ga *GormAdapter) err(m behemoth.Model, err error) error {
 func (ga *GormAdapter) row(m behemoth.Model) (map[string]any, error) {
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 	data, err := ser.ToMap()
 	if err != nil {
@@ -147,7 +147,7 @@ func (ga *GormAdapter) Create(ctx context.Context, m behemoth.Model) error {
 
 func (ga *GormAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 	// columns stay canonical: they key the map handed to FromMap.
 	columns := adapters.ReadColumns(ga.resolver, m, nil)
@@ -172,7 +172,7 @@ func (ga *GormAdapter) FindMany(
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 	var selected []string
 	if options != nil {
@@ -271,7 +271,7 @@ func (ga *GormAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 
 func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	if query, _ := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption); query == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 	res := ga.oneRow(ctx, ga.table(ctx, m), m, &expr).Delete(deleted())
 	if res.Error != nil {
@@ -282,7 +282,7 @@ func (ga *GormAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cla
 
 func (ga *GormAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	if query, _ := adapters.BuildSQLWhereClause(&expr, adapters.DefaultClauseOption); query == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 	return ga.err(m, ga.where(ga.table(ctx, m), m, &expr).Delete(deleted()).Error)
 }
@@ -344,23 +344,23 @@ func mapGormError(op, entity string, err error) error {
 
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
-		return behemotherr.NewNotFound(op, entity, err)
+		return errs.NewNotFound(op, entity, err)
 
 	case errors.Is(err, gorm.ErrDuplicatedKey):
-		return behemotherr.NewDuplicateKey(op, entity, err)
+		return errs.NewDuplicateKey(op, entity, err)
 
 	case errors.Is(err, gorm.ErrForeignKeyViolated):
-		return behemotherr.NewForeignKeyViolation(op, entity, err)
+		return errs.NewForeignKeyViolation(op, entity, err)
 
 	case errors.Is(err, gorm.ErrInvalidTransaction):
-		return behemotherr.NewTransactionError(op, err)
+		return errs.NewTransactionError(op, err)
 
 	case errors.Is(err, gorm.ErrInvalidData) ||
 		errors.Is(err, gorm.ErrInvalidDB) ||
 		errors.Is(err, gorm.ErrInvalidField) ||
 		errors.Is(err, gorm.ErrInvalidValue):
-		return behemotherr.NewValidationError(op, entity, err)
+		return errs.NewValidationError(op, entity, err)
 	}
 
-	return behemotherr.NewDatabaseError(op, err)
+	return errs.NewDatabaseError(op, err)
 }

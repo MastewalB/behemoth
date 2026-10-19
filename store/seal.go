@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/cryptotypes"
 )
 
@@ -23,7 +23,7 @@ const sealPrefix = "v"
 
 func (s *Store) seal(op, plaintext string) (string, error) {
 	if s.encryptor == nil {
-		return "", behemotherr.NewConfigurationError(op, "storing a secret requires store.WithEncryptor", nil)
+		return "", errs.NewConfigurationError(op, "storing a secret requires store.WithEncryptor", nil)
 	}
 	ciphertext, version, err := s.encryptor.Encrypt([]byte(plaintext))
 	if err != nil {
@@ -34,11 +34,11 @@ func (s *Store) seal(op, plaintext string) (string, error) {
 
 func (s *Store) open(op, sealed string) (string, error) {
 	if s.encryptor == nil {
-		return "", behemotherr.NewConfigurationError(op, "reading a secret requires store.WithEncryptor", nil)
+		return "", errs.NewConfigurationError(op, "reading a secret requires store.WithEncryptor", nil)
 	}
 	version, ciphertext, err := parseSealed(sealed)
 	if err != nil {
-		return "", behemotherr.NewSecurityError(op, "invalid_sealed_value", err)
+		return "", errs.NewSecurityError(op, "invalid_sealed_value", err)
 	}
 	plaintext, err := s.encryptor.Decrypt(ciphertext, version)
 	if err != nil {

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	"github.com/MastewalB/behemoth/types"
 	bmth "github.com/MastewalB/behemoth/types/init"
@@ -40,7 +40,7 @@ func (app *oauthApp) post(t *testing.T, path, body string, cookies ...*http.Cook
 	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
 	w := httptest.NewRecorder()
 	if err := route.Handler(rctx); err != nil {
-		status, errBody := (&behemotherr.DefaultErrorMapper{}).Map(err)
+		status, errBody := (&errs.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(errBody))
 	} else {

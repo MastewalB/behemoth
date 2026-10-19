@@ -49,7 +49,7 @@ The sender and the queue behave as follows:
 code, issued, err := ac.Codes.Issue(ctx, "myplugin.confirm", userID, types.CodeOptions{})
 // send code ...
 consumed, err := ac.Codes.Consume(ctx, "myplugin.confirm", userID, typed)
-if behemotherr.IsCodeRejection(err) {
+if errs.IsCodeRejection(err) {
 	// wrong, expired, used, or out of attempts
 }
 ```

@@ -7,7 +7,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -54,7 +54,7 @@ func TestLedgerEntrySerializable(t *testing.T) {
 		"non-text id":   {"id": 42, "applied_at": applied},
 	} {
 		err := (&core.MigrationLedgerEntry{}).FromMap(bad)
-		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationInvalidLedgerEntry), "%s: %v", name, err)
+		assert.True(t, errs.IsCode(err, errs.CodeMigrationInvalidLedgerEntry), "%s: %v", name, err)
 	}
 
 	assert.Equal(t, core.LedgerCanonicalName, entry.SchemaName())
@@ -106,7 +106,7 @@ func TestSchemaSnapshotSerializable(t *testing.T) {
 		"wrong shape":    {"version": "v", "tables": "[1, 2]"},
 	} {
 		err := (&core.SchemaSnapshot{}).FromMap(bad)
-		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationInvalidSnapshot), "%s: %v", name, err)
+		assert.True(t, errs.IsCode(err, errs.CodeMigrationInvalidSnapshot), "%s: %v", name, err)
 	}
 
 	assert.Equal(t, core.SnapshotCanonicalName, snap.SchemaName())
@@ -268,20 +268,20 @@ func TestSQLiteAdapterClassifiesMissingTable(t *testing.T) {
 	adapter := sqlite.NewSQLiteAdapter(openSQLite(t), nil)
 
 	_, err := adapter.FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
-	assert.True(t, behemotherr.IsUndefinedTable(err), "FindOne: %v", err)
-	assert.False(t, behemotherr.IsNotFound(err))
+	assert.True(t, errs.IsUndefinedTable(err), "FindOne: %v", err)
+	assert.False(t, errs.IsNotFound(err))
 
 	_, err = adapter.FindMany(ctx, &core.MigrationLedgerEntry{}, clause.Expression{}, nil)
-	assert.True(t, behemotherr.IsUndefinedTable(err), "FindMany: %v", err)
+	assert.True(t, errs.IsUndefinedTable(err), "FindMany: %v", err)
 
 	_, err = adapter.Count(ctx, &core.MigrationLedgerEntry{}, clause.Expression{})
-	assert.True(t, behemotherr.IsUndefinedTable(err), "Count: %v", err)
+	assert.True(t, errs.IsUndefinedTable(err), "Count: %v", err)
 
 	// A table that exists but has no matching row is still plain not-found.
 	db := openSQLite(t)
 	_, err = db.ExecContext(ctx, `CREATE TABLE behemoth_schema_snapshot (id INTEGER PRIMARY KEY, version TEXT, tables TEXT)`)
 	require.NoError(t, err)
 	_, err = sqlite.NewSQLiteAdapter(db, nil).FindOne(ctx, &core.SchemaSnapshot{}, clause.Expression{})
-	assert.True(t, behemotherr.IsNotFound(err), "empty table: %v", err)
-	assert.False(t, behemotherr.IsUndefinedTable(err))
+	assert.True(t, errs.IsNotFound(err), "empty table: %v", err)
+	assert.False(t, errs.IsUndefinedTable(err))
 }

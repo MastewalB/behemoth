@@ -8,7 +8,7 @@ import (
 	"slices"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -91,7 +91,7 @@ func VerifyJWT(ctx context.Context, token string, keys types.KeySet, opts Verify
 	const op = "crypto.VerifyJWT"
 	algs, err := opts.check(keys)
 	if err != nil {
-		return nil, behemotherr.NewConfigurationError(op, err.Error(), err)
+		return nil, errs.NewConfigurationError(op, err.Error(), err)
 	}
 	now := opts.Now
 	if now == nil {
@@ -104,7 +104,7 @@ func VerifyJWT(ctx context.Context, token string, keys types.KeySet, opts Verify
 		return nil, err
 	}
 	if !slices.Contains(algs, p.alg) {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTAlgorithmMismatch, nil)
+		return nil, errs.NewJWTError(op, errs.CodeJWTAlgorithmMismatch, nil)
 	}
 	candidates, err := candidateKeys(ctx, op, keys, p.kid, p.alg, opts.AllowMissingKID)
 	if err != nil {
@@ -118,7 +118,7 @@ func VerifyJWT(ctx context.Context, token string, keys types.KeySet, opts Verify
 		}
 	}
 	if verifyErr != nil {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTInvalidSignature, verifyErr)
+		return nil, errs.NewJWTError(op, errs.CodeJWTInvalidSignature, verifyErr)
 	}
 
 	checks := []jwt.ParserOption{
@@ -135,7 +135,7 @@ func VerifyJWT(ctx context.Context, token string, keys types.KeySet, opts Verify
 	// forms of Google's.
 	issuer, err := claims.GetIssuer()
 	if err != nil || !slices.Contains(opts.Issuers, issuer) {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTIssuerMismatch, err)
+		return nil, errs.NewJWTError(op, errs.CodeJWTIssuerMismatch, err)
 	}
 	return verifiedOf(op, p, claims)
 }
@@ -170,7 +170,7 @@ func (o VerifyOptions) check(keys types.KeySet) ([]string, error) {
 func candidateKeys(ctx context.Context, op string, keys types.KeySet, kid, alg string, allowMissingKID bool) ([]types.PublishedKey, error) {
 	if kid == "" {
 		if !allowMissingKID {
-			return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTUnknownKey, errors.New("the token names no kid"))
+			return nil, errs.NewJWTError(op, errs.CodeJWTUnknownKey, errors.New("the token names no kid"))
 		}
 		all, err := keys.PublicKeys(ctx)
 		if err != nil {
@@ -178,7 +178,7 @@ func candidateKeys(ctx context.Context, op string, keys types.KeySet, kid, alg s
 		}
 		found := keysWhere(all, func(k types.PublishedKey) bool { return fits(k, alg) })
 		if len(found) == 0 {
-			return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTUnknownKey, errors.New("no key fits the token's algorithm"))
+			return nil, errs.NewJWTError(op, errs.CodeJWTUnknownKey, errors.New("no key fits the token's algorithm"))
 		}
 		return found, nil
 	}
@@ -196,7 +196,7 @@ func candidateKeys(ctx context.Context, op string, keys types.KeySet, kid, alg s
 	}
 	found := keysWhere(all, func(k types.PublishedKey) bool { return k.KID == kid && fits(k, alg) })
 	if len(found) == 0 {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTAlgorithmMismatch, nil)
+		return nil, errs.NewJWTError(op, errs.CodeJWTAlgorithmMismatch, nil)
 	}
 	return found, nil
 }
@@ -227,7 +227,7 @@ func fits(key types.PublishedKey, alg string) bool {
 // wrong type, such as a numeric sub, refuses it.
 func verifiedOf(op string, p *parsed, claims jwt.MapClaims) (*VerifiedJWT, error) {
 	invalid := func(err error) error {
-		return behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTInvalidClaims, err)
+		return errs.NewJWTError(op, errs.CodeJWTInvalidClaims, err)
 	}
 	t := &VerifiedJWT{KID: p.kid, Algorithm: p.alg, payload: p.payload}
 	var err error

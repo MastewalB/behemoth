@@ -14,7 +14,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/outbound"
@@ -128,7 +128,7 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if p == nil {
-			return nil, behemotherr.NewConfigurationError("Prepare", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
+			return nil, errs.NewConfigurationError("Prepare", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
 		}
 		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, schemaRegistry, name)
 		if err := p.Declare(ic); err != nil {
@@ -267,10 +267,10 @@ type IndexChecker interface {
 // secret watch), so it should live as long as the application.
 func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootConfig) (*types.AuthContext, error) {
 	if app == nil {
-		return nil, behemotherr.NewConfigurationError("Boot", "Boot requires the result of Prepare", nil)
+		return nil, errs.NewConfigurationError("Boot", "Boot requires the result of Prepare", nil)
 	}
 	if db == nil {
-		return nil, behemotherr.NewConfigurationError("Boot", "a Database is required", nil)
+		return nil, errs.NewConfigurationError("Boot", "a Database is required", nil)
 	}
 	// Fail here instead of on the first hooked write (a sign-up) when the
 	// database is deployed without transactions, e.g. a standalone MongoDB.
@@ -312,7 +312,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if p == nil {
-			return nil, behemotherr.NewConfigurationError("Boot", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
+			return nil, errs.NewConfigurationError("Boot", fmt.Sprintf("internal error: resolved plugin name %q not found", name), nil)
 		}
 		scoped := &scopedHookRegistry{inner: hookRegistry, owner: name}
 		if err := p.Register(scoped); err != nil {
@@ -346,15 +346,15 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 
 	origins, err := types.NewTrustedOrigins(cfg.Router.TrustedOrigins)
 	if err != nil {
-		return nil, behemotherr.NewConfigurationError("Boot", "RouterConfig.TrustedOrigins", err)
+		return nil, errs.NewConfigurationError("Boot", "RouterConfig.TrustedOrigins", err)
 	}
 	// Built whatever the transport, so a malformed BaseURL fails here.
 	originCheck, err := types.NewOriginCheck(cfg.Router.BaseURL, origins)
 	if err != nil {
-		return nil, behemotherr.NewConfigurationError("Boot", "RouterConfig.BaseURL", err)
+		return nil, errs.NewConfigurationError("Boot", "RouterConfig.BaseURL", err)
 	}
 	if err := cfg.Outbound.Validate(); err != nil {
-		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	ac := &types.AuthContext{
 		DB:          db,
@@ -390,10 +390,10 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	dispatcher.ipCfg = ipCfg // audit events record the same client address
 	if err := cfg.Session.Validate(); err != nil {
-		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	if err := checkCookieAgainstBaseURL(cfg.Session, cfg.Router.BaseURL); err != nil {
-		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
 
@@ -405,7 +405,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		jwtCfg.Issuer = cfg.Router.BaseURL
 	}
 	if err := jwtCfg.Validate(); err != nil {
-		return nil, behemotherr.NewConfigurationError("Boot", err.Error(), err)
+		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	var externalKeys types.ExternalKeySet
 	if jwtCfg.ExternalEnabled() {
@@ -529,10 +529,10 @@ func ResolvePluginOrder(plugins []types.Plugin) ([]string, error) {
 	for _, p := range plugins {
 		meta := p.Meta()
 		if meta.Name == "" {
-			return nil, behemotherr.NewConfigurationError("ResolvePluginOrder", "a plugin returned an empty Meta().Name", nil)
+			return nil, errs.NewConfigurationError("ResolvePluginOrder", "a plugin returned an empty Meta().Name", nil)
 		}
 		if _, dup := byName[meta.Name]; dup {
-			return nil, behemotherr.NewConfigurationError("ResolvePluginOrder", fmt.Sprintf("plugin name %q registered more than once", meta.Name), nil)
+			return nil, errs.NewConfigurationError("ResolvePluginOrder", fmt.Sprintf("plugin name %q registered more than once", meta.Name), nil)
 		}
 		byName[meta.Name] = p
 		metas[meta.Name] = meta
@@ -543,7 +543,7 @@ func ResolvePluginOrder(plugins []types.Plugin) ([]string, error) {
 	for name, meta := range metas {
 		for _, dep := range meta.Dependencies {
 			if _, exists := metas[dep.Name]; !exists && !dep.Optional {
-				return nil, behemotherr.NewConfigurationError("ResolvePluginOrder",
+				return nil, errs.NewConfigurationError("ResolvePluginOrder",
 					fmt.Sprintf("plugin %q requires %q, which is not registered", name, dep.Name), nil)
 			}
 		}
@@ -573,7 +573,7 @@ func ResolvePluginOrder(plugins []types.Plugin) ([]string, error) {
 	alphabetical := func(a, b string) bool { return a < b }
 	order, cyclePath, ok := utils.KahnSort(graphMap, alphabetical)
 	if !ok {
-		return nil, behemotherr.NewConfigurationError("ResolvePluginOrder",
+		return nil, errs.NewConfigurationError("ResolvePluginOrder",
 			fmt.Sprintf("circular plugin dependency: %s", strings.Join(cyclePath, " -> ")), nil)
 	}
 
@@ -670,7 +670,7 @@ func (s *scopedSchemaRegistry) All() []schema.Table { return s.inner.All() }
 // Freeze is Prepare's alone; a declarer freezing the registry early would
 // lock out every declarer after it.
 func (s *scopedSchemaRegistry) Freeze() error {
-	return behemotherr.NewConfigurationError("SchemaRegistry.Freeze", fmt.Sprintf("%q cannot freeze the schema registry", s.owner), nil)
+	return errs.NewConfigurationError("SchemaRegistry.Freeze", fmt.Sprintf("%q cannot freeze the schema registry", s.owner), nil)
 }
 
 func newScopedInitContext(
@@ -703,14 +703,14 @@ func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPh
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.frozen {
-		return behemotherr.NewConfigurationError("HookRegistry.register", "cannot register after chains have been frozen", nil)
+		return errs.NewConfigurationError("HookRegistry.register", "cannot register after chains have been frozen", nil)
 	}
 	def, ok := r.catalog.Lookup(point)
 	if !ok {
-		return behemotherr.NewConfigurationError("HookRegistry.register", fmt.Sprintf("point %q was never declared", point), nil)
+		return errs.NewConfigurationError("HookRegistry.register", fmt.Sprintf("point %q was never declared", point), nil)
 	}
 	if def.Phase != phase {
-		return behemotherr.NewConfigurationError("HookRegistry.register",
+		return errs.NewConfigurationError("HookRegistry.register",
 			fmt.Sprintf("point %q is phase %q, cannot register a %q handler on it", point, def.Phase, phase), nil)
 	}
 
@@ -720,7 +720,7 @@ func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPh
 	// one handler.
 	for _, existing := range r.pending[point] {
 		if existing.plugin == plugin {
-			return behemotherr.NewConfigurationError("HookRegistry.register",
+			return errs.NewConfigurationError("HookRegistry.register",
 				fmt.Sprintf("%q already registered a handler on point %q; an owner may register one handler per point", plugin, point), nil)
 		}
 	}
@@ -797,13 +797,13 @@ func resolvePointOrder(point types.HookPoint, handlers []registeredHandler, plug
 		for _, h := range bucket {
 			for _, mustBeBefore := range h.before {
 				if otherP, ok := priorityOf[mustBeBefore]; ok && otherP < p {
-					return nil, behemotherr.NewConfigurationError("HookRegistry.Freeze",
+					return nil, errs.NewConfigurationError("HookRegistry.Freeze",
 						fmt.Sprintf("point %q: %q wants to run before %q, but %q sits in a higher-priority bucket", point, h.plugin, mustBeBefore, mustBeBefore), nil)
 				}
 			}
 			for _, mustBeAfter := range h.after {
 				if otherP, ok := priorityOf[mustBeAfter]; ok && otherP > p {
-					return nil, behemotherr.NewConfigurationError("HookRegistry.Freeze",
+					return nil, errs.NewConfigurationError("HookRegistry.Freeze",
 						fmt.Sprintf("point %q: %q wants to run after %q, but %q sits in a lower-priority bucket", point, h.plugin, mustBeAfter, mustBeAfter), nil)
 				}
 			}
@@ -863,7 +863,7 @@ func topoSortBucket(point types.HookPoint, bucket []registeredHandler, pluginOrd
 
 	sortedNames, cyclePath, ok := utils.KahnSort(graphMap, registrationOrder)
 	if !ok {
-		return nil, behemotherr.NewConfigurationError("HookRegistry.Freeze",
+		return nil, errs.NewConfigurationError("HookRegistry.Freeze",
 			fmt.Sprintf("point %q: circular handler ordering: %s", point, strings.Join(cyclePath, " -> ")), nil)
 	}
 
@@ -893,7 +893,7 @@ func DetectPluginNameConflicts(plugins []types.Plugin) error {
 				fmt.Fprintf(&conflicts, "\t %s - used %d times.\n", k, v)
 			}
 		}
-		return behemotherr.NewConfigurationError("Router.Mount", conflicts.String(), nil)
+		return errs.NewConfigurationError("Router.Mount", conflicts.String(), nil)
 	}
 
 	return nil
@@ -905,16 +905,16 @@ func DetectPluginNameConflicts(plugins []types.Plugin) error {
 // handlers, so each must mean one thing.
 func checkOwnerNames(plugins []types.Plugin, appName string) error {
 	if appName == coreOwner {
-		return behemotherr.NewConfigurationError("Prepare",
+		return errs.NewConfigurationError("Prepare",
 			fmt.Sprintf("AppName %q is reserved for behemoth's own declarations", coreOwner), nil)
 	}
 	for _, p := range plugins {
 		switch name := p.Meta().Name; name {
 		case coreOwner:
-			return behemotherr.NewConfigurationError("Prepare",
+			return errs.NewConfigurationError("Prepare",
 				fmt.Sprintf("plugin name %q is reserved for behemoth's own declarations", name), nil)
 		case appName:
-			return behemotherr.NewConfigurationError("Prepare",
+			return errs.NewConfigurationError("Prepare",
 				fmt.Sprintf("plugin name %q is the application's name (PrepareConfig.AppName); rename one of them", name), nil)
 		}
 	}
@@ -976,7 +976,7 @@ func (rl *DefaultRateLimiter) limiterFor(rule string, algorithm types.RateLimitA
 	if l, ok := rl.limiters[algorithm]; ok {
 		return l, nil
 	}
-	return nil, behemotherr.NewConfigurationError("RateLimiter", fmt.Sprintf("rule %q names the algorithm %q, which has no limiter", rule, algorithm), nil)
+	return nil, errs.NewConfigurationError("RateLimiter", fmt.Sprintf("rule %q names the algorithm %q, which has no limiter", rule, algorithm), nil)
 }
 
 // checkRateLimitRule is what the catalog requires of a rule's strategy: an
@@ -1050,7 +1050,7 @@ func (rl *DefaultRateLimiter) CheckRouteLimit(ctx context.Context, rule types.Ro
 		return err
 	}
 	if err := rl.evaluate(ctx, rule.Name, key, ip, limiter, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
-		return err // *behemotherr.DomainError, CategoryRateLimited; ErrorMapper already maps this to 429 + Retry-After, no body parsing or session lookup ever ran
+		return err // *errs.DomainError, CategoryRateLimited; ErrorMapper already maps this to 429 + Retry-After, no body parsing or session lookup ever ran
 	}
 
 	return nil
@@ -1108,7 +1108,7 @@ func (rl *DefaultRateLimiter) evaluate(
 				IPAddress: ip, Metadata: behemoth.M{"rule": name, "key": key},
 			})
 		}
-		return behemotherr.NewRateLimited(name, name, retryAfter)
+		return errs.NewRateLimited(name, name, retryAfter)
 	}
 
 	return nil
@@ -1129,7 +1129,7 @@ func (rl *DefaultRateLimiter) handleStoreFailure(ctx context.Context, rule strin
 		rl.tel.Logger.Warn(ctx, "rate limit store unavailable", telemetry.ErrorFields(err, behemoth.M{"rule": rule}))
 	}
 	if rl.cfg.FailureMode == types.FailClosed {
-		return behemotherr.NewRateLimited(rule, rule, 0)
+		return errs.NewRateLimited(rule, rule, 0)
 	}
 	return nil // FailOpen request proceeds
 }
@@ -1413,19 +1413,19 @@ func (c *DefaultHookCatalog) Declare(def types.HookPointDef) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.frozen {
-		return behemotherr.NewConfigurationError("HookCatalog.Declare", "cannot Declare after boot has completed", nil)
+		return errs.NewConfigurationError("HookCatalog.Declare", "cannot Declare after boot has completed", nil)
 	}
 	if def.Point == "" {
-		return behemotherr.NewConfigurationError("HookCatalog.Declare", "HookPointDef.Point must not be empty", nil)
+		return errs.NewConfigurationError("HookCatalog.Declare", "HookPointDef.Point must not be empty", nil)
 	}
 	if def.Owner == "" {
-		return behemotherr.NewConfigurationError("HookCatalog.Declare", fmt.Sprintf("point %q missing Owner", def.Point), nil)
+		return errs.NewConfigurationError("HookCatalog.Declare", fmt.Sprintf("point %q missing Owner", def.Point), nil)
 	}
 	if def.Phase != types.BeforeHookPhase && def.Phase != types.AfterHookPhase && def.Phase != types.FailedHookPhase {
-		return behemotherr.NewConfigurationError("HookCatalog.Declare", fmt.Sprintf("point %q declared with invalid or missing Phase %q", def.Point, def.Phase), nil)
+		return errs.NewConfigurationError("HookCatalog.Declare", fmt.Sprintf("point %q declared with invalid or missing Phase %q", def.Point, def.Phase), nil)
 	}
 	if existing, dup := c.points[def.Point]; dup {
-		return behemotherr.NewConfigurationError("HookCatalog.Declare", fmt.Sprintf("point %q already declared by %q, cannot redeclare from %q", def.Point, existing.Owner, def.Owner), nil)
+		return errs.NewConfigurationError("HookCatalog.Declare", fmt.Sprintf("point %q already declared by %q, cannot redeclare from %q", def.Point, existing.Owner, def.Owner), nil)
 	}
 	c.points[def.Point] = def
 	return nil
@@ -1487,10 +1487,10 @@ func NewDefaultDispatcher(
 func (d *DefaultDispatcher) checkPhase(op string, point types.HookPoint, expected types.HookPhase) (types.HookPointDef, error) {
 	def, ok := d.catalog.Lookup(point)
 	if !ok {
-		return types.HookPointDef{}, behemotherr.NewConfigurationError(op, fmt.Sprintf("point %q was never declared", point), nil)
+		return types.HookPointDef{}, errs.NewConfigurationError(op, fmt.Sprintf("point %q was never declared", point), nil)
 	}
 	if def.Phase != expected {
-		return types.HookPointDef{}, behemotherr.NewConfigurationError(op,
+		return types.HookPointDef{}, errs.NewConfigurationError(op,
 			fmt.Sprintf("point %q is phase %q, cannot dispatch as %q", point, def.Phase, expected), nil)
 	}
 	return def, nil
@@ -1514,7 +1514,7 @@ func forPoint(hctx *types.HookContext, point types.HookPoint, phase types.HookPh
 func (d *DefaultDispatcher) safeInvokeBefore(hctx *types.HookContext, fn types.BeforeHookFunc, payload behemoth.M, point types.HookPoint, plugin string) (m behemoth.M, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = behemotherr.NewInternalError("Dispatcher.RunBefore", fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
+			err = errs.NewInternalError("Dispatcher.RunBefore", fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
 			d.logError(hctx.Ctx, "before-hook panicked", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: plugin})
 		}
 	}()
@@ -1527,7 +1527,7 @@ func (d *DefaultDispatcher) safeInvokeBefore(hctx *types.HookContext, fn types.B
 func (d *DefaultDispatcher) safeInvokeAfter(op string, hctx *types.HookContext, fn types.AfterHookFunc, result any, point types.HookPoint, plugin string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = behemotherr.NewInternalError(op, fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
+			err = errs.NewInternalError(op, fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
 		}
 	}()
 	return fn(hctx, result)
@@ -1561,7 +1561,7 @@ func (d *DefaultDispatcher) RunBefore(hctx *types.HookContext, point types.HookP
 			// Should be structurally impossible. HookRegistry.OnBefore only
 			// ever stores a BeforeHookFunc under a Before-phase point. If this
 			// fires, it's a bug in the registry itself
-			err := behemotherr.NewInternalError("Dispatcher.RunBefore",
+			err := errs.NewInternalError("Dispatcher.RunBefore",
 				fmt.Errorf("point %q: handler from %q has wrong type for phase Before", point, h.plugin))
 
 			d.logError(hctx.Ctx, "before-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
@@ -1597,7 +1597,7 @@ func (d *DefaultDispatcher) RunAfter(hctx *types.HookContext, point types.HookPo
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.AfterHookFunc)
 		if !ok {
-			err := behemotherr.NewInternalError("Dispatcher.RunAfter",
+			err := errs.NewInternalError("Dispatcher.RunAfter",
 				fmt.Errorf("point %q: handler from %q has wrong type for phase After", point, h.plugin))
 			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			continue // execution continues since one bad registration must not stop the rest
@@ -1631,7 +1631,7 @@ func (d *DefaultDispatcher) RunAfterTx(hctx *types.HookContext, point types.Hook
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.AfterHookFunc)
 		if !ok {
-			err := behemotherr.NewInternalError("Dispatcher.RunAfterTx",
+			err := errs.NewInternalError("Dispatcher.RunAfterTx",
 				fmt.Errorf("point %q: handler from %q has wrong type for phase After", point, h.plugin))
 			d.logError(hctx.Ctx, "after-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			return err
@@ -1665,7 +1665,7 @@ func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint,
 	for _, h := range d.frozenChains[point] {
 		fn, ok := h.handler.(types.FailedHookFunc)
 		if !ok {
-			err := behemotherr.NewInternalError("Dispatcher.Fail",
+			err := errs.NewInternalError("Dispatcher.Fail",
 				fmt.Errorf("point %q: handler from %q has wrong type for phase Failed", point, h.plugin))
 			d.logError(hctx.Ctx, "failed-hook type assertion failed", err, behemoth.M{telemetry.FieldPoint: string(point), telemetry.FieldPlugin: h.plugin})
 			continue
@@ -1687,7 +1687,7 @@ func (d *DefaultDispatcher) Fail(hctx *types.HookContext, point types.HookPoint,
 func (d *DefaultDispatcher) safeInvokeFailed(hctx *types.HookContext, fn types.FailedHookFunc, reason types.FailureReason, point types.HookPoint, plugin string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = behemotherr.NewInternalError("Dispatcher.Fail", fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
+			err = errs.NewInternalError("Dispatcher.Fail", fmt.Errorf("panic in %q's handler on %q: %v", plugin, point, r))
 		}
 	}()
 	return fn(hctx, reason)
@@ -1867,7 +1867,7 @@ func (d *DefaultDispatcher) auditEvent(hctx *types.HookContext, point types.Hook
 			// The cause's own code says why, where the reason's code only
 			// says that a hook refused (types.FailureRejectedByHook). It is
 			// not a metric attribute: any plugin can define one. See ADR-0001.
-			if de, ok := errors.AsType[*behemotherr.DomainError](reason.Cause); ok && de.Code != "" {
+			if de, ok := errors.AsType[*errs.DomainError](reason.Cause); ok && de.Code != "" {
 				event.Metadata["causeCode"] = de.Code
 			}
 		}
@@ -1981,19 +1981,19 @@ func (c *DefaultTokenCatalog) Declare(def types.TokenKindDef) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.frozen {
-		return behemotherr.NewConfigurationError("TokenCatalog.Declare", "cannot Declare after boot has completed", nil)
+		return errs.NewConfigurationError("TokenCatalog.Declare", "cannot Declare after boot has completed", nil)
 	}
 	if def.Kind == "" {
-		return behemotherr.NewConfigurationError("TokenCatalog.Declare", "TokenKindDef.Kind must not be empty", nil)
+		return errs.NewConfigurationError("TokenCatalog.Declare", "TokenKindDef.Kind must not be empty", nil)
 	}
 	if def.Owner == "" {
-		return behemotherr.NewConfigurationError("TokenCatalog.Declare", fmt.Sprintf("kind %q missing Owner", def.Kind), nil)
+		return errs.NewConfigurationError("TokenCatalog.Declare", fmt.Sprintf("kind %q missing Owner", def.Kind), nil)
 	}
 	if def.Backend != types.TokenBackendDB && def.Backend != types.TokenBackendKV {
-		return behemotherr.NewConfigurationError("TokenCatalog.Declare", fmt.Sprintf("kind %q declared with invalid Backend %q", def.Kind, def.Backend), nil)
+		return errs.NewConfigurationError("TokenCatalog.Declare", fmt.Sprintf("kind %q declared with invalid Backend %q", def.Kind, def.Backend), nil)
 	}
 	if existing, dup := c.kinds[def.Kind]; dup {
-		return behemotherr.NewConfigurationError("TokenCatalog.Declare", fmt.Sprintf("kind %q already declared by %q", def.Kind, existing.Owner), nil)
+		return errs.NewConfigurationError("TokenCatalog.Declare", fmt.Sprintf("kind %q already declared by %q", def.Kind, existing.Owner), nil)
 	}
 	c.kinds[def.Kind] = def
 	return nil

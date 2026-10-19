@@ -1,11 +1,11 @@
-package behemotherr
+package errs
 
 const (
-	ErrorCodeTokenNotFound        = "token_not_found"
-	ErrorCodeTokenExpired         = "token_expired"
-	ErrorCodeTokenRevoked         = "token_revoked"
-	ErrorCodeTokenAlreadyConsumed = "token_already_consumed"
-	ErrorCodeTokenInvalidUsage    = "token_invalid_usage" // Calling Consume() on multi-use credential token
+	CodeTokenNotFound        = "token_not_found"
+	CodeTokenExpired         = "token_expired"
+	CodeTokenRevoked         = "token_revoked"
+	CodeTokenAlreadyConsumed = "token_already_consumed"
+	CodeTokenInvalidUsage    = "token_invalid_usage" // Calling Consume() on multi-use credential token
 )
 
 func NewTokenError(op, code string, original error) *DomainError {
@@ -24,9 +24,9 @@ func NewTokenError(op, code string, original error) *DomainError {
 // and already used tokens
 func tokenPublicMessage(code string) string {
 	switch code {
-	case ErrorCodeTokenExpired, ErrorCodeTokenRevoked, ErrorCodeTokenAlreadyConsumed:
+	case CodeTokenExpired, CodeTokenRevoked, CodeTokenAlreadyConsumed:
 		return "invalid or expired token"
-	case ErrorCodeTokenInvalidUsage:
+	case CodeTokenInvalidUsage:
 		return "this token cannot be consumed this way"
 	default:
 		return "invalid or expired token"

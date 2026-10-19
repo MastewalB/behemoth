@@ -22,7 +22,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -203,15 +203,15 @@ func encodeSegment(t *testing.T, v any) string {
 func refusedWith(t *testing.T, err error, code string, msgAndArgs ...any) {
 	t.Helper()
 	require.Error(t, err, msgAndArgs...)
-	var de *behemotherr.DomainError
+	var de *errs.DomainError
 	require.True(t, errors.As(err, &de), "the error is typed: %v", err)
-	assert.True(t, behemotherr.IsCode(err, code), "want code %q, got %v", code, err)
+	assert.True(t, errs.IsCode(err, code), "want code %q, got %v", code, err)
 	switch code {
-	case behemotherr.ErrorCodeJWTUnknownKind, behemotherr.ErrorCodeJWTExternalNotConfigured:
-		assert.Equal(t, behemotherr.CategoryConfiguration, de.Category, "a mistake of the caller's setup, not a refused token")
+	case errs.CodeJWTUnknownKind, errs.CodeJWTExternalNotConfigured:
+		assert.Equal(t, errs.CategoryConfiguration, de.Category, "a mistake of the caller's setup, not a refused token")
 	default:
-		assert.Equal(t, behemotherr.CategoryToken, de.Category, "a refused token")
-		status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+		assert.Equal(t, errs.CategoryToken, de.Category, "a refused token")
+		status, body := (&errs.DefaultErrorMapper{}).Map(err)
 		assert.Equal(t, http.StatusUnauthorized, status, "a route answers a refused token with 401")
 		assert.Equal(t, "invalid or expired token", body["error"], "the message does not say which check failed")
 	}
@@ -340,7 +340,7 @@ func TestJWTRefusesTamperedTokens(t *testing.T) {
 				"another key":         foreign,
 			} {
 				_, err := fx.provider.Verify(ctx, kind, bad)
-				refusedWith(t, err, behemotherr.ErrorCodeJWTInvalidSignature, name)
+				refusedWith(t, err, errs.CodeJWTInvalidSignature, name)
 			}
 		})
 	}
@@ -386,7 +386,7 @@ func TestJWTPinsTheAlgorithm(t *testing.T) {
 		for name, token := range tokens {
 			t.Run(string(kind)+"/"+name, func(t *testing.T) {
 				_, err := fx.provider.Verify(ctx, kind, token)
-				refusedWith(t, err, behemotherr.ErrorCodeJWTAlgorithmMismatch)
+				refusedWith(t, err, errs.CodeJWTAlgorithmMismatch)
 			})
 		}
 	}
@@ -412,11 +412,11 @@ func TestJWTChecksTheRegisteredClaims(t *testing.T) {
 			name, code string
 			token      string
 		}{
-			{"expired an hour ago", behemotherr.ErrorCodeTokenExpired, with(func(c jwt.MapClaims) { c["exp"] = now.Add(-time.Hour).Unix() })},
-			{"not valid for an hour", behemotherr.ErrorCodeJWTNotYetValid, with(func(c jwt.MapClaims) { c["nbf"] = now.Add(time.Hour).Unix() })},
-			{"another issuer", behemotherr.ErrorCodeJWTIssuerMismatch, with(func(c jwt.MapClaims) { c["iss"] = "https://evil.example.com" })},
-			{"another audience", behemotherr.ErrorCodeJWTAudienceMismatch, with(func(c jwt.MapClaims) { c["aud"] = "another-service" })},
-			{"the other kind's audience", behemotherr.ErrorCodeJWTAudienceMismatch, with(func(c jwt.MapClaims) { c["aud"] = otherAudience })},
+			{"expired an hour ago", errs.CodeTokenExpired, with(func(c jwt.MapClaims) { c["exp"] = now.Add(-time.Hour).Unix() })},
+			{"not valid for an hour", errs.CodeJWTNotYetValid, with(func(c jwt.MapClaims) { c["nbf"] = now.Add(time.Hour).Unix() })},
+			{"another issuer", errs.CodeJWTIssuerMismatch, with(func(c jwt.MapClaims) { c["iss"] = "https://evil.example.com" })},
+			{"another audience", errs.CodeJWTAudienceMismatch, with(func(c jwt.MapClaims) { c["aud"] = "another-service" })},
+			{"the other kind's audience", errs.CodeJWTAudienceMismatch, with(func(c jwt.MapClaims) { c["aud"] = otherAudience })},
 			{"no expiry", "", with(func(c jwt.MapClaims) { delete(c, "exp") })},
 			{"no audience", "", with(func(c jwt.MapClaims) { delete(c, "aud") })},
 		}
@@ -452,7 +452,7 @@ func TestJWTRefusesMalformedTokens(t *testing.T) {
 			t.Run(string(kind)+"/"+name, func(t *testing.T) {
 				var err error
 				require.NotPanics(t, func() { _, err = fx.provider.Verify(ctx, kind, token) })
-				refusedWith(t, err, behemotherr.ErrorCodeJWTMalformed)
+				refusedWith(t, err, errs.CodeJWTMalformed)
 			})
 		}
 	}
@@ -500,7 +500,7 @@ func TestJWTKeyRotation(t *testing.T) {
 
 		retired := newJWTFixture(t, map[int]string{2: secretV2}, 2)
 		_, err = retired.provider.Verify(ctx, types.JWTExternal, old)
-		refusedWith(t, err, behemotherr.ErrorCodeJWTUnknownKey, "a version that was removed no longer verifies")
+		refusedWith(t, err, errs.CodeJWTUnknownKey, "a version that was removed no longer verifies")
 
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		require.NoError(t, err)
@@ -508,7 +508,7 @@ func TestJWTKeyRotation(t *testing.T) {
 			unknown := signWith(t, jwt.SigningMethodEdDSA, priv, kid, claims(types.JWTExternal))
 			var verifyErr error
 			require.NotPanics(t, func() { _, verifyErr = rotated.provider.Verify(ctx, types.JWTExternal, unknown) })
-			refusedWith(t, verifyErr, behemotherr.ErrorCodeJWTUnknownKey, "kid %q", kid)
+			refusedWith(t, verifyErr, errs.CodeJWTUnknownKey, "kid %q", kid)
 		}
 	})
 }
@@ -519,15 +519,15 @@ func TestJWTKinds(t *testing.T) {
 	ctx := context.Background()
 	fx := defaultFixture(t)
 	_, err := fx.provider.Sign(ctx, "session", types.JWTRequest{Subject: "user-1"})
-	refusedWith(t, err, behemotherr.ErrorCodeJWTUnknownKind)
+	refusedWith(t, err, errs.CodeJWTUnknownKind)
 	_, err = fx.provider.Verify(ctx, "session", "a.b.c")
-	refusedWith(t, err, behemotherr.ErrorCodeJWTUnknownKind)
+	refusedWith(t, err, errs.CodeJWTUnknownKind)
 
 	var withoutKeys types.JWTProvider = crypto.NewJWTProvider(fx.suite.JWTSign, nil, jwtConfig())
 	_, err = withoutKeys.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1"})
-	refusedWith(t, err, behemotherr.ErrorCodeJWTExternalNotConfigured)
+	refusedWith(t, err, errs.CodeJWTExternalNotConfigured)
 	_, err = withoutKeys.Verify(ctx, types.JWTExternal, "a.b.c")
-	refusedWith(t, err, behemotherr.ErrorCodeJWTExternalNotConfigured)
+	refusedWith(t, err, errs.CodeJWTExternalNotConfigured)
 	token, err := withoutKeys.Sign(ctx, types.JWTInternal, types.JWTRequest{Subject: "user-1"})
 	require.NoError(t, err)
 	_, err = withoutKeys.Verify(ctx, types.JWTInternal, token)
@@ -644,10 +644,10 @@ func TestJWTAudiencesSessionAndID(t *testing.T) {
 	assert.Equal(t, otherAudience, got.Audience, "the audience the token names")
 
 	_, err = fx.provider.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1", Audience: internalAudience})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryValidation) && behemotherr.IsCode(err, "audience_invalid_input"),
+	assert.True(t, errs.IsCategory(err, errs.CategoryValidation) && errs.IsCode(err, "audience_invalid_input"),
 		"an audience of another kind is not on the list: %v", err)
 	_, err = fx.provider.Sign(ctx, types.JWTInternal, types.JWTRequest{})
-	assert.True(t, behemotherr.IsCode(err, "subject_invalid_input"), "a token is about someone: %v", err)
+	assert.True(t, errs.IsCode(err, "subject_invalid_input"), "a token is about someone: %v", err)
 }
 
 // The external keys are derived as ADR-0002 says: the seed of version v is

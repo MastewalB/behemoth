@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -76,7 +76,7 @@ func TestPublicView(t *testing.T) {
 	}
 
 	for name, m := range map[string]behemoth.Model{"an undeclared table": &models.Token{}, "no model": nil} {
-		if _, err := view.Of(m); !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		if _, err := view.Of(m); !errs.IsCategory(err, errs.CategoryConfiguration) {
 			t.Errorf("%s: Of returned %v, want a configuration error", name, err)
 		}
 	}

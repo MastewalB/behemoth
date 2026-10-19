@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types/cryptotypes"
@@ -242,7 +242,7 @@ func (s *Store) runCommitted(ctx context.Context, fn func(ctx context.Context)) 
 		if r == nil || s.tel == nil {
 			return
 		}
-		err := behemotherr.NewInternalError("Store.AfterCommit", fmt.Errorf("panic in an after-commit callback: %v", r))
+		err := errs.NewInternalError("Store.AfterCommit", fmt.Errorf("panic in an after-commit callback: %v", r))
 		telemetry.Named(s.tel.Logger, "store").Error(ctx, "after-commit callback panicked", telemetry.ErrorFields(err))
 	}()
 	fn(ctx)

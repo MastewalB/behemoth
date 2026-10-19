@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -20,7 +20,7 @@ func RunIntrospection(
 	for _, declared := range current.All() {
 		exists, err := introspector.TableExists(ctx, declared.Name)
 		if err != nil {
-			return nil, behemotherr.NewMigrationError("Introspection.TableExists", behemotherr.ErrorCodeMigrationExistenceCheckFailed, err)
+			return nil, errs.NewMigrationError("Introspection.TableExists", errs.CodeMigrationExistenceCheckFailed, err)
 		}
 		if !exists {
 			report.Tables[declared.Name] = TableIntrospection{Table: declared.Name, ExistsLive: false}
@@ -29,7 +29,7 @@ func RunIntrospection(
 
 		live, err := introspector.Introspect(ctx, declared.Name)
 		if err != nil {
-			return nil, behemotherr.NewMigrationError("Introspection.Introspect", behemotherr.ErrorCodeMigrationIntrospectionFailed,
+			return nil, errs.NewMigrationError("Introspection.Introspect", errs.CodeMigrationIntrospectionFailed,
 				fmt.Errorf("table %q: %w", declared.Name, err))
 		}
 
@@ -152,7 +152,7 @@ func PartitionForBaseline(
 	for _, table := range current.All() {
 		exists, err := introspector.TableExists(ctx, table.Name)
 		if err != nil {
-			return nil, nil, behemotherr.NewMigrationError("Baseline.Partition", behemotherr.ErrorCodeMigrationExistenceCheckFailed, err)
+			return nil, nil, errs.NewMigrationError("Baseline.Partition", errs.CodeMigrationExistenceCheckFailed, err)
 		}
 		if exists {
 			candidates = append(candidates, BaselineCandidate{Table: table.Name, Current: table})

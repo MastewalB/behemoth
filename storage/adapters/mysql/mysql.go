@@ -26,7 +26,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -123,7 +123,7 @@ func generateMySQLSETClause(columns []string) string {
 
 func (my *MySQLAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -146,7 +146,7 @@ func (my *MySQLAdapter) FindOne(
 	whereExpression clause.Expression,
 ) (behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 
 	// columns stay canonical: they key the map handed to FromMap.
@@ -195,7 +195,7 @@ func (my *MySQLAdapter) FindMany(
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 
 	var (
@@ -273,7 +273,7 @@ func (my *MySQLAdapter) FindMany(
 
 func (my *MySQLAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -384,7 +384,7 @@ func (my *MySQLAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	whereClause, args := my.where(m, &expr)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 
 	// LIMIT 1 and no subquery, for the reason given in UpdateOne.
@@ -407,7 +407,7 @@ func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cl
 func (my *MySQLAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr clause.Expression) error {
 	whereClause, args := my.where(m, &expr)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
@@ -483,7 +483,7 @@ func (my *MySQLAdapter) Transaction(ctx context.Context, fn behemoth.Transaction
 		_, err := fn(ctx, my)
 		return err
 	default:
-		return behemotherr.NewTransactionError("Transaction",
+		return errs.NewTransactionError("Transaction",
 			fmt.Errorf("cannot begin a transaction on a %T; the adapter needs a *sql.DB", my.DB))
 	}
 
@@ -504,7 +504,7 @@ func (my *MySQLAdapter) Transaction(ctx context.Context, fn behemoth.Transaction
 
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return behemotherr.NewTransactionError("Transaction", rollbackErr)
+			return errs.NewTransactionError("Transaction", rollbackErr)
 		}
 		return err
 	}

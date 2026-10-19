@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/utils"
 )
@@ -54,7 +54,7 @@ const BindingCookiePrefix = "behemoth_oauth_"
 func (p *Plugin) handleBegin(rctx *types.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("oauth.Begin", "request", err)
+		return errs.NewValidationError("oauth.Begin", "request", err)
 	}
 	var req BeginRequest
 	if err := req.FromMap(body); err != nil {
@@ -88,7 +88,7 @@ func (p *Plugin) handleComplete(rctx *types.RequestContext) error {
 	const op = "oauth.Complete"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError(op, "request", err)
+		return errs.NewValidationError(op, "request", err)
 	}
 	var req CompleteRequest
 	for _, field := range []struct {
@@ -103,7 +103,7 @@ func (p *Plugin) handleComplete(rctx *types.RequestContext) error {
 		case string:
 			*field.into = v
 		default:
-			return behemotherr.NewInvalidInputError(op, field.key, field.key+" must be a string", nil)
+			return errs.NewInvalidInputError(op, field.key, field.key+" must be a string", nil)
 		}
 	}
 

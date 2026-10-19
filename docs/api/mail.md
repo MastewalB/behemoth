@@ -86,7 +86,7 @@ A plugin takes the mailer from the `AuthContext`:
 ```go
 func (p *Plugin) Init(ac *types.AuthContext) error {
 	if !ac.Mailer.Configured() {
-		return behemotherr.NewConfigurationError("myplugin.Init", "no mail sender is configured", nil)
+		return errs.NewConfigurationError("myplugin.Init", "no mail sender is configured", nil)
 	}
 	// ...
 }

@@ -7,13 +7,13 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 )
 
 // The reasons an OriginCheck refuses a request with. They are the "reason"
 // attribute of telemetry.MetricOriginRefused and part of the error's
-// internal message. A client receives behemotherr.ErrorCodeUntrustedOrigin
+// internal message. A client receives errs.CodeUntrustedOrigin
 // for each of them.
 const (
 	OriginRefusedNull      = "null_origin"      // Origin: null, from a sandboxed frame or a file
@@ -63,7 +63,7 @@ func NewOriginCheck(baseURL string, trusted OriginValidator) (*OriginCheck, erro
 }
 
 // Check reports whether r may change state. It returns nil, or a forbidden
-// error with the code behemotherr.ErrorCodeUntrustedOrigin.
+// error with the code errs.CodeUntrustedOrigin.
 //
 //   - GET, HEAD and OPTIONS pass: no behemoth route changes state on them.
 //   - A request with an Origin header passes when the origin is behemoth's
@@ -73,7 +73,7 @@ func NewOriginCheck(baseURL string, trusted OriginValidator) (*OriginCheck, erro
 //     when Sec-Fetch-Site is "same-origin" or "none".
 func (c *OriginCheck) Check(r *http.Request) error {
 	if reason := c.refusal(r); reason != "" {
-		return behemotherr.NewUntrustedOrigin("OriginCheck", reason)
+		return errs.NewUntrustedOrigin("OriginCheck", reason)
 	}
 	return nil
 }
@@ -144,7 +144,7 @@ func (c *OriginCheck) Middleware() Middleware {
 			if rctx.Auth != nil && rctx.Auth.Telemetry.MetricsEnabled() {
 				rctx.Auth.Telemetry.Count(rctx.Ctx, telemetry.MetricOriginRefused, behemoth.M{telemetry.AttrReason: reason})
 			}
-			return behemotherr.NewUntrustedOrigin("OriginCheck", reason)
+			return errs.NewUntrustedOrigin("OriginCheck", reason)
 		}
 	}
 }
@@ -152,7 +152,7 @@ func (c *OriginCheck) Middleware() Middleware {
 // RefuseFormContentTypes returns a middleware that refuses a state-changing
 // request whose Content-Type is text/plain,
 // application/x-www-form-urlencoded or multipart/form-data, with the code
-// behemotherr.ErrorCodeUnsupportedContentType. Those are the types an HTML
+// errs.CodeUnsupportedContentType. Those are the types an HTML
 // form, or a script without a CORS preflight, can send to another origin,
 // and behemoth's handlers would decode such a body as JSON. A request with
 // another Content-Type, or with none, passes.
@@ -167,7 +167,7 @@ func RefuseFormContentTypes() Middleware {
 	return func(next HandlerFunc) HandlerFunc {
 		return func(rctx *RequestContext) error {
 			if contentType, form := formContentType(rctx.Request); form {
-				return behemotherr.NewUnsupportedContentType("RefuseFormContentTypes", contentType)
+				return errs.NewUnsupportedContentType("RefuseFormContentTypes", contentType)
 			}
 			return next(rctx)
 		}

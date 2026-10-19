@@ -3,7 +3,7 @@ package adapters
 import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 // ExpectOneRow maps the rows-affected count of an operation that targets a
@@ -34,7 +34,7 @@ func ExpectOneRow(op string, m behemoth.Model, affected int64, countMatching fun
 			return nil
 		}
 	}
-	return behemotherr.NewNotFound(op, m.SchemaName(), nil)
+	return errs.NewNotFound(op, m.SchemaName(), nil)
 }
 
 // ByPrimaryKey is the expression selecting m's own row.

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/redis/go-redis/v9"
 )
@@ -29,7 +29,7 @@ func NewRedisAdapter(client *redis.Client) *RedisAdapter {
 
 func (rkv *RedisAdapter) Get(ctx context.Context, key string) (string, error) {
 	if key == "" {
-		return "", behemotherr.NewEmptyKey("Get", nil)
+		return "", errs.NewEmptyKey("Get", nil)
 	}
 
 	value, err := rkv.redisClient.Get(ctx, key).Result()
@@ -46,7 +46,7 @@ func (rkv *RedisAdapter) Set(
 	ttl int,
 ) error {
 	if key == "" {
-		return behemotherr.NewEmptyKey(adapters.OpSet, nil)
+		return errs.NewEmptyKey(adapters.OpSet, nil)
 	}
 	err := rkv.redisClient.Set(ctx, key, value, time.Duration(ttl*int(time.Second))).Err()
 
@@ -55,7 +55,7 @@ func (rkv *RedisAdapter) Set(
 
 func (rkv *RedisAdapter) Delete(ctx context.Context, key string) error {
 	if key == "" {
-		return behemotherr.NewEmptyKey(adapters.OpDelete, nil)
+		return errs.NewEmptyKey(adapters.OpDelete, nil)
 	}
 
 	err := rkv.redisClient.Del(ctx, key).Err()
@@ -95,10 +95,10 @@ return {count, ttl}
 // agreeing.
 func (rkv *RedisAdapter) Increment(ctx context.Context, key string, ttl time.Duration) (int64, time.Time, error) {
 	if key == "" {
-		return 0, time.Time{}, behemotherr.NewEmptyKey("Increment", nil)
+		return 0, time.Time{}, errs.NewEmptyKey("Increment", nil)
 	}
 	if ttl < time.Millisecond {
-		return 0, time.Time{}, behemotherr.NewValidationError("Increment", EntityKVPair, fmt.Errorf("the window must be at least a millisecond, got %s", ttl))
+		return 0, time.Time{}, errs.NewValidationError("Increment", EntityKVPair, fmt.Errorf("the window must be at least a millisecond, got %s", ttl))
 	}
 	res, err := incrementScript.Run(ctx, rkv.redisClient, []string{rateLimitPrefix + key}, ttl.Milliseconds()).Int64Slice()
 	if err != nil {
@@ -120,11 +120,11 @@ func handleRedisError(op, entity string, err error) error {
 
 	switch err {
 	case redis.Nil:
-		return behemotherr.NewKeyNotFound(op, err)
+		return errs.NewKeyNotFound(op, err)
 		// case redis.
 
-		// case behemotherr.ErrEmptyKey:
-		// 	return behemotherr.NewEmptyKey(op, err)
+		// case errs.ErrEmptyKey:
+		// 	return errs.NewEmptyKey(op, err)
 	}
-	return behemotherr.NewDatabaseError(op, err)
+	return errs.NewDatabaseError(op, err)
 }

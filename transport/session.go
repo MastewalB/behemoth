@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -103,14 +103,14 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 	types.HookValuesFrom(ctx)[hooks.HookValueUserID] = fmt.Sprint(userID)
 
 	if meta.State != types.SessionActive && meta.State != types.SessionPending {
-		return nil, "", behemotherr.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
+		return nil, "", errs.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
 	}
 
 	// MaxConcurrent enforcement (SessionConfig)
 	if sm.cfg.MaxConcurrent > 0 {
 		count, err := sm.st.CountLiveSessions(ctx, fmt.Sprint(userID))
 		if err != nil {
-			return nil, "", behemotherr.WrapOp(op, "session", err)
+			return nil, "", errs.WrapOp(op, "session", err)
 		}
 		if count >= int64(sm.cfg.MaxConcurrent) {
 			if sm.cfg.EvictOldestOnLimit {
@@ -118,7 +118,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 					return nil, "", err
 				}
 			} else {
-				return nil, "", behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionLimitReached, nil)
+				return nil, "", errs.NewSessionError(op, errs.CodeSessionLimitReached, nil)
 
 			}
 		}
@@ -127,7 +127,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 	// Token generation & hashing
 	rawToken, err := sm.crypto.Random.SecureRandomString(32)
 	if err != nil {
-		return nil, "", behemotherr.NewSecurityError(op, "random_generation_failed", err)
+		return nil, "", errs.NewSecurityError(op, "random_generation_failed", err)
 	}
 	lookupHash := utils.LookupHashOf(rawToken)
 
@@ -182,7 +182,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta ty
 		UserAgent:    ua,
 	}
 	if err := sm.st.CreateSession(ctx, m); err != nil {
-		return nil, "", behemotherr.WrapOp(op, "session", err)
+		return nil, "", errs.WrapOp(op, "session", err)
 	}
 
 	sm.cacheSet(ctx, m)
@@ -216,7 +216,7 @@ func (sm *DefaultSessionManager) get(ctx context.Context, rawToken string) (*mod
 
 	m, fromCache, err := sm.fetchByLookupHash(ctx, lookupHash)
 	if err != nil {
-		err = behemotherr.WrapOp(op, "session", err)
+		err = errs.WrapOp(op, "session", err)
 		sm.countValidated(ctx, false, err)
 		return nil, err
 	}
@@ -230,18 +230,18 @@ func (sm *DefaultSessionManager) get(ctx context.Context, rawToken string) (*mod
 	if !ok {
 		// LookupHash matched but the keyed HMAC didn't; collapse into the
 		// same NotFound response
-		err := behemotherr.NewNotFound(op, "session", nil)
+		err := errs.NewNotFound(op, "session", nil)
 		sm.countValidated(ctx, fromCache, err)
 		return nil, err
 	}
 
 	if m.State == models.SessionRevoked {
-		err := behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionRevoked, nil)
+		err := errs.NewSessionError(op, errs.CodeSessionRevoked, nil)
 		sm.countValidated(ctx, fromCache, err)
 		return nil, err
 	}
 	if time.Now().After(m.ExpiresAt) {
-		err := behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionExpired, nil)
+		err := errs.NewSessionError(op, errs.CodeSessionExpired, nil)
 		sm.countValidated(ctx, fromCache, err)
 		return nil, err
 	}
@@ -278,7 +278,7 @@ func (sm *DefaultSessionManager) countValidated(ctx context.Context, fromCache b
 	}
 	if err != nil {
 		attrs[telemetry.AttrOutcome] = string(telemetry.OutcomeFailure)
-		attrs[telemetry.AttrReason] = behemotherr.ClassifyCode(err)
+		attrs[telemetry.AttrReason] = errs.ClassifyCode(err)
 	}
 	sm.tel.Count(ctx, telemetry.MetricSessionValidated, attrs)
 }
@@ -289,7 +289,7 @@ func (sm *DefaultSessionManager) Validate(ctx context.Context, rawToken string) 
 		return nil, err
 	}
 	if session.State == models.SessionPending {
-		return nil, behemotherr.NewSessionError("SessionManager.Validate", behemotherr.ErrorCodeSessionPending, nil)
+		return nil, errs.NewSessionError("SessionManager.Validate", errs.CodeSessionPending, nil)
 	}
 
 	return session, nil
@@ -299,21 +299,21 @@ func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) 
 	const op = "SessionManager.Promote"
 	m, err := sm.st.FindSessionByID(ctx, sessionID)
 	if err != nil {
-		return nil, behemotherr.WrapOp(op, "session", err)
+		return nil, errs.WrapOp(op, "session", err)
 	}
 
 	// Transition rule enforcement
 	if m.State == models.SessionRevoked {
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionRevoked, nil) // Revoked never transitions anywhere
+		return nil, errs.NewSessionError(op, errs.CodeSessionRevoked, nil) // Revoked never transitions anywhere
 	}
 	if m.State != models.SessionPending {
-		return nil, behemotherr.NewSessionError(op, "invalid_state_transition",
+		return nil, errs.NewSessionError(op, "invalid_state_transition",
 			fmt.Errorf("only a Pending session can be promoted (was %q)", m.State))
 	}
 	if time.Now().After(m.ExpiresAt) {
 		// An abandoned pending session (2FA never completed in time) cannot
 		// be resurrected by promotion; it must re-authenticate from scratch.
-		return nil, behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionExpired, nil)
+		return nil, errs.NewSessionError(op, errs.CodeSessionExpired, nil)
 	}
 
 	now := time.Now()
@@ -324,7 +324,7 @@ func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) 
 		models.SessionExpiresAt:   now.Add(sm.cfg.ExpiresIn),
 	})
 	if err != nil {
-		return nil, behemotherr.WrapOp(op, "session", err)
+		return nil, errs.WrapOp(op, "session", err)
 	}
 	sm.cacheSet(ctx, promoted)
 	return promoted, nil
@@ -348,7 +348,7 @@ func (sm *DefaultSessionManager) Touch(ctx context.Context, session *models.Sess
 
 	m, err := sm.st.FindSessionByID(ctx, session.ID)
 	if err != nil {
-		return nil, behemotherr.WrapOp(op, "session", err)
+		return nil, errs.WrapOp(op, "session", err)
 	}
 	// A revoked session being "used" isn't an error worth surfacing to
 	// request middleware, and one another request has just extended needs
@@ -367,7 +367,7 @@ func (sm *DefaultSessionManager) Touch(ctx context.Context, session *models.Sess
 		models.SessionExpiresAt:    now.Add(ttl),
 	})
 	if err != nil {
-		return nil, behemotherr.WrapOp(op, "session", err)
+		return nil, errs.WrapOp(op, "session", err)
 	}
 	sm.cacheSet(ctx, touched)
 	return touched, nil
@@ -388,7 +388,7 @@ func (sm *DefaultSessionManager) extensionDue(m *models.Session) bool {
 func (sm *DefaultSessionManager) ListForUser(ctx context.Context, userID any) ([]*models.Session, error) {
 	sessions, err := sm.st.ListSessionsForUser(ctx, fmt.Sprint(userID))
 	if err != nil {
-		return nil, behemotherr.WrapOp("SessionManager.ListForUser", "session", err)
+		return nil, errs.WrapOp("SessionManager.ListForUser", "session", err)
 	}
 	return sessions, nil
 }
@@ -407,11 +407,11 @@ func (sm *DefaultSessionManager) revoke(ctx context.Context, sessionID string, r
 
 	m, err := sm.st.FindSessionByID(ctx, sessionID)
 	if err != nil {
-		return behemotherr.WrapOp(op, "session", err)
+		return errs.WrapOp(op, "session", err)
 	}
 	err = sm.revokeModel(ctx, m, reason)
 	if err != nil {
-		return behemotherr.WrapOp(op, "session", err)
+		return errs.WrapOp(op, "session", err)
 	}
 	return nil
 }
@@ -422,11 +422,11 @@ func (sm *DefaultSessionManager) RevokeAllForUser(ctx context.Context, userID an
 
 	live, err := sm.st.ListLiveSessions(ctx, fmt.Sprint(userID), except, 0)
 	if err != nil {
-		return behemotherr.WrapOp(op, "session", err)
+		return errs.WrapOp(op, "session", err)
 	}
 	for _, m := range live {
 		if err := sm.revokeModel(ctx, m, reason); err != nil {
-			return behemotherr.WrapOp(op, "session", err)
+			return errs.WrapOp(op, "session", err)
 		}
 	}
 	return nil

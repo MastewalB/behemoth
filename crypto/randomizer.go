@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"io"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 type DefaultRandomizer struct{}
@@ -23,7 +23,7 @@ func (r *DefaultRandomizer) SecureRandomString(n int) (string, error) {
 func (r *DefaultRandomizer) SecureRandomBytes(n int) ([]byte, error) {
 	b := make([]byte, n)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		return nil, behemotherr.NewSecurityError("Randomizer.SecureRandomString", "crypto_read_failure", err)
+		return nil, errs.NewSecurityError("Randomizer.SecureRandomString", "crypto_read_failure", err)
 	}
 
 	return b, nil

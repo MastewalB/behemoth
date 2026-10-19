@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -349,7 +349,7 @@ type PluginInitContext struct {
 // BeforeHookFunc: pre-persistence, validate-and-prepare only.
 // Contract: return (mutatedPayload, nil) to continue the chain with that payload,
 // or (nil, err) to ABORT. There is no separate "abort" flag; a non-nil error IS
-// the abort signal. err must be one of the existing behemotherr domain error types
+// the abort signal. err must be one of the existing errs domain error types
 // (ValidationError, DomainError, etc.) so it maps cleanly to an HTTP status later.
 // A nil payload with a nil error means "no change": the chain continues with
 // the payload the handler received, including what it changed in place. To
@@ -499,7 +499,7 @@ const (
 // place that runs such a chain inside a flow calls it, so that the flows
 // agree on what a refusal is and how it is named.
 //
-// When err is a rejection (behemotherr.IsRejection), it fires failed with
+// When err is a rejection (errs.IsRejection), it fires failed with
 // reason, after setting reason's Code to FailureRejectedByHook and its Cause
 // to err. The caller fills in what only it knows: the subject and the
 // metadata. Any other error is a failure of the system and fires nothing, so
@@ -508,7 +508,7 @@ const (
 // It returns the error the flow should return: err, or the error of firing
 // failed.
 func FailIfRejected(dispatcher Dispatcher, hctx *HookContext, failed HookPoint, err error, reason FailureReason) error {
-	if !behemotherr.IsRejection(err) {
+	if !errs.IsRejection(err) {
 		return err
 	}
 	reason.Code, reason.Cause = FailureRejectedByHook, err

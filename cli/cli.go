@@ -35,7 +35,7 @@ import (
 	"os"
 	"os/signal"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/telemetry"
 	bmth "github.com/MastewalB/behemoth/types/init"
@@ -203,7 +203,7 @@ func (cmd command) exec(ctx context.Context, args []string, stdout, stderr io.Wr
 	})
 	if err != nil {
 		code := fail(err)
-		if behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationUnresolvedIssues) {
+		if errs.IsCode(err, errs.CodeMigrationUnresolvedIssues) {
 			fmt.Fprintf(stderr, "Answer the open questions in %s, then run the command again.\n", core.DraftPath(app.Migration))
 		}
 		return code

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -57,16 +57,16 @@ func NewPublicView(tables []schema.Table) PublicView {
 func (v *schemaPublicView) Of(m behemoth.Model) (behemoth.M, error) {
 	const op = "PublicView.Of"
 	if m == nil {
-		return nil, behemotherr.NewConfigurationError(op, "no model to build a view of", nil)
+		return nil, errs.NewConfigurationError(op, "no model to build a view of", nil)
 	}
 	public, declared := v.tables[m.SchemaName()]
 	if !declared {
-		return nil, behemotherr.NewConfigurationError(op,
+		return nil, errs.NewConfigurationError(op,
 			fmt.Sprintf("table %q is not declared, so none of its columns is known to be public", m.SchemaName()), nil)
 	}
 	s, ok := m.(behemoth.Serializable)
 	if !ok {
-		return nil, behemotherr.NewConfigurationError(op, fmt.Sprintf("%T has no ToMap to build a view from", m), nil)
+		return nil, errs.NewConfigurationError(op, fmt.Sprintf("%T has no ToMap to build a view from", m), nil)
 	}
 	row, err := s.ToMap()
 	if err != nil {

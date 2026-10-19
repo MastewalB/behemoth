@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/store"
@@ -345,16 +345,16 @@ func (p *Plugin) Middlewares() []types.Middleware {
 func (p *Plugin) Init(ac *types.AuthContext) error {
 	const op = "phonenumber.Init"
 	if p.passwords == nil {
-		return behemotherr.NewConfigurationError(op, "no email/password plugin was given to New; sign-in by password and password reset run through it", nil)
+		return errs.NewConfigurationError(op, "no email/password plugin was given to New; sign-in by password and password reset run through it", nil)
 	}
 	if ac.SMS == nil || !ac.SMS.Configured() {
-		return behemotherr.NewConfigurationError(op, "no SMS sender is configured; set BootConfig.SMS.Sender: the plugin does not send text messages itself", nil)
+		return errs.NewConfigurationError(op, "no SMS sender is configured; set BootConfig.SMS.Sender: the plugin does not send text messages itself", nil)
 	}
 	if ac.Codes == nil {
-		return behemotherr.NewConfigurationError(op, "AuthContext has no code manager", nil)
+		return errs.NewConfigurationError(op, "AuthContext has no code manager", nil)
 	}
 	if p.opts.CodeLength < 4 || p.opts.CodeLength > 12 || p.opts.CodeTTL < 0 || p.opts.MaxAttempts < 1 {
-		return behemotherr.NewConfigurationError(op,
+		return errs.NewConfigurationError(op,
 			fmt.Sprintf("code options are invalid: length %d (4 to 12), TTL %s, attempts %d", p.opts.CodeLength, p.opts.CodeTTL, p.opts.MaxAttempts), nil)
 	}
 	p.authContext = ac
@@ -410,27 +410,27 @@ func Parse(number string) (string, error) {
 }
 
 func errInvalidNumber(message string) error {
-	return behemotherr.NewInvalidInputError("phonenumber.Parse", HookValuePhoneNumber, message, nil)
+	return errs.NewInvalidInputError("phonenumber.Parse", HookValuePhoneNumber, message, nil)
 }
 
 // errInvalidCode is the one answer to every code the plugin refuses, and to
 // a number nobody holds, so that the response does not tell them apart.
 func errInvalidCode(op string) error {
-	return behemotherr.NewUnauthorized(op, ErrorCodeInvalidCode, "invalid or expired code")
+	return errs.NewUnauthorized(op, ErrorCodeInvalidCode, "invalid or expired code")
 }
 
 func errNumberTaken(op string) error {
 	const message = "this phone number is already in use"
-	return &behemotherr.DomainError{
-		Category: behemotherr.CategoryConflict, Op: op, Code: ErrorCodePhoneNumberTaken,
+	return &errs.DomainError{
+		Category: errs.CategoryConflict, Op: op, Code: ErrorCodePhoneNumberTaken,
 		PublicMessage: message, InternalMessage: op + ": " + message,
 	}
 }
 
 func errUnconfirmedChange() error {
 	const op, message = "phonenumber.write", "a phone number is set by confirming a code sent to it"
-	return &behemotherr.DomainError{
-		Category: behemotherr.CategoryForbidden, Op: op, Code: ErrorCodeUnconfirmedChange,
+	return &errs.DomainError{
+		Category: errs.CategoryForbidden, Op: op, Code: ErrorCodeUnconfirmedChange,
 		PublicMessage: message, InternalMessage: op + ": " + message,
 	}
 }
@@ -479,7 +479,7 @@ func (p *Plugin) onUserUpdate(hctx *types.HookContext, changes behemoth.M) (behe
 		if holder.ID != id {
 			return nil, errNumberTaken("phonenumber.write")
 		}
-	case !behemotherr.IsNotFound(err):
+	case !errs.IsNotFound(err):
 		return nil, err
 	}
 	changes[Column.Name] = number
@@ -504,7 +504,7 @@ func (p *Plugin) write(ctx context.Context, userID, number string) (*models.User
 // email/password plugin's does, and publishes number for rate-limit rules.
 func (p *Plugin) operation(ctx context.Context, op, number string) (*types.HookContext, error) {
 	if p.authContext == nil {
-		return nil, behemotherr.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	hctx := &types.HookContext{
 		Ctx:     ctx,
@@ -626,7 +626,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 	var kind types.CodeKind
 	var message types.SMSKind
 	holder, err := p.findHolder(hctx.Ctx, number)
-	if err != nil && !behemotherr.IsNotFound(err) {
+	if err != nil && !errs.IsNotFound(err) {
 		return nil, err
 	}
 	switch purpose {
@@ -770,7 +770,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 
 	consumed, err := ac.Codes.Consume(hctx.Ctx, codeVerify, in.userID, in.code)
 	if err != nil {
-		if !behemotherr.IsCodeRejection(err) {
+		if !errs.IsCodeRejection(err) {
 			return nil, err
 		}
 		return refuse("invalid_code", err, errInvalidCode(op))
@@ -783,7 +783,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 
 	user, err := p.write(hctx.Ctx, in.userID, in.number)
 	if err != nil {
-		if behemotherr.IsCode(err, ErrorCodePhoneNumberTaken) || behemotherr.IsDuplicateKey(err) {
+		if errs.IsCode(err, ErrorCodePhoneNumberTaken) || errs.IsDuplicateKey(err) {
 			return refuse("number_taken", err, errNumberTaken(op))
 		}
 		return nil, types.FailIfRejected(ac.Dispatcher, hctx, HookVerifyFailed, err,
@@ -834,7 +834,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.Sig
 
 	user, err := p.findHolder(hctx.Ctx, in.number)
 	if err != nil {
-		if !behemotherr.IsNotFound(err) {
+		if !errs.IsNotFound(err) {
 			return nil, err
 		}
 		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
@@ -849,7 +849,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, in signInInput) (*types.Sig
 	}
 
 	if _, err := ac.Codes.Consume(hctx.Ctx, codeSignIn, user.ID, in.code); err != nil {
-		if !behemotherr.IsCodeRejection(err) {
+		if !errs.IsCodeRejection(err) {
 			return nil, err
 		}
 		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("invalid_code", err)); failErr != nil {
@@ -921,7 +921,7 @@ func stringField(op string, data map[string]any, key string) (string, error) {
 	case string:
 		return v, nil
 	default:
-		return "", behemotherr.NewInvalidInputError(op, key, key+" must be a string", nil)
+		return "", errs.NewInvalidInputError(op, key, key+" must be a string", nil)
 	}
 }
 
@@ -939,7 +939,7 @@ func stringField(op string, data map[string]any, key string) (string, error) {
 // behind POST /sign-in/phone-number.
 func (p *Plugin) SignIn(ctx context.Context, creds Credentials) (*types.SignInResult, error) {
 	if p.authContext == nil {
-		return nil, behemotherr.NewConfigurationError("phonenumber.SignIn", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return nil, errs.NewConfigurationError("phonenumber.SignIn", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	return p.passwords.SignInWith(ctx, emailpassword.IdentifierCredentials{
 		Key:      HookValuePhoneNumber,
@@ -950,7 +950,7 @@ func (p *Plugin) SignIn(ctx context.Context, creds Credentials) (*types.SignInRe
 		Find: func(ctx context.Context, s *store.Store, value string) (*models.User, error) {
 			number, err := Parse(value)
 			if err != nil {
-				return nil, behemotherr.NewNotFound("phonenumber.SignIn", models.UserTable, err)
+				return nil, errs.NewNotFound("phonenumber.SignIn", models.UserTable, err)
 			}
 			return s.FindUserBy(ctx, Column.Name, number)
 		},
@@ -979,7 +979,7 @@ func (p *Plugin) RequestPasswordReset(ctx context.Context, req ResetRequest) (*S
 }
 
 func errResetOff(op string) error {
-	return behemotherr.NewConfigurationError(op, "password reset by phone is off; set Options.PasswordReset", nil)
+	return errs.NewConfigurationError(op, "password reset by phone is off; set Options.PasswordReset", nil)
 }
 
 // resetInput is the input of the wrapped flow behind ResetPassword. Its
@@ -1033,7 +1033,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 	ac := hctx.Auth
 	user, err := p.findHolder(hctx.Ctx, in.number)
 	if err != nil {
-		if !behemotherr.IsNotFound(err) {
+		if !errs.IsNotFound(err) {
 			return nil, err
 		}
 		if failErr := ac.Dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{
@@ -1044,7 +1044,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 		return nil, errInvalidCode(op)
 	}
 	if _, err := ac.Codes.Consume(hctx.Ctx, codeReset, user.ID, in.code); err != nil {
-		if !behemotherr.IsCodeRejection(err) {
+		if !errs.IsCodeRejection(err) {
 			return nil, err
 		}
 		if failErr := ac.Dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{
@@ -1070,7 +1070,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 // It does not check who is asking, and it fires no points of the plugin.
 func (p *Plugin) SetPhoneNumber(ctx context.Context, userID, phoneNumber string) (*models.User, error) {
 	if p.authContext == nil {
-		return nil, behemotherr.NewConfigurationError("phonenumber.SetPhoneNumber", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return nil, errs.NewConfigurationError("phonenumber.SetPhoneNumber", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	number := strings.TrimSpace(phoneNumber)
 	if number != "" {
@@ -1097,8 +1097,8 @@ func optionalSession(sm types.SessionManager) types.Middleware {
 			}
 			session, err := sm.Validate(rctx.Ctx, token)
 			if err != nil {
-				if behemotherr.IsNotFound(err) {
-					err = behemotherr.NewSessionError("phonenumber.session", behemotherr.ErrorCodeSessionInvalid, err)
+				if errs.IsNotFound(err) {
+					err = errs.NewSessionError("phonenumber.session", errs.CodeSessionInvalid, err)
 				}
 				return err
 			}
@@ -1121,7 +1121,7 @@ func sessionUser(rctx *types.RequestContext) string {
 func body(rctx *types.RequestContext, op string) (behemoth.M, error) {
 	var data behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&data); err != nil {
-		return nil, behemotherr.NewValidationError(op, "request", err)
+		return nil, errs.NewValidationError(op, "request", err)
 	}
 	return data, nil
 }
@@ -1134,7 +1134,7 @@ func metadataField(op string, data behemoth.M) (behemoth.M, error) {
 	case map[string]any:
 		return v, nil
 	default:
-		return nil, behemotherr.NewInvalidInputError(op, keyMetadata, keyMetadata+" must be an object", nil)
+		return nil, errs.NewInvalidInputError(op, keyMetadata, keyMetadata+" must be an object", nil)
 	}
 }
 

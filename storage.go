@@ -37,7 +37,7 @@ type Database interface {
 	// UpdateOne applies updates to one row matching expr — the first, if
 	// several match.
 	//
-	// [Convention] It returns a NotFound error (behemotherr.IsNotFound) when
+	// [Convention] It returns a NotFound error (errs.IsNotFound) when
 	// no row matches, and expr is checked against the row as it is when
 	// written, not only when it was selected: an implementation re-checks
 	// expr in the write itself, so after waiting on a concurrent writer the

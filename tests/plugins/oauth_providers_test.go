@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -262,7 +262,7 @@ func TestOAuthWithGitHub(t *testing.T) {
 
 	fake.github = []map[string]any{{"email": "octocat@example.com", "primary": true, "verified": false}}
 	_, err = signIn()
-	assert.True(t, hasCode(err, behemotherr.CategoryForbidden, oauth.ErrorCodeEmailNotProvided), "no verified address: %v", err)
+	assert.True(t, hasCode(err, errs.CategoryForbidden, oauth.ErrorCodeEmailNotProvided), "no verified address: %v", err)
 
 	fake.github = []map[string]any{{"email": "octocat@example.com", "primary": true, "verified": true}}
 	result, err := signIn()
@@ -327,7 +327,7 @@ func TestOAuthUsesTheSharedClient(t *testing.T) {
 
 	t.Run("a negative timeout fails Boot", func(t *testing.T) {
 		_, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *bmth.BootConfig) { cfg.Outbound.Timeout = -time.Second })
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "got %v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 	})
 }
 
@@ -363,7 +363,7 @@ func TestOAuthChecksTheProviderConfigs(t *testing.T) {
 	for name, opts := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := bootOAuth(t, opts, nil)
-			assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "got %v", err)
+			assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 		})
 	}
 
@@ -377,7 +377,7 @@ func TestOAuthChecksTheProviderConfigs(t *testing.T) {
 
 		_, err = app.plugin.Begin(context.Background(), oauth.BeginRequest{Provider: "down"})
 		require.Error(t, err, "the provider is called at the first sign-in")
-		assert.False(t, behemotherr.IsRejection(err))
+		assert.False(t, errs.IsRejection(err))
 		assert.NotContains(t, strings.ToLower(err.Error()), "s3cret")
 	})
 }

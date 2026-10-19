@@ -9,7 +9,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -109,7 +109,7 @@ func NewPostgresClauseOptions(N int) *adapters.ClauseOptions {
 func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -138,7 +138,7 @@ func (pg *PostgresAdapter) FindOne(
 ) (behemoth.Model, error) {
 
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 
 	// columns stay canonical: they key the map handed to FromMap.
@@ -172,7 +172,7 @@ func (pg *PostgresAdapter) FindMany(
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 	var (
 		columns        []string
@@ -244,7 +244,7 @@ func (pg *PostgresAdapter) FindMany(
 func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -385,7 +385,7 @@ func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 
 	whereClause, args := pg.where(m, &expr, defaultPostgresClauseOptions)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 
 	table := adapters.PhysicalTable(pg.names(), m)
@@ -424,7 +424,7 @@ func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 	whereClause, args := pg.where(m, &expr, defaultPostgresClauseOptions)
 
 	if whereClause == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
@@ -491,7 +491,7 @@ func (pg *PostgresAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 		_, err := fn(ctx, pg)
 		return err
 	default:
-		return behemotherr.NewTransactionError("Transaction",
+		return errs.NewTransactionError("Transaction",
 			fmt.Errorf("cannot begin a transaction on a %T; the adapter needs a *sql.DB", pg.DB))
 	}
 
@@ -512,7 +512,7 @@ func (pg *PostgresAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return behemotherr.NewTransactionError("Transaction", rollbackErr)
+			return errs.NewTransactionError("Transaction", rollbackErr)
 		}
 		return err
 	}

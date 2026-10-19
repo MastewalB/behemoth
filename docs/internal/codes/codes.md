@@ -8,7 +8,7 @@ The code it refers to lives in:
 - `transport/codes.go`: `DefaultCodeManager`
 - `models/verification_code.go`: the model and the table
 - `store/verification_codes.go`: the store operations
-- `errors/code.go`: the one rejection
+- `errs/code.go`: the one rejection
 
 ## A code next to a token
 

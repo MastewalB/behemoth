@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	bmth "github.com/MastewalB/behemoth/types/init"
@@ -158,7 +158,7 @@ func ensureIndexes(t *testing.T, client *mongo.Client) {
 
 		warnings, err := adapter.CheckIndexes(ctx, tables)
 		require.Error(t, err)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 		for _, name := range []string{"primary key", "unique column email", "unique column nickname", "index uq_members_team_badge", "EnsureIndexes"} {
 			assert.Contains(t, err.Error(), name)
 		}
@@ -230,7 +230,7 @@ func ensureIndexes(t *testing.T, client *mongo.Client) {
 
 		err := adapter.EnsureIndexes(ctx, tables)
 		require.Error(t, err)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryMigration), "%v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryMigration), "%v", err)
 		assert.Contains(t, err.Error(), `conflicts with the existing index "uq_members_email"`)
 		assert.Equal(t, allMemberIndexes, indexNames(t, members), "the hand-made index keeps the name; the others are created")
 
@@ -268,7 +268,7 @@ func ensureIndexes(t *testing.T, client *mongo.Client) {
 		err := adapter.Transaction(ctx, func(ctx context.Context, _ behemoth.Database) (any, error) {
 			return nil, adapter.EnsureIndexes(ctx, tables)
 		})
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 		assert.Empty(t, indexNames(t, members))
 	})
 
@@ -284,6 +284,6 @@ func ensureIndexes(t *testing.T, client *mongo.Client) {
 
 		// The adapter's own writes now meet the index.
 		require.NoError(t, adapter.Create(ctx, testutils.NewTestUser("dup")))
-		assert.True(t, behemotherr.IsDuplicateKey(adapter.Create(ctx, testutils.NewTestUser("dup"))))
+		assert.True(t, errs.IsDuplicateKey(adapter.Create(ctx, testutils.NewTestUser("dup"))))
 	})
 }

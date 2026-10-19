@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 // create runs BeforeCreate on m's row, inserts the (possibly rewritten) row
@@ -22,7 +22,7 @@ import (
 func (s *Store) create(ctx context.Context, m behemoth.Model, prepare func(behemoth.M)) error {
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 	return s.hooked(ctx, m.SchemaName(), func(ctx context.Context, tx *Store) error {
 		row, err := ser.ToMap()
@@ -42,7 +42,7 @@ func (s *Store) create(ctx context.Context, m behemoth.Model, prepare func(behem
 			prepare(row)
 		}
 		if err := ser.FromMap(row); err != nil {
-			return behemotherr.NewValidationError("Store.Create", m.SchemaName(), fmt.Errorf("row rewritten by a before-create hook: %w", err))
+			return errs.NewValidationError("Store.Create", m.SchemaName(), fmt.Errorf("row rewritten by a before-create hook: %w", err))
 		}
 		if err := tx.db.Create(ctx, m); err != nil {
 			return err
@@ -126,7 +126,7 @@ func (s *Store) hooked(ctx context.Context, table string, write func(ctx context
 // table doesn't have.
 func (s *Store) checkUpdate(m behemoth.Model, changes behemoth.M, op string) error {
 	if _, ok := changes[m.PrimaryKeyName()]; ok {
-		return behemotherr.NewValidationError(op, m.SchemaName(), fmt.Errorf("primary key %q can't be updated", m.PrimaryKeyName()))
+		return errs.NewValidationError(op, m.SchemaName(), fmt.Errorf("primary key %q can't be updated", m.PrimaryKeyName()))
 	}
 	return s.checkColumns(m, changes, op)
 }
@@ -138,7 +138,7 @@ func (s *Store) checkUpdate(m behemoth.Model, changes behemoth.M, op string) err
 func (s *Store) checkColumns(m behemoth.Model, row behemoth.M, op string) error {
 	ser, ok := m.New().(behemoth.Serializable)
 	if !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 	columns, err := ser.ToMap()
 	if err != nil {
@@ -149,7 +149,7 @@ func (s *Store) checkColumns(m behemoth.Model, row behemoth.M, op string) error 
 	}
 	for k := range row {
 		if _, ok := columns[k]; !ok {
-			return behemotherr.NewValidationError(op, m.SchemaName(), fmt.Errorf("unknown column %q", k))
+			return errs.NewValidationError(op, m.SchemaName(), fmt.Errorf("unknown column %q", k))
 		}
 	}
 	return nil

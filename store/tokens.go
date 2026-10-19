@@ -7,13 +7,9 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 )
-
-// ErrorCodeTokenAlreadyConsumed is the code ConsumeToken's error carries
-// when another call consumed the token first.
-const ErrorCodeTokenAlreadyConsumed = "token_already_consumed"
 
 // CreateToken inserts tok, assigning its ID and creation time. Hashes, kind,
 // subject and expiry are the token manager's to set.
@@ -36,7 +32,7 @@ func (s *Store) FindTokenByLookupHash(ctx context.Context, kind models.TokenKind
 
 // ConsumeToken marks the token with id consumed — at most once, however many
 // calls race for it — and returns the time it recorded. A call that loses the
-// race gets a token error with ErrorCodeTokenAlreadyConsumed; an unknown id
+// race gets a token error with errs.CodeTokenAlreadyConsumed; an unknown id
 // gets NotFound.
 //
 // The update is guarded (consumed_at must still be NULL), and UpdateOne
@@ -51,11 +47,11 @@ func (s *Store) ConsumeToken(ctx context.Context, id string) (time.Time, error) 
 		{Field: models.TokenID, Operator: clause.OpEqual, Value: id},
 		{Field: models.TokenConsumedAt, Operator: clause.OpIsNull},
 	}, Logic: clause.OpAnd}, behemoth.M{models.TokenConsumedAt: at})
-	if behemotherr.IsNotFound(err) {
+	if errs.IsNotFound(err) {
 		if _, findErr := s.FindTokenByID(ctx, id); findErr != nil {
 			return time.Time{}, findErr // no such token
 		}
-		return time.Time{}, behemotherr.NewTokenError(op, ErrorCodeTokenAlreadyConsumed, nil)
+		return time.Time{}, errs.NewTokenError(op, errs.CodeTokenAlreadyConsumed, nil)
 	}
 	if err != nil {
 		return time.Time{}, err
@@ -70,7 +66,7 @@ func (s *Store) RevokeToken(ctx context.Context, id string) error {
 		{Field: models.TokenID, Operator: clause.OpEqual, Value: id},
 		{Field: models.TokenRevokedAt, Operator: clause.OpIsNull},
 	}, Logic: clause.OpAnd}, behemoth.M{models.TokenRevokedAt: s.now()})
-	if behemotherr.IsNotFound(err) {
+	if errs.IsNotFound(err) {
 		_, findErr := s.FindTokenByID(ctx, id)
 		return findErr // nil: it exists, so it was already revoked
 	}

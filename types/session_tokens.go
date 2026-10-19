@@ -65,6 +65,6 @@ type SessionTokens interface {
 	// that is not active or has expired is a session error, an audience that
 	// is not configured a validation error (code "audience_invalid_input"),
 	// and session tokens that are not configured a configuration error
-	// (behemotherr.ErrorCodeJWTExternalNotConfigured).
+	// (errs.CodeJWTExternalNotConfigured).
 	Issue(ctx context.Context, req SessionTokenRequest) (*SessionToken, error)
 }

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -66,11 +66,11 @@ func checkDataHookPoints(catalog types.HookCatalog, points map[string]tableHookP
 		} {
 			def, ok := catalog.Lookup(want.point)
 			if !ok {
-				return behemotherr.NewConfigurationError("Boot",
+				return errs.NewConfigurationError("Boot",
 					fmt.Sprintf("data hook point %q of table %q was never declared", want.point, table), nil)
 			}
 			if def.Phase != want.phase {
-				return behemotherr.NewConfigurationError("Boot",
+				return errs.NewConfigurationError("Boot",
 					fmt.Sprintf("data hook point %q of table %q is declared as phase %q, the store fires it as %q", want.point, table, def.Phase, want.phase), nil)
 			}
 		}

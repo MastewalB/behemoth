@@ -18,7 +18,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -116,7 +116,7 @@ func call(t *testing.T, ac *types.AuthContext, route types.Route, body string) *
 	w := httptest.NewRecorder()
 	if err != nil {
 		// The router's error mapping, with its default mapper.
-		status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+		status, body := (&errs.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(body))
 		return w
@@ -173,7 +173,7 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 		assert.Equal(t, code, answer.Code, "sign-up body %s", body)
 	}
 	_, err = ac.Store.FindUserByEmail(ctx, "grace@example.com")
-	assert.True(t, behemotherr.IsNotFound(err), "none of them created a user: %v", err)
+	assert.True(t, errs.IsNotFound(err), "none of them created a user: %v", err)
 
 	w = call(t, ac, routes["/sign-in/email"], `{"email":"ADA@example.com","password":"correct horse"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -226,8 +226,8 @@ func TestEmailPasswordSignInAndSignOutErrors(t *testing.T) {
 
 	// Called from code, the refusal is told from a failure by its type.
 	_, err := p.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "wrong password"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryUnauthorized), "%v", err)
-	assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryUnauthorized), "%v", err)
+	assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "%v", err)
 
 	assert.Equal(t, http.StatusBadRequest, call(t, ac, routes["/sign-in/email"], `not json`).Code)
 
@@ -333,7 +333,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 		if err := signOut(rctx); err != nil {
 			// The session check returns its refusal for the router to
 			// answer; this is its error mapping, with the default mapper.
-			status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+			status, body := (&errs.DefaultErrorMapper{}).Map(err)
 			rec.Code = status
 			require.NoError(t, json.NewEncoder(rec.Body).Encode(body))
 			return rec
@@ -363,7 +363,7 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 	require.NoError(t, err)
 
-	veto := behemotherr.NewInvalidInputError("test", "user", "this email domain is not allowed", nil)
+	veto := errs.NewInvalidInputError("test", "user", "this email domain is not allowed", nil)
 	var failures []types.FailureReason
 	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
 		Crypto: crypto.Config{
@@ -402,7 +402,7 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 
 	err = signUp.Handler(rctx)
 	assert.ErrorIs(t, err, veto, "the handler's own error, for the router to map")
-	status, body := (&behemotherr.DefaultErrorMapper{}).Map(err)
+	status, body := (&errs.DefaultErrorMapper{}).Map(err)
 	assert.Equal(t, http.StatusBadRequest, status)
 	assert.Equal(t, "this email domain is not allowed", body["error"])
 
@@ -410,7 +410,7 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	assert.Equal(t, "rejected_by_hook", failures[0].Code)
 	assert.ErrorIs(t, failures[0].Cause, veto)
 	_, err = ac.Store.FindUserByEmail(ctx, "eve@blocked.example")
-	assert.True(t, behemotherr.IsNotFound(err), "nothing was written: %v", err)
+	assert.True(t, errs.IsNotFound(err), "nothing was written: %v", err)
 
 	// An untyped error is a failure of the system and not a rejection: a
 	// 500 without the error's text, and no failed point.
@@ -438,7 +438,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 
 	p := emailpassword.New(emailpassword.Options{})
 	_, err = p.SignUp(ctx, behemoth.M{"email": "early@example.com", "password": "correct horse"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "a flow called before Boot is a configuration error: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "a flow called before Boot is a configuration error: %v", err)
 
 	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 	require.NoError(t, err)
@@ -569,7 +569,7 @@ func TestEmailPasswordSignInPassesExtraInputToBeforeHandlers(t *testing.T) {
 			maps.Copy(seen, payload)
 			payloads = append(payloads, seen)
 			if payload["captchaToken"] == "bad" {
-				return nil, behemotherr.NewValidationError("captcha", "captchaToken", errors.New("captcha failed"))
+				return nil, errs.NewValidationError("captcha", "captchaToken", errors.New("captcha failed"))
 			}
 			return nil, nil
 		}, nil)
@@ -635,7 +635,7 @@ func TestEmailAndPasswordCredentialsPayload(t *testing.T) {
 		"Extra is replaced, and a missing password is empty")
 
 	err = back.FromMap(map[string]any{"email": "ada@example.com", "password": 5})
-	assert.True(t, behemotherr.IsValidationError(err), "got %v", err)
+	assert.True(t, errs.IsValidationError(err), "got %v", err)
 }
 
 // Core limits sign-in, and sign-up, to ten attempts a minute per client
@@ -708,7 +708,7 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 	require.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
 	assert.NotEmpty(t, w.Header().Get("Retry-After"))
 	_, err = ac.Store.FindUserByEmail(ctx, "user11@example.com")
-	assert.True(t, behemotherr.IsNotFound(err), "the refused sign-up created nothing: %v", err)
+	assert.True(t, errs.IsNotFound(err), "the refused sign-up created nothing: %v", err)
 
 	assert.Empty(t, rec.Logger.At(slog.LevelWarn), "the counter was reachable")
 	limited := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
@@ -787,7 +787,7 @@ CREATE TABLE tokens (
 		},
 	})
 	require.NoError(t, err)
-	limited := func(err error) bool { return behemotherr.Is(err, behemotherr.CategoryRateLimited) }
+	limited := func(err error) bool { return errs.IsCategory(err, errs.CategoryRateLimited) }
 
 	// Sign-up: one per email, counted on the normalized form.
 	user, err := p.SignUp(ctx, behemoth.M{"email": "ada@example.com", "password": "correct horse"})
@@ -804,13 +804,13 @@ CREATE TABLE tokens (
 	}
 	require.NoError(t, signIn("ada@example.com", "correct horse"))
 	err = signIn(" Ada@Example.com", "a wrong password")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryUnauthorized), "the second attempt reaches the flow: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryUnauthorized), "the second attempt reaches the flow: %v", err)
 	assert.True(t, limited(signIn("ada@example.com", "correct horse")), "the third attempt on the email is refused")
 	require.NoError(t, signIn("grace@example.com", "correct horse"), "another email has its own count")
 	require.NoError(t, signIn("alias@example.com", "correct horse"), "counted under the email that was sent, signed in as the rewritten one")
 	for i := 1; i <= 3; i++ {
 		err = signIn(" ", "a wrong password")
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryUnauthorized), "attempt %d without an email is not counted by the rule per email: %v", i, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryUnauthorized), "attempt %d without an email is not counted by the rule per email: %v", i, err)
 	}
 
 	// Session create: three per user. Ada's two sign-ins above made two.
@@ -895,7 +895,7 @@ func TestEmailPasswordOptions(t *testing.T) {
 	t.Run("contradicting limits fail Init", func(t *testing.T) {
 		p := emailpassword.New(emailpassword.Options{MinPasswordLength: 20, MaxPasswordLength: 10})
 		err := p.Init(authContext(t))
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	})
 }
 
@@ -1194,7 +1194,7 @@ func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 // insert is rolled back, so is the event.
 func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 	ctx := context.Background()
-	veto := behemotherr.NewInvalidInputError("test", "user", "not allowed", nil)
+	veto := errs.NewInvalidInputError("test", "user", "not allowed", nil)
 	ac, routes := auditApp(t, nil, func(reg types.HookRegistry) error {
 		// Runs after the user row is inserted, inside its transaction.
 		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, _ any) error {
@@ -1213,7 +1213,7 @@ func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 	require.ErrorIs(t, route.Handler(rctx), veto)
 
 	_, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
-	require.True(t, behemotherr.IsNotFound(err), "the user was rolled back")
+	require.True(t, errs.IsNotFound(err), "the user was rolled back")
 	page, err := ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{Types: []string{telemetry.AuditUserCreated}})
 	require.NoError(t, err)
 	assert.Empty(t, page.Events, "an event describes a user that was never created")

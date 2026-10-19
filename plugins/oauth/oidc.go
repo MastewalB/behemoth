@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/keysource"
 	"github.com/MastewalB/behemoth/outbound"
 )
@@ -220,7 +220,7 @@ func (p *oidcProvider) verifyIDToken(ctx context.Context, keys *crypto.CachedKey
 		Now:             p.now,
 	})
 	if err != nil {
-		if behemotherr.Is(err, behemotherr.CategoryToken) {
+		if errs.IsCategory(err, errs.CategoryToken) {
 			return nil, fmt.Errorf("%w: ID token: %w", ErrExchangeRefused, err)
 		}
 		return nil, fmt.Errorf("ID token: %w", err)

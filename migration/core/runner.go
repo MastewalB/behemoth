@@ -8,7 +8,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/MastewalB/behemoth/utils"
@@ -39,7 +39,7 @@ func (r *DefaultMigrationRunner) Apply(ctx context.Context, migrations []Migrati
 
 	for _, m := range migrations {
 		if err := r.applyTraced(ctx, m, &currentSnapshot); err != nil {
-			return behemotherr.WrapOp("MigrationRunner.Apply", "migration:"+m.ID, err)
+			return errs.WrapOp("MigrationRunner.Apply", "migration:"+m.ID, err)
 		}
 	}
 	return nil
@@ -57,7 +57,7 @@ func (r *DefaultMigrationRunner) applyTraced(ctx context.Context, m Migration, s
 func (r *DefaultMigrationRunner) applyOne(ctx context.Context, m Migration, snapshot *SchemaSnapshot) error {
 	nextTables, err := applyOperationsToSnapshot(snapshot.Tables, m.Up)
 	if err != nil {
-		return behemotherr.NewMigrationError("MigrationRunner.applyOne", behemotherr.ErrorCodeMigrationSnapshotProjectionFailed, err)
+		return errs.NewMigrationError("MigrationRunner.applyOne", errs.CodeMigrationSnapshotProjectionFailed, err)
 	}
 
 	req := MigrationRequest{
@@ -75,7 +75,7 @@ func (r *DefaultMigrationRunner) applyOne(ctx context.Context, m Migration, snap
 		applyErr = r.driver.ApplyMigration(ctx, req)
 	}
 	if applyErr != nil {
-		return behemotherr.NewMigrationError("MigrationRunner.applyOne", behemotherr.ErrorCodeMigrationApplyFailed, applyErr)
+		return errs.NewMigrationError("MigrationRunner.applyOne", errs.CodeMigrationApplyFailed, applyErr)
 	}
 
 	snapshot.Version, snapshot.Tables = m.ID, nextTables
@@ -195,7 +195,7 @@ func (r *DefaultMigrationRunner) Pending(ctx context.Context, onDisk []Migration
 	alphabetical := func(a, b string) bool { return a < b } // alphabetical is chronological here since migration IDs are timestamp/sequence-prefixed
 	sortedIDs, cyclePath, ok := utils.KahnSort(graphMap, alphabetical)
 	if !ok {
-		return nil, behemotherr.NewMigrationError("MigrationRunner.Pending", behemotherr.ErrorCodeMigrationDependencyCycle,
+		return nil, errs.NewMigrationError("MigrationRunner.Pending", errs.CodeMigrationDependencyCycle,
 			fmt.Errorf("circular migration dependency: %s", strings.Join(cyclePath, " -> ")))
 	}
 
@@ -208,14 +208,14 @@ func (r *DefaultMigrationRunner) Pending(ctx context.Context, onDisk []Migration
 
 func (r *DefaultMigrationRunner) loadLedger(ctx context.Context) ([]MigrationLedgerEntry, error) {
 	found, err := r.db.FindMany(ctx, &MigrationLedgerEntry{}, clause.Expression{}, nil)
-	if behemotherr.IsUndefinedTable(err) {
+	if errs.IsUndefinedTable(err) {
 		// The driver creates the ledger with the first migration it records:
 		// no table means nothing applied yet — the same reading
 		// DetermineRunState gives a missing ledger table.
 		return nil, nil
 	}
 	if err != nil {
-		return nil, behemotherr.WrapOp("MigrationRunner.loadLedger", "migration_ledger", err)
+		return nil, errs.WrapOp("MigrationRunner.loadLedger", "migration_ledger", err)
 	}
 	out := make([]MigrationLedgerEntry, len(found))
 	for i, f := range found {
@@ -230,10 +230,10 @@ func (r *DefaultMigrationRunner) LoadSnapshot(ctx context.Context) (SchemaSnapsh
 	if err != nil {
 		// No snapshot row, or no snapshot table at all (the driver creates it
 		// with the first migration it records): nothing applied yet.
-		if behemotherr.IsNotFound(err) || behemotherr.IsUndefinedTable(err) {
+		if errs.IsNotFound(err) || errs.IsUndefinedTable(err) {
 			return SchemaSnapshot{Tables: map[string]schema.Table{}}, nil
 		}
-		return SchemaSnapshot{}, behemotherr.WrapOp("MigrationRunner.LoadSnapshot", "schema_snapshot", err)
+		return SchemaSnapshot{}, errs.WrapOp("MigrationRunner.LoadSnapshot", "schema_snapshot", err)
 	}
 	return *found.(*SchemaSnapshot), nil
 }

@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -105,7 +105,7 @@ func TestCustomMigrationEmittedOnce(t *testing.T) {
 
 	// Already on disk: not emitted again.
 	_, err = RunGenerate(ctx, cfg, Declared{Schemas: reg, Custom: []CustomMigration{backfill}}, deps, false)
-	if !behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationNothingToGenerate) {
+	if !errs.IsCode(err, errs.CodeMigrationNothingToGenerate) {
 		t.Fatalf("second run: err = %v, want nothing to generate", err)
 	}
 

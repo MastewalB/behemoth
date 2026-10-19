@@ -4,7 +4,7 @@ package core
 // 	"fmt"
 // 	"sync"
 
-// 	behemotherr "github.com/MastewalB/behemoth/errors"
+// 	"github.com/MastewalB/behemoth/errs"
 // )
 
 // var (
@@ -36,7 +36,7 @@ package core
 // 	driversMu.RUnlock()
 
 // 	if !exists {
-// 		return nil, fmt.Errorf("\"%s\" %w (forgotten import?)", name, behemotherr.NewMigrationError("Migrator.Open", "driver_not_found", nil))
+// 		return nil, fmt.Errorf("\"%s\" %w (forgotten import?)", name, errs.NewMigrationError("Migrator.Open", "driver_not_found", nil))
 // 	}
 
 // 	return driver.Open(config)

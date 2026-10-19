@@ -9,7 +9,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -62,7 +62,7 @@ func (sqlt *SQLiteAdapter) where(m behemoth.Model, expr *clause.Expression) (str
 func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -91,7 +91,7 @@ func (sqlt *SQLiteAdapter) FindOne(
 ) (behemoth.Model, error) {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 
 	// columns stay canonical: they key the map handed to FromMap.
@@ -125,7 +125,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 	var (
 		columns        []string
@@ -198,7 +198,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	_, ok := m.(behemoth.Serializable)
 	if !ok {
-		return behemotherr.SerializableNotImplemented()
+		return errs.SerializableNotImplemented()
 	}
 
 	columns, values, _ := models.GenerateColumnValuePairs(m)
@@ -332,7 +332,7 @@ func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 
 	whereClause, args := sqlt.where(m, &expr)
 	if whereClause == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 
 	table := adapters.PhysicalTable(sqlt.names(), m)
@@ -369,7 +369,7 @@ func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 	whereClause, args := sqlt.where(m, &expr)
 
 	if whereClause == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 
 	query := fmt.Sprintf(
@@ -436,7 +436,7 @@ func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 		_, err := fn(ctx, sqlt)
 		return err
 	default:
-		return behemotherr.NewTransactionError("Transaction",
+		return errs.NewTransactionError("Transaction",
 			fmt.Errorf("cannot begin a transaction on a %T; the adapter needs a *sql.DB", sqlt.DB))
 	}
 
@@ -457,7 +457,7 @@ func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return behemotherr.NewTransactionError("Transaction", rollbackErr)
+			return errs.NewTransactionError("Transaction", rollbackErr)
 		}
 		return err
 	}

@@ -151,7 +151,7 @@ What it does not do:
 Errors:
 
 - A failure to list indexes (the server can't be reached) is returned at once, wrapped with the function's name.
-- Failures to create an index are collected. The function tries every index and returns one `behemotherr` migration error (`CategoryMigration`, code `apply_failed`) that joins them, so a deploy log shows every collection that needs attention in one run.
+- Failures to create an index are collected. The function tries every index and returns one `errs` migration error (`CategoryMigration`, code `apply_failed`) that joins them, so a deploy log shows every collection that needs attention in one run.
 - Each message says what the index is, where it was declared (`from unique column email`), what is in the way and what to do.
 
 ## `CheckIndexes` and `Boot`

@@ -11,7 +11,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -145,7 +145,7 @@ func (l fixtureLedger) FindMany(context.Context, behemoth.Model, clause.Expressi
 
 func (l fixtureLedger) FindOne(context.Context, behemoth.Model, clause.Expression) (behemoth.Model, error) {
 	if l.f.version == "" {
-		return nil, behemotherr.NewNotFound("fixtureLedger.FindOne", "schema_snapshot", nil)
+		return nil, errs.NewNotFound("fixtureLedger.FindOne", "schema_snapshot", nil)
 	}
 	return &core.SchemaSnapshot{Version: l.f.version, Tables: l.f.tables}, nil
 }
