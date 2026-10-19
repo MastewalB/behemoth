@@ -13,6 +13,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
@@ -21,7 +22,6 @@ import (
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +38,7 @@ type verificationApp struct {
 // bootVerification boots the email/password plugin and the verification
 // plugin over a fresh database, with one trusted origin. configure may
 // adjust the BootConfig.
-func bootVerification(t *testing.T, opts emailverification.Options, configure ...func(*bmth.BootConfig)) *verificationApp {
+func bootVerification(t *testing.T, opts emailverification.Options, configure ...func(*engine.BootConfig)) *verificationApp {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "verification.db")+"?_busy_timeout=10000")
@@ -59,9 +59,9 @@ func bootVerification(t *testing.T, opts emailverification.Options, configure ..
 	tel, rec := telemetrytest.New()
 	app.rec = rec
 
-	prepared, err := bmth.Prepare([]types.Plugin{app.passwords, app.plugin}, bmth.PrepareConfig{})
+	prepared, err := engine.Prepare([]types.Plugin{app.passwords, app.plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	cfg := bmth.BootConfig{
+	cfg := engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -74,7 +74,7 @@ func bootVerification(t *testing.T, opts emailverification.Options, configure ..
 	for _, fn := range configure {
 		fn(&cfg)
 	}
-	app.ac, err = bmth.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), cfg)
+	app.ac, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { app.ac.Mailer.Close(context.Background()) })
 	return app
@@ -327,9 +327,9 @@ func TestEmailVerificationOptions(t *testing.T) {
 		_, err = p.Verify(context.Background(), "token")
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
 
-		prepared, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
+		prepared, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
 		require.NoError(t, err, name)
-		_, err = bmth.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+		_, err = engine.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 			},

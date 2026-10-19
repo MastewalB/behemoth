@@ -33,11 +33,11 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/examples/cli/auth"
 	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 )
 
 func main() {
@@ -63,7 +63,7 @@ func main() {
 		log.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	if _, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+	if _, err := engine.Boot(ctx, app, db, engine.BootConfig{
 		Crypto:  cryptoCfg,
 		HTTP:    nethttp.New(mux),
 		Session: types.SessionConfig{ExpiresIn: 24 * time.Hour, Transport: types.TransportHeader},

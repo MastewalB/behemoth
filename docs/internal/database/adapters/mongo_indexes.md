@@ -31,14 +31,14 @@ The adapter did map MongoDB's duplicate-key error (`E11000`) to Behemoth's dupli
 The order in an application:
 
 ```go
-app, err := bmth.Prepare(plugins, prepareCfg)
+app, err := engine.Prepare(plugins, prepareCfg)
 db := mongoAdapter.NewMongoAdapter(client, "auth", app.Resolver)
 
 // From a deploy step, or at startup. Safe to repeat.
 if err := db.EnsureIndexes(ctx, app.Schemas.All()); err != nil {
 	return err
 }
-ac, err := bmth.Boot(ctx, app, db, bootCfg) // calls db.CheckIndexes
+ac, err := engine.Boot(ctx, app, db, bootCfg) // calls db.CheckIndexes
 ```
 
 `app.Schemas.All()` is every declared table with the contributions of other declarers merged in, so an index a plugin adds with `ExtendIndex` and a unique column it adds with `ExtendColumn` are covered without the application listing them.
@@ -164,7 +164,7 @@ type IndexChecker interface {
 }
 ```
 
-It is the same pattern as `behemoth.TransactionChecker`, which `Boot` uses to refuse a standalone MongoDB server. The interface is declared in `types/init` and not in the root package, because it names `schema.Table` and `schema` imports the root package.
+It is the same pattern as `behemoth.TransactionChecker`, which `Boot` uses to refuse a standalone MongoDB server. The interface is declared in `engine` and not in the root package, because it names `schema.Table` and `schema` imports the root package.
 
 Order in `Boot`: the transaction check, then telemetry is resolved, then the index check, then everything else. Nothing has been written at that point.
 

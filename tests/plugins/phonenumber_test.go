@@ -14,6 +14,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
@@ -21,7 +22,6 @@ import (
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -93,9 +93,9 @@ func bootPhones(t *testing.T, opts phonenumber.Options, hookFn func(reg types.Ho
 	app := &phoneApp{routes: mountedRoutes{}, sms: &texts{}, db: db}
 	app.passwords = emailpassword.New(emailpassword.Options{})
 	app.phones = phonenumber.New(app.passwords, opts)
-	prepared, err := bmth.Prepare([]types.Plugin{app.passwords, app.phones}, bmth.PrepareConfig{})
+	prepared, err := engine.Prepare([]types.Plugin{app.passwords, app.phones}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	app.ac, err = bmth.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), bmth.BootConfig{
+	app.ac, err = engine.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -748,9 +748,9 @@ func TestPhoneNumberOptionsAndWiring(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(phoneSchema)
 	require.NoError(t, err)
-	prepared, err := bmth.Prepare([]types.Plugin{passwords, phonenumber.New(passwords, phonenumber.Options{})}, bmth.PrepareConfig{})
+	prepared, err := engine.Prepare([]types.Plugin{passwords, phonenumber.New(passwords, phonenumber.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	_, err = bmth.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), bmth.BootConfig{
+	_, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},

@@ -21,7 +21,7 @@ The code lives in:
 - `types/hooks/hooks.go`: the names of the points core declares and the shared payload keys
 - `utils/graph.go`: `KahnSort`, the topological sort behind plugin order and handler order
 - `dispatch/catalog.go`, `dispatch/registry.go`, `dispatch/dispatcher.go`: the implementations (`DefaultHookCatalog`, `DefaultHookRegistry` and its scoped registry, `FreezeChains`, `DefaultDispatcher`)
-- `types/init/init.go`: `Prepare` and `Boot`, which run them, and the scoped catalogs
+- `engine/init.go`: `Prepare` and `Boot`, which run them, and the scoped catalogs
 - `dispatch/datahooks.go`: `dataHooks`, the adapter between the store and the dispatcher
 - `store/store.go` and `store/create.go`: `store.Hooks` and the write paths that call it
 

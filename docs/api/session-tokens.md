@@ -19,7 +19,7 @@ Use session tokens when your API, a worker, or a service in another language has
 Name the services that accept session tokens in `BootConfig.JWT`:
 
 ```go
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	JWT: crypto.JWTConfig{
 		Issuer: "https://auth.example.com",
 		Audiences: map[crypto.JWTKind][]string{

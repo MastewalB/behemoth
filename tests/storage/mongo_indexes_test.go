@@ -8,11 +8,11 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/schema"
 	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
 	"github.com/MastewalB/behemoth/tests/testutils"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -21,7 +21,7 @@ import (
 )
 
 // Boot finds the adapter's index check through this interface.
-var _ bmth.IndexChecker = (*mongoAdapter.MongoAdapter)(nil)
+var _ engine.IndexChecker = (*mongoAdapter.MongoAdapter)(nil)
 
 // memberTables declares one table with every kind of index the adapter
 // derives: a primary key, a unique column, a nullable unique column, a plain

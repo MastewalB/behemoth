@@ -17,13 +17,13 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -279,7 +279,7 @@ func TestOAuthWithGitHub(t *testing.T) {
 // builds from BootConfig.Outbound: its transport and its user agent, with a
 // span per call on the application's telemetry. A client of its own wins.
 func TestOAuthUsesTheSharedClient(t *testing.T) {
-	signIn := func(t *testing.T, fake *fakeIssuer, opts oauth.Options, configure func(*bmth.BootConfig)) {
+	signIn := func(t *testing.T, fake *fakeIssuer, opts oauth.Options, configure func(*engine.BootConfig)) {
 		t.Helper()
 		fake.github = []map[string]any{{"email": "octocat@example.com", "primary": true, "verified": true}}
 		opts.Providers = []oauth.ProviderConfig{{Kind: oauth.KindGitHub, ClientID: "gh-client", ClientSecret: secretOf("gh-secret")}}
@@ -296,7 +296,7 @@ func TestOAuthUsesTheSharedClient(t *testing.T) {
 	t.Run("the shared client", func(t *testing.T) {
 		fake := newFakeIssuer(t, "")
 		tel, rec := telemetrytest.New()
-		signIn(t, fake, oauth.Options{}, func(cfg *bmth.BootConfig) {
+		signIn(t, fake, oauth.Options{}, func(cfg *engine.BootConfig) {
 			cfg.Telemetry = tel
 			cfg.Outbound = outbound.Options{UserAgent: "shop-auth", Transport: fake.transport()}
 		})
@@ -315,7 +315,7 @@ func TestOAuthUsesTheSharedClient(t *testing.T) {
 
 	t.Run("a client of the plugin's own", func(t *testing.T) {
 		fake := newFakeIssuer(t, "")
-		signIn(t, fake, oauth.Options{HTTPClient: fake.client()}, func(cfg *bmth.BootConfig) {
+		signIn(t, fake, oauth.Options{HTTPClient: fake.client()}, func(cfg *engine.BootConfig) {
 			cfg.Outbound.Transport = roundTripper(func(req *http.Request) (*http.Response, error) {
 				t.Errorf("the shared client called %s", req.URL.Host)
 				return nil, errors.New("not this client")
@@ -326,7 +326,7 @@ func TestOAuthUsesTheSharedClient(t *testing.T) {
 	})
 
 	t.Run("a negative timeout fails Boot", func(t *testing.T) {
-		_, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *bmth.BootConfig) { cfg.Outbound.Timeout = -time.Second })
+		_, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) { cfg.Outbound.Timeout = -time.Second })
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 	})
 }

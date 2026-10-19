@@ -1,7 +1,7 @@
 // Package echo mounts behemoth's routes onto an application's *echo.Echo:
 //
 //	e := echo.New()
-//	ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{HTTP: echoadapter.New(e), ...})
+//	ac, err := engine.Boot(ctx, app, db, engine.BootConfig{HTTP: echoadapter.New(e), ...})
 package echo
 
 import (

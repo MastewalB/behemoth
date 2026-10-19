@@ -10,7 +10,7 @@ The code lives in:
 - `models/audit.go`, `models/schema.go`: the `AuditLog` model and the `audit_log` table
 - `store/audit.go`: `Store.RecordAuditEvent`, `QueryAuditEvents`, `PurgeAuditEvents`, and `store.AuditRecorder`
 - `dispatch/dispatcher.go`: `DefaultDispatcher.auditEvent`, `recordAudit`, `recordAuditTx`
-- `types/init/init.go`: the `AuditSpec` declarations in `CoreDeclareHookPoints`, the default recorder in `Boot`
+- `engine/init.go`: the `AuditSpec` declarations in `CoreDeclareHookPoints`, the default recorder in `Boot`
 
 ## Components
 

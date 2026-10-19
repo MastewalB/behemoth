@@ -8,8 +8,8 @@ The code lives in:
 - `types/origins.go`: `TrustedOrigins`, `parseOrigin`, `originOf`
 - `types/router.go`: `RouterConfig.BaseURL`, `RouterConfig.TrustedOrigins`
 - `types/session.go`: `TokenTransport.ReadsCookie`
-- `types/init/init.go`: `Boot`, which builds the check and decides whether it runs
-- `types/init/init.go`: `checkCookieAgainstBaseURL`, which ties the cookie's attributes to the base URL
+- `engine/init.go`: `Boot`, which builds the check and decides whether it runs
+- `engine/init.go`: `checkCookieAgainstBaseURL`, which ties the cookie's attributes to the base URL
 - `errs/origin.go`: `CodeUntrustedOrigin`, `CodeUnsupportedContentType`
 
 [`request_routing.md`](request_routing.md) describes the pipeline the check is a stage of. [`../plugins/magiclink.md`](../plugins/magiclink.md) describes `TrustedOrigins`, which the check shares with the redirect check.

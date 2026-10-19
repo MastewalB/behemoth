@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-19
 - **Deciders:** MastewalB
-- **Affects:** `identity` (new), `types` (`Access`), `types/init` (the audit event builder), `telemetry` (`NormalizeAuditEvent`), the admin operations (`emailpassword.SetPassword`, `username.SetUsername`, `phonenumber.SetPhoneNumber`, `phonenumber.AddNumber`), and every application that calls a flow from code
+- **Affects:** `identity` (new), `types` (`Access`), `engine` (the audit event builder), `telemetry` (`NormalizeAuditEvent`), the admin operations (`emailpassword.SetPassword`, `username.SetUsername`, `phonenumber.SetPhoneNumber`, `phonenumber.AddNumber`), and every application that calls a flow from code
 
 ## Context and problem
 

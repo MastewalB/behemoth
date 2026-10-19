@@ -113,7 +113,7 @@ The third row matters. A signed-in user whose session expired while they typed t
 | `TestPhoneNumberRoutes` | same | every route's bodies and statuses, with and without a session, a bad session token |
 | `TestPhoneNumberOptionsAndWiring` | same | the dependency, `Boot` without a sender, option errors |
 | `verificationCodesContract` | `tests/store/contract_test.go` | the store's code operations on every adapter, MongoDB included |
-| `TestSMSSendsWaitingAndInBackground` | `types/init/sms_test.go` | the SMS sender |
+| `TestSMSSendsWaitingAndInBackground` | `engine/sms_test.go` | the SMS sender |
 
 The plugin's own tests run on SQLite.
 

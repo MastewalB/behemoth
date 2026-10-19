@@ -7,7 +7,7 @@ It works like the [mail sender](mail.md), with a code where a mail has a link.
 ## The sender
 
 ```go
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	SMS: types.SMSConfig{
 		Sender: types.SMSSenderFunc(func(ctx context.Context, msg types.SMSMessage) error {
 			return provider.Send(ctx, msg.To, textFor(msg.Kind, msg.Code))

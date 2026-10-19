@@ -13,6 +13,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
@@ -20,7 +21,6 @@ import (
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,14 +52,14 @@ func bootUsernames(t *testing.T, opts username.Options, hookFn func(reg types.Ho
 	app.passwords = emailpassword.New(emailpassword.Options{})
 	app.names = username.New(app.passwords, opts)
 	// The username plugin is listed first: its dependency orders the two.
-	prepared, err := bmth.Prepare([]types.Plugin{app.names, app.passwords}, bmth.PrepareConfig{})
+	prepared, err := engine.Prepare([]types.Plugin{app.names, app.passwords}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	// The adapter is built with the resolver, so it reads and finds by the
 	// contributed columns. The transactions take SQLite's write lock at
 	// their start (_txlock=immediate): one that reads first and writes later
 	// is refused with "database is locked" when another did the same, which
 	// the concurrent sign-ups would hit.
-	app.ac, err = bmth.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), bmth.BootConfig{
+	app.ac, err = engine.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -406,9 +406,9 @@ func TestUsernameSignInsCanBeLimitedPerUsername(t *testing.T) {
 
 	passwords := emailpassword.New(emailpassword.Options{})
 	names := username.New(passwords, username.Options{})
-	prepared, err := bmth.Prepare([]types.Plugin{passwords, names, perUsernameLimit{}}, bmth.PrepareConfig{})
+	prepared, err := engine.Prepare([]types.Plugin{passwords, names, perUsernameLimit{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	_, err = bmth.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), bmth.BootConfig{
+	_, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, prepared.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -452,7 +452,7 @@ func TestUsernameOptionsAndWiring(t *testing.T) {
 	assert.Equal(t, []types.PluginDependency{{Name: emailpassword.PluginName}}, meta.Dependencies)
 
 	// The email/password plugin has to be installed.
-	_, err := bmth.Prepare([]types.Plugin{username.New(passwords, username.Options{})}, bmth.PrepareConfig{})
+	_, err := engine.Prepare([]types.Plugin{username.New(passwords, username.Options{})}, engine.PrepareConfig{})
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 

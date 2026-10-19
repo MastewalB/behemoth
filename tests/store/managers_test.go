@@ -15,6 +15,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
@@ -24,7 +25,6 @@ import (
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1141,7 +1141,7 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 // before and an after point, and core declares all four.
 func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 	ctx := context.Background()
-	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	var fired []types.HookPoint
@@ -1154,7 +1154,7 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 		fired, auths = append(fired, hctx.Point), append(auths, hctx.Auth)
 		return nil
 	}
-	ac, err := bmth.Boot(ctx, app, sessionsTokensDB(t), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sessionsTokensDB(t), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("cd", 32)}, Current: 1},
 		},

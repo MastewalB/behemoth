@@ -16,6 +16,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/magiclink"
@@ -24,7 +25,6 @@ import (
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -96,9 +96,9 @@ func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg types.H
 	tel, rec := telemetrytest.New()
 	app.rec = rec
 
-	prepared, err := bmth.Prepare([]types.Plugin{app.plugin}, bmth.PrepareConfig{})
+	prepared, err := engine.Prepare([]types.Plugin{app.plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	app.ac, err = bmth.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	app.ac, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -370,9 +370,9 @@ func TestMagicLinkOptions(t *testing.T) {
 		_, err = p.RequestLink(context.Background(), magiclink.LinkRequest{Email: "ada@example.com"})
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
 
-		prepared, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
+		prepared, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
 		require.NoError(t, err, name)
-		_, err = bmth.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+		_, err = engine.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 			},

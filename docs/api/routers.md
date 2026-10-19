@@ -19,7 +19,7 @@ The framework adapters are separate modules, so your application downloads Gin o
 Every adapter has one function, `New`, and its result goes into `BootConfig.HTTP`:
 
 ```go
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg,
 	Router: types.RouterConfig{BasePath: "/api/auth"}, // optional; the default is shown
 	HTTP:   nethttp.New(mux),
@@ -40,7 +40,7 @@ import "github.com/MastewalB/behemoth/plugins/adapters/nethttp"
 mux := http.NewServeMux()
 mux.HandleFunc("GET /{$}", home) // your own routes
 
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg,
 	HTTP:   nethttp.New(mux),
 })
@@ -86,7 +86,7 @@ Give Behemoth a mux of its own and register that mux, wrapped, on yours:
 ```go
 authMux := http.NewServeMux()
 
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg,
 	HTTP:   nethttp.New(authMux),
 })
@@ -111,7 +111,7 @@ import (
 fiberApp := fiber.New()
 fiberApp.Get("/", home) // your own routes
 
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg,
 	HTTP:   fiberadapter.New(fiberApp),
 })

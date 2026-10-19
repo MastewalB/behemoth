@@ -15,13 +15,13 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -100,7 +100,7 @@ type oauthApp struct {
 // empty get a provider "google" and a callback URL. configure may change
 // the BootConfig before Boot. It returns Boot's error, for the tests of the
 // options.
-func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg types.HookRegistry) error, configure ...func(*bmth.BootConfig)) (*oauthApp, error) {
+func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg types.HookRegistry) error, configure ...func(*engine.BootConfig)) (*oauthApp, error) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "oauth.db"))
@@ -118,9 +118,9 @@ func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg types.HookRegis
 	}
 	app.plugin = oauth.New(opts)
 
-	prepared, err := bmth.Prepare([]types.Plugin{app.plugin}, bmth.PrepareConfig{})
+	prepared, err := engine.Prepare([]types.Plugin{app.plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	cfg := bmth.BootConfig{
+	cfg := engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
@@ -132,7 +132,7 @@ func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg types.HookRegis
 	for _, fn := range configure {
 		fn(&cfg)
 	}
-	app.ac, err = bmth.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), cfg)
+	app.ac, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), cfg)
 	if err != nil {
 		return nil, err
 	}

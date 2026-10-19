@@ -6,7 +6,7 @@ The code lives in:
 
 - `types/mail.go`: `MailMessage`, `MailKind`, `MailSender`, `MailConfig`, the `Mailer` interface
 - `messaging/mailer.go`: `DefaultMailer`
-- `types/init/init.go`: `Boot` builds it from `BootConfig.Mail`
+- `engine/init.go`: `Boot` builds it from `BootConfig.Mail`
 
 ---
 
@@ -83,7 +83,7 @@ The queues are separate so that a slow mail provider does not delay a code that 
 
 | Test | File | Covers |
 | --- | --- | --- |
-| `TestMailerSendWaits` | `types/init/mailer_test.go` | no sender, the sender's error returned, the metric |
+| `TestMailerSendWaits` | `engine/mailer_test.go` | no sender, the sender's error returned, the metric |
 | `TestMailerSendAsync` | same | the send outlives the caller's canceled context, a failure and a panic are logged, a full queue refuses, `Close` drains and then refuses |
 | `TestMagicLinkSendsInBackground` | `tests/plugins/magiclink_test.go` | the request returns while the sender is blocked, and a failed send leaves the link valid |
 | `TestPasswordResetSendsInBackground` | `tests/plugins/passwordreset_test.go` | the same for a reset link |

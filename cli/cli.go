@@ -35,10 +35,10 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/telemetry"
-	bmth "github.com/MastewalB/behemoth/types/init"
 )
 
 // Exit codes of Run and Main.
@@ -53,17 +53,17 @@ const (
 // from its own binary.
 const program = "behemoth"
 
-// PrepareFunc returns the application's declarations: bmth.Prepare called
+// PrepareFunc returns the application's declarations: engine.Prepare called
 // with the plugins and the configuration the application boots with. It runs
 // before any connection is opened, so it should need none, the same as
 // Prepare itself.
-type PrepareFunc func() (*bmth.PreparedApp, error)
+type PrepareFunc func() (*engine.PreparedApp, error)
 
 // BackendFunc opens the application's database and returns its migration
 // backend, for example postgres.MigrationBackend(db, app.Resolver). The
 // backend has to be built with app.Resolver. Its Close, when set, is called
 // when the command ends.
-type BackendFunc func(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error)
+type BackendFunc func(ctx context.Context, app *engine.PreparedApp) (migration.Backend, error)
 
 // Main runs the command named by os.Args and exits the process with its
 // exit code. An interrupt cancels the command's context.

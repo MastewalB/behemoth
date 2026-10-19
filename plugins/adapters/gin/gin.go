@@ -1,7 +1,7 @@
 // Package gin mounts behemoth's routes onto an application's *gin.Engine:
 //
 //	engine := gin.New()
-//	ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{HTTP: ginadapter.New(engine), ...})
+//	ac, err := engine.Boot(ctx, app, db, engine.BootConfig{HTTP: ginadapter.New(engine), ...})
 //
 // Behemoth's routes then live on engine next to the application's own.
 package gin

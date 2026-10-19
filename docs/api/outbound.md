@@ -7,7 +7,7 @@ Behemoth calls other services over HTTP through one client, such as the OAuth pl
 Every field is optional:
 
 ```go
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Outbound: outbound.Options{
 		Timeout:   5 * time.Second,
 		UserAgent: "shop-auth/1.4",

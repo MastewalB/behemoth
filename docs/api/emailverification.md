@@ -27,9 +27,9 @@ verification := emailverification.New(emailverification.Options{
 	LinkURL: "https://app.example.com/auth/verify-email",
 })
 
-app, err := bmth.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{}), verification}, bmth.PrepareConfig{})
+app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{}), verification}, engine.PrepareConfig{})
 // ...
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Mail: types.MailConfig{Sender: sender}, // see Mail
 	// ...
 })

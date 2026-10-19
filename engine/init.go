@@ -1,4 +1,8 @@
-package types
+// Package engine assembles Behemoth. Prepare collects what the plugins declare:
+// hook points, token kinds, rate-limit rules, and tables. Boot builds the
+// services over a database and returns the AuthContext the application and
+// the plugins use.
+package engine
 
 import (
 	"context"

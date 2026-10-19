@@ -30,7 +30,7 @@ Behemoth might provide tool-specific generation (for goose or golang-migrate for
 
 ### Declaration
 
-Tables are declared once, during `Prepare` (`types/init`), into a single registry. Each declarer receives a scoped registry that stamps its own name as `Owner` (a declarer can never misattribute a table) and refuses `Freeze`:
+Tables are declared once, during `Prepare` (`engine`), into a single registry. Each declarer receives a scoped registry that stamps its own name as `Owner` (a declarer can never misattribute a table) and refuses `Freeze`:
 
 1. **core**: `CoreDeclareSchema(ic)`, owner `"core"`.
 2. **each plugin**, in dependency order: inside its existing `Declare(ic)`, through `ic.Schemas`, owner = plugin name. There is no separate schema interface: tables are declared next to hooks, tokens, and rate limits.

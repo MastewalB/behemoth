@@ -6,13 +6,13 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +52,7 @@ func TestHandlerSystemErrorFiresNoFailedPoint(t *testing.T) {
 	errDown := errors.New("lookup: connection refused")
 	var failAt types.HookPoint
 	var failed []types.FailureReason
-	app := bootVerification(t, emailverification.Options{}, func(cfg *bmth.BootConfig) {
+	app := bootVerification(t, emailverification.Options{}, func(cfg *engine.BootConfig) {
 		cfg.Hooks = func(reg types.HookRegistry) error {
 			for _, point := range []types.HookPoint{hooks.HookSignInCredentialsVerified, hooks.HookSignUpBefore} {
 				if err := reg.OnBefore(point, func(hctx *types.HookContext, _ behemoth.M) (behemoth.M, error) {

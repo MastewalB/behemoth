@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"os"
 
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/magiclink"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	_ "github.com/lib/pq"
 )
 
@@ -34,8 +34,8 @@ func plugins() ([]types.Plugin, *emailpassword.Plugin) {
 	return []types.Plugin{ep, ml, &ActivityPlugin{}}, ep
 }
 
-func prepareConfig() bmth.PrepareConfig {
-	return bmth.PrepareConfig{
+func prepareConfig() engine.PrepareConfig {
+	return engine.PrepareConfig{
 		Migration: migration.MigrationConfig{
 			FolderPath: "migrations",
 			// Path is left empty: PathGenerateOnly, behemoth writes files

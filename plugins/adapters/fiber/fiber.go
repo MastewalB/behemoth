@@ -1,7 +1,7 @@
 // Package fiber mounts behemoth's routes onto an application's *fiber.App:
 //
 //	fiberApp := fiber.New()
-//	ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{HTTP: fiberadapter.New(fiberApp), ...})
+//	ac, err := engine.Boot(ctx, app, db, engine.BootConfig{HTTP: fiberadapter.New(fiberApp), ...})
 //
 // Fiber is built on fasthttp, not net/http, so it has no *http.Request to
 // hand to behemoth's handlers. The driver builds one for each request (see

@@ -6,7 +6,7 @@ The code lives in:
 
 - `types/router.go`: `Router`, `RouterConfig`, `FrameworkDriver`, the wrapping pipeline
 - `types/plugins.go`: `Plugin`, `Route`, `Middleware`, `RequestContext`, `ResponseRecorder`
-- `types/init/init.go`: `Boot`, which drives everything below
+- `engine/init.go`: `Boot`, which drives everything below
 - `plugins/adapters/{gin,echo,chi,fiber}`: one `FrameworkDriver` per framework, each in its own module
 - `plugins/adapters/nethttp`: the `FrameworkDriver` for the standard library's `*http.ServeMux`, a package of the root module
 
@@ -20,7 +20,7 @@ Two guideline documents apply to anyone who adds or changes a route: [`../guidel
 engine := gin.New()
 engine.GET("/", ...) // the application's own routes
 
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg,
 	Router: types.RouterConfig{BasePath: "/api/auth"}, // optional; defaults shown
 	HTTP:   ginadapter.New(engine),

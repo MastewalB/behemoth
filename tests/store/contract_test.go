@@ -16,6 +16,7 @@ import (
 	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/models"
@@ -32,7 +33,6 @@ import (
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
@@ -373,12 +373,12 @@ func TestBootChecksMongoIndexes(t *testing.T) {
 	ctx := context.Background()
 	client, cleanup := testutils.SetupMongoTestDB(ctx, t)
 	t.Cleanup(cleanup)
-	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
 	db := mongoAdapter.NewMongoAdapter(client, "boot", app.Resolver)
 	tel, rec := telemetrytest.New()
 	boot := func() error {
-		_, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+		_, err := engine.Boot(ctx, app, db, engine.BootConfig{
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("cd", 32)}, Current: 1},
 			},

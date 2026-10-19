@@ -38,14 +38,14 @@ import (
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
+	"github.com/MastewalB/behemoth/engine"
 	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
 )
 
 plugin := emailpassword.New(emailpassword.Options{})
 
 // 1. Declarations: plugins, hooks, schema.
-app, err := bmth.Prepare([]types.Plugin{plugin}, bmth.PrepareConfig{})
+app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -54,7 +54,7 @@ if err != nil {
 db := postgres.NewPostgresAdapter(sqlDB, app.Resolver)
 engine := gin.New()
 
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg, // the master secret(s) every key is derived from
 	HTTP:   ginadapter.New(engine),
 	Session: types.SessionConfig{

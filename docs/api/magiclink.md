@@ -28,9 +28,9 @@ plugin := magiclink.New(magiclink.Options{
 	LinkURL: "https://app.example.com/auth/magic",
 })
 
-app, err := bmth.Prepare([]types.Plugin{plugin}, bmth.PrepareConfig{})
+app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
 // ...
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Router: types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
 	Mail: types.MailConfig{
 		Sender: types.MailSenderFunc(func(ctx context.Context, msg types.MailMessage) error {

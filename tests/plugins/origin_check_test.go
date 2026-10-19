@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,9 +36,9 @@ func bootWithSession(t *testing.T, session types.SessionConfig, router types.Rou
 	require.NoError(t, err)
 
 	mounted := mountedRoutes{}
-	app, err := bmth.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := bmth.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	ac, err := engine.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},

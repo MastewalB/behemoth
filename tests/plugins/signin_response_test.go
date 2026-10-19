@@ -15,6 +15,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
@@ -24,7 +25,6 @@ import (
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,9 +39,9 @@ func bootPasswords(t *testing.T, session types.SessionConfig, hookFn func(types.
 	require.NoError(t, err)
 
 	mounted := mountedRoutes{}
-	app, err := bmth.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := bmth.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	ac, err := engine.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -370,11 +370,11 @@ ALTER TABLE users ADD COLUMN risk_note TEXT;`)
 		ChangeLinkURL: "https://app.example.com/change",
 		RevertLinkURL: "https://app.example.com/undo",
 	})
-	app, err := bmth.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{}), links, verification, visibilityPlugin{}}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{}), links, verification, visibilityPlugin{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	// The adapter is built with the resolver, so it reads the contributed
 	// columns into the model.
-	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, app.Resolver), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, app.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},

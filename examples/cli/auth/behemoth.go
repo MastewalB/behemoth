@@ -15,20 +15,20 @@ import (
 	"database/sql"
 	"os"
 
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	_ "github.com/lib/pq"
 )
 
 // Prepare returns the application's declarations: its plugins, behemoth's
 // own tables and the application's schema (schema.go). It opens no
 // connection, so the command line can call it before it has a database.
-func Prepare() (*bmth.PreparedApp, error) {
+func Prepare() (*engine.PreparedApp, error) {
 	plugins := []types.Plugin{emailpassword.New(emailpassword.Options{})}
-	return bmth.Prepare(plugins, bmth.PrepareConfig{
+	return engine.Prepare(plugins, engine.PrepareConfig{
 		Migration: migration.MigrationConfig{
 			FolderPath: "migrations",
 			// Path is left empty: PathGenerateOnly. behemoth writes the
@@ -42,7 +42,7 @@ func Prepare() (*bmth.PreparedApp, error) {
 // MigrationBackend opens the database the command line compares the
 // declarations with. The backend takes the resolver Prepare built, the one
 // the server gives its adapter.
-func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error) {
+func MigrationBackend(ctx context.Context, app *engine.PreparedApp) (migration.Backend, error) {
 	db, err := OpenDB(ctx)
 	if err != nil {
 		return migration.Backend{}, err

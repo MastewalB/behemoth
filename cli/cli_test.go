@@ -11,10 +11,10 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/schema"
-	bmth "github.com/MastewalB/behemoth/types/init"
 )
 
 // note is an application table, declared the way an application does it:
@@ -68,17 +68,17 @@ type fixture struct {
 	openErr error
 }
 
-func (f *fixture) prepare() (*bmth.PreparedApp, error) {
+func (f *fixture) prepare() (*engine.PreparedApp, error) {
 	if f.prepErr != nil {
 		return nil, f.prepErr
 	}
-	return bmth.Prepare(nil, bmth.PrepareConfig{
+	return engine.Prepare(nil, engine.PrepareConfig{
 		Migration: migration.MigrationConfig{FolderPath: f.dir, Path: f.path},
 		Schema:    declareNotes,
 	})
 }
 
-func (f *fixture) backend(context.Context, *bmth.PreparedApp) (migration.Backend, error) {
+func (f *fixture) backend(context.Context, *engine.PreparedApp) (migration.Backend, error) {
 	f.opened++
 	if f.openErr != nil {
 		return migration.Backend{}, f.openErr

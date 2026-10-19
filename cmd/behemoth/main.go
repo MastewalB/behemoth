@@ -14,8 +14,8 @@
 // The package is the one with a file named behemoth.go, in the current
 // directory or below, or the directory given with -app. It has to export
 //
-//	func Prepare() (*bmth.PreparedApp, error)
-//	func MigrationBackend(context.Context, *bmth.PreparedApp) (migration.Backend, error)
+//	func Prepare() (*engine.PreparedApp, error)
+//	func MigrationBackend(context.Context, *engine.PreparedApp) (migration.Backend, error)
 //
 // The main is compiled inside the application's module through the go
 // command's -overlay flag, so it may import an internal package and nothing
@@ -243,8 +243,8 @@ func checkEntryPoints(pkg goPackage) error {
 	}
 	sort.Strings(names)
 	return fmt.Errorf("package %s does not export %s. The launcher needs both of\n"+
-		"  func %s() (*bmth.PreparedApp, error)\n"+
-		"  func %s(context.Context, *bmth.PreparedApp) (migration.Backend, error)",
+		"  func %s() (*engine.PreparedApp, error)\n"+
+		"  func %s(context.Context, *engine.PreparedApp) (migration.Backend, error)",
 		pkg.ImportPath, strings.Join(names, " and "), prepareFunc, backendFunc)
 }
 
