@@ -2,7 +2,7 @@
 
 This document describes how a flow learns who called it and where the call came from. It covers the caller value, the principals it names, how a transport authenticates a call through core, the permissions a flow requires, and how code in the process calls a flow. It also records the decisions taken and the order of the work.
 
-**Status:** planned, as of 2026-10-19. Nothing is built. [Implementation steps](#implementation-steps) lists the work.
+**Status:** planned, as of 2026-10-19. Step 1, the package layout, is done; the caller itself is not built. [Implementation steps](#implementation-steps) lists the work.
 
 The documents it builds on are:
 
@@ -383,7 +383,7 @@ The caller's package sits below `telemetry`, and a hook callout sends the caller
 
 | Step | Content | Status |
 | --- | --- | --- |
-| 1 | Part 1 of [`package_layout.md`](package_layout.md): the packages move to their layout, except for the HTTP types | Not started |
+| 1 | Part 1 of [`package_layout.md`](package_layout.md): the packages move to their layout, except for the HTTP types | Done |
 | 2 | The caller's package, `WithCaller`, `CallerFrom`, `System`, `For`, `HookContext.Caller`, the permission catalog, and `Access`, with tests. Nothing reads them yet. | Not started |
 | 3 | The authenticator. The router authenticates every call and puts the caller on the context. The token carrier takes the four HTTP methods of `SessionManager`, and `TokenTransport` gets its new name. `RequireSession`, `RequireFreshSession`, and `optionalSession` become wrappers, and the session keys in `RequestContext.Values` go. | Not started |
 | 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules | Not started |
@@ -410,6 +410,5 @@ These entries affect the plan:
 
 - **"Audit events record the IP address whatever the session setting says".** Step 4 changes the code that records the address. The fix lands with it or before it.
 - **"No route answers with the caller's session, and sign-out belongs to one plugin".** A session route in core reads the caller.
-- **"`types` mixes contracts, implementations and HTTP, and its layering forces aliases".** Step 1, and the move of the HTTP types after step 6, both planned in [`package_layout.md`](package_layout.md).
-- **"`Plugin` requires HTTP routes, and the request pipeline lives in the router".** The HTTP types move with it.
+- **"`Plugin` requires HTTP routes, and the request pipeline lives in the router".** The HTTP types leave `core` after step 6, as part 2 of [`package_layout.md`](package_layout.md).
 - **"Some flows take loose arguments instead of a request type".** `SignOut` takes its session from the caller.
