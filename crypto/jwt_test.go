@@ -559,7 +559,7 @@ func TestJWTCustomClaimsStayCustom(t *testing.T) {
 
 // The external key set publishes every public key, and only public keys, in
 // the form a third party uses to verify an external token. The route that
-// serves it is tested in transport.
+// serves it is tested in auth.
 func TestJWTPublishesTheExternalKeys(t *testing.T) {
 	ctx := context.Background()
 	fx := newJWTFixture(t, map[int]string{1: secretV1, 2: secretV2}, 2)

@@ -11,7 +11,7 @@ The code lives in:
 - `store/instrument.go`: `WithTelemetry`, `instrumentedDB`
 - `dispatch/dispatcher.go`: `DefaultDispatcher.observeHandler`, `countPoint`, `corePointMetrics`
 - `ratelimit/limiter.go`: `DefaultRateLimiter.countCheck`
-- `transport/session.go`: `DefaultSessionManager.countValidated`
+- `auth/session.go`: `DefaultSessionManager.countValidated`
 - `telemetry/audit.go`: `Telemetry.AuditFailed`
 - `telemetry/telemetrytest`: the recording sink
 

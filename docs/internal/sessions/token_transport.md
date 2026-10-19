@@ -7,7 +7,7 @@ The code lives in:
 - `types/session.go`: `TokenTransport`, `SessionTokenHeader`, the `SessionManager` interface, `RequireSession`, `RequireFreshSession`
 - `types/auth-options.go`: `SessionConfig`, `WithDefaults`, `Validate`
 - `types/signin.go`: `SignInResult`, `WriteSignIn`
-- `transport/session.go`: `DefaultSessionManager.WriteToken`, `ExtractToken`, `ClearToken`, `Touch`, `ExtendToken`
+- `auth/session.go`: `DefaultSessionManager.WriteToken`, `ExtractToken`, `ClearToken`, `Touch`, `ExtendToken`
 - `plugins/emailpassword/email-and-password.go`: `handleSignOut`, the one route that ends its caller's session
 - `models/user.go`: the user's JSON
 

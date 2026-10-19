@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
@@ -21,7 +22,6 @@ import (
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/tests/testutils"
-	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	bmth "github.com/MastewalB/behemoth/types/init"
@@ -175,7 +175,7 @@ func newSessionManager(t *testing.T, cfg types.SessionConfig) (types.SessionMana
 	if cfg.PendingExpiresIn == 0 {
 		cfg.PendingExpiresIn = 5 * time.Minute
 	}
-	return transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg, d, nil, managersAuth, nil), d
+	return auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg, d, nil, managersAuth, nil), d
 }
 
 // managersAuth is the AuthContext the managers under test are built with. It
@@ -289,7 +289,7 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 	t.Cleanup(func() { sqlDB.Close() })
 	_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
 	require.NoError(t, err)
-	sm := transport.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t),
+	sm := auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t),
 		types.SessionConfig{Transport: types.TransportHeader, ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
 		&passDispatcher{}, nil, managersAuth, nil)
 
@@ -370,7 +370,7 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 			cfg.ExpiresIn = time.Hour
 		}
 		cfg.PendingExpiresIn = time.Minute
-		return transport.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t), cfg, &passDispatcher{}, nil, managersAuth, nil)
+		return auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t), cfg, &passDispatcher{}, nil, managersAuth, nil)
 	}
 	// request sends cookie and bearer through the middleware mw builds, and
 	// returns the response and the middleware's error.
@@ -476,7 +476,7 @@ func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
 			kv = &memoryKV{entries: map[string]string{}}
 		}
 		tc.cfg.ExpiresIn = time.Hour
-		sm := transport.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil).WithLogger(rec.Logger)),
+		sm := auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil).WithLogger(rec.Logger)),
 			kv, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
 		_, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
 		require.NoError(t, err, name)
@@ -624,7 +624,7 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 	t.Run("behind a trusted proxy", func(t *testing.T) {
 		ipCfg, err := types.NewClientConfig([]string{"203.0.113.0/24"}, "")
 		require.NoError(t, err)
-		sm := transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t),
+		sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t),
 			types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, CaptureIPAndAgent: true},
 			&passDispatcher{}, nil, managersAuth, ipCfg)
 		sess, _, err := sm.Create(inRequest, "u1", active)
@@ -649,7 +649,7 @@ func (d *rewriteDispatcher) RunBefore(h *types.HookContext, point types.HookPoin
 func createWithRewrite(t *testing.T, cfg types.SessionConfig, ctx context.Context) (*models.Session, error) {
 	t.Helper()
 	cfg.ExpiresIn, cfg.PendingExpiresIn = time.Hour, time.Minute
-	sm := transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg,
+	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg,
 		&rewriteDispatcher{}, nil, managersAuth, nil)
 	sess, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
 	return sess, err
@@ -658,10 +658,10 @@ func createWithRewrite(t *testing.T, cfg types.SessionConfig, ctx context.Contex
 // The token manager's hooks get the same: issue, a consume, and a failed
 // second consume each dispatch with their own point and phase.
 func TestTokenHooksGetACompleteContext(t *testing.T) {
-	catalog := transport.NewDefaultTokenCatalog()
+	catalog := auth.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	d := &passDispatcher{}
-	tm := transport.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), d, types.TokenConfig{}, managersAuth)
+	tm := auth.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), d, types.TokenConfig{}, managersAuth)
 
 	ctx := context.Background()
 	_, raw, err := tm.Issue(ctx, kindReset, "u1", nil)
@@ -696,11 +696,11 @@ const kindAPI models.TokenKind = "api_key"
 
 func newTokenManager(t *testing.T) (types.TokenManager, *store.Store) {
 	t.Helper()
-	catalog := transport.NewDefaultTokenCatalog()
+	catalog := auth.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindAPI, Backend: types.TokenBackendDB, Owner: "core"}))
 	st := store.New(sessionsTokensDB(t))
-	return transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, managersAuth), st
+	return auth.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, managersAuth), st
 }
 
 func TestTokenIssueVerifyConsume(t *testing.T) {
@@ -781,7 +781,7 @@ func TestTokenRevoke(t *testing.T) {
 // another subject's and another kind's.
 func TestTokenListForSubject(t *testing.T) {
 	ctx := context.Background()
-	catalog := transport.NewDefaultTokenCatalog()
+	catalog := auth.NewDefaultTokenCatalog()
 	const kindShort models.TokenKind = "short_lived"
 	for _, def := range []types.TokenKindDef{
 		{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"},
@@ -790,7 +790,7 @@ func TestTokenListForSubject(t *testing.T) {
 	} {
 		require.NoError(t, catalog.Declare(def))
 	}
-	tm := transport.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, managersAuth)
+	tm := auth.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, managersAuth)
 
 	issue := func(kind models.TokenKind, subject string) (*models.Token, string) {
 		tok, raw, err := tm.Issue(ctx, kind, subject, behemoth.M{"n": subject})
@@ -887,7 +887,7 @@ func TestSessionFreshness(t *testing.T) {
 // the documented default, and the token travels in the default cookie.
 func TestSessionManagerWithAZeroConfig(t *testing.T) {
 	ctx := context.Background()
-	sm := transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), types.SessionConfig{}, &passDispatcher{}, nil, managersAuth, nil)
+	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), types.SessionConfig{}, &passDispatcher{}, nil, managersAuth, nil)
 
 	active, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
@@ -922,7 +922,7 @@ func TestSessionCookieAttributes(t *testing.T) {
 		"without Secure":    {types.SessionConfig{CookieInsecure: true}, "", http.SameSiteLaxMode, false},
 	} {
 		require.NoError(t, tc.cfg.Validate(), name)
-		sm := transport.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
+		sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
 		session, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
 		require.NoError(t, err, name)
 

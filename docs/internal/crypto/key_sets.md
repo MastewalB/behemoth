@@ -8,7 +8,7 @@ A JWK set (RFC 7517) is how an issuer publishes the public keys its tokens are v
 | --- | --- | --- |
 | `ParseJWKSet`, `MarshalJWKSet` | `crypto/jwk.go` | the codec: a set into `[]crypto.PublishedKey`, and back. No I/O. |
 | `algorithmsOf`, `checkRSA`, `curveNamed`, `curveName` | `crypto/jwk.go` | which algorithms a key can sign with, and which keys the codec accepts |
-| `KeySetRoutes` | `transport/key_set.go` | the key set route of session tokens, written with `MarshalJWKSet` |
+| `KeySetRoutes` | `auth/key_set.go` | the key set route of session tokens, written with `MarshalJWKSet` |
 | `keysource.JWKSet` | `keysource/keysource.go` | a source: fetches a set at a URL through an `outbound` client, and reads it with `ParseJWKSet` |
 | `oidcProvider.document`, `verifyIDToken` | `plugins/oauth/oidc.go` | the OAuth plugin's key set, a `CachedKeySet` over a `keysource.JWKSet`, and its ID tokens, checked with `VerifyJWT` and then the OpenID Connect rules |
 | `KeySource` | `crypto/key_set.go` | what a source is: `Keys(ctx)`, the keys as they are now |
@@ -48,7 +48,7 @@ Data that is not a JSON object with a `keys` array is an error. `{"keys": []}` i
 
 It writes what `ParseJWKSet` would keep, and refuses the rest. A private key is refused: `*rsa.PrivateKey`, `*ecdsa.PrivateKey`, and `ed25519.PrivateKey` are other types than the public ones, and the `jwk` struct has no field for a private member, so none can be written. Each key gets `use: "sig"`, its `kid`, and its `alg` when it names one. EC coordinates are written at the curve's full size (RFC 7518, section 6.2.1.2), from `ecdsa.PublicKey.Bytes`.
 
-The key set route (`transport.KeySetRoutes`) turns an error of `MarshalJWKSet` into a security error with `CodeJWKSReadFailed`, and publishes nothing. A set with one bad key is not published without it: a verifier would refuse every token that key signed, with nothing to say why.
+The key set route (`auth.KeySetRoutes`) turns an error of `MarshalJWKSet` into a security error with `CodeJWKSReadFailed`, and publishes nothing. A set with one bad key is not published without it: a verifier would refuse every token that key signed, with nothing to say why.
 
 ## The JWK set source
 

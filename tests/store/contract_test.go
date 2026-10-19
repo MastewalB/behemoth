@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
@@ -30,7 +31,6 @@ import (
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/tests/testutils"
-	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
 	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
@@ -276,7 +276,7 @@ func TestDeleteUserRemovesSessionsAndAccounts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			st := store.New(openDB(t), store.WithSchema(resolver), store.WithEncryptor(testCrypto(t).AtRest))
-			sm := transport.NewSessionManager(st, nil, testCrypto(t),
+			sm := auth.NewSessionManager(st, nil, testCrypto(t),
 				types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil, nil)
 
 			ada, grace := &models.User{Email: "ada@example.com"}, &models.User{Email: "grace@example.com"}
@@ -509,7 +509,7 @@ func usersContract(t *testing.T, st *store.Store) {
 
 func sessionsContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
-	sm := transport.NewSessionManager(st, nil, testCrypto(t),
+	sm := auth.NewSessionManager(st, nil, testCrypto(t),
 		types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil, nil)
 
 	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionPending})
@@ -531,9 +531,9 @@ func sessionsContract(t *testing.T, st *store.Store) {
 
 func tokensContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
-	catalog := transport.NewDefaultTokenCatalog()
+	catalog := auth.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
-	tm := transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, nil)
+	tm := auth.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, nil)
 
 	_, raw, err := tm.Issue(ctx, kindReset, "u1", behemoth.M{"redirect": "/reset"})
 	require.NoError(t, err)

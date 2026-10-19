@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
@@ -26,7 +27,6 @@ import (
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	bmth "github.com/MastewalB/behemoth/types/init"
@@ -88,7 +88,7 @@ func authContext(t *testing.T) *types.AuthContext {
 		Crypto:     c,
 		Dispatcher: passDispatcher{},
 		Public:     dbschema.NewPublicView([]dbschema.Table{models.UserTableSchema()}),
-		SessionManager: transport.NewSessionManager(st, nil, c,
+		SessionManager: auth.NewSessionManager(st, nil, c,
 			types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
 			passDispatcher{}, nil, nil, nil),
 	}

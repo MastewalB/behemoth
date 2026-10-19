@@ -1,11 +1,11 @@
 # One-time codes
 
-This document explains the code manager (`types.CodeManager`, `transport.DefaultCodeManager`): what a code is next to a token, how it is stored, and how its three operations stay correct under concurrent calls.
+This document explains the code manager (`types.CodeManager`, `auth.DefaultCodeManager`): what a code is next to a token, how it is stored, and how its three operations stay correct under concurrent calls.
 
 The code it refers to lives in:
 
 - `types/codes.go`: `CodeManager`, `CodeOptions`
-- `transport/codes.go`: `DefaultCodeManager`
+- `auth/codes.go`: `DefaultCodeManager`
 - `models/verification_code.go`: the model and the table
 - `store/verification_codes.go`: the store operations
 - `errs/code.go`: the one rejection

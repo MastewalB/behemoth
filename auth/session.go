@@ -1,4 +1,8 @@
-package transport
+// Package auth implements Behemoth's credential services: the session manager,
+// the token and code managers with the token catalog, session tokens for
+// other services, and the key set route those tokens are checked against.
+// The contracts it implements are in package types.
+package auth
 
 import (
 	"context"
