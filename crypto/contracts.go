@@ -1,15 +1,15 @@
-// Package cryptotypes holds behemoth's cryptography contracts: the interfaces
-// the crypto package implements and everything else consumes.
+// Package crypto is Behemoth's cryptography: the contracts the rest of
+// Behemoth consumes, such as KeyManager, PasswordHasher, JWTProvider, and
+// KeySet, and their implementations. It computes and makes no outbound call:
+// keys that come from elsewhere arrive through a KeySource.
 //
-// It sits below the types package, which re-exports every name here
-// (types.Encryptor is cryptotypes.Encryptor), so packages types itself
-// imports — store — can use the same definitions. It must never import
-// github.com/MastewalB/behemoth/types.
-package cryptotypes
+// It sits below store, which uses its contracts, so it must never import
+// github.com/MastewalB/behemoth/store or any package above it.
+package crypto
 
 import (
 	"context"
-	"crypto"
+	gocrypto "crypto"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,7 +18,10 @@ import (
 	"github.com/MastewalB/behemoth"
 )
 
-type Crypto struct {
+// Services bundles the cryptographic services Boot builds: the key manager,
+// randomness, secret and password hashing, signing, and encryption at rest.
+// AuthContext.Crypto holds it.
+type Services struct {
 	Keys       KeyManager
 	Random     Randomizer
 	Secrets    SecretHasher
@@ -236,7 +239,7 @@ type JWTProvider interface {
 }
 
 // KeySet holds the public keys tokens are verified with: behemoth's own
-// external keys, or the keys another issuer publishes. crypto.VerifyJWT
+// external keys, or the keys another issuer publishes. [VerifyJWT]
 // looks a token's key up in it.
 type KeySet interface {
 	// PublicKey returns the key kid names, to verify a token with. A kid
@@ -283,22 +286,13 @@ type PublishedKey struct {
 	Algorithm string
 	// Key is an ed25519.PublicKey, an *ecdsa.PublicKey, or an
 	// *rsa.PublicKey. Behemoth's derived keys are Ed25519.
-	Key crypto.PublicKey
+	Key gocrypto.PublicKey
 }
 
 type Randomizer interface {
 	SecureRandomString(n int) (string, error) // crypto/rand, base64url
 
 	SecureRandomBytes(n int) ([]byte, error)
-}
-
-type CSRFProtector interface {
-	IssueToken(sessionID string) string
-	ValidateToken(sessionID, submittedToken string) bool
-}
-
-type OriginValidator interface {
-	IsTrusted(origin string) bool // checks against RouterConfig.TrustedOrigins
 }
 
 // SecretSource is the pull-based secret source. Every backend(env, key-management-systems) supports this at minimum.

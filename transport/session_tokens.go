@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/types"
@@ -20,17 +21,17 @@ import (
 // JWTs with the JWT provider, for the session a request comes with. The
 // route that exposes it is POST /session/token (Routes).
 type DefaultSessionTokens struct {
-	jwt  types.JWTProvider
+	jwt  crypto.JWTProvider
 	disp types.Dispatcher
 	auth *types.AuthContext
 	sm   types.SessionManager
-	cfg  types.JWTConfig
+	cfg  crypto.JWTConfig
 }
 
 // NewSessionTokens returns the session token flow over jwt. cfg is the JWT
 // configuration with its defaults applied: its external audiences are the
 // ones a token may be issued for, and none means session tokens are off.
-func NewSessionTokens(jwt types.JWTProvider, disp types.Dispatcher, auth *types.AuthContext, sm types.SessionManager, cfg types.JWTConfig) *DefaultSessionTokens {
+func NewSessionTokens(jwt crypto.JWTProvider, disp types.Dispatcher, auth *types.AuthContext, sm types.SessionManager, cfg crypto.JWTConfig) *DefaultSessionTokens {
 	return &DefaultSessionTokens{jwt: jwt, disp: disp, auth: auth, sm: sm, cfg: cfg}
 }
 
@@ -53,7 +54,7 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionToken
 	case !session.ExpiresAt.IsZero() && time.Now().After(session.ExpiresAt):
 		return nil, errs.NewSessionError(op, errs.CodeSessionExpired, nil)
 	}
-	allowed := s.cfg.Audiences[types.JWTExternal]
+	allowed := s.cfg.Audiences[crypto.JWTExternal]
 	audience := req.Audience
 	if audience == "" {
 		audience = allowed[0]
@@ -97,14 +98,14 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req types.SessionToken
 		custom = nil
 	}
 
-	token, err := s.jwt.Sign(opCtx, types.JWTExternal, types.JWTRequest{
+	token, err := s.jwt.Sign(opCtx, crypto.JWTExternal, crypto.JWTRequest{
 		Subject: userID, Audience: audience, SessionID: session.ID, Custom: custom,
 	})
 	if err != nil {
 		return nil, err
 	}
 	// The token's id and expiry, read back from what was signed.
-	claims, err := s.jwt.Verify(opCtx, types.JWTExternal, token)
+	claims, err := s.jwt.Verify(opCtx, crypto.JWTExternal, token)
 	if err != nil {
 		return nil, err
 	}

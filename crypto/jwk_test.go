@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -228,7 +227,7 @@ func TestMarshalJWKSet(t *testing.T) {
 	edPub, _, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	rsaKey := newRSAKey(t, 2048)
-	keys := []types.PublishedKey{
+	keys := []crypto.PublishedKey{
 		{KID: "1", Algorithm: "EdDSA", Key: edPub},
 		{KID: "2", Algorithm: "ES256", Key: &newECKey(t, elliptic.P256()).PublicKey},
 		{KID: "3", Algorithm: "ES384", Key: &newECKey(t, elliptic.P384()).PublicKey},
@@ -277,7 +276,7 @@ func TestMarshalJWKSetRefusesWhatItCantPublish(t *testing.T) {
 	require.NoError(t, err)
 	ecKey := newECKey(t, elliptic.P256())
 	rsaKey := newRSAKey(t, 2048)
-	cases := map[string]types.PublishedKey{
+	cases := map[string]crypto.PublishedKey{
 		"an Ed25519 private key":     {KID: "k", Algorithm: "EdDSA", Key: edPriv},
 		"an EC private key":          {KID: "k", Algorithm: "ES256", Key: ecKey},
 		"an RSA private key":         {KID: "k", Algorithm: "RS256", Key: rsaKey},
@@ -294,7 +293,7 @@ func TestMarshalJWKSetRefusesWhatItCantPublish(t *testing.T) {
 	}
 	for name, key := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := crypto.MarshalJWKSet([]types.PublishedKey{{KID: "fine", Algorithm: "EdDSA", Key: edPub}, key})
+			_, err := crypto.MarshalJWKSet([]crypto.PublishedKey{{KID: "fine", Algorithm: "EdDSA", Key: edPub}, key})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), `key "k"`)
 		})

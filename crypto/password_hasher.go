@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/MastewalB/behemoth/types"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -36,12 +35,12 @@ var DefaultParams = &Params{
 // Argon2idHasher implements PasswordHasher using Argon2id + PHC string format.
 type Argon2idHasher struct {
 	params *Params
-	km     types.KeyManager
+	km     KeyManager
 }
 
 // NewArgon2idHasher returns a hasher that uses the supplied parameters.
 // If params is nil, DefaultParams is used.
-func NewArgon2idHasher(params *Params, km types.KeyManager) *Argon2idHasher {
+func NewArgon2idHasher(params *Params, km KeyManager) *Argon2idHasher {
 	if params == nil {
 		params = DefaultParams
 	}
@@ -53,7 +52,7 @@ func NewArgon2idHasher(params *Params, km types.KeyManager) *Argon2idHasher {
 
 // Hash produces a PHC-formatted Argon2id hash of the password.
 func (h *Argon2idHasher) Hash(password string) (string, error) {
-	pepper, version, err := h.km.Current(types.KeyPurposePasswordHash)
+	pepper, version, err := h.km.Current(KeyPurposePasswordHash)
 	if err != nil {
 		return "", fmt.Errorf("get current pepper: %w", err)
 	}
@@ -98,7 +97,7 @@ func (h *Argon2idHasher) Verify(hash, password string) (bool, error) {
 		return false, err
 	}
 
-	pepper, err := h.km.GetByVersion(types.KeyPurposePasswordHash, keyVersion)
+	pepper, err := h.km.GetByVersion(KeyPurposePasswordHash, keyVersion)
 	if err != nil {
 		return false, err
 	}
@@ -125,7 +124,7 @@ func (h *Argon2idHasher) NeedsRehash(hash string) bool {
 		return true
 	}
 
-	_, currentVersion, err := h.km.Current(types.KeyPurposePasswordHash)
+	_, currentVersion, err := h.km.Current(KeyPurposePasswordHash)
 	if err != nil {
 		return true
 	}

@@ -12,8 +12,6 @@ import (
 	"math/big"
 	"slices"
 	"strings"
-
-	"github.com/MastewalB/behemoth/types"
 )
 
 // The JWK codec turns a JWK set (RFC 7517) into the public keys tokens are
@@ -60,7 +58,7 @@ type jwk struct {
 //
 // Data that is not a JSON object with a "keys" array is an error. An empty
 // set is not.
-func ParseJWKSet(data []byte) ([]types.PublishedKey, error) {
+func ParseJWKSet(data []byte) ([]PublishedKey, error) {
 	var set struct {
 		Keys *[]json.RawMessage `json:"keys"`
 	}
@@ -70,7 +68,7 @@ func ParseJWKSet(data []byte) ([]types.PublishedKey, error) {
 	if set.Keys == nil {
 		return nil, errors.New(`not a JWK set: no "keys" array`)
 	}
-	keys := make([]types.PublishedKey, 0, len(*set.Keys))
+	keys := make([]PublishedKey, 0, len(*set.Keys))
 	for _, raw := range *set.Keys {
 		// Each key is decoded on its own, so that a malformed one is left
 		// out and does not fail the set.
@@ -82,35 +80,35 @@ func ParseJWKSet(data []byte) ([]types.PublishedKey, error) {
 }
 
 // parseJWK reads one key of a set. Its error says why the key is left out.
-func parseJWK(raw json.RawMessage) (types.PublishedKey, error) {
+func parseJWK(raw json.RawMessage) (PublishedKey, error) {
 	var k jwk
 	if err := json.Unmarshal(raw, &k); err != nil {
-		return types.PublishedKey{}, err
+		return PublishedKey{}, err
 	}
 	var private struct {
 		D json.RawMessage `json:"d"`
 	}
 	if err := json.Unmarshal(raw, &private); err != nil || private.D != nil {
-		return types.PublishedKey{}, errors.New("the key carries its private part")
+		return PublishedKey{}, errors.New("the key carries its private part")
 	}
 	if k.Use != "" && k.Use != "sig" {
-		return types.PublishedKey{}, fmt.Errorf("the key's use is %q", k.Use)
+		return PublishedKey{}, fmt.Errorf("the key's use is %q", k.Use)
 	}
 	if len(k.KeyOps) > 0 && !slices.Contains(k.KeyOps, "verify") {
-		return types.PublishedKey{}, errors.New(`the key's key_ops lack "verify"`)
+		return PublishedKey{}, errors.New(`the key's key_ops lack "verify"`)
 	}
 	key, err := k.publicKey()
 	if err != nil {
-		return types.PublishedKey{}, err
+		return PublishedKey{}, err
 	}
 	alg, algs := k.Alg, algorithmsOf(key)
 	switch {
 	case alg != "" && !slices.Contains(algs, alg):
-		return types.PublishedKey{}, fmt.Errorf("the key can't sign with %q", alg)
+		return PublishedKey{}, fmt.Errorf("the key can't sign with %q", alg)
 	case alg == "" && len(algs) == 1:
 		alg = algs[0]
 	}
-	return types.PublishedKey{KID: k.Kid, Algorithm: alg, Key: key}, nil
+	return PublishedKey{KID: k.Kid, Algorithm: alg, Key: key}, nil
 }
 
 // publicKey decodes the key of k: an *rsa.PublicKey, an *ecdsa.PublicKey, or
@@ -171,7 +169,7 @@ func (k jwk) publicKey() (any, error) {
 // route. Each key is written with its kid, its algorithm when it names one,
 // and use "sig". A key ParseJWKSet would leave out is an error, and so is a
 // private key: only public halves are written.
-func MarshalJWKSet(keys []types.PublishedKey) ([]byte, error) {
+func MarshalJWKSet(keys []PublishedKey) ([]byte, error) {
 	set := struct {
 		Keys []jwk `json:"keys"`
 	}{Keys: make([]jwk, 0, len(keys))}
@@ -185,7 +183,7 @@ func MarshalJWKSet(keys []types.PublishedKey) ([]byte, error) {
 	return json.Marshal(set)
 }
 
-func toJWK(key types.PublishedKey) (jwk, error) {
+func toJWK(key PublishedKey) (jwk, error) {
 	if key.Algorithm != "" && !slices.Contains(algorithmsOf(key.Key), key.Algorithm) {
 		return jwk{}, fmt.Errorf("a %T can't sign with %q", key.Key, key.Algorithm)
 	}

@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// OriginValidator answers whether an origin is one of
+// RouterConfig.TrustedOrigins. AuthContext.Origins is one.
+type OriginValidator interface {
+	IsTrusted(origin string) bool
+}
+
 // TrustedOrigins is the OriginValidator Boot builds from
 // RouterConfig.TrustedOrigins and puts on AuthContext.Origins. It answers
 // whether a browser may be sent to an origin, which is what a plugin asks

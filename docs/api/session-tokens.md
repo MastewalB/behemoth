@@ -20,10 +20,10 @@ Name the services that accept session tokens in `BootConfig.JWT`:
 
 ```go
 ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
-	JWT: types.JWTConfig{
+	JWT: crypto.JWTConfig{
 		Issuer: "https://auth.example.com",
-		Audiences: map[types.JWTKind][]string{
-			types.JWTExternal: {"https://api.example.com", "https://reports.example.com"},
+		Audiences: map[crypto.JWTKind][]string{
+			crypto.JWTExternal: {"https://api.example.com", "https://reports.example.com"},
 		},
 	},
 	// ...
@@ -33,8 +33,8 @@ ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `Issuer` | `RouterConfig.BaseURL` | The `iss` of every token. One of the two is required once an external audience is named. |
-| `Audiences[types.JWTExternal]` | none | The services a token may be issued for. The first is the default. Without any, session tokens are off and neither route is mounted. |
-| `TTL[types.JWTExternal]` | 15 minutes | How long a token is valid. |
+| `Audiences[crypto.JWTExternal]` | none | The services a token may be issued for. The first is the default. Without any, session tokens are off and neither route is mounted. |
+| `TTL[crypto.JWTExternal]` | 15 minutes | How long a token is valid. |
 | `JWKSPath` | `/.well-known/jwks.json` | Where the keys are published, outside the router's base path. |
 
 `Boot` returns a configuration error for an external audience without an issuer, an empty audience, a negative lifetime, and a key set path that does not start with `/`.

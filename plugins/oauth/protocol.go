@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/outbound"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // This file is the part of the OAuth 2.0 protocol the built-in providers
@@ -45,7 +45,7 @@ type tokenResponse struct {
 type clientAuth struct {
 	clientID string
 	// secret is the client secret's source. Nil for a public client.
-	secret types.SecretSource
+	secret crypto.SecretSource
 }
 
 // Client authentication methods, by their names in OpenID Connect
@@ -57,7 +57,7 @@ const (
 )
 
 // currentSecret returns the current value of the client secret.
-func currentSecret(ctx context.Context, source types.SecretSource) (string, error) {
+func currentSecret(ctx context.Context, source crypto.SecretSource) (string, error) {
 	secrets, current, err := source.Load(ctx)
 	if err != nil {
 		return "", fmt.Errorf("client secret: %w", err)

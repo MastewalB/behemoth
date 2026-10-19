@@ -86,7 +86,7 @@ Invariant: the check is the only thing that stands between a cross-origin page a
 
 These parts are deferred:
 
-- **A CSRF token.** `CSRFProtector` in `types/cryptotypes` is an interface without an implementation. `docs/plans.md` has what a token would take, under "A CSRF token".
+- **A CSRF token.** Nothing implements one. `CSRFProtector`, an interface without an implementation or a caller, was removed. `docs/plans.md` has what a token would take, under "A CSRF token".
 - **A requirement of `application/json`.** A request with no `Content-Type`, or with one that is not a form type, is decoded as JSON.
 - **`X-Forwarded-Host`.** An application behind a proxy that rewrites `Host` sets `BaseURL`. Deferred: see "The origin check does not read `X-Forwarded-Host`" in `docs/ongoing.md`.
 - **A `Referer` fallback and wildcard origins.**

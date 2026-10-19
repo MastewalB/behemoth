@@ -3,16 +3,14 @@ package crypto
 import (
 	"context"
 	"time"
-
-	"github.com/MastewalB/behemoth/types"
 )
 
 type PollingWatcher struct {
-	types.SecretSource
+	SecretSource
 	interval time.Duration
 }
 
-func NewPollingWatcher(source types.SecretSource, interval time.Duration) *PollingWatcher {
+func NewPollingWatcher(source SecretSource, interval time.Duration) *PollingWatcher {
 	return &PollingWatcher{SecretSource: source, interval: interval}
 }
 
@@ -39,4 +37,4 @@ func (p *PollingWatcher) Watch(ctx context.Context, onUpdate func(map[int]string
 }
 
 // A compile-time check to ensure that PollingWatcher implements WatchableSecretSource
-var _ types.WatchableSecretSource = (*PollingWatcher)(nil)
+var _ WatchableSecretSource = (*PollingWatcher)(nil)

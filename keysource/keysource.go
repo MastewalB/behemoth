@@ -22,7 +22,6 @@ import (
 
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/outbound"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // JWKSet is the source of the JWK set at a URL: a crypto.KeySource, whose
@@ -61,7 +60,7 @@ func NewJWKSet(client *http.Client, rawURL string) (*JWKSet, error) {
 // than outbound.DefaultMaxBody, or that is not a JWK set is an error. So is
 // a set without a key that can verify a signature: no token could be
 // checked with it.
-func (s *JWKSet) Keys(ctx context.Context) ([]types.PublishedKey, error) {
+func (s *JWKSet) Keys(ctx context.Context) ([]crypto.PublishedKey, error) {
 	var raw json.RawMessage
 	header := http.Header{"Accept": {"application/jwk-set+json, application/json"}}
 	if _, err := outbound.GetJSON(ctx, s.client, s.url, header, &raw); err != nil {

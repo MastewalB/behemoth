@@ -147,7 +147,7 @@ The caller plan changes some of these in its own steps: its step 3 moves four `S
 | `KeySet`, `ExternalKeySet`, `ExternalSigningKey`, `PublishedKey` | `crypto` |
 | `SecretSource`, `WatchableSecretSource` | `crypto` |
 | `OriginValidator` | `core`, since it isn't cryptography |
-| `CSRFProtector` | removed. It has no implementation and no caller, and "Trusted origins match exactly, and `CSRFProtector` has no implementation" proposes its removal. |
+| `CSRFProtector` | removed. It has no implementation and no caller, and "Trusted origins match exactly" proposed its removal. |
 
 No name in `types/cryptotypes` collides with a name in `crypto`. The file imports the standard library's `crypto` package, which needs an import alias inside a package named `crypto`.
 
@@ -155,7 +155,7 @@ No name in `types/cryptotypes` collides with a name in `crypto`. The file import
 
 | Identifiers | Destination |
 | --- | --- |
-| `JWTProviderImpl.HandleJWKS`, `JWTProviderImpl.Routes` | The key set route moves to `auth` in part 1, next to the session token route, and to `web` in part 2. `crypto` keeps a method without HTTP types that returns the published keys. |
+| `JWTProviderImpl.HandleJWKS`, `JWTProviderImpl.Routes` | The key set route moves to `transport`, next to the session token route, as `KeySetRoutes`, which serves the key set's `PublicKeys`. It reaches `auth` with step 8, and `web` in part 2. |
 | the `Environment` field of its configuration | typed `behemoth.Environment` |
 | `New` | returns `crypto.Services` |
 
@@ -213,7 +213,7 @@ Each step is one commit. It builds every module and passes the suite: the root m
 | 2 | `errors` becomes `errs`, `Is` becomes `IsCategory`, and the error code constants lose their `ErrorCode` prefix. The two functions that use `errs` as a variable name rename it first. | Done |
 | 3 | `migration/core` becomes `migration`. | Done |
 | 4 | `types/schema` becomes `schema`, and `PublicView` and `NewPublicView` join it. | Done |
-| 5 | `types/cryptotypes` merges into `crypto`, and the crypto aliases go. `Crypto` becomes `crypto.Services`, `OriginValidator` moves to `types`, and `CSRFProtector` goes. The key set route moves to `transport`, so `crypto` imports nothing of `types`. | Not started |
+| 5 | `types/cryptotypes` merges into `crypto`, and the crypto aliases go. `Crypto` becomes `crypto.Services`, `OriginValidator` moves to `types`, and `CSRFProtector` goes. The key set route moves to `transport`, so `crypto` imports nothing of `types`. | Done |
 | 6 | The duplicates go: `types.SessionState`, and the aliases `Token`, `TokenKind`, and `CodeKind`. | Not started |
 | 7 | The implementations leave `types/init` for `dispatch`, `ratelimit` (which takes in `types/ratelimit`), and `messaging`, and the token catalog moves to `transport`. | Not started |
 | 8 | `transport` becomes `auth`. | Not started |
@@ -245,4 +245,4 @@ These entries in `docs/ongoing.md` are resolved by this plan:
 
 - **"`types` mixes contracts, implementations and HTTP, and its layering forces aliases".** Part 1 resolves all of it except the HTTP types, which part 2 resolves.
 - **"`Plugin` requires HTTP routes, and the request pipeline lives in the router".** Steps 12 and 13.
-- **"Trusted origins match exactly, and `CSRFProtector` has no implementation".** Step 5 removes `CSRFProtector`. The point about wildcards stays open.
+- **"Trusted origins match exactly".** Step 5 removes `CSRFProtector`, which the entry also covered. The point about wildcards stays open.

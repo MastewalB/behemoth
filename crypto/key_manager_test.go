@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -35,7 +34,7 @@ func TestNewDefaultKeyManager(t *testing.T) {
 	tests := []struct {
 		name        string
 		cfg         KeyManagerConfig
-		source      types.SecretSource
+		source      SecretSource
 		expectError bool
 		errContains string
 	}{
@@ -99,23 +98,23 @@ func TestDefaultKeyManager_Current(t *testing.T) {
 	km, err := NewDefaultKeyManager(t.Context(), cfg, NewSecretSource(&TestParam{Len: 2}), tel)
 	assert.NoError(t, err)
 
-	key, version, err := km.Current(types.KeyPurposeTokenHash)
+	key, version, err := km.Current(KeyPurposeTokenHash)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, version)
 	assert.NotEmpty(t, key)
 
 	// Test retrieving version 1 (historical)
-	key1, err := km.GetByVersion(types.KeyPurposeCookieSign, 1)
+	key1, err := km.GetByVersion(KeyPurposeCookieSign, 1)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, key1)
 
 	// Test retrieving version 2 (current)
-	key2, err := km.GetByVersion(types.KeyPurposeCookieSign, 2)
+	key2, err := km.GetByVersion(KeyPurposeCookieSign, 2)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, key2)
 
 	// Test version doesn't exist
-	_, err = km.GetByVersion(types.KeyPurposeCookieSign, 99)
+	_, err = km.GetByVersion(KeyPurposeCookieSign, 99)
 	assert.Error(t, err)
 }
 
@@ -126,7 +125,7 @@ func TestDefaultKeyManager_SameSecretRegeneratesSameKey(t *testing.T) {
 	km1, err := NewDefaultKeyManager(t.Context(), cfg1, NewSecretSource(&TestParam{Len: 1}), tel)
 	assert.NoError(t, err)
 
-	key1, version1, err := km1.Current(types.KeyPurposeTokenHash)
+	key1, version1, err := km1.Current(KeyPurposeTokenHash)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, version1)
 
@@ -136,7 +135,7 @@ func TestDefaultKeyManager_SameSecretRegeneratesSameKey(t *testing.T) {
 	km2, err := NewDefaultKeyManager(t.Context(), cfg2, NewSecretSource(&TestParam{Len: 1}), tel)
 	assert.NoError(t, err)
 
-	key2, version2, err := km2.Current(types.KeyPurposeTokenHash)
+	key2, version2, err := km2.Current(KeyPurposeTokenHash)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, version2)
 
@@ -150,7 +149,7 @@ func TestDefaultKeyManager_DifferentSecretProducesDifferentKey(t *testing.T) {
 	km1, err := NewDefaultKeyManager(t.Context(), cfg1, NewSecretSource(&TestParam{Len: 1}), tel)
 	assert.NoError(t, err)
 
-	key1, _, err := km1.Current(types.KeyPurposeTokenHash)
+	key1, _, err := km1.Current(KeyPurposeTokenHash)
 	assert.NoError(t, err)
 
 	cfg2 := KeyManagerConfig{}
@@ -158,7 +157,7 @@ func TestDefaultKeyManager_DifferentSecretProducesDifferentKey(t *testing.T) {
 	km2, err := NewDefaultKeyManager(t.Context(), cfg2, NewSecretSource(&TestParam{Len: 2}), tel)
 	assert.NoError(t, err)
 
-	key2, _, err := km2.Current(types.KeyPurposeTokenHash)
+	key2, _, err := km2.Current(KeyPurposeTokenHash)
 	assert.NoError(t, err)
 
 	// Keys should be different
@@ -205,13 +204,13 @@ func TestDefaultKeyManager_ConcurrentAccess(t *testing.T) {
 	for range goroutines {
 		// Concurrent Current calls
 		go func() {
-			_, _, err := km.Current(types.KeyPurposeTokenHash)
+			_, _, err := km.Current(KeyPurposeTokenHash)
 			errChan <- err
 		}()
 
 		// Concurrent GetByVersion calls
 		go func() {
-			_, err := km.GetByVersion(types.KeyPurposeTokenHash, 1)
+			_, err := km.GetByVersion(KeyPurposeTokenHash, 1)
 			errChan <- err
 		}()
 	}
@@ -234,7 +233,7 @@ func BenchmarkDefaultKeyManager_Current(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		_, _, err = km.Current(types.KeyPurposeTokenHash)
+		_, _, err = km.Current(KeyPurposeTokenHash)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -251,7 +250,7 @@ func BenchmarkDefaultKeyManager_GetByVersion(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		_, err = km.GetByVersion(types.KeyPurposeTokenHash, 1)
+		_, err = km.GetByVersion(KeyPurposeTokenHash, 1)
 		if err != nil {
 			b.Fatal(err)
 		}

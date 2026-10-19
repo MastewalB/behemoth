@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -87,7 +86,7 @@ func (t *VerifiedJWT) Claims(v any) error {
 // errors/jwt.go. When keys can't get its keys, its error is returned: a
 // failure of the system. Options without an issuer or an audience, or with
 // an algorithm that is not asymmetric, are a configuration error.
-func VerifyJWT(ctx context.Context, token string, keys types.KeySet, opts VerifyOptions) (*VerifiedJWT, error) {
+func VerifyJWT(ctx context.Context, token string, keys KeySet, opts VerifyOptions) (*VerifiedJWT, error) {
 	const op = "crypto.VerifyJWT"
 	algs, err := opts.check(keys)
 	if err != nil {
@@ -142,7 +141,7 @@ func VerifyJWT(ctx context.Context, token string, keys types.KeySet, opts Verify
 
 // check returns the algorithms a token may name, or why the options can't
 // work.
-func (o VerifyOptions) check(keys types.KeySet) ([]string, error) {
+func (o VerifyOptions) check(keys KeySet) ([]string, error) {
 	switch {
 	case keys == nil:
 		return nil, errors.New("a key set is required")
@@ -167,7 +166,7 @@ func (o VerifyOptions) check(keys types.KeySet) ([]string, error) {
 // candidateKeys returns the keys of keys that may have signed a token with
 // kid and alg. A kid the set lacks is refused by the set. A token without a
 // kid, when it is allowed, may have been signed by any key that fits alg.
-func candidateKeys(ctx context.Context, op string, keys types.KeySet, kid, alg string, allowMissingKID bool) ([]types.PublishedKey, error) {
+func candidateKeys(ctx context.Context, op string, keys KeySet, kid, alg string, allowMissingKID bool) ([]PublishedKey, error) {
 	if kid == "" {
 		if !allowMissingKID {
 			return nil, errs.NewJWTError(op, errs.CodeJWTUnknownKey, errors.New("the token names no kid"))
@@ -176,7 +175,7 @@ func candidateKeys(ctx context.Context, op string, keys types.KeySet, kid, alg s
 		if err != nil {
 			return nil, err
 		}
-		found := keysWhere(all, func(k types.PublishedKey) bool { return fits(k, alg) })
+		found := keysWhere(all, func(k PublishedKey) bool { return fits(k, alg) })
 		if len(found) == 0 {
 			return nil, errs.NewJWTError(op, errs.CodeJWTUnknownKey, errors.New("no key fits the token's algorithm"))
 		}
@@ -187,14 +186,14 @@ func candidateKeys(ctx context.Context, op string, keys types.KeySet, kid, alg s
 		return nil, err
 	}
 	if fits(key, alg) {
-		return []types.PublishedKey{key}, nil
+		return []PublishedKey{key}, nil
 	}
 	// RFC 7517, section 4.5: keys of different types may share a kid.
 	all, err := keys.PublicKeys(ctx)
 	if err != nil {
 		return nil, err
 	}
-	found := keysWhere(all, func(k types.PublishedKey) bool { return k.KID == kid && fits(k, alg) })
+	found := keysWhere(all, func(k PublishedKey) bool { return k.KID == kid && fits(k, alg) })
 	if len(found) == 0 {
 		return nil, errs.NewJWTError(op, errs.CodeJWTAlgorithmMismatch, nil)
 	}
@@ -203,8 +202,8 @@ func candidateKeys(ctx context.Context, op string, keys types.KeySet, kid, alg s
 
 // keysWhere returns the keys for which keep is true, in a new slice: the
 // one a KeySet returned may be its own.
-func keysWhere(keys []types.PublishedKey, keep func(types.PublishedKey) bool) []types.PublishedKey {
-	var found []types.PublishedKey
+func keysWhere(keys []PublishedKey, keep func(PublishedKey) bool) []PublishedKey {
+	var found []PublishedKey
 	for _, k := range keys {
 		if keep(k) {
 			found = append(found, k)
@@ -216,7 +215,7 @@ func keysWhere(keys []types.PublishedKey, keep func(types.PublishedKey) bool) []
 // fits reports whether key may check a token signed with alg: alg is the
 // key's own algorithm when it names one, and in any case one the key's type
 // signs with.
-func fits(key types.PublishedKey, alg string) bool {
+func fits(key PublishedKey, alg string) bool {
 	if key.Algorithm != "" && key.Algorithm != alg {
 		return false
 	}

@@ -11,7 +11,6 @@ import (
 
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,12 +19,12 @@ import (
 // counts its calls.
 type fakeSource struct {
 	mu    sync.Mutex
-	keys  []types.PublishedKey
+	keys  []crypto.PublishedKey
 	err   error
 	calls int
 }
 
-func (s *fakeSource) Keys(ctx context.Context) ([]types.PublishedKey, error) {
+func (s *fakeSource) Keys(ctx context.Context) ([]crypto.PublishedKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -35,7 +34,7 @@ func (s *fakeSource) Keys(ctx context.Context) ([]types.PublishedKey, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	return append([]types.PublishedKey(nil), s.keys...), nil
+	return append([]crypto.PublishedKey(nil), s.keys...), nil
 }
 
 func (s *fakeSource) set(err error, kids ...string) {
@@ -44,7 +43,7 @@ func (s *fakeSource) set(err error, kids ...string) {
 	s.err, s.keys = err, nil
 	for _, kid := range kids {
 		pub, _, _ := ed25519.GenerateKey(rand.Reader)
-		s.keys = append(s.keys, types.PublishedKey{KID: kid, Algorithm: "EdDSA", Key: pub})
+		s.keys = append(s.keys, crypto.PublishedKey{KID: kid, Algorithm: "EdDSA", Key: pub})
 	}
 }
 

@@ -6,14 +6,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types/cryptotypes"
 )
 
 // WithEncryptor encrypts at-rest secrets (OAuth tokens) with e. Without it
 // the store refuses to write or read one, rather than storing it in the
 // clear.
-func WithEncryptor(e cryptotypes.Encryptor) Option { return func(s *Store) { s.encryptor = e } }
+func WithEncryptor(e crypto.Encryptor) Option { return func(s *Store) { s.encryptor = e } }
 
 // A sealed value is "v<key version>:<base64 ciphertext>". The version
 // travels with the ciphertext, so each secret column is decryptable on its

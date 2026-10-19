@@ -81,7 +81,7 @@ A `ProviderConfig` describes one built-in provider:
 | `Kind` | `oauth.KindOIDC`, `oauth.KindGoogle`, or `oauth.KindGitHub`. Required. |
 | `ID` | The provider's id. It defaults to the kind for Google and GitHub, and is required for `KindOIDC`, such as `"okta"`. It is stored with every account the provider signs in, so don't change it once users have signed in. |
 | `ClientID` | The client id the provider issued to your application. Required. |
-| `ClientSecret` | A `types.SecretSource` with the client secret. Its current secret is used. Required for Google and GitHub. Without it, a `KindOIDC` provider is a public client and authenticates with PKCE alone. |
+| `ClientSecret` | A `crypto.SecretSource` with the client secret. Its current secret is used. Required for Google and GitHub. Without it, a `KindOIDC` provider is a public client and authenticates with PKCE alone. |
 | `Issuer` | The issuer of a `KindOIDC` provider, such as `"https://login.example.com"`. Required for `KindOIDC`, and empty for the other two. It is `https`, or `http` on `localhost` or a loopback address, and it has to be exactly the issuer the provider's discovery document names. |
 | `Scopes` | Replaces the kind's scopes. An OpenID Connect provider needs `openid`. |
 

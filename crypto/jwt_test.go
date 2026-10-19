@@ -14,7 +14,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,7 +22,6 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,30 +49,30 @@ var (
 	secretV2 = strings.Repeat("cd", 32)
 )
 
-var kinds = []types.JWTKind{types.JWTInternal, types.JWTExternal}
+var kinds = []crypto.JWTKind{crypto.JWTInternal, crypto.JWTExternal}
 
-func jwtConfig() types.JWTConfig {
-	return types.JWTConfig{
+func jwtConfig() crypto.JWTConfig {
+	return crypto.JWTConfig{
 		Issuer: testIssuer,
-		Audiences: map[types.JWTKind][]string{
-			types.JWTInternal: {internalAudience},
-			types.JWTExternal: {externalAudience, otherAudience},
+		Audiences: map[crypto.JWTKind][]string{
+			crypto.JWTInternal: {internalAudience},
+			crypto.JWTExternal: {externalAudience, otherAudience},
 		},
-		TTL: map[types.JWTKind]time.Duration{types.JWTInternal: internalTTL, types.JWTExternal: externalTTL},
+		TTL: map[crypto.JWTKind]time.Duration{crypto.JWTInternal: internalTTL, crypto.JWTExternal: externalTTL},
 	}
 }
 
 // audienceOf is the default audience of kind: the first configured one.
-func audienceOf(kind types.JWTKind) string { return jwtConfig().Audiences[kind][0] }
+func audienceOf(kind crypto.JWTKind) string { return jwtConfig().Audiences[kind][0] }
 
 // jwtFixture is a provider and what a test needs to make tokens of its own:
 // the key manager behind internal tokens and the key set behind external
 // ones.
 type jwtFixture struct {
-	provider types.JWTProvider
+	provider crypto.JWTProvider
 	impl     *crypto.JWTProviderImpl
-	suite    types.Crypto
-	keys     types.ExternalKeySet
+	suite    crypto.Services
+	keys     crypto.ExternalKeySet
 }
 
 // newJWTFixture builds a provider whose keys come from secrets, current
@@ -99,7 +97,7 @@ func defaultFixture(t *testing.T) *jwtFixture {
 // hmacKey is the key internal tokens of version are signed with.
 func (fx *jwtFixture) hmacKey(t *testing.T, version int) []byte {
 	t.Helper()
-	key, err := fx.suite.Keys.GetByVersion(types.KeyPurposeJWTSign, version)
+	key, err := fx.suite.Keys.GetByVersion(crypto.KeyPurposeJWTSign, version)
 	require.NoError(t, err)
 	return key
 }
@@ -109,7 +107,7 @@ func (fx *jwtFixture) hmacKey(t *testing.T, version int) []byte {
 // jwt_external (ADR-0002).
 func (fx *jwtFixture) externalKey(t *testing.T, version int) ed25519.PrivateKey {
 	t.Helper()
-	seed, err := fx.suite.Keys.GetByVersion(types.KeyPurposeJWTExternal, version)
+	seed, err := fx.suite.Keys.GetByVersion(crypto.KeyPurposeJWTExternal, version)
 	require.NoError(t, err)
 	return ed25519.NewKeyFromSeed(seed)
 }
@@ -119,7 +117,7 @@ func (fx *jwtFixture) currentKid() string { return strconv.Itoa(fx.suite.Keys.Cu
 
 // claims returns the claims of a valid token of kind, as a standard
 // library writes them.
-func claims(kind types.JWTKind) jwt.MapClaims {
+func claims(kind crypto.JWTKind) jwt.MapClaims {
 	now := time.Now()
 	return jwt.MapClaims{
 		"iss": testIssuer, "aud": audienceOf(kind), "sub": "user-1",
@@ -129,9 +127,9 @@ func claims(kind types.JWTKind) jwt.MapClaims {
 
 // standardToken signs c the way the provider's kind does, with its current
 // key: HS256 with the key manager's key, or EdDSA with the key set's key.
-func (fx *jwtFixture) standardToken(t *testing.T, kind types.JWTKind, c jwt.MapClaims) string {
+func (fx *jwtFixture) standardToken(t *testing.T, kind crypto.JWTKind, c jwt.MapClaims) string {
 	t.Helper()
-	if kind == types.JWTInternal {
+	if kind == crypto.JWTInternal {
 		return signWith(t, jwt.SigningMethodHS256, fx.hmacKey(t, 1), "1", c)
 	}
 	return signWith(t, jwt.SigningMethodEdDSA, fx.externalKey(t, fx.suite.Keys.CurrentVersion()), fx.currentKid(), c)
@@ -148,10 +146,10 @@ func signWith(t *testing.T, method jwt.SigningMethod, key any, kid string, c jwt
 
 // verifyStandard checks token with golang-jwt, as a third party would: the
 // algorithm, the key, the issuer, the audience, and the expiry.
-func (fx *jwtFixture) verifyStandard(t *testing.T, kind types.JWTKind, token string) (jwt.MapClaims, error) {
+func (fx *jwtFixture) verifyStandard(t *testing.T, kind crypto.JWTKind, token string) (jwt.MapClaims, error) {
 	t.Helper()
 	method := "HS256"
-	if kind == types.JWTExternal {
+	if kind == crypto.JWTExternal {
 		method = "EdDSA"
 	}
 	parser := jwt.NewParser(
@@ -161,12 +159,12 @@ func (fx *jwtFixture) verifyStandard(t *testing.T, kind types.JWTKind, token str
 	parsed := jwt.MapClaims{}
 	_, err := parser.ParseWithClaims(token, parsed, func(tok *jwt.Token) (any, error) {
 		kid, _ := tok.Header["kid"].(string)
-		if kind == types.JWTInternal {
+		if kind == crypto.JWTInternal {
 			version, err := strconv.Atoi(kid)
 			if err != nil {
 				return nil, err
 			}
-			return fx.suite.Keys.GetByVersion(types.KeyPurposeJWTSign, version)
+			return fx.suite.Keys.GetByVersion(crypto.KeyPurposeJWTSign, version)
 		}
 		key, err := fx.keys.PublicKey(context.Background(), kid)
 		if err != nil {
@@ -226,7 +224,7 @@ func TestJWTRoundTrip(t *testing.T) {
 	custom := behemoth.M{"role": "admin", "plan": "pro"}
 	for _, kind := range kinds {
 		t.Run(string(kind), func(t *testing.T) {
-			token, err := fx.provider.Sign(ctx, kind, types.JWTRequest{Subject: "user-1", Custom: custom})
+			token, err := fx.provider.Sign(ctx, kind, crypto.JWTRequest{Subject: "user-1", Custom: custom})
 			require.NoError(t, err)
 
 			got, err := fx.provider.Verify(ctx, kind, token)
@@ -249,12 +247,12 @@ func TestJWTIssuesStandardTokens(t *testing.T) {
 	fx := defaultFixture(t)
 	for _, kind := range kinds {
 		t.Run(string(kind), func(t *testing.T) {
-			token, err := fx.provider.Sign(ctx, kind, types.JWTRequest{Subject: "user-1", Custom: behemoth.M{"role": "admin"}})
+			token, err := fx.provider.Sign(ctx, kind, crypto.JWTRequest{Subject: "user-1", Custom: behemoth.M{"role": "admin"}})
 			require.NoError(t, err)
 
 			header, payload := segments(t, token)
 			wantAlg, wantKid := "HS256", "1"
-			if kind == types.JWTExternal {
+			if kind == crypto.JWTExternal {
 				wantAlg, wantKid = "EdDSA", fx.currentKid()
 			}
 			assert.Equal(t, wantAlg, header["alg"])
@@ -312,7 +310,7 @@ func TestJWTRefusesTamperedTokens(t *testing.T) {
 	other := newJWTFixture(t, map[int]string{1: secretV2}, 1)
 	for _, kind := range kinds {
 		t.Run(string(kind), func(t *testing.T) {
-			token, err := fx.provider.Sign(ctx, kind, types.JWTRequest{Subject: "user-1"})
+			token, err := fx.provider.Sign(ctx, kind, crypto.JWTRequest{Subject: "user-1"})
 			require.NoError(t, err)
 			parts := strings.Split(token, ".")
 			_, payload := segments(t, token)
@@ -323,7 +321,7 @@ func TestJWTRefusesTamperedTokens(t *testing.T) {
 			flipped[0] ^= 0xff
 
 			var foreign string
-			if kind == types.JWTInternal {
+			if kind == crypto.JWTInternal {
 				// Another key manager's key, under the same version.
 				foreign = signWith(t, jwt.SigningMethodHS256, other.hmacKey(t, 1), "1", claims(kind))
 			} else {
@@ -356,29 +354,29 @@ func TestJWTPinsTheAlgorithm(t *testing.T) {
 	require.NoError(t, err)
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	unsigned := func(kind types.JWTKind) string {
+	unsigned := func(kind crypto.JWTKind) string {
 		tok, err := jwt.NewWithClaims(jwt.SigningMethodNone, claims(kind)).SignedString(jwt.UnsafeAllowNoneSignatureType)
 		require.NoError(t, err)
 		return tok
 	}
-	internalToken, err := fx.provider.Sign(ctx, types.JWTInternal, types.JWTRequest{Subject: "user-1"})
+	internalToken, err := fx.provider.Sign(ctx, crypto.JWTInternal, crypto.JWTRequest{Subject: "user-1"})
 	require.NoError(t, err)
-	externalToken, err := fx.provider.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1"})
+	externalToken, err := fx.provider.Sign(ctx, crypto.JWTExternal, crypto.JWTRequest{Subject: "user-1"})
 	require.NoError(t, err)
 	kid := fx.currentKid()
 	public := fx.externalKey(t, 1).Public().(ed25519.PublicKey)
 
-	cases := map[types.JWTKind]map[string]string{
-		types.JWTInternal: {
-			"none":                    unsigned(types.JWTInternal),
-			"HS512 with the same key": signWith(t, jwt.SigningMethodHS512, fx.hmacKey(t, 1), "1", claims(types.JWTInternal)),
-			"RS256":                   signWith(t, jwt.SigningMethodRS256, rsaKey, "1", claims(types.JWTInternal)),
+	cases := map[crypto.JWTKind]map[string]string{
+		crypto.JWTInternal: {
+			"none":                    unsigned(crypto.JWTInternal),
+			"HS512 with the same key": signWith(t, jwt.SigningMethodHS512, fx.hmacKey(t, 1), "1", claims(crypto.JWTInternal)),
+			"RS256":                   signWith(t, jwt.SigningMethodRS256, rsaKey, "1", claims(crypto.JWTInternal)),
 			"an external token":       externalToken,
 		},
-		types.JWTExternal: {
-			"none":                                unsigned(types.JWTExternal),
-			"HS256 with the public key as secret": signWith(t, jwt.SigningMethodHS256, []byte(public), kid, claims(types.JWTExternal)),
-			"ES256":                               signWith(t, jwt.SigningMethodES256, ecKey, kid, claims(types.JWTExternal)),
+		crypto.JWTExternal: {
+			"none":                                unsigned(crypto.JWTExternal),
+			"HS256 with the public key as secret": signWith(t, jwt.SigningMethodHS256, []byte(public), kid, claims(crypto.JWTExternal)),
+			"ES256":                               signWith(t, jwt.SigningMethodES256, ecKey, kid, claims(crypto.JWTExternal)),
 			"an internal token":                   internalToken,
 		},
 	}
@@ -399,9 +397,9 @@ func TestJWTChecksTheRegisteredClaims(t *testing.T) {
 	fx := defaultFixture(t)
 	now := time.Now()
 	for _, kind := range kinds {
-		otherAudience := audienceOf(types.JWTExternal)
-		if kind == types.JWTExternal {
-			otherAudience = audienceOf(types.JWTInternal)
+		otherAudience := audienceOf(crypto.JWTExternal)
+		if kind == crypto.JWTExternal {
+			otherAudience = audienceOf(crypto.JWTInternal)
 		}
 		with := func(change func(jwt.MapClaims)) string {
 			c := claims(kind)
@@ -439,7 +437,7 @@ func TestJWTRefusesMalformedTokens(t *testing.T) {
 	ctx := context.Background()
 	fx := defaultFixture(t)
 	notJSON := base64.RawURLEncoding.EncodeToString([]byte("not json"))
-	body := encodeSegment(t, claims(types.JWTInternal))
+	body := encodeSegment(t, claims(crypto.JWTInternal))
 	for _, kind := range kinds {
 		for name, token := range map[string]string{
 			"empty":                     "",
@@ -464,50 +462,50 @@ func TestJWTRefusesMalformedTokens(t *testing.T) {
 func TestJWTKeyRotation(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run(string(types.JWTInternal), func(t *testing.T) {
+	t.Run(string(crypto.JWTInternal), func(t *testing.T) {
 		before := newJWTFixture(t, map[int]string{1: secretV1}, 1)
-		old, err := before.provider.Sign(ctx, types.JWTInternal, types.JWTRequest{Subject: "user-1"})
+		old, err := before.provider.Sign(ctx, crypto.JWTInternal, crypto.JWTRequest{Subject: "user-1"})
 		require.NoError(t, err)
 
 		rotated := newJWTFixture(t, map[int]string{1: secretV1, 2: secretV2}, 2)
-		_, err = rotated.provider.Verify(ctx, types.JWTInternal, old)
+		_, err = rotated.provider.Verify(ctx, crypto.JWTInternal, old)
 		require.NoError(t, err, "a token of the previous version still verifies")
-		fresh, err := rotated.provider.Sign(ctx, types.JWTInternal, types.JWTRequest{Subject: "user-1"})
+		fresh, err := rotated.provider.Sign(ctx, crypto.JWTInternal, crypto.JWTRequest{Subject: "user-1"})
 		require.NoError(t, err)
 		header, _ := segments(t, fresh)
 		assert.Equal(t, "2", header["kid"], "new tokens use the current version")
 
 		retired := newJWTFixture(t, map[int]string{2: secretV2}, 2)
 		var verifyErr error
-		require.NotPanics(t, func() { _, verifyErr = retired.provider.Verify(ctx, types.JWTInternal, old) })
+		require.NotPanics(t, func() { _, verifyErr = retired.provider.Verify(ctx, crypto.JWTInternal, old) })
 		assert.Error(t, verifyErr, "a version that was removed no longer verifies")
-		_, err = retired.provider.Verify(ctx, types.JWTInternal, fresh)
+		_, err = retired.provider.Verify(ctx, crypto.JWTInternal, fresh)
 		assert.NoError(t, err)
 	})
 
-	t.Run(string(types.JWTExternal), func(t *testing.T) {
+	t.Run(string(crypto.JWTExternal), func(t *testing.T) {
 		before := newJWTFixture(t, map[int]string{1: secretV1}, 1)
-		old, err := before.provider.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1"})
+		old, err := before.provider.Sign(ctx, crypto.JWTExternal, crypto.JWTRequest{Subject: "user-1"})
 		require.NoError(t, err)
 
 		rotated := newJWTFixture(t, map[int]string{1: secretV1, 2: secretV2}, 2)
-		_, err = rotated.provider.Verify(ctx, types.JWTExternal, old)
+		_, err = rotated.provider.Verify(ctx, crypto.JWTExternal, old)
 		require.NoError(t, err, "a token of the previous version still verifies")
-		fresh, err := rotated.provider.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1"})
+		fresh, err := rotated.provider.Sign(ctx, crypto.JWTExternal, crypto.JWTRequest{Subject: "user-1"})
 		require.NoError(t, err)
 		header, _ := segments(t, fresh)
 		assert.Equal(t, "2", header["kid"], "new tokens use the current version")
 
 		retired := newJWTFixture(t, map[int]string{2: secretV2}, 2)
-		_, err = retired.provider.Verify(ctx, types.JWTExternal, old)
+		_, err = retired.provider.Verify(ctx, crypto.JWTExternal, old)
 		refusedWith(t, err, errs.CodeJWTUnknownKey, "a version that was removed no longer verifies")
 
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		require.NoError(t, err)
 		for _, kid := range []string{"key-that-never-was", "7", "01", ""} {
-			unknown := signWith(t, jwt.SigningMethodEdDSA, priv, kid, claims(types.JWTExternal))
+			unknown := signWith(t, jwt.SigningMethodEdDSA, priv, kid, claims(crypto.JWTExternal))
 			var verifyErr error
-			require.NotPanics(t, func() { _, verifyErr = rotated.provider.Verify(ctx, types.JWTExternal, unknown) })
+			require.NotPanics(t, func() { _, verifyErr = rotated.provider.Verify(ctx, crypto.JWTExternal, unknown) })
 			refusedWith(t, verifyErr, errs.CodeJWTUnknownKey, "kid %q", kid)
 		}
 	})
@@ -518,19 +516,19 @@ func TestJWTKeyRotation(t *testing.T) {
 func TestJWTKinds(t *testing.T) {
 	ctx := context.Background()
 	fx := defaultFixture(t)
-	_, err := fx.provider.Sign(ctx, "session", types.JWTRequest{Subject: "user-1"})
+	_, err := fx.provider.Sign(ctx, "session", crypto.JWTRequest{Subject: "user-1"})
 	refusedWith(t, err, errs.CodeJWTUnknownKind)
 	_, err = fx.provider.Verify(ctx, "session", "a.b.c")
 	refusedWith(t, err, errs.CodeJWTUnknownKind)
 
-	var withoutKeys types.JWTProvider = crypto.NewJWTProvider(fx.suite.JWTSign, nil, jwtConfig())
-	_, err = withoutKeys.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1"})
+	var withoutKeys crypto.JWTProvider = crypto.NewJWTProvider(fx.suite.JWTSign, nil, jwtConfig())
+	_, err = withoutKeys.Sign(ctx, crypto.JWTExternal, crypto.JWTRequest{Subject: "user-1"})
 	refusedWith(t, err, errs.CodeJWTExternalNotConfigured)
-	_, err = withoutKeys.Verify(ctx, types.JWTExternal, "a.b.c")
+	_, err = withoutKeys.Verify(ctx, crypto.JWTExternal, "a.b.c")
 	refusedWith(t, err, errs.CodeJWTExternalNotConfigured)
-	token, err := withoutKeys.Sign(ctx, types.JWTInternal, types.JWTRequest{Subject: "user-1"})
+	token, err := withoutKeys.Sign(ctx, crypto.JWTInternal, crypto.JWTRequest{Subject: "user-1"})
 	require.NoError(t, err)
-	_, err = withoutKeys.Verify(ctx, types.JWTInternal, token)
+	_, err = withoutKeys.Verify(ctx, crypto.JWTInternal, token)
 	assert.NoError(t, err)
 }
 
@@ -542,7 +540,7 @@ func TestJWTCustomClaimsStayCustom(t *testing.T) {
 	for _, kind := range kinds {
 		t.Run(string(kind), func(t *testing.T) {
 			custom := behemoth.M{"sub": "admin", "iss": "https://evil.example.com", "aud": "another-service", "exp": "never"}
-			token, err := fx.provider.Sign(ctx, kind, types.JWTRequest{Subject: "user-1", Custom: custom})
+			token, err := fx.provider.Sign(ctx, kind, crypto.JWTRequest{Subject: "user-1", Custom: custom})
 			require.NoError(t, err)
 
 			_, payload := segments(t, token)
@@ -559,28 +557,22 @@ func TestJWTCustomClaimsStayCustom(t *testing.T) {
 	}
 }
 
-// The key set endpoint publishes every public key, and only public keys, in
-// the form a third party uses to verify an external token.
+// The external key set publishes every public key, and only public keys, in
+// the form a third party uses to verify an external token. The route that
+// serves it is tested in transport.
 func TestJWTPublishesTheExternalKeys(t *testing.T) {
 	ctx := context.Background()
 	fx := newJWTFixture(t, map[int]string{1: secretV1, 2: secretV2}, 2)
 
-	routes := fx.impl.Routes()
-	require.Len(t, routes, 1)
-	assert.Equal(t, http.MethodGet, routes[0].Method)
-	assert.Equal(t, "/.well-known/jwks.json", routes[0].Path)
-
-	rctx := &types.RequestContext{Ctx: ctx, Response: types.NewResponseRecorder()}
-	require.NoError(t, fx.impl.HandleJWKS(rctx))
-	w := httptest.NewRecorder()
-	rctx.Response.Flush(w)
-	require.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "public, max-age=300", w.Header().Get("Cache-Control"), "a verifier may cache the set for a while")
+	keys, err := fx.keys.PublicKeys(ctx)
+	require.NoError(t, err)
+	body, err := crypto.MarshalJWKSet(keys)
+	require.NoError(t, err)
 
 	var set struct {
 		Keys []map[string]string `json:"keys"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &set))
+	require.NoError(t, json.Unmarshal(body, &set))
 	require.Len(t, set.Keys, 2, "one key per secret version, the previous one included")
 	published := map[string]ed25519.PublicKey{}
 	for _, k := range set.Keys {
@@ -597,7 +589,7 @@ func TestJWTPublishesTheExternalKeys(t *testing.T) {
 	assert.Equal(t, fx.externalKey(t, 2).Public(), published["2"])
 
 	// A third party verifies a token with the published key alone.
-	token, err := fx.provider.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1"})
+	token, err := fx.provider.Sign(ctx, crypto.JWTExternal, crypto.JWTRequest{Subject: "user-1"})
 	require.NoError(t, err)
 	_, err = jwt.NewParser(jwt.WithValidMethods([]string{"EdDSA"}), jwt.WithAudience(externalAudience), jwt.WithExpirationRequired()).
 		Parse(token, func(tok *jwt.Token) (any, error) {
@@ -609,9 +601,6 @@ func TestJWTPublishesTheExternalKeys(t *testing.T) {
 			return key, nil
 		})
 	assert.NoError(t, err, "a third party verifies an external token from the published keys")
-
-	withoutKeys := crypto.NewJWTProvider(fx.suite.JWTSign, nil, jwtConfig())
-	assert.Nil(t, withoutKeys.Routes(), "no key set, nothing to publish")
 }
 
 // A token is issued for the kind's first audience, or for another one of
@@ -621,9 +610,9 @@ func TestJWTAudiencesSessionAndID(t *testing.T) {
 	ctx := context.Background()
 	fx := defaultFixture(t)
 
-	first, err := fx.provider.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1", SessionID: "session-9"})
+	first, err := fx.provider.Sign(ctx, crypto.JWTExternal, crypto.JWTRequest{Subject: "user-1", SessionID: "session-9"})
 	require.NoError(t, err)
-	second, err := fx.provider.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1", Audience: otherAudience})
+	second, err := fx.provider.Sign(ctx, crypto.JWTExternal, crypto.JWTRequest{Subject: "user-1", Audience: otherAudience})
 	require.NoError(t, err)
 
 	_, payload := segments(t, first)
@@ -635,18 +624,18 @@ func TestJWTAudiencesSessionAndID(t *testing.T) {
 	assert.NotEmpty(t, payload["jti"])
 	assert.NotEqual(t, payload["jti"], otherPayload["jti"], "every token has an id of its own")
 
-	got, err := fx.provider.Verify(ctx, types.JWTExternal, first)
+	got, err := fx.provider.Verify(ctx, crypto.JWTExternal, first)
 	require.NoError(t, err)
 	assert.Equal(t, "session-9", got.SessionID)
 	assert.Equal(t, payload["jti"], got.ID)
-	got, err = fx.provider.Verify(ctx, types.JWTExternal, second)
+	got, err = fx.provider.Verify(ctx, crypto.JWTExternal, second)
 	require.NoError(t, err)
 	assert.Equal(t, otherAudience, got.Audience, "the audience the token names")
 
-	_, err = fx.provider.Sign(ctx, types.JWTExternal, types.JWTRequest{Subject: "user-1", Audience: internalAudience})
+	_, err = fx.provider.Sign(ctx, crypto.JWTExternal, crypto.JWTRequest{Subject: "user-1", Audience: internalAudience})
 	assert.True(t, errs.IsCategory(err, errs.CategoryValidation) && errs.IsCode(err, "audience_invalid_input"),
 		"an audience of another kind is not on the list: %v", err)
-	_, err = fx.provider.Sign(ctx, types.JWTInternal, types.JWTRequest{})
+	_, err = fx.provider.Sign(ctx, crypto.JWTInternal, crypto.JWTRequest{})
 	assert.True(t, errs.IsCode(err, "subject_invalid_input"), "a token is about someone: %v", err)
 }
 
@@ -655,7 +644,7 @@ func TestJWTAudiencesSessionAndID(t *testing.T) {
 // as it is. A change to any part of it changes every published key, and
 // every token issued before stops verifying.
 func TestJWTExternalKeysAreDerivedFromTheMasterSecret(t *testing.T) {
-	assert.Equal(t, types.KeyPurpose("jwt_external"), types.KeyPurposeJWTExternal, "the purpose string never changes")
+	assert.Equal(t, crypto.KeyPurpose("jwt_external"), crypto.KeyPurposeJWTExternal, "the purpose string never changes")
 
 	fx := newJWTFixture(t, map[int]string{1: secretV1}, 1)
 	published, err := fx.keys.PublicKey(context.Background(), "1")
