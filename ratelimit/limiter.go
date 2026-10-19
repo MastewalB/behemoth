@@ -28,18 +28,52 @@ type DefaultRateLimiter struct {
 	catalog  core.RateLimitCatalog
 	limiters map[core.RateLimitAlgorithm]core.Limiter
 	cfg      core.RateLimitConfig
+	disabled map[string]bool // cfg.Disabled as a set
+	audit    core.AuditConfig
 	tel      *telemetry.Telemetry
 }
 
 // NewDefaultRateLimiter returns the rate limiter of the rules in catalog. It
 // counts attempts in kv when kv can count atomically, as the Redis adapter
 // can, and in the rate_limits table through st otherwise.
-func NewDefaultRateLimiter(catalog core.RateLimitCatalog, kv behemoth.KeyValueStorage, st *store.Store, cfg core.RateLimitConfig, tel *telemetry.Telemetry) (*DefaultRateLimiter, error) {
+//
+// cfg's Limits and Disabled must name declared rules, and each Limit must
+// have a positive Max and Window; anything else is a configuration error.
+// audit says what the event of a refusal records.
+func NewDefaultRateLimiter(catalog core.RateLimitCatalog, kv behemoth.KeyValueStorage, st *store.Store, cfg core.RateLimitConfig, audit core.AuditConfig, tel *telemetry.Telemetry) (*DefaultRateLimiter, error) {
+	const op = "RateLimiter"
+	for name, limit := range cfg.Limits {
+		if !catalog.HasRule(name) {
+			return nil, errs.NewConfigurationError(op, fmt.Sprintf("RateLimitConfig.Limits names %q, which no rule has", name), nil)
+		}
+		if limit.Max <= 0 || limit.Window <= 0 {
+			return nil, errs.NewConfigurationError(op, fmt.Sprintf("RateLimitConfig.Limits[%q] needs a positive Max and Window", name), nil)
+		}
+	}
+	disabled := make(map[string]bool, len(cfg.Disabled))
+	for _, name := range cfg.Disabled {
+		if !catalog.HasRule(name) {
+			return nil, errs.NewConfigurationError(op, fmt.Sprintf("RateLimitConfig.Disabled names %q, which no rule has", name), nil)
+		}
+		disabled[name] = true
+	}
 	counter, err := resolveRateLimitStore(kv, st)
 	if err != nil {
 		return nil, err
 	}
-	return &DefaultRateLimiter{catalog: catalog, limiters: newLimiters(counter), cfg: cfg, tel: telemetry.OrDefault(tel).Named("ratelimit")}, nil
+	return &DefaultRateLimiter{
+		catalog: catalog, limiters: newLimiters(counter), cfg: cfg, disabled: disabled, audit: audit,
+		tel: telemetry.OrDefault(tel).Named("ratelimit"),
+	}, nil
+}
+
+// limitOf returns the limit rule name is checked against: the one
+// RateLimitConfig.Limits sets for it, or the declared one.
+func (rl *DefaultRateLimiter) limitOf(name string, declared core.Limit) core.Limit {
+	if limit, ok := rl.cfg.Limits[name]; ok {
+		return limit
+	}
+	return declared
 }
 
 // knownAlgorithms are the algorithms a rule may name; newLimiters builds a
@@ -110,7 +144,10 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point core.Hoo
 
 	rules := rl.catalog.RulesForHook(point)
 	for _, rule := range rules {
-		// A rule that has nothing to count this call per (no request for a
+		if rl.disabled[rule.Name] {
+			continue
+		}
+		// A rule that has nothing to count this call per (no address for a
 		// rule per address, no email on the sign-in) is skipped, not counted
 		// under an empty key that every such caller would share.
 		ruleKey, ok := rule.KeyFunc(hctx)
@@ -123,7 +160,8 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point core.Hoo
 		if err != nil {
 			return err
 		}
-		if err := rl.evaluate(ctx, rule.Name, key, "", limiter, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
+		ip := hctx.Caller().Peer().IPAddress
+		if err := rl.evaluate(ctx, rule.Name, key, ip, limiter, rl.limitOf(rule.Name, rule.Limit), rule.Action, rule.LockoutFor); err != nil {
 			return err
 		}
 	}
@@ -132,13 +170,16 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point core.Hoo
 }
 
 func (rl *DefaultRateLimiter) CheckRouteLimit(ctx context.Context, rule core.RouteRateLimitRule, r *http.Request, ipCfg *core.ClientIPConfig) error {
+	if rl.disabled[rule.Name] {
+		return nil // as a rule declared with Disabled: the route has no limit
+	}
 	ip := core.ClientIP(r, ipCfg)
 	key := rule.Name + ":" + rule.KeyFunc(r, ip)
 	limiter, err := rl.limiterFor(rule.Name, rule.Algorithm, rule.Limiter)
 	if err != nil {
 		return err
 	}
-	if err := rl.evaluate(ctx, rule.Name, key, ip, limiter, rule.Limit, rule.Action, rule.LockoutFor); err != nil {
+	if err := rl.evaluate(ctx, rule.Name, key, ip, limiter, rl.limitOf(rule.Name, rule.Limit), rule.Action, rule.LockoutFor); err != nil {
 		return err // *errs.DomainError, CategoryRateLimited; ErrorMapper already maps this to 429 + Retry-After, no body parsing or session lookup ever ran
 	}
 
@@ -192,10 +233,16 @@ func (rl *DefaultRateLimiter) evaluate(
 
 	if !allowed {
 		if rl.tel != nil {
-			rl.tel.RecordAudit(ctx, telemetry.AuditEvent{
+			event := telemetry.AuditEvent{
 				Type: telemetry.AuditRateLimitExceeded, Outcome: telemetry.OutcomeDenied,
 				IPAddress: ip, Metadata: behemoth.M{"rule": name, "key": key},
-			})
+			}
+			if rl.audit.OmitIPAndAgent {
+				// The key of a rule per address is the address.
+				event.IPAddress = ""
+				delete(event.Metadata, "key")
+			}
+			rl.tel.RecordAudit(ctx, event)
 		}
 		return errs.NewRateLimited(name, name, retryAfter)
 	}

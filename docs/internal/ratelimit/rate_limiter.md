@@ -4,7 +4,7 @@ This document explains how rate limiting works: how a rule becomes a check, the 
 
 The code lives in:
 
-- `core/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `Limit`, the rule types, `AtomicIncrementer`, `RateLimiter`
+- `core/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `Limit`, the rule types, `KeyByValues`, `KeyByClientIP`, `RateLimitConfig`, `AtomicIncrementer`, `RateLimiter`
 - `ratelimit/fixed_window.go`: `FixedWindow`, the one algorithm
 - `ratelimit/limiter.go`, `ratelimit/catalog.go`: `DefaultRateLimiter`, `NewDefaultRateLimiter`, `DefaultRateLimitCatalog`, `resolveRateLimitStore`, `dbCounterStore`
 - `engine/init.go`: `CoreDeclareRateLimitRules`
@@ -23,7 +23,8 @@ The code lives in:
 | Fixed-window algorithm (`ratelimit.FixedWindow`) | works |
 | Database counter (`Store.IncrementRateLimit`) | works; used when no key-value storage can count |
 | Redis counter (`RedisAdapter.Increment`) | works; used when Redis is the configured key-value storage |
-| Core rules | two: sign-in and sign-up, each 10 attempts a minute per client address |
+| Core rules | three hook rules per client address: sign-in and sign-up, each 10 attempts a minute per method, and session token issues, 30 a minute |
+| Changing a rule by name (`RateLimitConfig.Limits`, `Disabled`) | works, for route and hook rules |
 | Lockout (`ActionLockout`) | `[Not built]` the catalog rejects a rule that asks for it; see *Lockout is declared and rejected* |
 | Sliding window, token bucket | `[Not built]` |
 | Removal of old database counters | the method exists, nothing schedules it |
@@ -35,10 +36,10 @@ The code lives in:
 A check passes through these steps:
 
 1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
-2. At `Boot`, `NewDefaultRateLimiter` picks the counter storage (`resolveRateLimitStore`) and builds one `Limiter` per algorithm over it (`newLimiters`).
-3. At request time `DefaultRateLimiter` builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.route:1.2.3.4`, and `limiterFor` picks the rule's limiter. A hook rule's `KeyFunc` also returns whether the rule applies; when it does not, the rule is skipped and the steps below don't run for it.
+2. At `Boot`, `NewDefaultRateLimiter` checks the names in `RateLimitConfig.Limits` and `Disabled` against the catalog (`HasRule`), picks the counter storage (`resolveRateLimitStore`), and builds one `Limiter` per algorithm over it (`newLimiters`).
+3. At request time `DefaultRateLimiter` skips a rule `Disabled` names, builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.address:1.2.3.4|emailpassword`, and `limiterFor` picks the rule's limiter. The limit is the one `Limits` sets for the rule, else the declared one (`limitOf`). A hook rule's `KeyFunc` also returns whether the rule applies; when it does not, the rule is skipped and the steps below don't run for it.
 4. `evaluate` calls `limiter.Allow(ctx, key, limit)`.
-5. If the attempt is not allowed, it records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) and returns a `rate_limited` error with a retry-after: the time left in the window. The router answers `429` and sets `Retry-After` to that time in whole seconds, rounded up.
+5. If the attempt is not allowed, it records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) with the rule's name, the counter key, and the client address, and returns a `rate_limited` error with a retry-after: the time left in the window. The router answers `429` and sets `Retry-After` to that time in whole seconds, rounded up. With `AuditConfig.OmitIPAndAgent` the event has neither the address nor the key, which for a rule per address is the address.
 6. If `Allow` itself fails, `RateLimitConfig.FailureMode` decides: `FailOpen` (the default) lets the request through and logs a warning; `FailClosed` rejects it.
 
 Route rules and hook rules differ in one way. For a route, the single most specific matching rule applies. For a hook point, every declared rule is evaluated and all must pass.
@@ -79,29 +80,44 @@ With a limit of 10 a minute, a client's attempts look like this:
 
 ### The core rules
 
-`CoreDeclareRateLimitRules` declares two rules, each 10 attempts a minute keyed by client address:
+`CoreDeclareRateLimitRules` declares three hook rules, keyed by client address with `core.KeyByClientIP`:
 
-| Rule | Constant | Route | What it bounds |
-| --- | --- | --- | --- |
-| `core.signin.route` | `RuleSignInRoute` | `POST /sign-in/email` | password guesses from one client |
-| `core.signup.route` | `RuleSignUpRoute` | `POST /sign-up/email` | accounts created, and passwords hashed, by one client |
+| Rule | Constant | Point | Key | Limit | What it bounds |
+| --- | --- | --- | --- | --- | --- |
+| `core.signin.address` | `RuleSignInAddress` | `auth.signIn.before` | address and method | 10 a minute | password and code guesses from one client, per sign-in method |
+| `core.signup.address` | `RuleSignUpAddress` | `auth.signUp.before` | address and method | 10 a minute | accounts created, and passwords hashed, by one client |
+| `core.session_token.address` | `RuleSessionTokenAddress` | `auth.sessionToken.beforeIssue` | address | 30 a minute | session tokens issued to one client |
 
-The key includes the rule's name, so the two count separately: a client that used up its sign-ins can still sign up. The address is resolved with `RouterConfig.TrustedProxies`, like a session's.
+- **Every call of the flow counts**, whatever reached it: the route, another transport's wrapper, a plugin calling in. The address is the caller's (`identity.Peer.IPAddress`), which the authentication stage resolved with `RouterConfig.TrustedProxies`, like a session's. Code in the process has no address, and is not counted.
+- **The key includes the rule's name**, so the rules count separately: a client that used up its sign-ins can still sign up.
+- **Sign-in counts each method apart.** Every sign-in plugin fires `auth.signIn.before`, and each publishes its name under `hooks.HookValueMethod` first: `emailpassword`, `username`, `magiclink`, `oauth`, `phonenumber`. A client that used up its password attempts can still follow a magic link. Before, each plugin had a route rule on its own sign-in path with the same limit; one rule keyed by method keeps that, and covers a sign-in method added later. Sign-up is keyed the same way, so the sign-up inside an OAuth sign-in counts apart from the email sign-up.
+- **The sign-in rule is keyed by address and not by email** on purpose. A per-account limit lets anyone lock a user out by failing on that user's email. The cost is that an attacker with many addresses is not slowed per account.
+- **The plugins' limits per address follow the same pattern**, with names that end in `.address`, on their flows' before points. `username.available.route` stays a route rule: `Available` fires no hook point. The email verification send rule counts only the sends a caller asks for (`SendVerification` marks them), not the plugin's own sends for a new user, so that a busy address can't leave a new user without a link.
 
-The sign-in rule is keyed by address and not by email on purpose. A per-account limit lets anyone lock a user out by failing on that user's email. The cost is that an attacker with many addresses is not slowed per account. A per-account rule can't be written as a hook rule today: its `KeyFunc` gets the `HookContext` and not the payload, so it can't see the email (see *Limits to know*).
+An application changes any rule by its name, route or hook, with `RateLimitConfig`:
 
-An application replaces a rule with a more specific route rule for the same path, or turns it off with a rule that has `Disabled` set.
+```go
+engine.BootConfig{
+	RateLimit: core.RateLimitConfig{
+		Limits:   map[string]core.Limit{engine.RuleSignInAddress: {Max: 20, Window: time.Minute}},
+		Disabled: []string{engine.RuleSignUpAddress},
+	},
+}
+```
+
+`Boot` fails on a name no rule has and on a limit without a positive `Max` and `Window`. A disabled route rule leaves its routes without a limit, like a rule declared with `Disabled`. A route rule declared with `Disabled`, or a more specific one for the same path, still works for route rules; a hook rule can be changed only through the configuration.
 
 ### What a hook rule can key on
 
-A route rule's `KeyFunc` gets the request and the client address. A hook rule's gets the `HookContext`, because a hook point also fires without a request: from a CLI, a job or another plugin. That is the reason to use one. "Five invite tokens a minute per team" as a route rule covers one path; as a rule on `token.beforeIssue` it covers every caller of `TokenManager.Issue`.
+A route rule's `KeyFunc` gets the request and the client address. A hook rule's gets the `HookContext`, because a hook point also fires without a request: from a CLI, a job, another plugin, or another transport. That is the reason to use one. The caller is on `hctx.Ctx` (`hctx.Caller()`), with the address the transport resolved, which `core.KeyByClientIP` keys on. "Five invite tokens a minute per team" as a route rule covers one path; as a rule on `token.beforeIssue` it covers every caller of `TokenManager.Issue`.
 
 The payload is not passed to `KeyFunc`. The firing site publishes what a rule may count per in `hctx.Values`, before its first dispatch:
 
 | Point | Entry in `Values` | Published by |
 | --- | --- | --- |
-| `auth.signUp.before` | `HookValueEmail`: the email, normalized | `Plugin.SignUp` (`publishEmail`) |
-| `auth.signIn.before` | `HookValueEmail`: the email, normalized | `Plugin.SignIn` (`publishEmail`); `magiclink.Plugin.Verify`, when the token names one |
+| `auth.signUp.before` | `HookValueEmail`: the email, normalized; `HookValueMethod` | `Plugin.SignUp` (`publishEmail`); `oauth.Plugin.Complete`, for the sign-up of a new user |
+| `auth.signIn.before` | `HookValueEmail`: the email, normalized; `HookValueMethod`: the plugin's name | `Plugin.SignIn` (`publishEmail`), `Plugin.SignInWith` (the method and the identifier), `magiclink.Plugin.Verify` (the email, when the token names one), `oauth.Plugin.Complete`, `phonenumber.Plugin.SignInWithCode` |
+| `auth.phoneNumber.beforeSend` | the number, and `purpose` | `phonenumber.Plugin` (`send`) |
 | `auth.magicLink.beforeRequest` | `HookValueEmail`: the email, normalized | `magiclink.Plugin.RequestLink` |
 | `auth.passwordReset.beforeRequest`, `.before` | `HookValueEmail`: the email, normalized | `emailpassword.Plugin.RequestPasswordReset`; `ResetPassword`, when the token names one |
 | `auth.emailVerification.beforeSend`, `.beforeVerify` | `HookValueEmail`: the email, normalized | `emailverification.Plugin` (`sendVerification`, `Verify`) |
@@ -141,7 +157,7 @@ A hook rule's `KeyFunc` returns the key and whether the rule applies to the call
 | `"", true` | counted under `<rule>:`, one count for every caller. This is a limit on the operation as a whole |
 | anything, `false` | skipped; `behemoth.ratelimit.checks{result="skipped"}` counts it |
 
-Two cases need the second value. A rule per client address has no address when the flow runs from a CLI or a job. A rule per email has no email when a sign-in arrives without one. Before the second value existed, both returned `""` and every such caller shared one count, so unrelated callers refused each other.
+Two cases need the second value. A rule per client address has no address when the flow runs from a CLI or a job (`core.KeyByClientIP` returns `false` then). A rule per email has no email when a sign-in arrives without one. Before the second value existed, both returned `""` and every such caller shared one count, so unrelated callers refused each other.
 
 `core.KeyByValues(keys...)` builds the usual `KeyFunc`: the named `Values` entries joined with `|`, and `false` when one is missing or empty. The firing sites cooperate by not publishing an empty value. `publishEmail` removes the entry for a call without an email, and `DefaultTokenManager.issue` removes the subject entry for a token without a subject. They remove it, and don't only skip the write, because the map may hold an entry copied from an enclosing operation that belongs to another call.
 
@@ -284,7 +300,8 @@ These limits apply:
 - **A burst across the window boundary.** A client can make `Max` attempts at the end of one window and `Max` at the start of the next.
 - **Sign-up's limit equals sign-in's.** Sign-ups are rarer than sign-ins, so a lower number would fit; 10 a minute was chosen to match. The password reset routes have rules of their own, declared by the email/password plugin when reset is on.
 - **A deployment without the `rate_limits` table and without Redis is not limited.** The counter fails, and with the default `FailOpen` the request goes through with a Warn line under the `ratelimit` component. `behemoth.ratelimit.checks{result="error"}` counts it.
-- **A hook rule keys on what its point publishes.** `HookRateLimitRule.KeyFunc` receives the `HookContext` and not the payload. Four firing sites publish values for it in `hctx.Values`; see *What a hook rule can key on*. On any other point a rule has the request and whatever an enclosing operation published.
+- **A hook rule keys on what its point publishes.** `HookRateLimitRule.KeyFunc` receives the `HookContext` and not the payload. The firing sites in *What a hook rule can key on* publish values for it in `hctx.Values`. On any other point a rule has the caller and whatever an enclosing operation published.
+- **A hook rule runs after the input is decoded.** A route rule refused a request before its body was read; a hook rule on the flow's before point runs once the wrapper has decoded the body and the flow has started. A flood of requests now costs a decode each, and for the magic link and OAuth completions a token read, before it is refused. Malformed input that a flow refuses before its before point, such as a phone number that does not parse, is not counted.
 - **A skipped hook rule does not limit the call.** That is the point of skipping, and it means a rule attached to a point that never publishes what it reads limits nothing. `result="skipped"` in `behemoth.ratelimit.checks` shows it.
 - **An empty key from a route rule is still one shared count.** Only a hook rule's `KeyFunc` can say it does not apply.
 - **A plugin can't add an algorithm by name.** `knownAlgorithms` is fixed. A rule's own `Limiter` is the extension point.
@@ -297,14 +314,18 @@ These limits apply:
 | Test | File | Covers |
 | --- | --- | --- |
 | `TestFixedWindow` | `ratelimit/fixed_window_test.go` | allowed up to `Max`, refused after, retry-after from the window's end and its caps, a failing counter |
-| `TestRateLimitRulesNameTheirAlgorithm` | `dispatch/dispatcher_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on route and hook rules, also when the rule has its own `Limiter` |
-| `TestRateLimiterMetrics` | `dispatch/dispatcher_test.go` | `evaluate`: the three results, the audit event |
+| `TestRateLimitRulesNameTheirAlgorithm` | `ratelimit/limiter_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on route and hook rules, also when the rule has its own `Limiter` |
+| `TestRateLimiterMetrics` | `ratelimit/limiter_test.go` | `evaluate`: the three results, the audit event |
 | `TestStoreContract/*/RateLimits` | `tests/store/contract_test.go` | the database counter on every backend: concurrent counts, the window's end, the reset |
 | `TestRedisIncrement` | `tests/storage/kv_storage_test.go` | the Redis counter: concurrent counts, the expiry, the reset, a counter without an expiry |
 | `TestHookRateLimitRulesKeyOnPublishedValues` | `tests/plugins/emailpassword_test.go` | hook rules under a real `Boot`, without a request: per email on sign-up and sign-in (normalized, and not moved by a handler's rewrite), per user on session create, per kind and subject on token issue. A sign-in without an email and a token without a subject are not counted |
-| `TestHookRuleIsSkippedWhenItDoesNotApply` | `dispatch/dispatcher_test.go` | `CheckHookLimit`: a rule whose `KeyFunc` returns `false` is skipped and counted as `skipped`, the point's other rules still run, `"", true` is counted |
+| `TestHookRuleIsSkippedWhenItDoesNotApply` | `ratelimit/limiter_test.go` | `CheckHookLimit`: a rule whose `KeyFunc` returns `false` is skipped and counted as `skipped`, the point's other rules still run, `"", true` is counted |
 | `TestKeyByValues` | `core/ratelimit_test.go` | the joined key, and `false` for a missing, nil or empty entry |
-| `TestSignInRouteIsRateLimited` | `tests/plugins/emailpassword_test.go` | both core rules through the router: the 11th attempt is a `429` with `Retry-After`, another address is not affected, the two routes count separately, a refused sign-up creates nothing |
+| `TestKeyByClientIP` | same | the caller's address with the named entries, and `false` for a caller without an address or a missing entry |
+| `TestRateLimitConfigChangesRulesByName` | `ratelimit/limiter_test.go` | `Limits` replaces a hook and a route rule's limit, `Disabled` skips both, an unknown name or a limit that can't count is a configuration error |
+| `TestRateLimitRefusalOmitsTheAddressWhenConfigured` | same | with `AuditConfig.OmitIPAndAgent` the refusal's event has neither the address nor the key |
+| `TestSignInRouteIsRateLimited` | `tests/plugins/emailpassword_test.go` | sign-in and sign-up through the router: the 11th attempt is a `429` with `Retry-After`, another address is not affected, the two flows count separately, a refused sign-up creates nothing |
+| `TestSignInLimitsHoldForEveryTransport` | same | sign-in called with another transport's caller is refused at the 11th attempt, another method counts apart, a system caller is not counted, `Limits` and `Disabled` through `Boot`, an unknown name fails `Boot` |
 
 ---
 
@@ -363,6 +384,20 @@ These limits apply:
 **Decision:** The second value, with `KeyByValues` as the helper that returns `false` for a missing or empty entry, and firing sites that don't publish empty values. The helper matters as much as the signature: an author can still write `return email, true`, and the helper makes the correct form the short one. Route rules keep one return value because they have no such case.
 
 **Revisit if:** a route rule needs to say it does not apply (a rule per session on a path that also serves anonymous requests, for example). The two `KeyFunc` signatures would then be made the same.
+
+### The limits per address are hook rules
+
+**Context:** Core's limits per client address, and each plugin's, were route rules: matched by method and path, and applied by the router. A flow called from anywhere else, such as an application's GraphQL resolver or another transport's wrapper, ran without them. A hook rule could not count per address, because it had no resolved address: only the raw request, without the router's proxy settings.
+
+**Options considered:**
+
+- *Keep the route rules and document that an application exposing a flow itself limits it.* No change. Every wrapper has to repeat the limit, against the guideline that a protection belongs to the operation.
+- *Hook rules on the flows' before points, keyed by the caller's address.* Every call of a flow counts, however it arrived. The authentication stage puts the address on the caller first. A hook rule runs after the input is decoded, where a route rule ran before.
+- *Both.* Two counts for one HTTP request, and the hook rule alone for other transports.
+
+**Decision:** hook rules, with `core.KeyByClientIP`, under names that end in `.address`. The old route rules are removed. A flow without a before point keeps its route rule (`username.available.route`). Sign-in has one core rule keyed by address and method in place of a route rule per plugin, so each method keeps a count of its own. Hook rules are cumulative and can't be overridden by a more specific rule, so `RateLimitConfig.Limits` and `Disabled` change any rule by name.
+
+**Revisit if:** the cost of decoding before the limit matters, such as a flood of large bodies. A route rule with a higher limit in front would bound it.
 
 ### Lockout is declared and rejected
 

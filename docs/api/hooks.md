@@ -458,9 +458,10 @@ ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 
 A hook rate-limit rule works as follows:
 
-- `KeyFunc` gets the `HookContext`, not the payload. It keys on the entries the operation publishes in `hctx.Values` (next section) and on the request.
+- `KeyFunc` gets the `HookContext`, not the payload. It keys on the entries the operation publishes in `hctx.Values` (next section) and on the caller, `hctx.Caller()`, whose address the transport resolved.
 - `KeyFunc` returns the key and whether the rule applies to this call. When it returns `false`, the rule is skipped: nothing is counted and the call is not limited by it.
 - `core.KeyByValues(keys...)` builds a `KeyFunc` from `Values` entries. It joins them with `|`, and returns `false` when one is missing or empty.
+- `core.KeyByClientIP(keys...)` builds a `KeyFunc` from the caller's address, followed by the named `Values` entries. It returns `false` for a caller without an address, such as a CLI or a job, and when an entry is missing.
 - `Limit` allows `Max` attempts per key in each `Window`. The window opens with the first attempt, and the count starts again when it has passed (a fixed window, the only algorithm).
 - Every rule declared on the point is checked, and all must pass.
 - A rejected attempt returns a `rate_limited` error with a retry-after. No handler runs, and the caller can't tell it apart from a before handler stopping the operation.
@@ -476,10 +477,12 @@ These operations put what they were called with in `hctx.Values` before the firs
 
 | Point | Entry | Value |
 | --- | --- | --- |
+| `auth.signUp.before`, `auth.signIn.before` | `hooks.HookValueMethod` | the name of the plugin whose flow runs it: `emailpassword`, `username`, `magiclink`, `oauth`, `phonenumber` |
 | `auth.signUp.before` | `hooks.HookValueEmail` | the email being registered, trimmed and lowercased |
 | `auth.signIn.before` | `hooks.HookValueEmail` | the email being tried, trimmed and lowercased. For a magic link, the email the link was sent to; absent when the token is not valid |
 | `auth.signIn.before`, for a sign-in by username | `username.HookValueUsername` | the username being tried, trimmed and lowercased. No email is published for these sign-ins |
 | `auth.phoneNumber.beforeSend`, `.beforeVerify`, `.beforePasswordReset`, and `auth.signIn.before` for a sign-in by phone number | `phonenumber.HookValuePhoneNumber` | the phone number, in E.164 form. No email is published |
+| `auth.phoneNumber.beforeSend` | `"purpose"` | what the code is for: `verify`, `sign_in`, or `password_reset` |
 | `auth.signIn.before`, for a sign-in through an OAuth provider | `oauth.HookValueProvider` | the id of the provider the request names. No email is published: the provider has not answered yet. A sign-up inside such a sign-in publishes `hooks.HookValueEmail` for `auth.signUp.before`. |
 | `auth.magicLink.beforeRequest` | `hooks.HookValueEmail` | the email a link is requested for, trimmed and lowercased |
 | `auth.passwordReset.beforeRequest`, `.before` | `hooks.HookValueEmail` | the email a reset link is requested for, or the one the link being used was sent to; absent at the reset when the token is not valid |
@@ -501,16 +504,21 @@ ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 })
 ```
 
-A `KeyFunc` of your own says when the rule does not apply. This one counts per client address, and leaves calls from a CLI or a job alone:
+A limit per client address, which leaves calls from a CLI or a job alone:
 
 ```go
+KeyFunc: core.KeyByClientIP(),
+```
+
+A `KeyFunc` of your own says when the rule does not apply. This one counts per client address only the sign-ins of one method:
+
+```go
+byAddress := core.KeyByClientIP()
 KeyFunc: func(hctx *core.HookContext) (string, bool) {
-	if hctx.Request == nil || hctx.Request.Request == nil {
-		return "", false // no HTTP request: nothing to count per
+	if hctx.Values[hooks.HookValueMethod] != "magiclink" {
+		return "", false // another method: this rule does not apply
 	}
-	// The direct peer's address. Behind a proxy, pass your trusted-proxy
-	// configuration instead of an empty one.
-	return core.ClientIP(hctx.Request.Request, &core.ClientIPConfig{}), true
+	return byAddress(hctx)
 },
 ```
 
@@ -518,11 +526,33 @@ Published entries follow these rules:
 
 - **The entry is the value the caller sent.** A before handler that rewrites the payload's email does not change it, so the attempt stays on the count of the email that was typed.
 - **An operation inside another one also sees the outer entries.** A session created by a sign-in has the sign-in's email next to its own user id. A session created by a direct call to `SessionManager.Create` has no email.
-- **The client address is only there for an HTTP request.** `hctx.Request` is nil for a call from a CLI or a job. Key on a published entry when the limit has to hold there too.
+- **The client address is the caller's.** A transport puts it on the context when it authenticates the call: over HTTP, the address resolved with `RouterConfig.TrustedProxies`. A call from a CLI or a job has none. Key on a published entry when the limit has to hold there too.
 - **An entry without a value is not published.** A sign-in without an email has no `HookValueEmail`, and a token without a subject has no `HookValueTokenSubject`. A rule built with `KeyByValues` does not apply to those calls.
 - **A key returned with `true` is counted as it is.** `return "", true` is one count shared by every caller, which is how to write a limit on the operation as a whole. Return `false` when there is nothing to count per.
 - **A skipped rule is counted in the metrics**, as `behemoth.ratelimit.checks` with `result="skipped"`. A rule that is skipped on every call is attached to a point that does not publish what it reads.
 - **A limit per account lets anyone use up an account's attempts** and keep its owner out for the window. The built-in sign-in limit is per client address for that reason. Weigh the two before keying on the email.
+
+### Change a rule by its name
+
+Every rule, behemoth's and the plugins', route and hook, has a name. `BootConfig.RateLimit` changes a rule's limit, or turns the rule off, by that name:
+
+```go
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
+	RateLimit: core.RateLimitConfig{
+		Limits: map[string]core.Limit{
+			engine.RuleSignInAddress: {Max: 20, Window: time.Minute},
+		},
+		Disabled: []string{magiclink.RuleRequestAddress},
+	},
+	// ...
+})
+```
+
+- **The key, the point, and the algorithm stay.** Only the limit changes.
+- **`Boot` fails on a name no rule has**, and on a limit without a positive `Max` and `Window`. A misspelled name is found at startup.
+- **A disabled route rule leaves its routes without a limit.**
+
+Behemoth's own rules are `engine.RuleSignInAddress` and `engine.RuleSignUpAddress`, 10 attempts a minute per client address and method, and `engine.RuleSessionTokenAddress`, 30 a minute per client address. Each plugin's page lists its rules.
 
 ## Audit
 

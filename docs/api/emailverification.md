@@ -270,11 +270,13 @@ The plugin also registers handlers of its own on `data.user.created`, `data.user
 
 | Rule | Limits | Default |
 | --- | --- | --- |
-| `emailverification.RuleSendRoute` | requests to `POST /email/send-verification` per client address | 10 a minute |
-| `emailverification.RuleVerifyRoute` | requests to `POST /email/verify` per client address | 10 a minute |
+| `emailverification.RuleSendAddress` | sends a client asks for (`POST /email/send-verification`, `SendVerification`) per client address | 10 a minute |
+| `emailverification.RuleVerifyAddress` | verify attempts per client address | 10 a minute |
 | `emailverification.RuleSendEmail` | links sent per email | `Options.SendLimit`, 5 per 15 minutes |
 
-With the change flow on there are four more: 10 a minute per client address on each of its three routes (`RuleChangeRoute`, `RuleChangeConfirmRoute`, `RuleChangeRevertRoute`), and `RuleChangeUser`, which allows `Options.ChangeLimit` requests per user (3 an hour) from any caller. Each request mails the current address, and this rule bounds that.
+With the change flow on there are four more: 10 a minute per client address on each of its three flows (`RuleChangeAddress`, `RuleChangeConfirmAddress`, `RuleChangeRevertAddress`), and `RuleChangeUser`, which allows `Options.ChangeLimit` requests per user (3 an hour) from any caller. Each request mails the current address, and this rule bounds that.
+
+The rules are attached to the flows' before points, so they hold however a flow is called. The rule per address on sends counts the sends a client asks for, and not the automatic one for a new user or a changed address. Change a limit, or turn a rule off, by its name with `RateLimitConfig`; see [Hooks](hooks.md#change-a-rule-by-its-name).
 
 The rule per email is attached to `auth.emailVerification.beforeSend`, so it counts every send: the automatic one for a new user, the route, and `SendVerification` from code. From the route it counts requests for unknown addresses too, so a `429` does not show whether the address has an account.
 

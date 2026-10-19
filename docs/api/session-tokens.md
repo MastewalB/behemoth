@@ -57,7 +57,7 @@ The token route requires an active session, sent the way `RouterConfig.Carrier.D
 | no session, an invalid, revoked, or expired one | `401` | `session_missing`, `session_invalid`, `session_revoked`, `session_expired` |
 | a session that waits for a second factor | `401` | `session_pending` |
 | a hook handler rejected the token with a typed error | the error's status | the error's code |
-| more than 30 requests a minute from one address | `429` with `Retry-After` | `rate_limited` |
+| more than 30 requests a minute from one address (`engine.RuleSessionTokenAddress`) | `429` with `Retry-After` | `rate_limited` |
 
 ## The token
 

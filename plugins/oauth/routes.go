@@ -19,13 +19,11 @@ const (
 	PathComplete = "/oauth/complete"
 )
 
-// Names of the rate-limit rules the plugin declares. An application that
-// wants another limit declares a more specific rule, or the same method and
-// path with Disabled set.
-const (
-	RuleBeginRoute    = "oauth.begin.route"    // sign-ins started per client address
-	RuleCompleteRoute = "oauth.complete.route" // completions tried per client address
-)
+// RuleBeginAddress is the name of the rate-limit rule on sign-ins started,
+// per client address. RateLimitConfig.Limits and Disabled change it by name.
+// Completions are sign-ins, which core's core.signin.address counts per
+// client address and method.
+const RuleBeginAddress = "oauth.begin.address"
 
 // Keys of the routes' bodies that are not keys of a hook payload.
 const (

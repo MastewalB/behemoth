@@ -109,6 +109,13 @@ func (c *DefaultRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {
 	return c.routeRules // safe to hand out directly post-freeze
 }
 
+// HasRule implements [core.RateLimitCatalog].
+func (c *DefaultRateLimitCatalog) HasRule(name string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.names[name]
+}
+
 func (c *DefaultRateLimitCatalog) Freeze() { c.mu.Lock(); c.frozen = true; c.mu.Unlock() }
 
 var _ core.RateLimitCatalog = (*DefaultRateLimitCatalog)(nil)

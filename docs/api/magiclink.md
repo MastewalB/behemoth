@@ -165,15 +165,16 @@ Issuing and consuming the token also fire the token manager's points (`token.bef
 
 ## Rate limits
 
-The plugin declares three rules.
+The plugin declares two rules.
 
 | Rule | Limits | Default |
 | --- | --- | --- |
-| `magiclink.RuleRequestRoute` | requests to `POST /sign-in/magic-link` per client address | 10 a minute |
-| `magiclink.RuleVerifyRoute` | requests to `POST /magic-link/verify` per client address | 10 a minute |
+| `magiclink.RuleRequestAddress` | link requests per client address | 10 a minute |
 | `magiclink.RuleRequestEmail` | link requests per email | `Options.RequestLimit`, 5 per 15 minutes |
 
-The rule per email is attached to `auth.magicLink.beforeRequest` and not to the route, so it also holds for `RequestLink` called from code. It keeps one address from being sent link after link. It counts requests for unknown emails too, so a `429` does not show whether the address has an account.
+Verifying a link is a sign-in, which core limits to 10 attempts a minute per client address and sign-in method (`engine.RuleSignInAddress`). The magic link method counts apart from password sign-ins. Change a limit, or turn a rule off, by its name with `RateLimitConfig`; see [Hooks](hooks.md#change-a-rule-by-its-name).
+
+Both rules are attached to `auth.magicLink.beforeRequest` and not to the route, so they also hold for `RequestLink` called from code. It keeps one address from being sent link after link. It counts requests for unknown emails too, so a `429` does not show whether the address has an account.
 
 ## Limits
 

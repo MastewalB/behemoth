@@ -33,7 +33,7 @@ The code lives in:
 | --- | --- |
 | token kind | `core.TokenKindOAuthState`, single use, `Options.StateTTL` (10 minutes by default), database backend |
 | hook points | `auth.oauth.beforeBegin` (before), `.afterBegin` (after), `.beginFailed` (failed). None is audited. |
-| route rules | `oauth.begin.route` and `oauth.complete.route`: 10 a minute per client address |
+| hook rule per address | `oauth.begin.address` on `auth.oauth.beforeBegin`: 10 a minute per client address (`core.KeyByClientIP`). A completion is a sign-in, which core's `core.signin.address` counts per address and method; `Complete` publishes `HookValueMethod` for it, and the sign-up of a new user inherits it |
 
 `Complete` declares no point. It fires core's `auth.signIn.*` points, and `auth.signUp.*` for a user it creates.
 
@@ -103,7 +103,7 @@ Invariants:
 - **The token has no subject.** Nobody is signed in when it is issued. `Store.DeleteUser` and `RevokeAllForSubject` therefore never touch it.
 - **A provider's error does not quote the URL.** The URL holds the state, and the error ends up in a log line.
 
-`[Limit]` The limits per client address are route rules, so `Begin` and `Complete` called from code have none. This is the general gap "A flow called from code skips the per-address limits of its route" in `docs/ongoing.md`. A rule that an application declares on `token.beforeIssue`, `auth.oauth.beforeBegin`, or `auth.signIn.before` does apply.
+The limits per client address are hook rules, so they hold for `Begin` and `Complete` called from any transport whose caller has an address. Code in the process has none and is not counted.
 
 ## Completing a sign-in
 
@@ -171,7 +171,7 @@ Both routes are JSON `POST`s, so the origin check and the refusal of form conten
 | `POST /sign-in/oauth` (`PathBegin`) | `Begin` | `{"authorization_url": ...}`, plus `binding` for a client without cookies, with `Cache-Control: no-store` |
 | `POST /oauth/complete` (`PathComplete`) | `Complete` | `core.WriteSignIn` with `redirect_url` as the extra key |
 
-Each has a route rule per client address, 10 a minute: `oauth.begin.route` and `oauth.complete.route`.
+Each flow is limited per client address on its before point, 10 a minute: `oauth.begin.address` for `Begin`, and core's `core.signin.address` for `Complete`.
 
 ### Where the binding value goes
 

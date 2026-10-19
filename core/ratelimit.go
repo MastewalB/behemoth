@@ -62,6 +62,16 @@ const (
 
 type RateLimitConfig struct {
 	FailureMode FailureMode // default: FailOpen
+
+	// Limits replaces the Limit of the rules it names, route and hook
+	// rules alike, core's and the plugins'. A rule keeps its key, its
+	// algorithm and its point; only the numbers change. Boot fails on a
+	// name no rule has, and on a Limit without a positive Max and Window.
+	Limits map[string]Limit
+	// Disabled names rules that are not checked. A disabled route rule
+	// leaves its routes without a limit, as a rule declared with Disabled
+	// does. Boot fails on a name no rule has.
+	Disabled []string
 }
 
 type RouteRateLimitRule struct {
@@ -90,15 +100,15 @@ type HookRateLimitRule struct {
 	// KeyFunc returns what the rule counts per, and whether the rule applies
 	// to this call. It gets the HookContext and not the payload: it keys on
 	// what the firing site published in hctx.Values before the dispatch (the
-	// email of a sign-in, the kind and subject of a token issue), and on
-	// hctx.Request, which is nil outside an HTTP request. docs/api/hooks.md
-	// lists the published values.
+	// email of a sign-in, the kind and subject of a token issue), and on the
+	// caller (hctx.Caller()), whose address the transport resolved.
+	// docs/api/hooks.md lists the published values.
 	//
 	// When it returns false the rule is skipped for the call and nothing is
 	// counted: a rule per client address has nothing to count for a call
 	// from a CLI. A key returned with true is counted as it is, so "" is one
 	// count shared by every caller. KeyByValues builds a KeyFunc from
-	// Values entries.
+	// Values entries, and KeyByClientIP from the caller's address.
 	KeyFunc    func(hctx *HookContext) (key string, ok bool)
 	Limit      Limit
 	Algorithm  RateLimitAlgorithm // which strategy this rule uses; empty means AlgorithmFixedWindow
@@ -107,6 +117,34 @@ type HookRateLimitRule struct {
 	LockoutFor time.Duration // reserved for ActionLockout, which the catalog rejects (not built); not read
 
 	Owner string // plugin name; same ownership discipline as HookPointDef/TokenKindDef
+}
+
+// KeyByClientIP returns a HookRateLimitRule.KeyFunc that keys on the
+// caller's address (hctx.Caller().Peer().IPAddress), which the transport
+// resolved with the router's proxy settings, followed by the Values entries
+// under keys as KeyByValues joins them. The rule does not apply to a call
+// whose caller has no address, such as code in the process, nor to one in
+// which an entry under keys is missing or empty.
+//
+// It is how a limit per client address counts every call of a flow, over
+// HTTP or another transport, where a route rule counts the requests to one
+// path.
+func KeyByClientIP(keys ...string) func(hctx *HookContext) (string, bool) {
+	byValues := KeyByValues(keys...)
+	return func(hctx *HookContext) (string, bool) {
+		ip := hctx.Caller().Peer().IPAddress
+		if ip == "" {
+			return "", false
+		}
+		if len(keys) == 0 {
+			return ip, true
+		}
+		values, ok := byValues(hctx)
+		if !ok {
+			return "", false
+		}
+		return ip + "|" + values, true
+	}
 }
 
 // KeyByValues returns a HookRateLimitRule.KeyFunc that keys on the entries
@@ -133,12 +171,19 @@ func KeyByValues(keys ...string) func(hctx *HookContext) (string, bool) {
 	}
 }
 
+// RateLimitCatalog holds the declared rate-limit rules: hook rules by the
+// point they guard, and route rules. Plugins declare into it at Prepare,
+// and the rate limiter reads it.
 type RateLimitCatalog interface {
 	DeclareHookRateLimitRule(rule HookRateLimitRule) error
 	RulesForHook(point HookPoint) []HookRateLimitRule
 
 	DeclareRouteRateLimitRule(rule RouteRateLimitRule) error
 	RulesForRoute() []RouteRateLimitRule
+
+	// HasRule reports whether a hook or a route rule is declared under
+	// name. Boot checks RateLimitConfig's names with it.
+	HasRule(name string) bool
 }
 
 func SplitPath(p string) []string {

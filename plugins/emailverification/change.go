@@ -96,10 +96,10 @@ const (
 
 // Names of the flow's rate-limit rules.
 const (
-	RuleChangeRoute        = "emailverification.change.route"         // change requests per client address
-	RuleChangeConfirmRoute = "emailverification.change.confirm.route" // confirm attempts per client address
-	RuleChangeRevertRoute  = "emailverification.change.revert.route"  // revert attempts per client address
-	RuleChangeUser         = "emailverification.change.user"          // change requests per user, from any caller
+	RuleChangeAddress        = "emailverification.change.address"         // change requests per client address
+	RuleChangeConfirmAddress = "emailverification.change.confirm.address" // confirm attempts per client address
+	RuleChangeRevertAddress  = "emailverification.change.revert.address"  // revert attempts per client address
+	RuleChangeUser           = "emailverification.change.user"            // change requests per user, from any caller
 )
 
 // Paths of the flow's routes, below the router's base path.
@@ -235,7 +235,7 @@ func (p *Plugin) changeEnabled() bool {
 
 // declareChange declares what the flow needs: its two token kinds, nine
 // points and four rate-limit rules.
-func (p *Plugin) declareChange(ic *core.PluginInitContext, byAddress func(*http.Request, string) string) error {
+func (p *Plugin) declareChange(ic *core.PluginInitContext, perAddress core.Limit) error {
 	for _, def := range []core.TokenKindDef{
 		{Kind: TokenKindEmailChange, SingleUse: true, DefaultTTL: p.opts.ChangeTTL, Backend: core.TokenBackendDB},
 		{Kind: TokenKindEmailChangeRevert, SingleUse: true, DefaultTTL: p.opts.RevertTTL, Backend: core.TokenBackendDB},
@@ -261,22 +261,19 @@ func (p *Plugin) declareChange(ic *core.PluginInitContext, byAddress func(*http.
 		}
 	}
 
-	perMinute := core.Limit{Max: 10, Window: time.Minute}
-	for _, rule := range []core.RouteRateLimitRule{
-		{Name: RuleChangeRoute, Method: http.MethodPost, Path: PathChange, KeyFunc: byAddress, Limit: perMinute},
-		{Name: RuleChangeConfirmRoute, Method: http.MethodPost, Path: PathChangeConfirm, KeyFunc: byAddress, Limit: perMinute},
-		{Name: RuleChangeRevertRoute, Method: http.MethodPost, Path: PathChangeRevert, KeyFunc: byAddress, Limit: perMinute},
+	// Per client address on each flow's before point. Per user on the
+	// request: every request mails the current address, whoever makes it.
+	for _, rule := range []core.HookRateLimitRule{
+		{Name: RuleChangeAddress, Point: HookChangeRequestBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+		{Name: RuleChangeConfirmAddress, Point: HookChangeConfirmBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+		{Name: RuleChangeRevertAddress, Point: HookChangeRevertBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+		{Name: RuleChangeUser, Point: HookChangeRequestBefore, KeyFunc: core.KeyByValues(hooks.HookValueUserID), Limit: p.opts.ChangeLimit},
 	} {
-		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
+		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
 			return err
 		}
 	}
-	// Per user on the request itself: every request mails the current
-	// address, whoever makes it.
-	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
-		Name: RuleChangeUser, Point: HookChangeRequestBefore,
-		KeyFunc: core.KeyByValues(hooks.HookValueUserID), Limit: p.opts.ChangeLimit,
-	})
+	return nil
 }
 
 // initChange checks the flow's options and wraps its three flows.

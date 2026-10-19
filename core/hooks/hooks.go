@@ -55,6 +55,12 @@ const (
 	HookValueState     = "state"
 	HookValueReason    = "reason"
 	HookValueEmail     = "email"
+	// HookValueMethod is how a sign-in or a sign-up is done: the name of
+	// the plugin whose flow runs it, such as "emailpassword" or
+	// "magiclink". Every sign-in and sign-up flow publishes it in the
+	// operation's Values before auth.signIn.before and auth.signUp.before,
+	// so a rate-limit rule there can count each method apart.
+	HookValueMethod = "method"
 
 	HookValueTokenID      = "tokenID"
 	HookValueTokenKind    = "kind"

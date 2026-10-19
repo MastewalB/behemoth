@@ -54,13 +54,12 @@ const (
 	HookRequestFailed core.HookPoint = "auth.magicLink.requestFailed"
 )
 
-// Names of the rate-limit rules the plugin declares. An application that
-// wants another limit declares a more specific rule, or for the route rules
-// the same method and path with Disabled set.
+// Names of the rate-limit rules the plugin declares. RateLimitConfig.Limits
+// and Disabled change them by name. Verify attempts are sign-ins, which
+// core's core.signin.address counts per client address and method.
 const (
-	RuleRequestRoute = "magiclink.request.route" // link requests per client address
-	RuleVerifyRoute  = "magiclink.verify.route"  // verify attempts per client address
-	RuleRequestEmail = "magiclink.request.email" // link requests per email, from any caller
+	RuleRequestAddress = "magiclink.request.address" // link requests per client address
+	RuleRequestEmail   = "magiclink.request.email"   // link requests per email, from any caller
 )
 
 // Paths of the plugin's routes, below the router's base path.
@@ -303,24 +302,20 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 		}
 	}
 
-	// Per address on the routes, like core's sign-in rule: it slows one
-	// client down and can't be used to keep another one out.
-	byAddress := func(_ *http.Request, ip string) string { return ip }
-	for _, rule := range []core.RouteRateLimitRule{
-		{Name: RuleRequestRoute, Method: http.MethodPost, Path: PathRequest, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
-		{Name: RuleVerifyRoute, Method: http.MethodPost, Path: PathVerify, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
+	// Per client address, like core's sign-in rule: it slows one client
+	// down and can't be used to keep another one out. Per email, so that a
+	// mailbox is not flooded; it counts requests for unknown emails too, and
+	// so answers the same for both. Both are on the request's before point,
+	// so they hold for RequestLink called from any transport.
+	for _, rule := range []core.HookRateLimitRule{
+		{Name: RuleRequestAddress, Point: HookRequestBefore, KeyFunc: core.KeyByClientIP(), Limit: core.Limit{Max: 10, Window: time.Minute}},
+		{Name: RuleRequestEmail, Point: HookRequestBefore, KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.RequestLimit},
 	} {
-		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
+		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
 			return err
 		}
 	}
-	// Per email on the request itself, so it also holds for RequestLink
-	// called from code. It counts requests for unknown emails too, and so
-	// answers the same for both.
-	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
-		Name: RuleRequestEmail, Point: HookRequestBefore,
-		KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.RequestLimit,
-	})
+	return nil
 }
 
 // Register implements [core.Plugin]. The plugin attaches no handlers to
@@ -528,6 +523,7 @@ func (p *Plugin) Verify(ctx context.Context, rawToken string) (*VerifyResult, er
 		return nil, err
 	}
 	publishEmail(hctx, in.email)
+	hctx.Values[hooks.HookValueMethod] = PluginName // core's per-address limit counts each method apart
 
 	result, err := p.verify(hctx, in)
 	if err != nil {

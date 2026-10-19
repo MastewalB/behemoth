@@ -9,7 +9,7 @@ It rests on two core components that were built for it: the SMS sender ([`../mai
 | `core.Plugin` method | Result | Why |
 | --- | --- | --- |
 | `Meta` | name `phonenumber`, a dependency on `emailpassword`, no mount path | the password is that plugin's |
-| `Declare` | the `phone_number` column, six points (nine with reset), a route rule per route and one hook rule per number | codes are core's, so no table and no token kind |
+| `Declare` | the `phone_number` column, six points (nine with reset), a hook rule per address on each flow's before point and one per number | codes are core's, so no table and no token kind |
 | `Register` | handlers on `data.user.beforeCreate` and `data.user.beforeUpdate` | only the plugin's flows may set a number |
 | `Init` | checks the options, requires an SMS sender, wraps three flows with `WithLifecycle` | |
 | `Routes` | send, verify, sign-in, and the two reset routes with `Options.PasswordReset` | |
@@ -125,7 +125,7 @@ These limits apply:
 - `[Not built]` National number formats. `Parse` accepts E.164 only; converting needs the caller's country and a numbering-plan library, which by the guidelines is a module of its own.
 - `[Not built]` A notice by text message when a number changes or a password is reset. A number change sends nothing to the old number.
 - `[Limit]` A request for a number that has an account does more work than one for a number that has none (a code write). `docs/ongoing.md` has the entry it shares with the link plugins.
-- `[Limit]` The per-address limits are route rules, so the flows called from code have only the per-number limit.
+- The per-address limits are hook rules (`core.KeyByClientIP`), so they hold for the flows called from any transport whose caller has an address. The two send rules share `auth.phoneNumber.beforeSend`: `send` publishes the purpose in `Values`, and `phonenumber.reset_request.address` counts the sends of a password reset while `phonenumber.send.address` counts the others, as the two routes did. A sign-in, by code or by password, is counted by core's `core.signin.address` under the method `phonenumber`.
 
 ## Design decisions
 

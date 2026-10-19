@@ -159,10 +159,9 @@ It registers three handlers: on `auth.signUp.before`, `data.user.beforeCreate`, 
 
 | Rule | Limits | Default |
 | --- | --- | --- |
-| `username.RuleSignInRoute` | requests to `POST /sign-in/username` per client address | 10 a minute |
 | `username.RuleAvailableRoute` | requests to `POST /username/available` per client address, declared with `AvailabilityRoute` | 30 a minute |
 
-Core's rule for `POST /sign-in/email` does not cover this route, so the two count separately.
+A sign-in by username is limited by core to 10 attempts a minute per client address and sign-in method (`engine.RuleSignInAddress`). The `username` method counts apart from sign-in by email, and the limit holds for `SignIn` called from your own code too. `Available` fires no hook point, so its limit is a route rule and holds for the route only. Change a limit, or turn a rule off, by its name with `RateLimitConfig`; see [Hooks](hooks.md#change-a-rule-by-its-name).
 
 A sign-in by username publishes the username under `username.HookValueUsername` and publishes no email. A rule of yours on `auth.signIn.before` that counts per email does not count these sign-ins. To limit attempts per account, add a rule per username next to it:
 
