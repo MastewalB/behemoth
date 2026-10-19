@@ -5,7 +5,7 @@ import (
 	"sort"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // Declared is everything an application declares for migrations to converge

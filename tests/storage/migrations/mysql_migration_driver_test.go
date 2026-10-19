@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/migration"
+	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/storage/adapters/mysql"
-	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

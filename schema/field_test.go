@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 type plan string

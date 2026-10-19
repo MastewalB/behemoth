@@ -12,7 +12,7 @@ import (
 
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // mysqlTypeMapping is the reverse (native -> canonical) type mapping. Native

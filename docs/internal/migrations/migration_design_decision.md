@@ -23,7 +23,7 @@ Behemoth might provide tool-specific generation (for goose or golang-migrate for
 
 | Package | Holds |
 | --- | --- |
-| `types/schema` | The declaration vocabulary shared across packages: `schema.Table`, `Column`, `Index`, `ForeignKey`, `ColumnOverride`, the `ColumnType` and `FK*` action constants, the contribution types, and `schema.Registry` (`DefaultRegistry`, `NewRegistry`). `[Convention, important]` It must never import `types`: it sits below it so `PluginInitContext` can carry a registry without an import cycle. |
+| `schema` | The declaration vocabulary shared across packages: `schema.Table`, `Column`, `Index`, `ForeignKey`, `ColumnOverride`, the `ColumnType` and `FK*` action constants, the contribution types, and `schema.Registry` (`DefaultRegistry`, `NewRegistry`). `[Convention, important]` It must never import `types`: it sits below it so `PluginInitContext` can carry a registry without an import cycle. |
 | `migration` | Everything about migrating: operations, `Migration`, `MigrationConfig`, `CustomMigration`, introspection/diff, planning, resolution, generation, the runner, `BuildSchemaResolverTable`, the driver capability interfaces below, and `Backend` with `Generate` and `Migrate`, which bundle those capabilities and pick the entry point by path (see *Entry points*). |
 | `storage/adapters/postgres`, `storage/adapters/sqlite`, `storage/adapters/mysql`, `storage/adapters/sqlserver` | One module per database, each holding the `behemoth.Database` adapter **and** the migration driver, built with the same `SchemaResolver` so application queries and migrations agree on physical names. SQLite is its own module so only applications using it link `go-sqlite3` (and therefore cgo). The Postgres module also has `MigrationBackend`, which returns both as one `migration.Backend`. |
 | `cli`, `cmd/behemoth` | The command line: the commands as a library an application links, and the launcher that builds that link for it. Described in [`cli.md`](cli.md). |
@@ -1153,7 +1153,7 @@ Declaration works as follows:
 	- no operation ID is used by two different custom migrations
 	- no operation ID equals a custom migration `Name` (both are node identities in the Generation stage graph)
 - These are the checks that need no plan. Collisions with *generated* operation IDs depend on the plan and are checked at Generation.
-- `[Deferred]` **Plugin-declared custom migrations.** `PluginInitContext` lives in `types`, which cannot reference `migration` types without an import cycle. Supporting plugins means moving `SchemaOperation` and `CustomMigration` into `types/schema`, which is deferred until a plugin needs it.
+- `[Deferred]` **Plugin-declared custom migrations.** `PluginInitContext` lives in `types`, which cannot reference `migration` types without an import cycle. Supporting plugins means moving `SchemaOperation` and `CustomMigration` into `schema`, which is deferred until a plugin needs it.
 
 ### Stage 1: introspection and diff
 

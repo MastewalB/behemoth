@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 func TestIsNarrowingChange(t *testing.T) {

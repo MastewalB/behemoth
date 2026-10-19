@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 type Config struct {

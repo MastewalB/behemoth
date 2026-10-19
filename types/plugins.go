@@ -9,8 +9,8 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
-	"github.com/MastewalB/behemoth/types/schema"
 )
 
 type Plugin interface {

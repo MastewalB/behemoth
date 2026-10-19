@@ -9,10 +9,10 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/schema"
 	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
 	"github.com/MastewalB/behemoth/tests/testutils"
 	bmth "github.com/MastewalB/behemoth/types/init"
-	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"

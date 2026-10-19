@@ -164,7 +164,7 @@ type IndexChecker interface {
 }
 ```
 
-It is the same pattern as `behemoth.TransactionChecker`, which `Boot` uses to refuse a standalone MongoDB server. The interface is declared in `types/init` and not in the root package, because it names `schema.Table` and `types/schema` imports the root package.
+It is the same pattern as `behemoth.TransactionChecker`, which `Boot` uses to refuse a standalone MongoDB server. The interface is declared in `types/init` and not in the root package, because it names `schema.Table` and `schema` imports the root package.
 
 Order in `Boot`: the transaction check, then telemetry is resolved, then the index check, then everything else. Nothing has been written at that point.
 

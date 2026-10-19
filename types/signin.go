@@ -71,7 +71,7 @@ func WriteSignIn(rctx *RequestContext, result *SignInResult, extra behemoth.M) e
 	if result.Session.State == models.SessionPending {
 		body[SignInStatusKey] = SignInStatusSecondFactor
 	} else {
-		// The user's public columns, not the model: see PublicView.
+		// The user's public columns, not the model: see schema.PublicView.
 		user, err := rctx.Auth.Public.Of(result.User)
 		if err != nil {
 			return err

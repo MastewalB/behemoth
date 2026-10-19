@@ -1,4 +1,4 @@
-package types
+package schema_test
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // The view of a user has the table's public columns and the contributed
@@ -35,7 +35,7 @@ func TestPublicView(t *testing.T) {
 	if err := registry.Freeze(); err != nil {
 		t.Fatal(err)
 	}
-	view := NewPublicView(registry.All())
+	view := schema.NewPublicView(registry.All())
 
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	user := &models.User{ID: "u1", Email: "ada@example.com", Firstname: "Ada", EmailVerified: true, CreatedAt: at, UpdatedAt: at}

@@ -212,7 +212,7 @@ Each step is one commit. It builds every module and passes the suite: the root m
 | 1 | Delete the files without code. Move `KahnSort` to `utils`, and `Environment` to the root package. | Done |
 | 2 | `errors` becomes `errs`, `Is` becomes `IsCategory`, and the error code constants lose their `ErrorCode` prefix. The two functions that use `errs` as a variable name rename it first. | Done |
 | 3 | `migration/core` becomes `migration`. | Done |
-| 4 | `types/schema` becomes `schema`, and `PublicView` and `NewPublicView` join it. | Not started |
+| 4 | `types/schema` becomes `schema`, and `PublicView` and `NewPublicView` join it. | Done |
 | 5 | `types/cryptotypes` merges into `crypto`, and the crypto aliases go. `Crypto` becomes `crypto.Services`, `OriginValidator` moves to `types`, and `CSRFProtector` goes. The key set route moves to `transport`, so `crypto` imports nothing of `types`. | Not started |
 | 6 | The duplicates go: `types.SessionState`, and the aliases `Token`, `TokenKind`, and `CodeKind`. | Not started |
 | 7 | The implementations leave `types/init` for `dispatch`, `ratelimit` (which takes in `types/ratelimit`), and `messaging`, and the token catalog moves to `transport`. | Not started |

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 )
@@ -52,7 +53,7 @@ type AuthContext struct {
 	// with Public.Of(user) and not with the model, which as JSON carries
 	// every column a plugin contributed to users. Never nil on an
 	// AuthContext Boot returns.
-	Public PublicView
+	Public schema.PublicView
 	// Mailer sends the messages plugins produce (a sign-in link, an email
 	// verification) through the application's MailSender. Never nil on an
 	// AuthContext Boot returns; Mailer.Configured says whether a sender was

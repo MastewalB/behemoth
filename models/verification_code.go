@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // Canonical names of the verification_codes table and its columns.

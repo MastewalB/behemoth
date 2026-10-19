@@ -11,7 +11,7 @@ import "github.com/MastewalB/behemoth"
 // Encoded as JSON, a model has every one of these columns under "extra",
 // whatever its declarer meant a client to see. That encoding is for
 // behemoth's own storage (the session cache keeps sessions this way). A
-// route answers with types.PublicView instead, which leaves out the columns
+// route answers with schema.PublicView instead, which leaves out the columns
 // that are not declared Public.
 type Extension struct {
 	Extra behemoth.M `json:"extra,omitempty"`

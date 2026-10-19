@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/schema"
 )
 
 // Two tables as an application declares them: each with an index, one of
