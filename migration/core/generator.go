@@ -12,8 +12,8 @@ import (
 	"time"
 
 	behemotherr "github.com/MastewalB/behemoth/errors"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/utils"
 )
 
 type DefaultMigrationGenerator struct{}
@@ -41,7 +41,7 @@ func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, p
 	}
 
 	alphabetical := func(a, b string) bool { return a < b } // deterministic default
-	sortedIDs, cyclePath, ok := types.KahnSort(graphMap, alphabetical)
+	sortedIDs, cyclePath, ok := utils.KahnSort(graphMap, alphabetical)
 	if !ok {
 		return nil, behemotherr.NewConfigurationError("MigrationGenerator.Generate",
 			fmt.Sprintf("circular schema operation dependency: %s", strings.Join(cyclePath, " -> ")), nil)

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
 	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
@@ -156,7 +157,7 @@ func cryptoConfig() (crypto.Config, error) {
 
 	return crypto.Config{
 		Secrets:    crypto.StaticSecretSource{Secrets: map[int]string{1: secret}, Current: 1},
-		KeyManager: crypto.KeyManagerConfig{Environment: types.EnvDev},
+		KeyManager: crypto.KeyManagerConfig{Environment: behemoth.EnvDev},
 		Password:   nil, // crypto.DefaultParams
 	}, nil
 }

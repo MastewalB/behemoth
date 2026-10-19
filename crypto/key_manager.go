@@ -18,7 +18,7 @@ import (
 
 type KeyManagerConfig struct {
 	MinSecretBytes int
-	Environment    types.Environment
+	Environment    behemoth.Environment
 }
 
 func (c KeyManagerConfig) withDefaults() KeyManagerConfig {
@@ -114,7 +114,7 @@ func decodeAndValidate(raw map[int]string, current int, cfg KeyManagerConfig) (m
 
 	decoded := make(map[int][]byte, len(raw))
 	for version, value := range raw {
-		if cfg.Environment == types.EnvProduction && (value == "" || value == devDefaultSecret) {
+		if cfg.Environment == behemoth.EnvProduction && (value == "" || value == devDefaultSecret) {
 			return nil, behemotherr.NewConfigurationError("KeyManager.Load",
 				fmt.Sprintf("refusing empty/default secret for version %d in production", version), nil)
 		}
