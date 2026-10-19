@@ -25,6 +25,7 @@ import (
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/types/ratelimit"
 	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/utils"
 )
 
 // PrepareConfig is everything Prepare needs beyond the plugin list. None of
@@ -518,7 +519,7 @@ func logBootSummary(ctx context.Context, log telemetry.Logger, order []string, r
 }
 
 // ResolvePluginOrder builds a dependency DAG from every plugin's declared
-// PluginMeta.Dependencies, resolves it via graph.KahnSort, and returns
+// PluginMeta.Dependencies, resolves it via utils.KahnSort, and returns
 // plugins in an order where every hard dependency precedes its dependant.
 func ResolvePluginOrder(plugins []types.Plugin) ([]string, error) {
 	byName := make(map[string]types.Plugin, len(plugins))
@@ -570,7 +571,7 @@ func ResolvePluginOrder(plugins []types.Plugin) ([]string, error) {
 
 	// Step 4: sort, and report a cycle if one exists
 	alphabetical := func(a, b string) bool { return a < b }
-	order, cyclePath, ok := types.KahnSort(graphMap, alphabetical)
+	order, cyclePath, ok := utils.KahnSort(graphMap, alphabetical)
 	if !ok {
 		return nil, behemotherr.NewConfigurationError("ResolvePluginOrder",
 			fmt.Sprintf("circular plugin dependency: %s", strings.Join(cyclePath, " -> ")), nil)
@@ -860,7 +861,7 @@ func topoSortBucket(point types.HookPoint, bucket []registeredHandler, pluginOrd
 		}
 	}
 
-	sortedNames, cyclePath, ok := types.KahnSort(graphMap, registrationOrder)
+	sortedNames, cyclePath, ok := utils.KahnSort(graphMap, registrationOrder)
 	if !ok {
 		return nil, behemotherr.NewConfigurationError("HookRegistry.Freeze",
 			fmt.Sprintf("point %q: circular handler ordering: %s", point, strings.Join(cyclePath, " -> ")), nil)

@@ -31,6 +31,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/examples/cli/auth"
 	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
@@ -93,6 +94,6 @@ func cryptoConfig() (crypto.Config, error) {
 	}
 	return crypto.Config{
 		Secrets:    crypto.StaticSecretSource{Secrets: map[int]string{1: secret}, Current: 1},
-		KeyManager: crypto.KeyManagerConfig{Environment: types.EnvDev},
+		KeyManager: crypto.KeyManagerConfig{Environment: behemoth.EnvDev},
 	}, nil
 }

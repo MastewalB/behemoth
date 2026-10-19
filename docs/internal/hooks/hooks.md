@@ -17,8 +17,9 @@ The transaction rules of data hooks (what `HookContext.Tx` is bound to, what a r
 
 The code lives in:
 
-- `types/plugins.go`: the public types (`HookPoint`, `HookPhase`, `HookPointDef`, `HookCatalog`, `HookRegistry`, `HookOptions`, `HookContext`, the handler function types, `Dispatcher`, `WithLifecycle`, `KahnSort`)
+- `types/plugins.go`: the public types (`HookPoint`, `HookPhase`, `HookPointDef`, `HookCatalog`, `HookRegistry`, `HookOptions`, `HookContext`, the handler function types, `Dispatcher`, `WithLifecycle`)
 - `types/hooks/hooks.go`: the names of the points core declares and the shared payload keys
+- `utils/graph.go`: `KahnSort`, the topological sort behind plugin order and handler order
 - `types/init/init.go`: the implementations (`DefaultHookCatalog`, `DefaultHookRegistry`, the scoped wrappers, `freezeAllHookChains`, `DefaultDispatcher`) and `Prepare` and `Boot`, which run them
 - `types/init/datahooks.go`: `dataHooks`, the adapter between the store and the dispatcher
 - `store/store.go` and `store/create.go`: `store.Hooks` and the write paths that call it

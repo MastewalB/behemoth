@@ -209,7 +209,7 @@ Each step is one commit. It builds every module and passes the suite: the root m
 
 | Step | Content | Status |
 | --- | --- | --- |
-| 1 | Delete the files without code. Move `KahnSort` to `utils`, and `Environment` to the root package. | Not started |
+| 1 | Delete the files without code. Move `KahnSort` to `utils`, and `Environment` to the root package. | Done |
 | 2 | `errors` becomes `errs`, `Is` becomes `IsCategory`, and the error code constants lose their `ErrorCode` prefix. The two functions that use `errs` as a variable name rename it first. | Not started |
 | 3 | `migration/core` becomes `migration`. | Not started |
 | 4 | `types/schema` becomes `schema`, and `PublicView` and `NewPublicView` join it. | Not started |

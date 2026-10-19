@@ -10,8 +10,8 @@ import (
 	"github.com/MastewalB/behemoth/clause"
 	behemotherr "github.com/MastewalB/behemoth/errors"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/schema"
+	"github.com/MastewalB/behemoth/utils"
 )
 
 type DefaultMigrationRunner struct {
@@ -193,7 +193,7 @@ func (r *DefaultMigrationRunner) Pending(ctx context.Context, onDisk []Migration
 	}
 
 	alphabetical := func(a, b string) bool { return a < b } // alphabetical is chronological here since migration IDs are timestamp/sequence-prefixed
-	sortedIDs, cyclePath, ok := types.KahnSort(graphMap, alphabetical)
+	sortedIDs, cyclePath, ok := utils.KahnSort(graphMap, alphabetical)
 	if !ok {
 		return nil, behemotherr.NewMigrationError("MigrationRunner.Pending", behemotherr.ErrorCodeMigrationDependencyCycle,
 			fmt.Errorf("circular migration dependency: %s", strings.Join(cyclePath, " -> ")))
