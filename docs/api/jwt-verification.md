@@ -113,8 +113,8 @@ All of them have the same public message, so a client is not told which check fa
 
 ## Keys from elsewhere
 
-`NewCachedKeySet` takes any `crypto.KeySource`: a type with `Keys(ctx) ([]types.PublishedKey, error)`, which returns the keys as they are each time it is called. `keysource.JWKSet` is one. Write your own for keys from a file or a key management service.
+`NewCachedKeySet` takes any `crypto.KeySource`: a type with `Keys(ctx) ([]crypto.PublishedKey, error)`, which returns the keys as they are each time it is called. `keysource.JWKSet` is one. Write your own for keys from a file or a key management service.
 
 To read a JWK set you already have, use `crypto.ParseJWKSet`. It returns the keys that can verify a signature, and leaves out the others: symmetric keys, keys for encryption, RSA keys under 2048 bits, keys that carry a private part, and keys whose `alg` does not fit them. `crypto.MarshalJWKSet` writes keys as a JWK set.
 
-`VerifyJWT` takes any `types.KeySet`. Behemoth's own key set is one, and `ac.JWT.Verify` checks Behemoth's tokens with it in the process that issues them.
+`VerifyJWT` takes any `crypto.KeySet`. Behemoth's own key set is one, and `ac.JWT.Verify` checks Behemoth's tokens with it in the process that issues them.

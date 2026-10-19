@@ -13,7 +13,6 @@ import (
 
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,23 +21,23 @@ import (
 // staticKeys is a KeySet with fixed keys. err, when set, is the error of
 // every call: a set that can't get its keys.
 type staticKeys struct {
-	keys []types.PublishedKey
+	keys []crypto.PublishedKey
 	err  error
 }
 
-func (s *staticKeys) PublicKey(_ context.Context, kid string) (types.PublishedKey, error) {
+func (s *staticKeys) PublicKey(_ context.Context, kid string) (crypto.PublishedKey, error) {
 	if s.err != nil {
-		return types.PublishedKey{}, s.err
+		return crypto.PublishedKey{}, s.err
 	}
 	for _, k := range s.keys {
 		if k.KID == kid {
 			return k, nil
 		}
 	}
-	return types.PublishedKey{}, errs.NewJWTError("staticKeys", errs.CodeJWTUnknownKey, nil)
+	return crypto.PublishedKey{}, errs.NewJWTError("staticKeys", errs.CodeJWTUnknownKey, nil)
 }
 
-func (s *staticKeys) PublicKeys(context.Context) ([]types.PublishedKey, error) {
+func (s *staticKeys) PublicKeys(context.Context) ([]crypto.PublishedKey, error) {
 	return s.keys, s.err
 }
 
@@ -63,7 +62,7 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	_, ed, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	f := &verifyFixture{rsa: rsaKey, ec256: newECKey(t, elliptic.P256()), ec384: newECKey(t, elliptic.P384()), ed: ed}
-	f.keys = &staticKeys{keys: []types.PublishedKey{
+	f.keys = &staticKeys{keys: []crypto.PublishedKey{
 		{KID: "rsa", Key: &rsaKey.PublicKey}, // names no algorithm: any of RSA's
 		{KID: "ec", Algorithm: "ES256", Key: &f.ec256.PublicKey},
 		{KID: "ed", Algorithm: "EdDSA", Key: ed.Public()},

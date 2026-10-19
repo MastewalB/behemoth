@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
@@ -20,12 +21,12 @@ const maxCodeLength = 12
 // table does not give the codes away.
 type DefaultCodeManager struct {
 	st     *store.Store
-	crypto types.Crypto
+	crypto crypto.Services
 }
 
 // NewCodeManager builds the default CodeManager.
-func NewCodeManager(st *store.Store, crypto types.Crypto) *DefaultCodeManager {
-	return &DefaultCodeManager{st: st, crypto: crypto}
+func NewCodeManager(st *store.Store, services crypto.Services) *DefaultCodeManager {
+	return &DefaultCodeManager{st: st, crypto: services}
 }
 
 // hashed is what is hashed for a code: the kind and the subject with it, so

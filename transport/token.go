@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -19,7 +20,7 @@ type DefaultTokenManager struct {
 	st      *store.Store
 	kv      behemoth.KeyValueStorage
 	catalog types.TokenCatalog
-	crypto  types.Crypto
+	crypto  crypto.Services
 	cfg     types.TokenConfig
 	disp    types.Dispatcher
 	auth    *types.AuthContext
@@ -33,7 +34,7 @@ func NewDefaultTokenManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
 	catalog types.TokenCatalog,
-	crypto types.Crypto,
+	crypto crypto.Services,
 	dispatcher types.Dispatcher,
 	cfg types.TokenConfig,
 	auth *types.AuthContext,

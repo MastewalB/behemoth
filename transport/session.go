@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
@@ -22,7 +23,7 @@ import (
 type DefaultSessionManager struct {
 	st     *store.Store
 	kv     behemoth.KeyValueStorage
-	crypto types.Crypto
+	crypto crypto.Services
 	cfg    types.SessionConfig
 	disp   types.Dispatcher
 	tel    *telemetry.Telemetry
@@ -43,7 +44,7 @@ func cacheKey(lookupHash string) string { return "session:" + lookupHash }
 func NewSessionManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
-	crypto types.Crypto,
+	crypto crypto.Services,
 	cfg types.SessionConfig,
 	disp types.Dispatcher,
 	tel *telemetry.Telemetry,

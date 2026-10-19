@@ -3,17 +3,14 @@ package crypto
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"strconv"
 	"time"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -41,7 +38,7 @@ type wireClaims struct {
 // payload returns the claims of a new token as they are signed. A map, and
 // not wireClaims, because golang-jwt writes a single audience as an array
 // unless a package-wide setting says otherwise.
-func payload(op string, kind types.JWTKind, cfg types.JWTConfig, req types.JWTRequest) (jwt.MapClaims, error) {
+func payload(op string, kind JWTKind, cfg JWTConfig, req JWTRequest) (jwt.MapClaims, error) {
 	if req.Subject == "" {
 		return nil, errs.NewInvalidInputError(op, "subject", "a token needs a subject", nil)
 	}
@@ -131,8 +128,8 @@ func signWith(op, alg, kid string, claims jwt.MapClaims, sign func([]byte) ([]by
 }
 
 // validate checks the registered claims of an internal token whose
-// signature is valid, and returns them as types.Claims.
-func validate(op string, c *wireClaims, issuer string, audiences []string) (*types.Claims, error) {
+// signature is valid, and returns them as Claims.
+func validate(op string, c *wireClaims, issuer string, audiences []string) (*Claims, error) {
 	opts := []jwt.ParserOption{jwt.WithExpirationRequired()}
 	if issuer != "" {
 		opts = append(opts, jwt.WithIssuer(issuer))
@@ -169,9 +166,9 @@ func checkClaims(op string, v *jwt.Validator, claims jwt.Claims) error {
 	return errs.NewJWTError(op, code, err)
 }
 
-// claimsOf returns the claims of a checked token as types.Claims.
-func claimsOf(c *wireClaims, audiences []string) *types.Claims {
-	out := &types.Claims{Issuer: c.Issuer, Subject: c.Subject, SessionID: c.SessionID, ID: c.ID, Custom: c.Custom}
+// claimsOf returns the claims of a checked token as Claims.
+func claimsOf(c *wireClaims, audiences []string) *Claims {
+	out := &Claims{Issuer: c.Issuer, Subject: c.Subject, SessionID: c.SessionID, ID: c.ID, Custom: c.Custom}
 	// Claims holds one audience: the first configured one the token names.
 	if len(c.Audience) > 0 {
 		out.Audience = c.Audience[0]
@@ -197,13 +194,13 @@ func claimsOf(c *wireClaims, audiences []string) *types.Claims {
 // purpose jwt_sign. Its kid is the key's version, so a token signed before
 // a rotation still verifies.
 type internalJWT struct {
-	signer types.Signer
-	cfg    types.JWTConfig
+	signer Signer
+	cfg    JWTConfig
 }
 
-func (j *internalJWT) sign(req types.JWTRequest) (string, error) {
+func (j *internalJWT) sign(req JWTRequest) (string, error) {
 	const op = "JWT.Sign.Internal"
-	claims, err := payload(op, types.JWTInternal, j.cfg, req)
+	claims, err := payload(op, JWTInternal, j.cfg, req)
 	if err != nil {
 		return "", err
 	}
@@ -218,7 +215,7 @@ func (j *internalJWT) sign(req types.JWTRequest) (string, error) {
 		func(b []byte) ([]byte, error) { return signingKey.Sign(b), nil })
 }
 
-func (j *internalJWT) verify(token string) (*types.Claims, error) {
+func (j *internalJWT) verify(token string) (*Claims, error) {
 	const op = "JWT.Verify.Internal"
 	var c wireClaims
 	p, err := parse(op, token, &c)
@@ -241,19 +238,19 @@ func (j *internalJWT) verify(token string) (*types.Claims, error) {
 	if !ok {
 		return nil, errs.NewJWTError(op, errs.CodeJWTInvalidSignature, nil)
 	}
-	return validate(op, &c, j.cfg.Issuer, j.cfg.Audiences[types.JWTInternal])
+	return validate(op, &c, j.cfg.Issuer, j.cfg.Audiences[JWTInternal])
 }
 
 // externalJWT is signed with the current key of an ExternalKeySet, for
 // other services to verify with the published keys. Its kid is the key's.
 type externalJWT struct {
-	keys types.ExternalKeySet
-	cfg  types.JWTConfig
+	keys ExternalKeySet
+	cfg  JWTConfig
 }
 
-func (j *externalJWT) sign(ctx context.Context, req types.JWTRequest) (string, error) {
+func (j *externalJWT) sign(ctx context.Context, req JWTRequest) (string, error) {
 	const op = "JWT.Sign.External"
-	claims, err := payload(op, types.JWTExternal, j.cfg, req)
+	claims, err := payload(op, JWTExternal, j.cfg, req)
 	if err != nil {
 		return "", err
 	}
@@ -270,9 +267,9 @@ func (j *externalJWT) sign(ctx context.Context, req types.JWTRequest) (string, e
 // and the ones rotated out, which still verify the tokens they signed until
 // those expire. An algorithm no key may have, none and the HMAC ones among
 // them, is refused before the key set is asked.
-func (j *externalJWT) verify(ctx context.Context, token string) (*types.Claims, error) {
+func (j *externalJWT) verify(ctx context.Context, token string) (*Claims, error) {
 	const op = "JWT.Verify.External"
-	audiences := j.cfg.Audiences[types.JWTExternal]
+	audiences := j.cfg.Audiences[JWTExternal]
 	verified, err := VerifyJWT(ctx, token, j.keys, VerifyOptions{Issuers: []string{j.cfg.Issuer}, Audiences: audiences})
 	if err != nil {
 		return nil, err
@@ -287,17 +284,13 @@ func (j *externalJWT) verify(ctx context.Context, token string) (*types.Claims, 
 type JWTProviderImpl struct {
 	internal *internalJWT
 	external *externalJWT // not required
-	cfg      types.JWTConfig
+	cfg      JWTConfig
 }
 
 // NewJWTProvider returns the provider of both kinds of JWT. Internal tokens
 // are signed by signer, external ones by keys. A nil keys leaves external
-// tokens off: Sign and Verify of JWTExternal are then configuration errors,
-// and Routes publishes nothing.
-func NewJWTProvider(signer types.Signer, keys types.ExternalKeySet, cfg types.JWTConfig) *JWTProviderImpl {
-	if cfg.JWKSPath == "" {
-		cfg.JWKSPath = "/.well-known/jwks.json"
-	}
+// tokens off: Sign and Verify of JWTExternal are then configuration errors.
+func NewJWTProvider(signer Signer, keys ExternalKeySet, cfg JWTConfig) *JWTProviderImpl {
 	p := &JWTProviderImpl{internal: &internalJWT{signer: signer, cfg: cfg}, cfg: cfg}
 	if keys != nil {
 		p.external = &externalJWT{keys: keys, cfg: cfg}
@@ -305,13 +298,13 @@ func NewJWTProvider(signer types.Signer, keys types.ExternalKeySet, cfg types.JW
 	return p
 }
 
-// Sign implements [types.JWTProvider]. A request without a subject, or for
+// Sign implements [JWTProvider]. A request without a subject, or for
 // an audience the kind does not list, is a validation error.
-func (p *JWTProviderImpl) Sign(ctx context.Context, kind types.JWTKind, req types.JWTRequest) (string, error) {
+func (p *JWTProviderImpl) Sign(ctx context.Context, kind JWTKind, req JWTRequest) (string, error) {
 	switch kind {
-	case types.JWTInternal:
+	case JWTInternal:
 		return p.internal.sign(req)
-	case types.JWTExternal:
+	case JWTExternal:
 		if p.external == nil {
 			return "", errs.NewConfigurationErrorCode("JWT.Sign", errs.CodeJWTExternalNotConfigured, "external JWTs need a key set")
 		}
@@ -321,49 +314,18 @@ func (p *JWTProviderImpl) Sign(ctx context.Context, kind types.JWTKind, req type
 	}
 }
 
-// Verify implements [types.JWTProvider]. A refused token is a CategoryToken
+// Verify implements [JWTProvider]. A refused token is a CategoryToken
 // error, with one of the codes of errors/jwt.go.
-func (p *JWTProviderImpl) Verify(ctx context.Context, kind types.JWTKind, token string) (*types.Claims, error) {
+func (p *JWTProviderImpl) Verify(ctx context.Context, kind JWTKind, token string) (*Claims, error) {
 	switch kind {
-	case types.JWTInternal:
+	case JWTInternal:
 		return p.internal.verify(token)
-	case types.JWTExternal:
+	case JWTExternal:
 		if p.external == nil {
 			return nil, errs.NewConfigurationErrorCode("JWT.Verify", errs.CodeJWTExternalNotConfigured, "external JWTs need a key set")
 		}
 		return p.external.verify(ctx, token)
 	default:
 		return nil, errs.NewConfigurationErrorCode("JWT.Verify", errs.CodeJWTUnknownKind, "unknown JWT kind")
-	}
-}
-
-// jwksMaxAge is how long a verifier may cache the key set. A key published
-// for a new secret version is found within it.
-const jwksMaxAge = 5 * time.Minute
-
-// HandleJWKS answers with the published keys as a JWK set (RFC 7517), public
-// halves only. A key MarshalJWKSet can't write, such as a private key, is a
-// security error, and nothing is published.
-func (p *JWTProviderImpl) HandleJWKS(rctx *types.RequestContext) error {
-	published, err := p.external.keys.PublicKeys(rctx.Ctx)
-	if err != nil {
-		return err
-	}
-	set, err := MarshalJWKSet(published)
-	if err != nil {
-		return errs.NewSecurityError("JWT.HandleJWKS", errs.CodeJWKSReadFailed, err)
-	}
-	rctx.Response.SetHeader("Cache-Control", fmt.Sprintf("public, max-age=%d", int(jwksMaxAge/time.Second)))
-	return rctx.Response.JSON(http.StatusOK, json.RawMessage(set))
-}
-
-// Routes exposes the JWKS endpoint as a Route. Returns nil when external
-// JWT isn't configured
-func (p *JWTProviderImpl) Routes() []types.Route {
-	if p.external == nil {
-		return nil
-	}
-	return []types.Route{
-		{Method: http.MethodGet, Path: p.cfg.JWKSPath, Handler: p.HandleJWKS},
 	}
 }

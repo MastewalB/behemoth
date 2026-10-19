@@ -5,20 +5,19 @@ import (
 	"crypto/cipher"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 )
 
 type AESGCMEncryptor struct {
-	km  types.KeyManager
-	rnd types.Randomizer
+	km  KeyManager
+	rnd Randomizer
 }
 
-func NewEncryptor(km types.KeyManager, rnd types.Randomizer) *AESGCMEncryptor {
+func NewEncryptor(km KeyManager, rnd Randomizer) *AESGCMEncryptor {
 	return &AESGCMEncryptor{km: km, rnd: rnd}
 }
 
 func (e *AESGCMEncryptor) Encrypt(plaintext []byte) ([]byte, int, error) {
-	key, version, err := e.km.Current(types.KeyPurposeEncryptAtRest)
+	key, version, err := e.km.Current(KeyPurposeEncryptAtRest)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -39,7 +38,7 @@ func (e *AESGCMEncryptor) Encrypt(plaintext []byte) ([]byte, int, error) {
 }
 
 func (e *AESGCMEncryptor) Decrypt(ciphertext []byte, keyVersion int) ([]byte, error) {
-	key, err := e.km.GetByVersion(types.KeyPurposeEncryptAtRest, keyVersion)
+	key, err := e.km.GetByVersion(KeyPurposeEncryptAtRest, keyVersion)
 	if err != nil {
 		return nil, err
 	}

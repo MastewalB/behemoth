@@ -35,10 +35,10 @@ const (
 	reportsAudience = "https://reports.example.com"
 )
 
-func sessionTokenConfig() types.JWTConfig {
-	return types.JWTConfig{
+func sessionTokenConfig() crypto.JWTConfig {
+	return crypto.JWTConfig{
 		Issuer:    tokenIssuer,
-		Audiences: map[types.JWTKind][]string{types.JWTExternal: {apiAudience, reportsAudience}},
+		Audiences: map[crypto.JWTKind][]string{crypto.JWTExternal: {apiAudience, reportsAudience}},
 	}
 }
 
@@ -52,7 +52,7 @@ type tokenApp struct {
 	raw     string
 }
 
-func bootSessionTokens(t *testing.T, jwtCfg types.JWTConfig, hookFn func(reg types.HookRegistry) error, configure ...func(*bmth.BootConfig)) (*tokenApp, error) {
+func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg types.HookRegistry) error, configure ...func(*bmth.BootConfig)) (*tokenApp, error) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "tokens.db"))
@@ -350,7 +350,7 @@ func TestSessionTokenHooks(t *testing.T) {
 // mounted, and the flow is a configuration error. Internal JWTs still work.
 func TestSessionTokensOff(t *testing.T) {
 	ctx := context.Background()
-	app, err := bootSessionTokens(t, types.JWTConfig{}, nil)
+	app, err := bootSessionTokens(t, crypto.JWTConfig{}, nil)
 	require.NoError(t, err)
 	assert.NotContains(t, app.mounted, "/api/auth"+types.PathSessionToken)
 	assert.NotContains(t, app.mounted, "/.well-known/jwks.json")
@@ -358,18 +358,18 @@ func TestSessionTokensOff(t *testing.T) {
 	_, err = app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: app.session})
 	assert.True(t, errs.IsCode(err, errs.CodeJWTExternalNotConfigured), "%v", err)
 
-	token, err := app.ac.JWT.Sign(ctx, types.JWTInternal, types.JWTRequest{Subject: app.user.ID})
+	token, err := app.ac.JWT.Sign(ctx, crypto.JWTInternal, crypto.JWTRequest{Subject: app.user.ID})
 	require.NoError(t, err)
-	_, err = app.ac.JWT.Verify(ctx, types.JWTInternal, token)
+	_, err = app.ac.JWT.Verify(ctx, crypto.JWTInternal, token)
 	assert.NoError(t, err)
 }
 
 // The issuer falls back to the base URL, the lifetime can be set, and a
 // configuration that can't work fails Boot.
 func TestSessionTokenConfiguration(t *testing.T) {
-	audiences := map[types.JWTKind][]string{types.JWTExternal: {apiAudience}}
+	audiences := map[crypto.JWTKind][]string{crypto.JWTExternal: {apiAudience}}
 
-	app, err := bootSessionTokens(t, types.JWTConfig{Audiences: audiences, TTL: map[types.JWTKind]time.Duration{types.JWTExternal: 5 * time.Minute}}, nil,
+	app, err := bootSessionTokens(t, crypto.JWTConfig{Audiences: audiences, TTL: map[crypto.JWTKind]time.Duration{crypto.JWTExternal: 5 * time.Minute}}, nil,
 		func(cfg *bmth.BootConfig) { cfg.Router.BaseURL = tokenIssuer })
 	require.NoError(t, err)
 	issued := app.issue(t, "")
@@ -378,10 +378,10 @@ func TestSessionTokenConfiguration(t *testing.T) {
 	require.NoError(t, err, "the issuer is the base URL")
 	assert.Equal(t, float64(5*60), claims["exp"].(float64)-claims["iat"].(float64))
 
-	for name, cfg := range map[string]types.JWTConfig{
+	for name, cfg := range map[string]crypto.JWTConfig{
 		"no issuer and no base URL": {Audiences: audiences},
-		"an empty audience":         {Issuer: tokenIssuer, Audiences: map[types.JWTKind][]string{types.JWTExternal: {""}}},
-		"a negative lifetime":       {Issuer: tokenIssuer, Audiences: audiences, TTL: map[types.JWTKind]time.Duration{types.JWTExternal: -time.Minute}},
+		"an empty audience":         {Issuer: tokenIssuer, Audiences: map[crypto.JWTKind][]string{crypto.JWTExternal: {""}}},
+		"a negative lifetime":       {Issuer: tokenIssuer, Audiences: audiences, TTL: map[crypto.JWTKind]time.Duration{crypto.JWTExternal: -time.Minute}},
 		"a relative key set path":   {Issuer: tokenIssuer, Audiences: audiences, JWKSPath: "jwks.json"},
 	} {
 		t.Run(name, func(t *testing.T) {

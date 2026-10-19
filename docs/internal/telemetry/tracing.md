@@ -124,7 +124,7 @@ Because the adapter is called with the span's context, a driver's own instrument
 
 ### Passwords
 
-`cryptotypes.PasswordHasher.Hash` and `Verify` take no context, so the hasher cannot start a span that has a parent. The email/password plugin starts the spans around its calls: `hashPassword` for the four `Hash` calls, and inline for `Verify`. The plan placed these spans in `crypto`.
+`crypto.PasswordHasher.Hash` and `Verify` take no context, so the hasher cannot start a span that has a parent. The email/password plugin starts the spans around its calls: `hashPassword` for the four `Hash` calls, and inline for `Verify`. The plan placed these spans in `crypto`.
 
 `[Limit]` Another plugin that hashes a password is not traced unless it does the same. See "PasswordHasher takes no context" in `docs/ongoing.md`.
 

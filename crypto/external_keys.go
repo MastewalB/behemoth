@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // derivedKeySet is the ExternalKeySet whose keys are derived from the master
@@ -16,23 +15,23 @@ import (
 // the version, as a decimal string. Nothing is stored: every replica derives
 // the same keys, and a rotation of the master secret rotates them.
 type derivedKeySet struct {
-	km types.KeyManager
+	km KeyManager
 }
 
 // NewDerivedKeySet returns the key set of external JWTs derived from km's
 // secrets. It publishes a key for every version km holds, so a token stays
 // verifiable as long as its version stays in the secret source.
-func NewDerivedKeySet(km types.KeyManager) types.ExternalKeySet {
+func NewDerivedKeySet(km KeyManager) ExternalKeySet {
 	return &derivedKeySet{km: km}
 }
 
 // algEdDSA is the JWS algorithm of every derived key.
 const algEdDSA = "EdDSA"
 
-// CurrentKey implements [types.ExternalKeySet]. The seed and its version
+// CurrentKey implements [ExternalKeySet]. The seed and its version
 // come from one call, so a rotation can't land between them.
-func (s *derivedKeySet) CurrentKey(context.Context) (types.ExternalSigningKey, error) {
-	seed, version, err := s.km.Current(types.KeyPurposeJWTExternal)
+func (s *derivedKeySet) CurrentKey(context.Context) (ExternalSigningKey, error) {
+	seed, version, err := s.km.Current(KeyPurposeJWTExternal)
 	if err != nil {
 		return nil, err
 	}
@@ -42,21 +41,21 @@ func (s *derivedKeySet) CurrentKey(context.Context) (types.ExternalSigningKey, e
 	return &derivedSigningKey{kid: strconv.Itoa(version), key: ed25519.NewKeyFromSeed(seed)}, nil
 }
 
-// PublicKey implements [types.ExternalKeySet]. A kid that is not the version
+// PublicKey implements [ExternalKeySet]. A kid that is not the version
 // of a secret the manager holds is a refused token.
-func (s *derivedKeySet) PublicKey(_ context.Context, kid string) (types.PublishedKey, error) {
+func (s *derivedKeySet) PublicKey(_ context.Context, kid string) (PublishedKey, error) {
 	const op = "ExternalKeySet.PublicKey"
 	version, err := strconv.Atoi(kid)
 	if err != nil || strconv.Itoa(version) != kid || !slices.Contains(s.km.Versions(), version) {
-		return types.PublishedKey{}, errs.NewJWTError(op, errs.CodeJWTUnknownKey, err)
+		return PublishedKey{}, errs.NewJWTError(op, errs.CodeJWTUnknownKey, err)
 	}
 	return s.publicKey(version)
 }
 
-// PublicKeys implements [types.ExternalKeySet], in ascending versions.
-func (s *derivedKeySet) PublicKeys(context.Context) ([]types.PublishedKey, error) {
+// PublicKeys implements [ExternalKeySet], in ascending versions.
+func (s *derivedKeySet) PublicKeys(context.Context) ([]PublishedKey, error) {
 	versions := s.km.Versions()
-	keys := make([]types.PublishedKey, 0, len(versions))
+	keys := make([]PublishedKey, 0, len(versions))
 	for _, version := range versions {
 		key, err := s.publicKey(version)
 		if err != nil {
@@ -67,12 +66,12 @@ func (s *derivedKeySet) PublicKeys(context.Context) ([]types.PublishedKey, error
 	return keys, nil
 }
 
-func (s *derivedKeySet) publicKey(version int) (types.PublishedKey, error) {
-	seed, err := s.km.GetByVersion(types.KeyPurposeJWTExternal, version)
+func (s *derivedKeySet) publicKey(version int) (PublishedKey, error) {
+	seed, err := s.km.GetByVersion(KeyPurposeJWTExternal, version)
 	if err != nil {
-		return types.PublishedKey{}, err
+		return PublishedKey{}, err
 	}
-	return types.PublishedKey{
+	return PublishedKey{
 		KID: strconv.Itoa(version), Algorithm: algEdDSA,
 		Key: ed25519.NewKeyFromSeed(seed).Public(),
 	}, nil

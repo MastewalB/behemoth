@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/outbound"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // Kinds of the providers that ship with the plugin (ProviderConfig.Kind).
@@ -56,7 +56,7 @@ type ProviderConfig struct {
 	// without a restart. Its current secret is the one used. Required for
 	// KindGoogle and KindGitHub. Nil for KindOIDC means a public client,
 	// which authenticates with PKCE alone.
-	ClientSecret types.SecretSource
+	ClientSecret crypto.SecretSource
 	// Issuer is the issuer of a KindOIDC provider, such as
 	// "https://login.example.com". Required for KindOIDC: https, or http
 	// on a loopback address, and exactly the issuer the discovery document

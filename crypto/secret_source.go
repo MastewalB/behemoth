@@ -2,8 +2,6 @@ package crypto
 
 import (
 	"context"
-
-	"github.com/MastewalB/behemoth/types"
 )
 
 // StaticSecretSource serves a fixed set of hex-encoded secrets, keyed by
@@ -18,4 +16,4 @@ func (s StaticSecretSource) Load(context.Context) (map[int]string, int, error) {
 	return s.Secrets, s.Current, nil
 }
 
-var _ types.SecretSource = StaticSecretSource{}
+var _ SecretSource = StaticSecretSource{}

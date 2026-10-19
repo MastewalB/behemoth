@@ -7,7 +7,7 @@ The code lives in:
 - `models/`: one file per model, plus `schema.go` (table declarations) and `extension.go` (contributed columns)
 - `store/`: the typed operations on those models; `seal.go` holds the at-rest encryption
 - `types/init/init.go`: `CoreDeclareSchema`, which declares the tables, and `Boot`, which builds the store
-- `types/cryptotypes/`: the crypto contracts the store uses (`Encryptor`)
+- `crypto/contracts.go`: the crypto contracts the store uses (`Encryptor`)
 
 The rate limiter that writes `rate_limits` is described in [`../ratelimit/rate_limiter.md`](../ratelimit/rate_limiter.md).
 

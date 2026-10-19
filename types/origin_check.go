@@ -33,7 +33,7 @@ const (
 //
 // RefuseFormContentTypes is the second layer Boot installs next to it.
 //
-// Not built: a CSRF token (CSRFProtector has no implementation), a Referer
+// Not built: a CSRF token, a Referer
 // fallback, and X-Forwarded-Host for an application that leaves BaseURL
 // unset behind a proxy.
 type OriginCheck struct {

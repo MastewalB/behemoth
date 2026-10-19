@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -21,7 +22,7 @@ type AuthContext struct {
 	// type: store never imports types, so no interface is needed to break
 	// an import cycle.
 	Store          *store.Store
-	Crypto         Crypto
+	Crypto         crypto.Services
 	SessionManager SessionManager
 	// SessionConfig is BootConfig.Session with its defaults applied: the
 	// settings the session manager runs with. A route that hands the client
@@ -35,7 +36,7 @@ type AuthContext struct {
 	// HMAC key, external ones with keys derived from the master secret
 	// (ADR-0002). Never nil on an AuthContext Boot returns. External tokens
 	// are on when BootConfig.JWT names an external audience.
-	JWT JWTProvider
+	JWT crypto.JWTProvider
 	// SessionTokens exchanges a session for a session token, a short-lived
 	// external JWT for other services. Never nil on an AuthContext Boot
 	// returns; with external tokens off, Issue is a configuration error.

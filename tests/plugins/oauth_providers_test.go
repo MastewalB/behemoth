@@ -162,7 +162,7 @@ func (s *rotatingSecret) Load(context.Context) (map[int]string, int, error) {
 	return s.secrets, s.current, nil
 }
 
-func secretOf(value string) types.SecretSource {
+func secretOf(value string) crypto.SecretSource {
 	return crypto.StaticSecretSource{Secrets: map[int]string{1: value}, Current: 1}
 }
 

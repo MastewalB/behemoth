@@ -209,7 +209,7 @@ type BootConfig struct {
 	// (Audiences[JWTExternal]) turns session tokens on: POST /session/token
 	// and the key set route at JWKSPath are mounted. An empty Issuer is
 	// RouterConfig.BaseURL. Zero value = session tokens off.
-	JWT types.JWTConfig
+	JWT crypto.JWTConfig
 
 	// Mail gives behemoth the application's mail sender, which plugins
 	// that send messages need (magic link, email verification). Zero value
@@ -407,7 +407,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err := jwtCfg.Validate(); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
-	var externalKeys types.ExternalKeySet
+	var externalKeys crypto.ExternalKeySet
 	if jwtCfg.ExternalEnabled() {
 		externalKeys = crypto.NewDerivedKeySet(cryptoSuite.Keys)
 	}
@@ -448,7 +448,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err := router.Mount(coreOwner, "", sessionTokens.Routes()); err != nil {
 		return nil, err
 	}
-	if err := router.MountAbsolute(coreOwner, jwtProvider.Routes()...); err != nil {
+	if err := router.MountAbsolute(coreOwner, transport.KeySetRoutes(externalKeys, jwtCfg.JWKSPath)...); err != nil {
 		return nil, err
 	}
 

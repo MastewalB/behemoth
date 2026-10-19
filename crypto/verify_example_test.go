@@ -12,7 +12,6 @@ import (
 
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/keysource"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -22,7 +21,7 @@ func ExampleVerifyJWT() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	set, err := crypto.MarshalJWKSet([]types.PublishedKey{{KID: "1", Algorithm: "EdDSA", Key: public}})
+	set, err := crypto.MarshalJWKSet([]crypto.PublishedKey{{KID: "1", Algorithm: "EdDSA", Key: public}})
 	if err != nil {
 		log.Fatal(err)
 	}

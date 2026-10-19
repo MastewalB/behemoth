@@ -9,7 +9,7 @@ The code it refers to lives in:
 - `types/init/init.go`: `Prepare`, `Boot`, `BootConfig`, `PrepareConfig`
 - `plugins/*`: each plugin's `Options`, `New`, and `Init`
 - `types/mail.go`: `MailSender`, `MailMessage`
-- `types/cryptotypes/cryptotypes.go`, `crypto/`: `SecretSource`, `WatchableSecretSource`, `PollingWatcher`
+- `crypto/`: `SecretSource`, `WatchableSecretSource`, `PollingWatcher`
 - `types/init/mailer.go`: `DefaultMailer`, the one component with background workers
 - `store/rate_limits.go`, `store/audit.go`: the purges
 

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // KeySource gives a key set its keys: fetched over the network, read from a
@@ -17,7 +16,7 @@ import (
 type KeySource interface {
 	// Keys returns the keys of the set. An error is a failure of the
 	// system, never a refused token.
-	Keys(ctx context.Context) ([]types.PublishedKey, error)
+	Keys(ctx context.Context) ([]PublishedKey, error)
 }
 
 // Defaults of CacheOptions.
@@ -98,13 +97,13 @@ type CachedKeySet struct {
 	opts CacheOptions
 
 	mu        sync.Mutex
-	keys      []types.PublishedKey
+	keys      []PublishedKey
 	fetchedAt time.Time // the last fetch that succeeded; zero before the first
 	triedAt   time.Time // the last fetch, whatever its result
 	lastErr   error     // the error of the last fetch; nil when it succeeded
 }
 
-var _ types.KeySet = (*CachedKeySet)(nil)
+var _ KeySet = (*CachedKeySet)(nil)
 
 // NewCachedKeySet returns a key set over src with opts. It fetches nothing
 // yet: the first call that needs a key does. A nil src and options that
@@ -120,32 +119,32 @@ func NewCachedKeySet(src KeySource, opts CacheOptions) (*CachedKeySet, error) {
 	return &CachedKeySet{src: src, opts: opts.withDefaults()}, nil
 }
 
-// PublicKey implements [types.KeySet]. A kid the keys lack makes the set
+// PublicKey implements [KeySet]. A kid the keys lack makes the set
 // fetch them again, unless the last fetch was less than RefetchInterval
 // ago. A kid they still lack is a refused token, with
 // ErrorCodeJWTUnknownKey.
-func (s *CachedKeySet) PublicKey(ctx context.Context, kid string) (types.PublishedKey, error) {
+func (s *CachedKeySet) PublicKey(ctx context.Context, kid string) (PublishedKey, error) {
 	const op = "CachedKeySet.PublicKey"
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.refresh(ctx, false); err != nil {
-		return types.PublishedKey{}, err
+		return PublishedKey{}, err
 	}
 	if key, ok := s.lookup(kid); ok {
 		return key, nil
 	}
 	if err := s.refresh(ctx, true); err != nil {
-		return types.PublishedKey{}, err
+		return PublishedKey{}, err
 	}
 	if key, ok := s.lookup(kid); ok {
 		return key, nil
 	}
-	return types.PublishedKey{}, errs.NewJWTError(op, errs.CodeJWTUnknownKey, nil)
+	return PublishedKey{}, errs.NewJWTError(op, errs.CodeJWTUnknownKey, nil)
 }
 
-// PublicKeys implements [types.KeySet]. It returns a copy of the keys,
+// PublicKeys implements [KeySet]. It returns a copy of the keys,
 // fetched first when there are none yet or they are older than the TTL.
-func (s *CachedKeySet) PublicKeys(ctx context.Context) ([]types.PublishedKey, error) {
+func (s *CachedKeySet) PublicKeys(ctx context.Context) ([]PublishedKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.refresh(ctx, false); err != nil {
@@ -157,13 +156,13 @@ func (s *CachedKeySet) PublicKeys(ctx context.Context) ([]types.PublishedKey, er
 // lookup returns the first key with kid. A set may hold two keys of
 // different types under one kid (RFC 7517, section 4.5); VerifyJWT looks
 // for the other one in PublicKeys when the first does not fit the token.
-func (s *CachedKeySet) lookup(kid string) (types.PublishedKey, bool) {
+func (s *CachedKeySet) lookup(kid string) (PublishedKey, bool) {
 	for _, key := range s.keys {
 		if key.KID == kid {
 			return key, true
 		}
 	}
-	return types.PublishedKey{}, false
+	return PublishedKey{}, false
 }
 
 // refresh fetches the keys when they are due: when there are none yet, when

@@ -3,8 +3,6 @@ package crypto
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-
-	"github.com/MastewalB/behemoth/types"
 )
 
 type hmacSigningKey struct {
@@ -20,15 +18,15 @@ func (k *hmacSigningKey) Sign(payload []byte) []byte {
 }
 
 type HMACSigner struct {
-	km      types.KeyManager
-	purpose types.KeyPurpose // e.g. KeyPurposeCookieSign
+	km      KeyManager
+	purpose KeyPurpose // e.g. KeyPurposeCookieSign
 }
 
-func NewSigner(km types.KeyManager, purpose types.KeyPurpose) *HMACSigner {
+func NewSigner(km KeyManager, purpose KeyPurpose) *HMACSigner {
 	return &HMACSigner{km: km, purpose: purpose}
 }
 
-func (s *HMACSigner) PrepareSigning() (types.SigningKey, error) {
+func (s *HMACSigner) PrepareSigning() (SigningKey, error) {
 	key, version, err := s.km.Current(s.purpose) // the ONE fetch for the whole operation
 	if err != nil {
 		return nil, err

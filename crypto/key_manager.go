@@ -12,7 +12,6 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -33,7 +32,7 @@ const devDefaultSecret = "dev-insecure-default-secret-do-not-use-in-production"
 
 type derivedKeyCacheKey struct {
 	version int
-	purpose types.KeyPurpose
+	purpose KeyPurpose
 }
 
 type DefaultKeyManager struct {
@@ -45,7 +44,7 @@ type DefaultKeyManager struct {
 	tel     *telemetry.Telemetry
 }
 
-func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source types.SecretSource, tel *telemetry.Telemetry) (*DefaultKeyManager, error) {
+func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source SecretSource, tel *telemetry.Telemetry) (*DefaultKeyManager, error) {
 	tel = telemetry.OrDefault(tel).Named("crypto")
 	raw, current, err := source.Load(ctx)
 	if err != nil {
@@ -62,7 +61,7 @@ func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source type
 		return nil, err
 	}
 
-	if watchable, ok := source.(types.WatchableSecretSource); ok {
+	if watchable, ok := source.(WatchableSecretSource); ok {
 		if err := watchable.Watch(ctx, km.applyUpdate); err != nil {
 			tel.Logger.Warn(ctx, "failed to start secret watch; rotation will require a restart", telemetry.ErrorFields(err))
 		} else {
@@ -75,12 +74,12 @@ func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source type
 	return km, nil
 }
 
-func (km *DefaultKeyManager) Current(purpose types.KeyPurpose) (key []byte, version int, err error) {
+func (km *DefaultKeyManager) Current(purpose KeyPurpose) (key []byte, version int, err error) {
 	key, err = km.deriveKey(purpose, km.current)
 	return key, km.current, err
 }
 
-func (km *DefaultKeyManager) GetByVersion(purpose types.KeyPurpose, version int) (key []byte, err error) {
+func (km *DefaultKeyManager) GetByVersion(purpose KeyPurpose, version int) (key []byte, err error) {
 	return km.deriveKey(purpose, version)
 }
 
@@ -88,7 +87,7 @@ func (km *DefaultKeyManager) CurrentVersion() int {
 	return km.current
 }
 
-// Versions implements [types.KeyManager].
+// Versions implements [KeyManager].
 func (km *DefaultKeyManager) Versions() []int {
 	km.mu.RLock()
 	defer km.mu.RUnlock()
@@ -133,7 +132,7 @@ func decodeAndValidate(raw map[int]string, current int, cfg KeyManagerConfig) (m
 	return decoded, nil
 }
 
-func (km *DefaultKeyManager) deriveKey(purpose types.KeyPurpose, version int) ([]byte, error) {
+func (km *DefaultKeyManager) deriveKey(purpose KeyPurpose, version int) ([]byte, error) {
 	ck := derivedKeyCacheKey{version: version, purpose: purpose}
 
 	km.mu.RLock()

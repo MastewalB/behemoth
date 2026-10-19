@@ -53,7 +53,7 @@ func sessionsTokensDB(t *testing.T) behemoth.Database {
 	return sqliteAdapter.NewSQLiteAdapter(db, nil)
 }
 
-func testCrypto(t *testing.T) types.Crypto {
+func testCrypto(t *testing.T) crypto.Services {
 	t.Helper()
 	c, err := crypto.New(context.Background(), crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("cd", 32)}, Current: 1},
