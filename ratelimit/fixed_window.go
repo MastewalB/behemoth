@@ -1,6 +1,8 @@
-// Package ratelimit holds the rate-limiting algorithms: implementations of
-// types.Limiter. Boot builds them, once it knows where counters are kept, and
-// DefaultRateLimiter picks one per rule by the rule's Algorithm.
+// Package ratelimit enforces rate-limit rules: the catalog rules are declared
+// in, the rate limiter that checks them, and the algorithms it counts with,
+// implementations of types.Limiter. The rate limiter builds one limiter per
+// algorithm over the counter storage it resolves, and picks one per rule by
+// the rule's Algorithm.
 package ratelimit
 
 import (

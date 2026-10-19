@@ -9,7 +9,8 @@ The code lives in:
 - `telemetry/tracer.go`: `Tracer`, `Span`, `NoOpTracer`, `WithTracer`, the span names, `Telemetry.StartSpan`, `SpanFrom`, `FinishSpan`, `IsSystemFailure`
 - `types/router.go`: `Router.withTracing`
 - `store/instrument.go`: `WithTelemetry`, `instrumentedDB`
-- `types/init/init.go`: `DefaultDispatcher.chainSpan`, `handlerSpan`, the span in `DefaultRateLimiter.evaluate`
+- `dispatch/dispatcher.go`: `DefaultDispatcher.chainSpan`, `handlerSpan`
+- `ratelimit/limiter.go`: the span in `DefaultRateLimiter.evaluate`
 - `transport/session.go`, `transport/token.go`: the span wrappers around `Create`, `Get`, `Revoke`, `Issue`, `Consume`
 - `plugins/emailpassword`: `hashPassword`, the verify span in `signInBody`
 - `migration/runner.go`: `applyTraced`

@@ -5,7 +5,7 @@ This document explains how plugins send messages: the `Mailer` on the `AuthConte
 The code lives in:
 
 - `types/mail.go`: `MailMessage`, `MailKind`, `MailSender`, `MailConfig`, the `Mailer` interface
-- `types/init/mailer.go`: `DefaultMailer`
+- `messaging/mailer.go`: `DefaultMailer`
 - `types/init/init.go`: `Boot` builds it from `BootConfig.Mail`
 
 ---
@@ -64,7 +64,7 @@ The pool is a convenience for an application without a queue. It has no retry, n
 
 `AuthContext.SMS` (`types.SMS`, `DefaultSMS`) is the same component for text messages: `types.SMSSender` is the application's, `SMSMessage` carries a kind, a number and a code, and a plugin picks `Send` or `SendAsync` per operation. The phone number plugin is its one caller.
 
-Both are thin types over `sendQueue[M]` (`types/init/sendqueue.go`), which holds what this document describes: the direct call, the bounded queue, the workers that start with the first background send, the timeout, the panic recovery, `Close`, and the metric. `DefaultMailer` and `DefaultSMS` each embed one and set its name, its metric and its errors.
+Both are thin types over `sendQueue[M]` (`messaging/sendqueue.go`), which holds what this document describes: the direct call, the bounded queue, the workers that start with the first background send, the timeout, the panic recovery, `Close`, and the metric. `DefaultMailer` and `DefaultSMS` each embed one and set its name, its metric and its errors.
 
 | | Mail | SMS |
 | --- | --- | --- |

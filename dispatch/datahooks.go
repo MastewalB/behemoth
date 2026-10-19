@@ -1,4 +1,4 @@
-package types
+package dispatch
 
 import (
 	"context"
@@ -37,7 +37,7 @@ type tableHookPoints struct {
 // "tokens" here would fire those points a second time from the store, and
 // would open a transaction around every session and token write.
 //
-// Boot checks each entry against the catalog (checkDataHookPoints), so an
+// Boot checks each entry against the catalog (CheckDataHookPoints), so an
 // entry whose point is missing from CoreDeclareHookPoints fails Boot instead
 // of the first write to the table.
 var coreDataHookPoints = map[string]tableHookPoints{
@@ -102,6 +102,21 @@ type dataHooks struct {
 }
 
 var _ store.Hooks = dataHooks{}
+
+// NewDataHooks returns the data hooks of the core tables over ac.Dispatcher:
+// what Boot passes to store.WithHooks, so that a write to users fires the
+// data.user points.
+func NewDataHooks(ac *types.AuthContext) store.Hooks {
+	return dataHooks{ac: ac, points: coreDataHookPoints}
+}
+
+// CheckDataHookPoints reports a configuration error when a data point of a
+// core table was never declared in catalog, or was declared with a phase
+// other than the one the store fires it in. Boot calls it, so that a missing
+// point fails Boot instead of the first write to the table.
+func CheckDataHookPoints(catalog types.HookCatalog) error {
+	return checkDataHookPoints(catalog, coreDataHookPoints)
+}
 
 func (h dataHooks) Fires(table string) bool {
 	_, ok := h.points[table]
@@ -227,7 +242,7 @@ func (h dataHooks) AfterDelete(ctx context.Context, tx *store.Store, table strin
 // onCommit queues the dispatch of point, an after-commit point of the write
 // ctx belongs to, on tx's transaction. The write can't be undone any more
 // when it runs, so the only error RunAfter returns (the point can't be
-// dispatched, which Boot's checkDataHookPoints rules out) is logged.
+// dispatched, which CheckDataHookPoints rules out at Boot) is logged.
 //
 // The dispatch keeps values, the write's Values as its after hook left them,
 // but runs with the callback's context: ctx is the transaction's, which has

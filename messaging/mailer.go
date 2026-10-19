@@ -1,4 +1,7 @@
-package types
+// Package messaging sends the messages plugins produce: mail through the
+// application's MailSender, and text messages through its SMSSender, each
+// with a background queue for the sends a flow doesn't wait for.
+package messaging
 
 import (
 	"errors"

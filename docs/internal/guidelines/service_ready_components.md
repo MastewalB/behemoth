@@ -10,7 +10,7 @@ The code it refers to lives in:
 - `plugins/*`: each plugin's `Options`, `New`, and `Init`
 - `types/mail.go`: `MailSender`, `MailMessage`
 - `crypto/`: `SecretSource`, `WatchableSecretSource`, `PollingWatcher`
-- `types/init/mailer.go`: `DefaultMailer`, the one component with background workers
+- `messaging/mailer.go`: `DefaultMailer`, the one component with background workers
 - `store/rate_limits.go`, `store/audit.go`: the purges
 
 The other guideline documents are [`http_contract.md`](http_contract.md), about what a client of the routes depends on, and [`transport_neutral_flows.md`](transport_neutral_flows.md), about flows and their wrappers.

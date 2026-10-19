@@ -1,14 +1,10 @@
-package types
+package dispatch
 
 import (
 	"context"
 	"errors"
-	"net/http"
 	"reflect"
-	"slices"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
@@ -38,7 +34,7 @@ func afterDispatcher(t *testing.T, audit telemetry.AuditRecorder, handlers ...ty
 		chain[i] = registeredHandler{plugin: "test", handler: h}
 	}
 	chains := map[types.HookPoint][]registeredHandler{point: chain}
-	return NewDefaultDispatcher(catalog, chains, nil, telemetry.New(nil, audit, nil)), point
+	return NewDefaultDispatcher(catalog, chains, nil, nil, telemetry.New(nil, audit, nil)), point
 }
 
 // A data-level after hook runs inside the write's transaction: the first
@@ -113,7 +109,7 @@ func beforeDispatcher(t *testing.T, handlers ...types.BeforeHookFunc) (*DefaultD
 		chain[i] = registeredHandler{plugin: "test", handler: h}
 	}
 	chains := map[types.HookPoint][]registeredHandler{point: chain}
-	return NewDefaultDispatcher(catalog, chains, nil, telemetry.New(nil, nil, nil)), point
+	return NewDefaultDispatcher(catalog, chains, nil, nil, telemetry.New(nil, nil, nil)), point
 }
 
 // A before handler that returns a nil payload leaves the payload unchanged,
@@ -198,47 +194,8 @@ func TestDispatchOfUndeclaredOrWrongPhasePointIsAConfigurationError(t *testing.T
 	}
 }
 
-// Core declares every point its own code fires, each in the phase it is
-// fired in, and the data points the store fires pass the Boot check.
-func TestCoreDeclaresTheHookPointsItFires(t *testing.T) {
-	catalog := NewDefaultHookCatalog()
-	ic := newScopedInitContext(catalog, nil, nil, nil, coreOwner)
-	if err := CoreDeclareHookPoints(ic); err != nil {
-		t.Fatal(err)
-	}
-	want := map[types.HookPoint]types.HookPhase{
-		hooks.HookSignUpBefore: types.BeforeHookPhase, hooks.HookSignUpAfter: types.AfterHookPhase, hooks.HookSignUpFailed: types.FailedHookPhase,
-		hooks.HookSignInBefore: types.BeforeHookPhase, hooks.HookSignInCredentialsVerified: types.BeforeHookPhase,
-		hooks.HookSignInAfter: types.AfterHookPhase, hooks.HookSignInFailed: types.FailedHookPhase,
-		hooks.HookSignOutBefore: types.BeforeHookPhase, hooks.HookSignOutAfter: types.AfterHookPhase,
-		hooks.HookSessionBeforeCreate: types.BeforeHookPhase, hooks.HookSessionAfterCreate: types.AfterHookPhase,
-		hooks.HookSessionBeforeRevoke: types.BeforeHookPhase, hooks.HookSessionAfterRevoke: types.AfterHookPhase,
-		hooks.HookSessionTokenBeforeIssue: types.BeforeHookPhase, hooks.HookSessionTokenAfterIssue: types.AfterHookPhase,
-		hooks.HookSessionTokenIssueFailed: types.FailedHookPhase,
-		hooks.HookTokenBeforeIssue:        types.BeforeHookPhase, hooks.HookTokenAfterIssue: types.AfterHookPhase,
-		hooks.HookTokenConsumed: types.AfterHookPhase, hooks.HookTokenFailed: types.FailedHookPhase,
-		hooks.HookUserBeforeCreate: types.BeforeHookPhase, hooks.HookUserAfterCreate: types.AfterHookPhase,
-		hooks.HookUserBeforeUpdate: types.BeforeHookPhase, hooks.HookUserAfterUpdate: types.AfterHookPhase,
-		hooks.HookUserCreated: types.AfterHookPhase, hooks.HookUserUpdated: types.AfterHookPhase,
-		hooks.HookUserBeforeDelete: types.BeforeHookPhase, hooks.HookUserAfterDelete: types.AfterHookPhase,
-		hooks.HookUserDeleted: types.AfterHookPhase,
-	}
-	for point, phase := range want {
-		def, ok := catalog.Lookup(point)
-		if !ok {
-			t.Errorf("%q is not declared", point)
-		} else if def.Phase != phase || def.Owner != coreOwner {
-			t.Errorf("%q declared as phase %q by %q, want %q by %q", point, def.Phase, def.Owner, phase, coreOwner)
-		}
-	}
-	if got := len(catalog.All()); got != len(want) {
-		t.Errorf("core declares %d points, the test knows %d", got, len(want))
-	}
-
-	if err := checkDataHookPoints(catalog, coreDataHookPoints); err != nil {
-		t.Errorf("checkDataHookPoints(core) = %v", err)
-	}
-}
+// coreOwner is the owner Boot declares core's points with.
+const coreOwner = "core"
 
 func TestCheckDataHookPointsRejectsUndeclaredAndWrongPhase(t *testing.T) {
 	catalog := NewDefaultHookCatalog()
@@ -319,7 +276,7 @@ func TestDispatcherMetrics(t *testing.T) {
 			{plugin: "analytics", handler: types.AfterHookFunc(func(*types.HookContext, any) error { return nil })},
 		},
 	}
-	d := NewDefaultDispatcher(catalog, chains, nil, tel)
+	d := NewDefaultDispatcher(catalog, chains, nil, nil, tel)
 	hctx := &types.HookContext{Ctx: context.Background()}
 
 	if err := d.RunAfter(hctx, hooks.HookSignInAfter, nil); err != nil {
@@ -351,154 +308,5 @@ func TestDispatcherMetrics(t *testing.T) {
 	}
 	if n := m.Count(telemetry.MetricTokenIssued, behemoth.M{telemetry.AttrKind: "password_reset"}); n != 1 {
 		t.Errorf("tokens issued = %d, want 1 with its kind", n)
-	}
-}
-
-// A rule names its algorithm, or brings a Limiter of its own. The catalog
-// rejects a name nothing builds and a limit that can't be counted, and the
-// rate limiter resolves the name to the Limiter Boot built.
-func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
-	keyFunc := func(*http.Request, string) string { return "k" }
-	declare := func(rule types.RouteRateLimitRule) error {
-		rule.Method, rule.Path, rule.KeyFunc, rule.Owner = http.MethodPost, "/x", keyFunc, "test"
-		return NewRateLimitCatalog(NewDefaultHookCatalog()).DeclareRouteRateLimitRule(rule)
-	}
-	limit := types.Limit{Max: 5, Window: time.Minute}
-	for name, tc := range map[string]struct {
-		rule types.RouteRateLimitRule
-		ok   bool
-	}{
-		"the default algorithm":         {types.RouteRateLimitRule{Name: "a", Limit: limit}, true},
-		"fixed window by name":          {types.RouteRateLimitRule{Name: "b", Limit: limit, Algorithm: types.AlgorithmFixedWindow}, true},
-		"an unknown algorithm":          {types.RouteRateLimitRule{Name: "c", Limit: limit, Algorithm: "token_bucket"}, false},
-		"no limit":                      {types.RouteRateLimitRule{Name: "d"}, false},
-		"no window":                     {types.RouteRateLimitRule{Name: "e", Limit: types.Limit{Max: 5}}, false},
-		"its own limiter, any limit":    {types.RouteRateLimitRule{Name: "f", Limiter: fixedLimiter{allowed: true}}, true},
-		"disabled rules are not judged": {types.RouteRateLimitRule{Name: "g", Disabled: true}, true},
-		"reject by name":                {types.RouteRateLimitRule{Name: "h", Limit: limit, Action: types.ActionReject}, true},
-		"lockout is not built":          {types.RouteRateLimitRule{Name: "i", Limit: limit, Action: types.ActionLockout, LockoutFor: time.Hour}, false},
-		"lockout with its own limiter":  {types.RouteRateLimitRule{Name: "j", Limiter: fixedLimiter{allowed: true}, Action: types.ActionLockout}, false},
-		"an unknown action":             {types.RouteRateLimitRule{Name: "k", Limit: limit, Action: "ban"}, false},
-	} {
-		if err := declare(tc.rule); (err == nil) != tc.ok {
-			t.Errorf("%s: Declare = %v, want ok=%v", name, err, tc.ok)
-		}
-	}
-
-	// A hook rule goes through the same check.
-	hookCatalog := NewDefaultHookCatalog()
-	if err := hookCatalog.Declare(types.HookPointDef{Point: "test.thing.before", Owner: "test", Phase: types.BeforeHookPhase}); err != nil {
-		t.Fatal(err)
-	}
-	err := NewRateLimitCatalog(hookCatalog).DeclareHookRateLimitRule(types.HookRateLimitRule{
-		Name: "l", Point: "test.thing.before", KeyFunc: types.KeyByValues("email"), Limit: limit,
-		Action: types.ActionLockout, LockoutFor: time.Hour, Owner: "test",
-	})
-	if err == nil || !strings.Contains(err.Error(), "ActionLockout") {
-		t.Errorf("a hook rule with ActionLockout: Declare = %v, want an error naming the action", err)
-	}
-
-	built, own := fixedLimiter{allowed: true}, fixedLimiter{allowed: false}
-	rl := &DefaultRateLimiter{limiters: map[types.RateLimitAlgorithm]types.Limiter{types.AlgorithmFixedWindow: built}}
-	if got, err := rl.limiterFor("r", "", nil); err != nil || got != types.Limiter(built) {
-		t.Errorf("an empty algorithm resolved to (%v, %v), want the fixed window", got, err)
-	}
-	if got, err := rl.limiterFor("r", types.AlgorithmFixedWindow, own); err != nil || got != types.Limiter(own) {
-		t.Errorf("a rule's own limiter resolved to (%v, %v), want its own", got, err)
-	}
-	if _, err := rl.limiterFor("r", "token_bucket", nil); !errs.IsCategory(err, errs.CategoryConfiguration) {
-		t.Errorf("an algorithm with no limiter returned %v, want a configuration error", err)
-	}
-}
-
-// keyRecorder is a Limiter that allows every attempt and keeps the keys it
-// was asked about.
-type keyRecorder struct{ keys *[]string }
-
-func (l keyRecorder) Allow(_ context.Context, key string, _ types.Limit) (bool, time.Duration, error) {
-	*l.keys = append(*l.keys, key)
-	return true, 0, nil
-}
-
-// A hook rule whose KeyFunc returns false is skipped for the call: nothing
-// is counted for it, and the point's other rules are still checked. An empty
-// key returned with true is counted like any other.
-func TestHookRuleIsSkippedWhenItDoesNotApply(t *testing.T) {
-	const point = types.HookPoint("test.thing.before")
-	hookCatalog := NewDefaultHookCatalog()
-	if err := hookCatalog.Declare(types.HookPointDef{Point: point, Owner: "test", Phase: types.BeforeHookPhase}); err != nil {
-		t.Fatal(err)
-	}
-	var keys []string
-	catalog := NewRateLimitCatalog(hookCatalog)
-	for name, keyFunc := range map[string]func(*types.HookContext) (string, bool){
-		"per.email": types.KeyByValues("email"),
-		"global":    func(*types.HookContext) (string, bool) { return "", true },
-	} {
-		if err := catalog.DeclareHookRateLimitRule(types.HookRateLimitRule{
-			Name: name, Point: point, KeyFunc: keyFunc, Limiter: keyRecorder{&keys}, Owner: "test",
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	tel, rec := telemetrytest.New()
-	rl := &DefaultRateLimiter{catalog: catalog, tel: tel}
-	ctx := context.Background()
-
-	for _, values := range []behemoth.M{{}, {"email": ""}, {"email": "ada@example.com"}} {
-		if err := rl.CheckHookLimit(ctx, point, &types.HookContext{Ctx: ctx, Values: values}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	slices.Sort(keys)
-	if want := []string{"global:", "global:", "global:", "per.email:ada@example.com"}; !slices.Equal(keys, want) {
-		t.Errorf("keys counted = %q, want %q", keys, want)
-	}
-	for rule, want := range map[string]int64{"per.email": 2, "global": 0} {
-		if n := rec.Metrics.Count(telemetry.MetricRateLimitChecks, behemoth.M{telemetry.AttrRule: rule, telemetry.AttrResult: "skipped"}); n != want {
-			t.Errorf("skipped checks of %q = %d, want %d", rule, n, want)
-		}
-	}
-}
-
-// fixedLimiter answers every check the same way.
-type fixedLimiter struct {
-	allowed bool
-	err     error
-}
-
-func (l fixedLimiter) Allow(context.Context, string, types.Limit) (bool, time.Duration, error) {
-	return l.allowed, time.Second, l.err
-}
-
-// Each evaluated rule is counted once with how it ended, and a rejection is
-// also an audit event with the outcome "denied".
-func TestRateLimiterMetrics(t *testing.T) {
-	tel, rec := telemetrytest.New()
-	rl := &DefaultRateLimiter{tel: tel}
-	ctx := context.Background()
-	check := func(l types.Limiter) error {
-		return rl.evaluate(ctx, "signin", "signin:203.0.113.7", "203.0.113.7", l, types.Limit{}, "", 0)
-	}
-
-	if err := check(fixedLimiter{allowed: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := check(fixedLimiter{allowed: false}); !errs.IsCategory(err, errs.CategoryRateLimited) {
-		t.Fatalf("a rejected check returned %v", err)
-	}
-	if err := check(fixedLimiter{err: errors.New("redis down")}); err != nil {
-		t.Fatalf("a store failure with fail-open returned %v", err)
-	}
-
-	for result, want := range map[string]int64{"allowed": 1, "limited": 1, "error": 1} {
-		if n := rec.Metrics.Count(telemetry.MetricRateLimitChecks, behemoth.M{telemetry.AttrRule: "signin", telemetry.AttrResult: result}); n != want {
-			t.Errorf("checks with result %q = %d, want %d", result, n, want)
-		}
-	}
-	events := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
-	if len(events) != 1 || events[0].Outcome != telemetry.OutcomeDenied || events[0].IPAddress != "203.0.113.7" {
-		t.Errorf("audit events = %+v, want one denied event with the address", events)
 	}
 }

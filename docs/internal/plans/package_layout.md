@@ -215,7 +215,7 @@ Each step is one commit. It builds every module and passes the suite: the root m
 | 4 | `types/schema` becomes `schema`, and `PublicView` and `NewPublicView` join it. | Done |
 | 5 | `types/cryptotypes` merges into `crypto`, and the crypto aliases go. `Crypto` becomes `crypto.Services`, `OriginValidator` moves to `types`, and `CSRFProtector` goes. The key set route moves to `transport`, so `crypto` imports nothing of `types`. | Done |
 | 6 | The duplicates go: `types.SessionState`, and the aliases `Token`, `TokenKind`, and `CodeKind`. | Done |
-| 7 | The implementations leave `types/init` for `dispatch`, `ratelimit` (which takes in `types/ratelimit`), and `messaging`, and the token catalog moves to `transport`. | Not started |
+| 7 | The implementations leave `types/init` for `dispatch`, `ratelimit` (which takes in `types/ratelimit`), and `messaging`, and the token catalog moves to `transport`. | Done |
 | 8 | `transport` becomes `auth`. | Not started |
 | 9 | `types/init` becomes `engine`. | Not started |
 | 10 | `types` becomes `core`, and `types/hooks` becomes `core/hooks`. The repository table in `CLAUDE.md` follows. | Not started |

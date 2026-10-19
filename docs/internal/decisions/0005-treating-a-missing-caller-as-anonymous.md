@@ -103,5 +103,5 @@ The rest of the design relies on the same property. The zero `Caller` and the ze
 - [ADR-0004](0004-carrying-the-caller-in-the-context.md): the caller travels in the context
 - [ADR-0006](0006-requiring-declared-permissions.md): the zero grant, and what a system caller holds
 - [`../guidelines/service_ready_components.md`](../guidelines/service_ready_components.md): "The zero value is the default, and a wrong value fails at start"
-- `types/init/init.go`: `auditEvent`, which names the system outside a request today
+- `dispatch/dispatcher.go`: `auditEvent`, which names the system outside a request today
 - `telemetry/audit.go`: `NormalizeAuditEvent`

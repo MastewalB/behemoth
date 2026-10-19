@@ -177,7 +177,7 @@ A stored value that is not a valid sealed string, or whose ciphertext is truncat
 
 These limits apply:
 
-- **Hooks do not fire for accounts today.** The store calls its hooks for every table, but `coreDataHookPoints` in `types/init/datahooks.go` only maps `users` to hook points. The "hooks see the sealed form" rule takes effect when account points are declared.
+- **Hooks do not fire for accounts today.** The store calls its hooks for every table, but `coreDataHookPoints` in `dispatch/datahooks.go` only maps `users` to hook points. The "hooks see the sealed form" rule takes effect when account points are declared.
 - **A hook that rewrites a token column on create is not reflected in the caller's model.** `CreateAccount` restores the caller's original plaintext after the insert.
 - **Ciphertext is not bound to its row.** The `Encryptor` interface takes no associated data, so a sealed value copied from one row or column to another still decrypts. Someone with write access to the table could swap tokens between accounts.
 
@@ -350,7 +350,7 @@ Both run the same frozen after-chain. They differ in what a handler error means.
 
 All four dispatcher methods start with `DefaultDispatcher.checkPhase`. A point that was never declared, or is declared with another phase, returns a configuration error and runs no handler. For `RunAfter` and `Fail` this is the only error they return.
 
-`Boot` runs the same check once for the points in `coreDataHookPoints` (`checkDataHookPoints`), so a table mapped to an undeclared point fails `Boot` instead of the first write.
+`Boot` runs the same check once for the points in `coreDataHookPoints` (`CheckDataHookPoints`), so a table mapped to an undeclared point fails `Boot` instead of the first write.
 
 `dataHooks.AfterCreate` and `AfterUpdate` call `RunAfterTx` and return its error to the store. Before hooks need no second entry point: `RunBefore` already stops at the first error.
 

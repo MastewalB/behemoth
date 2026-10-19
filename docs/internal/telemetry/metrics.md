@@ -9,7 +9,8 @@ The code lives in:
 - `telemetry/metrics.go`: `Metrics`, `NoOpMetrics`, the metric names and attribute keys, `Telemetry.MetricsEnabled`, `Count`, `ObserveSince`
 - `types/router.go`: `Router.withMetrics`
 - `store/instrument.go`: `WithTelemetry`, `instrumentedDB`
-- `types/init/init.go`: `DefaultDispatcher.observeHandler`, `countPoint`, `corePointMetrics`, `DefaultRateLimiter.countCheck`
+- `dispatch/dispatcher.go`: `DefaultDispatcher.observeHandler`, `countPoint`, `corePointMetrics`
+- `ratelimit/limiter.go`: `DefaultRateLimiter.countCheck`
 - `transport/session.go`: `DefaultSessionManager.countValidated`
 - `telemetry/audit.go`: `Telemetry.AuditFailed`
 - `telemetry/telemetrytest`: the recording sink

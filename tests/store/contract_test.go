@@ -531,7 +531,7 @@ func sessionsContract(t *testing.T, st *store.Store) {
 
 func tokensContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
-	catalog := bmth.NewDefaultTokenCatalog()
+	catalog := transport.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
 	tm := transport.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, nil)
 
