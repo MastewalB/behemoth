@@ -279,7 +279,7 @@ func TestCodeManager(t *testing.T) {
 	ctx := context.Background()
 	app := bootPhones(t, waited(phonenumber.Options{}), nil)
 	codes := app.ac.Codes
-	const kind types.CodeKind = "test.kind"
+	const kind models.CodeKind = "test.kind"
 
 	code, issued, err := codes.Issue(ctx, kind, "subject", types.CodeOptions{Length: 8, Metadata: behemoth.M{"note": "x"}})
 	require.NoError(t, err)

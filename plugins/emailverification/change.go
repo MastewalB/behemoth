@@ -44,11 +44,11 @@ const (
 	// TokenKindEmailChange is the link sent to the new address. Its
 	// metadata holds the address the user had ("from") and the one asked
 	// for ("to").
-	TokenKindEmailChange types.TokenKind = "email_change"
+	TokenKindEmailChange models.TokenKind = "email_change"
 	// TokenKindEmailChangeRevert is the link sent to the address the user
 	// had when a change was requested. Its metadata holds that address
 	// ("restore").
-	TokenKindEmailChangeRevert types.TokenKind = "email_change_revert"
+	TokenKindEmailChangeRevert models.TokenKind = "email_change_revert"
 )
 
 // Defaults of the flow's lifetimes.
@@ -395,7 +395,7 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 		}
 		return cause
 	}
-	revoke := func(token *types.Token) {
+	revoke := func(token *models.Token) {
 		if err := ac.TokenManager.Revoke(hctx.Ctx, token.ID); err != nil {
 			p.log.Warn(hctx.Ctx, "a link of a failed email change request was not revoked", telemetry.ErrorFields(err))
 		}
@@ -479,7 +479,7 @@ func errEmailTaken(op string) error {
 // subject), and the address the token would write in the payload. A token
 // that does not check out still goes through the flow, which refuses it and
 // fires the failed point.
-func (p *Plugin) readChangeToken(hctx *types.HookContext, kind types.TokenKind, rawToken, emailKey string) (*types.Token, changeTokenInput, error) {
+func (p *Plugin) readChangeToken(hctx *types.HookContext, kind models.TokenKind, rawToken, emailKey string) (*models.Token, changeTokenInput, error) {
 	in := changeTokenInput{token: rawToken}
 	token, err := p.authContext.TokenManager.Verify(hctx.Ctx, kind, rawToken)
 	if err != nil {

@@ -86,7 +86,7 @@ type completeInput struct {
 	req CompleteRequest
 	// transaction is the token of the state as it was read before the flow,
 	// or nil when the state did not check out.
-	transaction *types.Token
+	transaction *models.Token
 }
 
 func (c *completeInput) ToMap() (map[string]any, error) {
@@ -293,9 +293,9 @@ func (p *Plugin) completeBody(hctx *types.HookContext, in completeInput) (*types
 		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
 			types.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
-	state := types.SessionActive
+	state := models.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
-		state = types.SessionPending
+		state = models.SessionPending
 	}
 
 	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{State: state})

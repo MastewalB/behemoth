@@ -8,14 +8,6 @@ import (
 	"github.com/MastewalB/behemoth/models"
 )
 
-type SessionState string
-
-const (
-	SessionPending SessionState = "pending" // credentials verified, awaiting a secondary factor
-	SessionActive  SessionState = "active"
-	SessionRevoked SessionState = "revoked"
-)
-
 type SessionManager interface {
 	// Create starts a session for userID in meta.State and returns it with
 	// its raw token. Pass the context of the request being handled: the
@@ -143,7 +135,7 @@ type SessionMeta struct {
 	// SessionConfig.CaptureIPAndAgent is on.
 	IPAddress string
 	UserAgent string
-	State     SessionState // Active or Pending: set by the caller (SignIn passes Active or Pending depending on whether 2FA is required)
+	State     models.SessionState // Active or Pending: set by the caller (SignIn passes Active or Pending depending on whether 2FA is required)
 }
 
 // TokenTransport is where the session token travels, in both directions:

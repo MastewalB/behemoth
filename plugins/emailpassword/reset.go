@@ -213,7 +213,7 @@ type resetInput struct {
 	// What ResetPassword's read of the token gave: the token when it is
 	// usable, and otherwise the reason it is not. The flow checks the user
 	// against verified before it consumes the token.
-	verified  *types.Token
+	verified  *models.Token
 	verifyErr error
 }
 

@@ -38,7 +38,7 @@ func (app *verificationApp) verifiedUser(t *testing.T, email string) (user *mode
 	ctx := context.Background()
 	user = &models.User{Email: email, EmailVerified: true}
 	require.NoError(t, app.ac.Store.CreateUser(ctx, user))
-	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: types.SessionActive})
+	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	return user, rawSession
 }
@@ -255,7 +255,7 @@ func TestEmailChangeToAnAddressThatIsTaken(t *testing.T) {
 	_, err = app.plugin.ConfirmChange(ctx, confirm.Token)
 	require.NoError(t, err)
 	app.verifiedUser(t, "ada@example.com")
-	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: types.SessionActive})
+	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	_, err = app.plugin.RevertChange(ctx, notice.Token)
 	assert.True(t, emailTaken(err), "%v", err)
@@ -354,7 +354,7 @@ func TestEmailChangeRoutes(t *testing.T) {
 	stale := callAs(t, app.ac, change, `{"email":"ada@late.example.com"}`, rawSession)
 	assert.Equal(t, http.StatusUnauthorized, stale.Code)
 	assert.Contains(t, stale.Body.String(), errs.CodeSessionNotFresh)
-	_, signedInAgain, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: types.SessionActive})
+	_, signedInAgain, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, callAs(t, app.ac, change, `{"email":"ada@late.example.com"}`, signedInAgain).Code, "signing in again makes a fresh session")
 	msgs = app.mails(t, 5) // the taken address got a notice and no confirmation

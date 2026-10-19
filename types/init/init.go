@@ -612,7 +612,7 @@ func (s *scopedTokenCatalog) Declare(def types.TokenKindDef) error {
 	def.Owner = s.owner
 	return s.inner.Declare(def)
 }
-func (s *scopedTokenCatalog) Lookup(kind types.TokenKind) (types.TokenKindDef, bool) {
+func (s *scopedTokenCatalog) Lookup(kind models.TokenKind) (types.TokenKindDef, bool) {
 	return s.inner.Lookup(kind)
 }
 
@@ -1969,12 +1969,12 @@ func auditSubject(result any) (subjectType, subjectID, userID, sessionID string)
 
 type DefaultTokenCatalog struct {
 	mu     sync.RWMutex
-	kinds  map[types.TokenKind]types.TokenKindDef
+	kinds  map[models.TokenKind]types.TokenKindDef
 	frozen bool
 }
 
 func NewDefaultTokenCatalog() *DefaultTokenCatalog {
-	return &DefaultTokenCatalog{kinds: map[types.TokenKind]types.TokenKindDef{}}
+	return &DefaultTokenCatalog{kinds: map[models.TokenKind]types.TokenKindDef{}}
 }
 
 func (c *DefaultTokenCatalog) Declare(def types.TokenKindDef) error {
@@ -1999,7 +1999,7 @@ func (c *DefaultTokenCatalog) Declare(def types.TokenKindDef) error {
 	return nil
 }
 
-func (c *DefaultTokenCatalog) Lookup(kind types.TokenKind) (types.TokenKindDef, bool) {
+func (c *DefaultTokenCatalog) Lookup(kind models.TokenKind) (types.TokenKindDef, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	def, ok := c.kinds[kind]

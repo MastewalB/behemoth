@@ -31,12 +31,12 @@ func NewCodeManager(st *store.Store, services crypto.Services) *DefaultCodeManag
 
 // hashed is what is hashed for a code: the kind and the subject with it, so
 // that a hash copied to another row matches nothing there.
-func hashed(kind types.CodeKind, subject, code string) string {
+func hashed(kind models.CodeKind, subject, code string) string {
 	return string(kind) + "\x00" + subject + "\x00" + code
 }
 
 // Issue implements [types.CodeManager].
-func (m *DefaultCodeManager) Issue(ctx context.Context, kind types.CodeKind, subject string, opts types.CodeOptions) (string, *models.VerificationCode, error) {
+func (m *DefaultCodeManager) Issue(ctx context.Context, kind models.CodeKind, subject string, opts types.CodeOptions) (string, *models.VerificationCode, error) {
 	const op = "CodeManager.Issue"
 	if kind == "" || subject == "" {
 		return "", nil, errs.NewConfigurationError(op, "a code needs a kind and a subject", nil)
@@ -94,7 +94,7 @@ func (m *DefaultCodeManager) digits(n int) (string, error) {
 
 // Consume implements [types.CodeManager]. The attempt is taken before the
 // guess is compared, so that guesses arriving together can't share one.
-func (m *DefaultCodeManager) Consume(ctx context.Context, kind types.CodeKind, subject, code string) (*models.VerificationCode, error) {
+func (m *DefaultCodeManager) Consume(ctx context.Context, kind models.CodeKind, subject, code string) (*models.VerificationCode, error) {
 	const op = "CodeManager.Consume"
 	found, err := m.st.SpendVerificationCodeAttempt(ctx, kind, subject)
 	if errs.IsNotFound(err) {
@@ -125,7 +125,7 @@ func (m *DefaultCodeManager) Consume(ctx context.Context, kind types.CodeKind, s
 }
 
 // Revoke implements [types.CodeManager].
-func (m *DefaultCodeManager) Revoke(ctx context.Context, kind types.CodeKind, subject string) error {
+func (m *DefaultCodeManager) Revoke(ctx context.Context, kind models.CodeKind, subject string) error {
 	return m.st.DeleteVerificationCodeFor(ctx, kind, subject)
 }
 

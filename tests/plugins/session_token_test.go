@@ -82,7 +82,7 @@ func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg ty
 
 	app.user = &models.User{Email: "ada@example.com"}
 	require.NoError(t, app.ac.Store.CreateUser(ctx, app.user))
-	app.session, app.raw, err = app.ac.SessionManager.Create(ctx, app.user.ID, types.SessionMeta{State: types.SessionActive})
+	app.session, app.raw, err = app.ac.SessionManager.Create(ctx, app.user.ID, types.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	return app, nil
 }
@@ -268,7 +268,7 @@ func TestSessionTokenNeedsASignedInSession(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, none.status)
 	assert.Equal(t, errs.CodeSessionMissing, none.body["code"])
 
-	_, pendingRaw, err := app.ac.SessionManager.Create(ctx, app.user.ID, types.SessionMeta{State: types.SessionPending})
+	_, pendingRaw, err := app.ac.SessionManager.Create(ctx, app.user.ID, types.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
 	pending := app.call(t, http.MethodPost, path, "", pendingRaw)
 	assert.Equal(t, http.StatusUnauthorized, pending.status)

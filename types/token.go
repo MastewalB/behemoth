@@ -8,16 +8,14 @@ import (
 	"github.com/MastewalB/behemoth/models"
 )
 
-// TokenKind is models.TokenKind: the token model lives in package models so
-// the store (which can't import types) can persist it.
-type TokenKind = models.TokenKind
-
+// The token kinds Behemoth names. The plugin that issues tokens of a kind
+// declares it in the TokenCatalog.
 const (
-	TokenKindEmailVerification TokenKind = "email_verification"
-	TokenKindPasswordReset     TokenKind = "password_reset"
-	TokenKindMagicLink         TokenKind = "magic_link"
-	TokenKindOAuthState        TokenKind = "oauth_state"
-	TokenKindAPIKey            TokenKind = "api_key"
+	TokenKindEmailVerification models.TokenKind = "email_verification"
+	TokenKindPasswordReset     models.TokenKind = "password_reset"
+	TokenKindMagicLink         models.TokenKind = "magic_link"
+	TokenKindOAuthState        models.TokenKind = "oauth_state"
+	TokenKindAPIKey            models.TokenKind = "api_key"
 )
 
 type TokenBackend string
@@ -28,7 +26,7 @@ const (
 )
 
 type TokenKindDef struct {
-	Kind       TokenKind
+	Kind       models.TokenKind
 	SingleUse  bool          // password reset/email verification/magic link/oauth state: true. API key: false.
 	DefaultTTL time.Duration // 0 = no expiry (API keys)
 	Backend    TokenBackend
@@ -36,33 +34,32 @@ type TokenKindDef struct {
 }
 
 type TokenConfig struct {
-	TTLOverrides map[TokenKind]time.Duration // overrides TokenKindDef.DefaultTTL per kind
+	TTLOverrides map[models.TokenKind]time.Duration // overrides TokenKindDef.DefaultTTL per kind
 }
 
 type TokenCatalog interface {
 	Declare(def TokenKindDef) error
-	Lookup(kind TokenKind) (TokenKindDef, bool)
+	Lookup(kind models.TokenKind) (TokenKindDef, bool)
 }
 
-// Token is models.Token; see TokenKind.
-type Token = models.Token
-
+// TokenManager issues and checks tokens of the kinds in the TokenCatalog. It
+// stores a token's hash, and the raw value exists only in what Issue returns.
 type TokenManager interface {
 	// Issue generates a raw token, persists only its hash and returns the raw value
-	Issue(ctx context.Context, kind TokenKind, subject any, meta behemoth.M) (token *Token, rawToken string, err error)
+	Issue(ctx context.Context, kind models.TokenKind, subject any, meta behemoth.M) (token *models.Token, rawToken string, err error)
 
 	// Verify checks validity (hash match, not expired, not revoked, not
 	// consumed) without side effects. Safe to call repeatedly
-	Verify(ctx context.Context, kind TokenKind, rawToken string) (*Token, error)
+	Verify(ctx context.Context, kind models.TokenKind, rawToken string) (*models.Token, error)
 
 	// Consume atomically verifies and marks single-use.
 	// Implementations must use a single transactional operation (check-and-invalidate)
 	// to avoid usage of the same token be consumed twice concurrently.
 	// Returns ErrTokenAlreadyConsumed / ErrTokenExpired / ErrTokenRevoked
-	Consume(ctx context.Context, kind TokenKind, rawToken string) (*Token, error)
+	Consume(ctx context.Context, kind models.TokenKind, rawToken string) (*models.Token, error)
 
 	Revoke(ctx context.Context, tokenID string) error
-	RevokeAllForSubject(ctx context.Context, kind TokenKind, subject any) error
+	RevokeAllForSubject(ctx context.Context, kind models.TokenKind, subject any) error
 
 	// ListForSubject returns the tokens of kind issued to subject that can
 	// still be used: not revoked, not consumed, not expired. Oldest first.
@@ -70,5 +67,5 @@ type TokenManager interface {
 	// uses it to see what is pending for a user, or to revoke some of a
 	// subject's tokens and not all. Like RevokeAllForSubject it is not
 	// supported for a kind kept in the key-value storage.
-	ListForSubject(ctx context.Context, kind TokenKind, subject any) ([]*Token, error)
+	ListForSubject(ctx context.Context, kind models.TokenKind, subject any) ([]*models.Token, error)
 }
