@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 )
 
@@ -184,14 +185,14 @@ const SessionTokenHeader = "Set-Auth-Token"
 
 // RequireFreshSession is RequireSession plus a check that the session is
 // fresh (SessionManager.IsFresh). A session that is valid but too old gets a
-// typed session error with errs.CodeSessionNotFresh, which the
-// router answers with 401: the client asks the user to sign in again and
-// retries. Use it on its own; it does what RequireSession does first.
+// typed session error with errs.CodeSessionNotFresh, which the router
+// answers with 401: the client asks the user to sign in again and retries.
+// Use it on its own; it does what RequireSession does first.
 func RequireFreshSession(sm SessionManager) Middleware {
 	return func(next HandlerFunc) HandlerFunc {
-		return RequireSession(sm)(func(rctx *RequestContext) error {
-			session, _ := rctx.Values["session"].(*models.Session)
-			if session == nil || !sm.IsFresh(session) {
+		return RequireSession()(func(rctx *RequestContext) error {
+			session, _ := identity.CallerFrom(rctx.Ctx).Session()
+			if !sm.IsFresh(&models.Session{State: models.SessionState(session.State), FreshAt: session.FreshAt}) {
 				return errs.NewSessionError("RequireFreshSession", errs.CodeSessionNotFresh, nil)
 			}
 			return next(rctx)
@@ -199,81 +200,38 @@ func RequireFreshSession(sm SessionManager) Middleware {
 	}
 }
 
-// RequireSession lets a request through only with a valid active session.
-// It reads the token where the transport says (SessionManager.ExtractToken)
-// and puts the session in rctx.Values["session"] and its id in
-// rctx.Values["sessionID"].
+// RequireSession lets a request through only when its caller signed in with
+// an active session. The router has authenticated the request already
+// (AuthenticateRequests), so the handler reads the session from the caller:
+// identity.CallerFrom(rctx.Ctx).Session().
 //
-// A request it refuses gets a typed session error, which the router answers
-// with 401 and the error's public message and code:
+// A request it refuses gets the reason the caller is anonymous, a typed
+// session error that the router answers with 401 and the error's public
+// message and code:
 //
 //	no token in the request                session_missing
 //	a token that belongs to no session     session_invalid
 //	a revoked or expired session           session_revoked, session_expired
 //	a session waiting for a second factor  session_pending
 //
-// A session that is invalid, revoked or expired will not come back, so the
-// refusal also takes its token back from the client
-// (SessionManager.ClearToken): a browser can't drop the session cookie
-// itself, and would send it with every request until it expires.
+// It writes no response itself. A lookup that failed, such as a database
+// that is down, is returned unchanged: the router answers it with 500, logs
+// it, and keeps its text from the client. Answering it with 401 would tell a
+// signed-in client that its session is gone.
 //
-// It writes no response itself. Any other error of SessionManager.Validate
-// is a failure of the system, such as a database that is down, and is
-// returned unchanged: the router answers it with 500, logs it, and keeps its
-// text from the client. Answering it with 401 would tell a signed-in client
-// that its session is gone.
-//
-// It also applies the rolling expiration. When the session was due for an
-// extension (SessionManager.Touch), the handler sees the session with its
-// new expiry, and a client that sent the token in a cookie gets the cookie
-// again with the new date (SessionManager.ExtendToken). That response carries
-// the session token, so it is marked Cache-Control: no-store after the
-// handler has run, whatever the handler set. An extension that fails is not
-// an error of the request: the session is used as it was validated.
-func RequireSession(sm SessionManager) Middleware {
+// A caller that is not signed in with a session, such as a system caller on
+// a request's context, is refused with session_missing.
+func RequireSession() Middleware {
 	return func(next HandlerFunc) HandlerFunc {
 		return func(rctx *RequestContext) error {
-			const op = "RequireSession"
-			token, ok := sm.ExtractToken(rctx.Request)
-			if !ok {
-				return errs.NewSessionError(op, errs.CodeSessionMissing, nil)
+			caller := identity.CallerFrom(rctx.Ctx)
+			if _, ok := caller.Session(); ok && !caller.IsAnonymous() {
+				return next(rctx)
 			}
-			session, err := sm.Validate(rctx.Ctx, token)
-			if err != nil {
-				// To the lookup, a token that resolves to nothing is "not
-				// found", which the router answers with 404. To a route
-				// that needs a session it is a request without one.
-				if errs.IsNotFound(err) {
-					err = errs.NewSessionError(op, errs.CodeSessionInvalid, err)
-				}
-				if sessionIsGone(err) {
-					sm.ClearToken(rctx)
-				}
+			if err := caller.AuthError(); err != nil {
 				return err
 			}
-			tokenWritten := false
-			if extended, err := sm.Touch(rctx.Ctx, session); err == nil && extended != nil {
-				session = extended
-				tokenWritten = sm.ExtendToken(rctx, token, session)
-			}
-			rctx.Values["session"] = session
-			rctx.Values["sessionID"] = session.ID
-
-			err = next(rctx)
-			if tokenWritten {
-				rctx.Response.SetHeader("Cache-Control", "no-store")
-			}
-			return err
+			return errs.NewSessionError("RequireSession", errs.CodeSessionMissing, nil)
 		}
 	}
-}
-
-// sessionIsGone reports whether err says that a session has ended for good:
-// its token belongs to no session, or the session is revoked or expired. A
-// session that waits for a second factor is still live. Any other error says
-// that the lookup failed, not what became of the session.
-func sessionIsGone(err error) bool {
-	return errs.IsCode(err, errs.CodeSessionInvalid) ||
-		errs.IsCode(err, errs.CodeSessionRevoked) ||
-		errs.IsCode(err, errs.CodeSessionExpired)
 }

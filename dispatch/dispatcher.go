@@ -459,7 +459,9 @@ func (d *DefaultDispatcher) auditEvent(hctx *core.HookContext, point core.HookPo
 			event.IPAddress = core.ClientIP(req.Request, d.clientIPConfig())
 			event.UserAgent = req.Request.UserAgent()
 		}
-		if sess, ok := req.Values["session"].(*models.Session); ok && sess != nil {
+	}
+	if caller := hctx.Caller(); !caller.IsAnonymous() {
+		if sess, ok := caller.Session(); ok {
 			event.ActorID, event.SessionID = sess.UserID, sess.ID
 		}
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	pgAdapter "github.com/MastewalB/behemoth/storage/adapters/postgres"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -294,7 +295,7 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 		&passDispatcher{}, nil, managersAuth, nil)
 
 	reached := 0
-	handler := core.RequireSession(sm)(func(*core.RequestContext) error {
+	handler := requireSession(sm, func(*core.RequestContext) error {
 		reached++
 		return nil
 	})
@@ -383,8 +384,10 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 		rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
-		return rctx, mw(sm)(func(*core.RequestContext) error { return nil })(rctx)
+		return rctx, authenticated(sm, mw(sm)(func(*core.RequestContext) error { return nil }))(rctx)
 	}
+	// requireSessionMW is RequireSession in the form request takes.
+	requireSessionMW := func(core.SessionManager) core.Middleware { return core.RequireSession() }
 	// removed reports whether the response removes the session cookie.
 	removed := func(rctx *core.RequestContext) bool {
 		set := (&http.Response{Header: rctx.Response.Headers}).Cookies()
@@ -409,17 +412,17 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 		"expired":      {expiredToken, errs.CodeSessionExpired},
 		"never issued": {"never-issued", errs.CodeSessionInvalid},
 	} {
-		rctx, err := request(sm, core.RequireSession, tc.token, "")
+		rctx, err := request(sm, requireSessionMW, tc.token, "")
 		assert.True(t, errs.IsCode(err, tc.code), "%s: %v", name, err)
 		assert.True(t, removed(rctx), "%s: the cookie is removed: %q", name, rctx.Response.Headers.Values("Set-Cookie"))
 	}
 
 	// Not gone: the client still needs its cookie, or has none.
-	rctx, err := request(sm, core.RequireSession, pendingToken, "")
+	rctx, err := request(sm, requireSessionMW, pendingToken, "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a session that waits for its second factor keeps its cookie")
 
-	rctx, err = request(sm, core.RequireSession, "", "")
+	rctx, err = request(sm, requireSessionMW, "", "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "no cookie came, none is removed")
 
@@ -431,17 +434,17 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 	// Both transports: the bearer token is read first. A dead one says
 	// nothing about the cookie next to it, which is another session's.
 	both := manager(core.SessionConfig{Transport: core.TransportBoth})
-	rctx, err = request(both, core.RequireSession, liveToken, revokedToken)
+	rctx, err = request(both, requireSessionMW, liveToken, revokedToken)
 	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "the live session's cookie stays")
-	rctx, err = request(both, core.RequireSession, revokedToken, "")
+	rctx, err = request(both, requireSessionMW, revokedToken, "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	assert.True(t, removed(rctx), "the dead session's own cookie goes")
 
 	// The database fails: nothing is known about the session, so nothing
 	// is taken from the client.
 	require.NoError(t, sqlDB.Close())
-	rctx, err = request(sm, core.RequireSession, liveToken, "")
+	rctx, err = request(sm, requireSessionMW, liveToken, "")
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryDatabase), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a failed lookup removes no cookie")
@@ -483,7 +486,7 @@ func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
 		require.NotEmpty(t, rec.Logger.At(slog.LevelDebug), "%s: creating the session ran statements, so they are being counted", name)
 
 		reached := false
-		handler := core.RequireSession(sm)(func(*core.RequestContext) error {
+		handler := requireSession(sm, func(*core.RequestContext) error {
 			reached = true
 			return nil
 		})
@@ -842,11 +845,12 @@ func TestSessionFreshness(t *testing.T) {
 	assert.False(t, sm.IsFresh(nil))
 
 	reached := 0
-	handler := core.RequireFreshSession(sm)(func(rctx *core.RequestContext) error {
+	handler := authenticated(sm, core.RequireFreshSession(sm)(func(rctx *core.RequestContext) error {
 		reached++
-		assert.NotNil(t, rctx.Values["session"], "it does what RequireSession does first")
+		_, ok := identity.CallerFrom(rctx.Ctx).Session()
+		assert.True(t, ok, "it does what RequireSession does first")
 		return nil
-	})
+	}))
 	request := func(header string) (*core.RequestContext, error) {
 		req := httptest.NewRequest(http.MethodPost, "/x", nil)
 		if header != "" {
@@ -1054,7 +1058,7 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 	// request sends one request through RequireSession to a handler that
 	// sets a Cache-Control of its own. It returns the response and the
 	// session the handler saw.
-	request := func(sm core.SessionManager, cookie, bearer string) (*core.RequestContext, *models.Session) {
+	request := func(sm core.SessionManager, cookie, bearer string) (*core.RequestContext, identity.SessionRef) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, "/me", nil)
 		if cookie != "" {
@@ -1063,15 +1067,16 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 		if bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
-		var seen *models.Session
-		handler := core.RequireSession(sm)(func(rctx *core.RequestContext) error {
-			seen, _ = rctx.Values["session"].(*models.Session)
+		var seen identity.SessionRef
+		reached := false
+		handler := requireSession(sm, func(rctx *core.RequestContext) error {
+			seen, reached = identity.CallerFrom(rctx.Ctx).Session()
 			rctx.Response.SetHeader("Cache-Control", ownCacheControl)
 			return rctx.Response.JSON(http.StatusOK, behemoth.M{})
 		})
 		rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, handler(rctx))
-		require.NotNil(t, seen, "the request reached the handler")
+		require.True(t, reached, "the request reached the handler")
 		return rctx, seen
 	}
 	cookies := func(rctx *core.RequestContext) []*http.Cookie {
@@ -1184,4 +1189,36 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 	for i, got := range auths {
 		assert.Same(t, ac, got, "%s: handlers get the booted AuthContext", fired[i])
 	}
+}
+
+// authenticated wraps next in the stage the router puts in front of every
+// route, over sm's sessions.
+func authenticated(sm core.SessionManager, next core.HandlerFunc) core.HandlerFunc {
+	return core.AuthenticateRequests(auth.NewAuthenticator(sm, nil), sm, nil)(next)
+}
+
+// requireSession is what a route behind RequireSession runs: the
+// authentication stage, then RequireSession, then next.
+func requireSession(sm core.SessionManager, next core.HandlerFunc) core.HandlerFunc {
+	return authenticated(sm, core.RequireSession()(next))
+}
+
+// The authentication stage replaces any caller the context carried, so a
+// middleware in front of Behemoth can't plant an identity: a request without
+// a token is anonymous, whatever its context said.
+func TestAuthenticationReplacesAPlantedCaller(t *testing.T) {
+	sm, _ := newSessionManager(t, core.SessionConfig{Transport: core.TransportHeader})
+	reached := false
+	handler := requireSession(sm, func(*core.RequestContext) error {
+		reached = true
+		return nil
+	})
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	planted := identity.WithCaller(req.Context(), identity.System("planted").For("victim"))
+	rctx := &core.RequestContext{Ctx: planted, Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+
+	err := handler(rctx)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "got %v", err)
+	assert.False(t, reached)
+	assert.True(t, identity.CallerFrom(rctx.Ctx).IsAnonymous())
 }

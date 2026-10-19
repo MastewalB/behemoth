@@ -5,6 +5,8 @@ This document explains how a session token reaches the client and comes back: th
 The code lives in:
 
 - `core/session.go`: `TokenTransport`, `SessionTokenHeader`, the `SessionManager` interface, `RequireSession`, `RequireFreshSession`
+- `core/authenticator.go`: `AuthenticateRequests`, the stage the router puts in front of every route (`Router.ApplyAuthentication`)
+- `auth/authenticator.go`: `DefaultAuthenticator`, which resolves the token and applies the rolling expiration
 - `core/auth-options.go`: `SessionConfig`, `WithDefaults`, `Validate`
 - `core/signin.go`: `SignInResult`, `WriteSignIn`
 - `auth/session.go`: `DefaultSessionManager.WriteToken`, `ExtractToken`, `ClearToken`, `Touch`, `ExtendToken`
@@ -74,11 +76,11 @@ Set-Cookie: session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-A
 - It writes to the response and nothing else. It does not revoke.
 - It removes the cookie for the request that presented its token in it (`DefaultSessionManager.cookieCarries`, which `ExtendToken` uses too). Under `TransportBoth` the token is read from the `Authorization` header first, and the cookie next to it may be another session's, which is live. A request without the cookie gets no `Set-Cookie`.
 
-It has two callers: a route that ended its caller's own session, and the session check when it finds the session gone.
+It has two callers: a route that ended its caller's own session, and the authentication stage when the session a request carries is gone.
 
 `[Convention, important]` **A route calls it only after the session has ended.** `POST /sign-out` is the one route that does:
 
-1. `RequireSession` resolves the caller's session.
+1. The authentication stage resolves the caller's session, and `RequireSession` lets the request through.
 2. `emailpassword.SignOut` fires the sign-out points and revokes it.
 3. `handleSignOut` calls `ClearToken` and answers `200`.
 
@@ -86,7 +88,7 @@ A sign-out that did not go through returns at step 2: a hook handler on `auth.si
 
 `SignOut` does not call `ClearToken` itself, for two reasons. It takes a session id, which may be another client's (an administrator ending a user's session), and the cookie on the response belongs to the caller. It also runs from code, where `HookContext.Request` is nil.
 
-**A session that ends in another request** leaves its cookie in the browser at first: one revoked from another device, by `RevokeAllForUser` (the email change revert), by eviction over `MaxConcurrent`, expired, or deleted with its user. No response went to that browser when it ended. `RequireSession` takes the cookie back on the next request that carries it, with the refusal: see *What the session check answers* below. Until that request the cookie is a dead token that grants nothing.
+**A session that ends in another request** leaves its cookie in the browser at first: one revoked from another device, by `RevokeAllForUser` (the email change revert), by eviction over `MaxConcurrent`, expired, or deleted with its user. No response went to that browser when it ended. The authentication stage takes the cookie back on the next request that carries it, whatever the route: see *What the session check answers* below. Until that request the cookie is a dead token that grants nothing.
 
 ## Following a rolling session
 
@@ -97,26 +99,26 @@ Touch(ctx context.Context, session *models.Session) (*models.Session, error)
 ExtendToken(rctx *RequestContext, rawToken string, session *models.Session) (written bool)
 ```
 
-`RequireSession` is where both are called, for every route behind it:
+The authentication stage is where both are called, for every request that carries a token, whatever its route:
 
-1. `ExtractToken` and `Validate` resolve the session. A request without a usable session ends here: see *What the session check answers* below.
+1. `ExtractToken` reads the token, and `DefaultAuthenticator` resolves it with `Get`. A request without a usable session goes on as an anonymous caller: see *What the session check answers* below.
 2. `Touch` is handed the validated session and decides whether an extension is due. It returns the session with its new expiry, or nil when it wrote nothing.
-3. On an extension, `ExtendToken` sets the cookie again with the same token and the new `Expires`, and reports that it did. The extended session is what goes into `rctx.Values["session"]`, so the handler reads the expiry the client now has.
+3. On an extension, `ExtendToken` sets the cookie again with the same token and the new `Expires`, and reports that it did. The extended session is the caller's session, so the handler reads the expiry the client now has.
 4. The handler runs.
-5. If the cookie was written, the middleware sets `Cache-Control: no-store`.
+5. If the cookie was written, the stage sets `Cache-Control: no-store`.
 
 - **Best effort.** A failed `Touch` is not an error of the request. The session is used as it was validated, and nothing is written.
-- **A request that is not due costs nothing.** Steps 1 to 3 run on every authenticated request. `Touch` reads whether an extension is due off the session it is handed (`DefaultSessionManager.extensionDue`: less than `UpdateAge` is left, and never with `UpdateAge` at zero), and returns without touching the database when it is not. With a session cache, where `Validate` is answered from the cache, such a request runs no statement at all. Without one it runs the read that validates the token.
+- **A request that is not due costs nothing.** Steps 1 to 3 run on every authenticated request. `Touch` reads whether an extension is due off the session it is handed (`DefaultSessionManager.extensionDue`: less than `UpdateAge` is left, and never with `UpdateAge` at zero), and returns without touching the database when it is not. With a session cache, where `Get` is answered from the cache, such a request runs no statement at all. Without one it runs the read that validates the token.
 - **When it is due, the row decides.** `Touch` then reads the row and checks again before it writes. The session it was handed may be a cached copy, and another request may have extended or revoked the session a moment earlier. A row that is no longer due, or is revoked, is left alone and `Touch` returns nil. The read and the write happen once per extension.
 - **Only the cookie's own token.** `ExtendToken` writes the cookie when the request carried the token in it. Under `TransportBoth` a request may present the token in the `Authorization` header, which `ExtractToken` reads first, while its cookie holds another session's token. Writing the cookie then would replace that other session's token in the browser.
 - **The header and body transports need nothing.** Their clients keep the token without a date, and the server alone decides when it ends. `ExtendToken` returns false, and no `Set-Auth-Token` is sent: that header is for a sign-in.
-- **`no-store` is set after the handler, and overrides it.** The response carries the session token. A handler that marks its responses cacheable does so for the content it wrote and does not know the middleware added a credential. A shared cache that stored such a response would hand the token to its next reader. `WriteSignIn` marks its response the same way. This affects the one response per extension.
+- **`no-store` is set after the handler, and overrides it.** The response carries the session token. A handler that marks its responses cacheable does so for the content it wrote and does not know the stage added a credential. A shared cache that stored such a response would hand the token to its next reader. `WriteSignIn` marks its response the same way. This affects the one response per extension.
 
-`[Implementation Detail]` **One `Set-Cookie` per response.** The sign-out route sits behind `RequireSession`. A sign-out of a session that is due would queue two cookies: the extended one from step 3 and the expired one from `ClearToken`. `DefaultSessionManager.setCookie`, which all three writers use, removes a session cookie already queued on the recorder before it adds the new one, so the last write is the only one sent. A response should not set one cookie twice (RFC 6265, section 4.1.1), and here the two would contradict each other.
+`[Implementation Detail]` **One `Set-Cookie` per response.** The sign-out route is authenticated like every route. A sign-out of a session that is due would queue two cookies: the extended one from step 3 and the expired one from `ClearToken`. `DefaultSessionManager.setCookie`, which all three writers use, removes a session cookie already queued on the recorder before it adds the new one, so the last write is the only one sent. A response should not set one cookie twice (RFC 6265, section 4.1.1), and here the two would contradict each other.
 
 ## What the session check answers
 
-`RequireSession` writes no response. It returns an error, and the router maps it like a handler's (`wrapWithErrorMapping`, see [`../http/request_routing.md`](../http/request_routing.md)): the status from the error's category, the public message and the code in the body, one log line.
+The authentication stage resolves the token of every request, and a request without a usable session goes on as an anonymous caller that keeps the reason. `RequireSession` writes no response. It returns that reason, and the router maps it like a handler's (`wrapWithErrorMapping`, see [`../http/request_routing.md`](../http/request_routing.md)): the status from the error's category, the public message and the code in the body, one log line.
 
 | What happened | The error it returns | The router answers | `ClearToken` |
 | --- | --- | --- | --- |

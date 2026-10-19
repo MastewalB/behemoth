@@ -73,13 +73,13 @@ All three kinds have a user id as their subject, and the number in their metadat
 
 `Plugin.Verify` calls `AddNumber` when the request names a user and `SignInWithCode` when it does not. `handleSend` and `handleVerify` fill the user from `optionalSession`.
 
-`optionalSession` is a middleware on those two routes only:
+`optionalSession` is a middleware on those two routes only. The router has authenticated the request already, so it reads the caller:
 
 | Request | Result |
 | --- | --- |
 | no session token | passes; the handler sees no session |
-| a valid token | passes; `rctx.Values["session"]` is set |
-| a token that is expired, revoked, pending or unknown | the session error, `401` |
+| a valid token | passes; the caller is the session's user (`sessionUser`) |
+| a token that is expired, revoked, pending or unknown | the caller's `AuthError`, a session error, `401` |
 
 The third row matters. A signed-in user whose session expired while they typed the code would otherwise be taken for a visitor, and their request to add a number would become a sign-in attempt for whoever holds it.
 
@@ -126,7 +126,6 @@ These limits apply:
 - `[Not built]` A notice by text message when a number changes or a password is reset. A number change sends nothing to the old number.
 - `[Limit]` A request for a number that has an account does more work than one for a number that has none (a code write). `docs/ongoing.md` has the entry it shares with the link plugins.
 - `[Limit]` The per-address limits are route rules, so the flows called from code have only the per-number limit.
-- `[Limit]` `optionalSession` repeats part of `RequireSession` and does not extend the session.
 
 ## Design decisions
 

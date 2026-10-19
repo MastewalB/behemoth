@@ -151,7 +151,7 @@ Session: core.SessionConfig{
 },
 ```
 
-A session is "used" by a request to a route behind `core.RequireSession` or `core.RequireFreshSession`. That is where the extension happens. A request that reaches no such route extends nothing.
+A session is "used" by any request to one of Behemoth's routes that carries its token: the router authenticates every request before the route runs, and that is where the extension happens. A request that carries no token extends nothing.
 
 Only the request that crosses the threshold writes to the database. The others cost nothing extra: with a session cache (`BootConfig.KV`), a request whose session is not due is checked without a database query.
 
@@ -163,7 +163,7 @@ What the client sees depends on the transport:
 | `core.TransportHeader`, `core.TransportBody` | has nothing to add | nothing. The client keeps the token without a date, and the server decides when it ends. |
 | `core.TransportBoth` | sets the cookie again if the request carried the token in the cookie | nothing |
 
-For a route of yours behind `RequireSession`, here `/me`, and a session that is due:
+For a route of yours, here `/me`, and a session that is due:
 
 ```bash
 curl -i localhost:8080/api/auth/me --cookie 'session_token=r8_x6fau4053kWPOukmnuUFxoY8iz...'
@@ -260,10 +260,10 @@ Refusals are counted in the `behemoth.http.origin_refused` metric by `reason`. S
 
 ```go
 {Method: http.MethodGet, Path: "/me", Handler: me,
-	Middlewares: []core.Middleware{core.RequireSession(ac.SessionManager)}},
+	Middlewares: []core.Middleware{core.RequireSession()}},
 ```
 
-`core.RequireSession` reads the token where the transport says, answers `401` without a valid active session, and puts the session in `rctx.Values["session"]` and its id in `rctx.Values["sessionID"]`. With `UpdateAge` set it also extends a session that is due, and the session your handler reads then has the new expiry. See [Rolling expiration](#rolling-expiration).
+The router authenticates every request before its route runs: it reads the token where the transport says, and puts the caller on the request's context. `core.RequireSession` answers `401` unless the caller signed in with a valid active session. Your handler reads the session from the caller with `identity.CallerFrom(rctx.Ctx).Session()`, and the user is `Session().UserID`. With `UpdateAge` set, a session that is due has been extended by then, and the session your handler reads has the new expiry. See [Rolling expiration](#rolling-expiration).
 
 A request it refuses does not reach your handler. The response is JSON with a message and a code your client can act on:
 
@@ -275,11 +275,11 @@ A request it refuses does not reach your handler. The response is JSON with a me
 | has the token of an expired session | `401` | `{"error": "session expired", "code": "session_expired"}` | removed |
 | has the token of a session that waits for a second factor | `401` | `{"error": "additional verification required", "code": "session_pending"}` | kept: the client needs it to present the second factor |
 
-A session that is invalid, revoked, or expired does not come back, so with a cookie transport the refusal also removes the cookie. A browser can't delete it itself, and would send the dead token with every request until the cookie expired. With `core.TransportBoth` this applies when the token came in the cookie. A request that sent a bearer token keeps its cookie. Clients of the header and body transports hold the token themselves and discard it when they get one of these codes.
+A session that is invalid, revoked, or expired does not come back, so with a cookie transport the response also removes the cookie. The router does this for any request that carries such a token, whatever its route. A browser can't delete it itself, and would send the dead token with every request until the cookie expired. With `core.TransportBoth` this applies when the token came in the cookie. A request that sent a bearer token keeps its cookie. Clients of the header and body transports hold the token themselves and discard it when they get one of these codes.
 
 A `401` always means the client has no usable session. If Behemoth could not check the session, because the database is down for example, the answer is `500` with a generic message, and the error is logged. No cookie is removed, and a client should not sign its user out on a `500`.
 
-The middleware returns these as typed errors and the router writes the response, so your `RouterConfig.ErrorMapper` shapes them like any other error.
+`RequireSession` returns these as typed errors and the router writes the response, so your `RouterConfig.ErrorMapper` shapes them like any other error.
 
 ### Fresh sessions
 
@@ -318,7 +318,7 @@ A route that ends its caller's own session takes the token back afterwards with 
 
 ```go
 func signOutEverywhere(rctx *core.RequestContext) error {
-	session, _ := rctx.Values["session"].(*models.Session) // set by RequireSession
+	session, _ := identity.CallerFrom(rctx.Ctx).Session() // behind RequireSession
 	if err := rctx.Auth.SessionManager.RevokeAllForUser(rctx.Ctx, session.UserID, "signed_out_everywhere", ""); err != nil {
 		return err
 	}
