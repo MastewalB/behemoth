@@ -15,6 +15,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
 )
@@ -265,6 +266,11 @@ type HookContext struct {
 	Request *RequestContext
 }
 
+// Caller returns the caller of the operation, identity.CallerFrom(h.Ctx): who
+// it runs for, and where the call came from. It reads the context and keeps
+// no copy, so a handler always sees the caller the dispatch runs with.
+func (h *HookContext) Caller() identity.Caller { return identity.CallerFrom(h.Ctx) }
+
 type requestContextKey struct{}
 
 // ContextWithRequest returns ctx carrying rc, the request being handled. The
@@ -350,6 +356,9 @@ type PluginInitContext struct {
 	Tokens     TokenCatalog
 	RateLimits RateLimitCatalog
 	Schemas    schema.Registry
+	// Permissions is where a plugin declares the permissions its flows
+	// require (Access).
+	Permissions PermissionCatalog
 }
 
 // BeforeHookFunc: pre-persistence, validate-and-prepare only.

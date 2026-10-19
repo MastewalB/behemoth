@@ -66,17 +66,10 @@ The plugins planned next act on the signed-in user's own account: a second facto
 
 ## The caller
 
-The shape, to be settled in the implementation:
+As built in step 2, in package `identity`:
 
 ```go
-// PrincipalType says what kind of identity a Principal names.
-type PrincipalType string
-
-const (
-	PrincipalUser    PrincipalType = "user"    // ID is a user id
-	PrincipalService PrincipalType = "service" // ID is a client id: another system with a key of its own (not built)
-	PrincipalSystem  PrincipalType = "system"  // ID names code in the process, such as "purge-sessions"
-)
+type PrincipalType string // PrincipalUser, PrincipalService (not built), PrincipalSystem
 
 // Principal is who an operation runs for. The zero value is nobody.
 type Principal struct {
@@ -86,59 +79,52 @@ type Principal struct {
 
 // SessionRef is the session a caller was authenticated with, as plain data.
 type SessionRef struct {
-	ID             string
-	UserID         string
-	State          string
-	ExpiresAt      time.Time
-	FreshAt        time.Time
-	ImpersonatorID string
+	ID, UserID, State, ImpersonatorID string
+	ExpiresAt, FreshAt                time.Time
 }
 
-// Caller is who an operation runs for, and where the call came from. The
-// zero value is an anonymous caller about which nothing is known.
-type Caller struct {
-	principal Principal
-	delegate  Principal   // zero when the principal acts itself
-	session   *SessionRef // nil unless the caller was authenticated with a session
-	grant     grant       // the zero value holds no permission
-	authErr   error       // why the caller is anonymous although it presented a credential
+// Peer is what a transport knows about a call besides its credential.
+type Peer struct{ Transport, IPAddress, UserAgent string }
 
-	transport string // "http"; "" for a call from code in the process
-	ipAddress string // resolved with the trusted proxies
-	userAgent string
-}
+// Caller is who an operation runs for, and where the call came from. Its
+// fields are unexported. The zero value is anonymous and holds no permission.
+type Caller struct{ /* principal, delegate, session, grant, authErr, peer */ }
 
 func (c Caller) Principal() Principal
 func (c Caller) Delegate() Principal
-func (c Caller) Session() *SessionRef
+func (c Caller) Session() (SessionRef, bool) // a copy
 func (c Caller) AuthError() error
-func (c Caller) Transport() string
-func (c Caller) IPAddress() string
-func (c Caller) UserAgent() string
+func (c Caller) Peer() Peer
+func (c Caller) IsAnonymous() bool
+func (c Caller) Holds(permission string, admin bool) bool
 
 func WithCaller(ctx context.Context, c Caller) context.Context
 func CallerFrom(ctx context.Context) Caller // the zero Caller when ctx carries none
 
-// System returns a caller for code in the process, named for the audit log.
+// For code in the process.
 func System(name string) Caller
+func (c Caller) For(userID string) Caller // ErrInvalidFor on any caller but a system one
 
-// For returns a caller that acts for the user: the principal is the user,
-// and the delegate is the system caller For is called on.
-func (c Caller) For(userID string) Caller
+// For an authenticator.
+func Anonymous(peer Peer) Caller
+func Unauthenticated(peer Peer, reason error, pending *SessionRef) Caller
+func SignedIn(session SessionRef, peer Peer) Caller
 ```
+
+A grant is all of a kind or nothing: a signed-in user holds every self-service permission, a system caller every permission, and an anonymous caller none. A grant that lists permissions one by one waits for the first delegated credential.
 
 `HookContext` gains a method, `Caller`, that returns `CallerFrom(hctx.Ctx)`. It gets no caller field, so there is no copy to keep in step ([ADR-0004](../decisions/0004-carrying-the-caller-in-the-context.md)).
 
 ### Where the types live
 
-The caller's own types (`Principal`, `SessionRef`, `Caller`, `WithCaller`, `CallerFrom`, and `System`) live in a new package, `identity`, below `telemetry`, so that `NormalizeAuditEvent` can read the caller. `identity` imports no other Behemoth package, which is why a caller holds a `SessionRef` and not a `*models.Session`. The authenticator, the permission catalog, and `Access` are contracts in `core`, the package that `types` became in step 1 ([`package_layout.md`](package_layout.md)).
+The caller's own types (`Principal`, `SessionRef`, `Peer`, `Caller`, `WithCaller`, `CallerFrom`, `System`, and the constructors an authenticator uses) live in a new package, `identity`, below `telemetry`, so that `NormalizeAuditEvent` can read the caller. `identity` imports no other Behemoth package, which is why a caller holds a `SessionRef` and not a `*models.Session`. The authenticator, the permission catalog, and `Access` are contracts in `core`, the package that `types` became in step 1 ([`package_layout.md`](package_layout.md)).
 
 ### Who builds a caller
 
-A caller's fields are unexported, so only two places can build one:
+A caller's fields are unexported, so a caller comes from a constructor:
 
-- **The authenticator,** from a transport's credential and what the transport knows about the call.
-- **`System`,** for code in the process, with `For` when that code acts for a user.
+- **`System` and `For`,** for code in the process.
+- **`Anonymous`, `Unauthenticated`, and `SignedIn`,** for an authenticator. The first two grant nothing. `SignedIn` grants a user's rights, so `TestOnlyAuthBuildsSignedInCallers` in `layout_test.go` fails when a package other than `auth` calls it.
 
 No code can write a struct literal that claims to be a signed-in user.
 
@@ -169,20 +155,13 @@ A session that waits for a second factor authenticates nobody. The caller keeps 
 | Authenticator, in core | Validates the token, maps "not found" to `session_invalid`, checks the state, applies the rolling extension, and builds the caller. |
 | Flow | Requires what it needs, through `Access`. |
 
-The contracts, to be settled in the implementation:
+The contracts, to be settled in step 3:
 
 ```go
 // Credential is what a transport takes from a request.
 type Credential struct {
 	Kind  CredentialKind // CredentialSession today
 	Value string         // the raw secret
-}
-
-// Peer is what a transport knows about a call besides its credential.
-type Peer struct {
-	Transport string
-	IPAddress string
-	UserAgent string
 }
 
 // Authenticator turns a credential into a caller.
@@ -192,12 +171,12 @@ type Authenticator interface {
 	// an error: the caller is anonymous and keeps the reason
 	// (Caller.AuthError). A failed lookup is kept in the same way, and
 	// logged once.
-	Authenticate(ctx context.Context, cred *Credential, peer Peer) (Caller, AuthOutcome)
+	Authenticate(ctx context.Context, cred *Credential, peer identity.Peer) (identity.Caller, AuthOutcome)
 }
 
 // AuthOutcome is what the transport may have to write back.
 type AuthOutcome struct {
-	Extended *SessionRef // the session, when the rolling extension extended it
+	Extended *identity.SessionRef // the session, when the rolling extension extended it
 	Ended    bool        // the credential belongs to a session that has ended
 }
 ```
@@ -223,7 +202,7 @@ These parts of the session API change:
 
 ### `Access`
 
-The require helpers are methods of a service on `AuthContext`, like the dispatcher, because they check the permission catalog. The shape, to be settled in the implementation:
+The require helpers are methods of a service on `AuthContext`, like the dispatcher, because they check the permission catalog. As built in step 2, with `auth.DefaultAccess` as the implementation; `NewAccess` takes the catalog and `SessionManager.IsFresh`:
 
 ```go
 // Access answers whether the caller on a context may run a flow.
@@ -267,7 +246,7 @@ The first four rows are what `RequireSession` answers today, so the HTTP contrac
 
 ### Permissions
 
-A plugin declares the permissions its flows require in `Declare`, through a catalog on `PluginInitContext`. The shape, to be settled in the implementation:
+A plugin declares the permissions its flows require in `Declare`, through a catalog on `PluginInitContext`. As built in step 2, with `auth.DefaultPermissionCatalog` as the implementation:
 
 ```go
 type Permission string
@@ -384,7 +363,7 @@ The caller's package sits below `telemetry`, and a hook callout sends the caller
 | Step | Content | Status |
 | --- | --- | --- |
 | 1 | Part 1 of [`package_layout.md`](package_layout.md): the packages move to their layout, except for the HTTP types | Done |
-| 2 | The caller's package, `WithCaller`, `CallerFrom`, `System`, `For`, `HookContext.Caller`, the permission catalog, and `Access`, with tests. Nothing reads them yet. | Not started |
+| 2 | The caller's package, `WithCaller`, `CallerFrom`, `System`, `For`, `HookContext.Caller`, the permission catalog, and `Access`, with tests. Nothing reads them yet. | Done |
 | 3 | The authenticator. The router authenticates every call and puts the caller on the context. The token carrier takes the four HTTP methods of `SessionManager`, and `TokenTransport` gets its new name. `RequireSession`, `RequireFreshSession`, and `optionalSession` become wrappers, and the session keys in `RequestContext.Values` go. | Not started |
 | 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules | Not started |
 | 5 | The flows: the permissions declared, and the flows in the table above require them. The `UserID` fields of `phonenumber.SendRequest`, `phonenumber.VerifyRequest`, and `emailverification.ChangeRequest` go, and so does `SessionTokenRequest.Session`. | Not started |
