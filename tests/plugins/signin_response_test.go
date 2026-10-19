@@ -29,8 +29,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// bootPasswords boots the email/password plugin alone with session.
-func bootPasswords(t *testing.T, session core.SessionConfig, hookFn func(core.HookRegistry) error) (*core.AuthContext, mountedRoutes, error) {
+// bootPasswords boots the email/password plugin alone with session and the
+// token carrier's settings.
+func bootPasswords(t *testing.T, session core.SessionConfig, carrier core.TokenCarrierConfig, hookFn func(core.HookRegistry) error) (*core.AuthContext, mountedRoutes, error) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "signin.db"))
 	require.NoError(t, err)
@@ -46,6 +47,7 @@ func bootPasswords(t *testing.T, session core.SessionConfig, hookFn func(core.Ho
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session: session,
+		Router:  core.RouterConfig{Carrier: carrier},
 		HTTP:    mounted,
 		Hooks:   hookFn,
 	})
@@ -74,26 +76,26 @@ func callHeaders(t *testing.T, ac *core.AuthContext, route core.Route, body stri
 	return w
 }
 
-// A sign-in hands the session token over where SessionConfig.Transport
-// says, and nowhere else: a cookie, the Set-Auth-Token header, or the JSON
-// body. The body has the same shape for every transport, and the user in it
-// is keyed by column name. Left unset, the transport is the cookie.
-func TestSignInDeliversTheTokenByTransport(t *testing.T) {
+// A sign-in hands the session token over where RouterConfig.Carrier says,
+// and nowhere else: a cookie, the Set-Auth-Token header, or the JSON body.
+// The body has the same shape for every delivery, and the user in it is
+// keyed by column name. Left unset, the delivery is the cookie.
+func TestSignInDeliversTheTokenByDelivery(t *testing.T) {
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
-		session core.SessionConfig
+		carrier core.TokenCarrierConfig
 		cookie  string // the cookie's name when the token is in one
 		header  bool   // the token is in Set-Auth-Token
 		body    bool   // the token is in the JSON body
 	}{
-		"nothing set":   {core.SessionConfig{}, "session_token", false, false},
-		"cookie, named": {core.SessionConfig{Transport: core.TransportCookie, CookieName: "sid"}, "sid", false, false},
-		"header":        {core.SessionConfig{Transport: core.TransportHeader}, "", true, false},
-		"body":          {core.SessionConfig{Transport: core.TransportBody}, "", false, true},
-		"both":          {core.SessionConfig{Transport: core.TransportBoth}, "session_token", true, false},
+		"nothing set":   {core.TokenCarrierConfig{}, "session_token", false, false},
+		"cookie, named": {core.TokenCarrierConfig{Delivery: core.DeliveryCookie, CookieName: "sid"}, "sid", false, false},
+		"header":        {core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, "", true, false},
+		"body":          {core.TokenCarrierConfig{Delivery: core.DeliveryBody}, "", false, true},
+		"both":          {core.TokenCarrierConfig{Delivery: core.DeliveryBoth}, "session_token", true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ac, mounted, err := bootPasswords(t, tc.session, nil)
+			ac, mounted, err := bootPasswords(t, core.SessionConfig{}, tc.carrier, nil)
 			require.NoError(t, err)
 
 			w := call(t, ac, mounted["/api/auth/sign-up/email"],
@@ -136,7 +138,7 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 			assert.Equal(t, tc.body, signedIn.Token != "", "token in the body: %s", w.Body.String())
 
 			// Wherever it arrived, it is the session's token, and the route
-			// behind RequireSession accepts it where this client sends it.
+			// that needs a session accepts it where this client sends it.
 			signOut := mounted["/api/auth/sign-out"]
 			assert.Equal(t, http.StatusUnauthorized, call(t, ac, signOut, "").Code, "without the token")
 			var present map[string]string
@@ -153,7 +155,7 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 			}
 			if tc.cookie != "" && tc.header {
 				assert.Equal(t, fromCookie, fromHeader, "the cookie and the header carry one token")
-				// A browser under both transports sends the cookie by
+				// A browser under both deliveries sends the cookie by
 				// itself, next to the bearer token.
 				present["Cookie"] = tc.cookie + "=" + token
 			}
@@ -165,7 +167,7 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 
 			// The sign-out takes the token back. A browser can't drop an
 			// HttpOnly cookie by itself, so the response replaces it with
-			// an expired one. A client of the other transports holds the
+			// an expired one. A client of the other deliveries holds the
 			// token itself, and gets no cookie.
 			gone := (&http.Response{Header: out.Header()}).Cookies()
 			if tc.cookie == "" {
@@ -186,7 +188,7 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 // behind the session check is refused, and the refusal removes the cookie.
 func TestASessionEndedElsewhereLosesItsCookie(t *testing.T) {
 	ctx := context.Background()
-	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, nil)
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, core.TokenCarrierConfig{}, nil)
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -225,7 +227,7 @@ func TestRefusedSignOutKeepsTheCookie(t *testing.T) {
 			return nil, errs.NewInvalidInputError("test", "session", "not now", nil)
 		}, nil)
 	}
-	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, refuse)
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, core.TokenCarrierConfig{}, refuse)
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -251,16 +253,16 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 			return payload, nil
 		}, nil)
 	}
-	for transport, read := range map[core.TokenTransport]func(w *httptest.ResponseRecorder, body map[string]any) string{
-		core.TransportBody: func(_ *httptest.ResponseRecorder, body map[string]any) string {
+	for delivery, read := range map[core.TokenDelivery]func(w *httptest.ResponseRecorder, body map[string]any) string{
+		core.DeliveryBody: func(_ *httptest.ResponseRecorder, body map[string]any) string {
 			token, _ := body["token"].(string)
 			return token
 		},
-		core.TransportHeader: func(w *httptest.ResponseRecorder, _ map[string]any) string {
+		core.DeliveryHeader: func(w *httptest.ResponseRecorder, _ map[string]any) string {
 			return w.Header().Get(core.SessionTokenHeader)
 		},
 	} {
-		ac, mounted, err := bootPasswords(t, core.SessionConfig{Transport: transport}, stepUp)
+		ac, mounted, err := bootPasswords(t, core.SessionConfig{}, core.TokenCarrierConfig{Delivery: delivery}, stepUp)
 		require.NoError(t, err)
 		call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 		w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -268,24 +270,24 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-		assert.Equal(t, "requires_second_factor", body["status"], transport)
-		assert.NotContains(t, body, "user", "%s: the user is not signed in yet", transport)
+		assert.Equal(t, "requires_second_factor", body["status"], delivery)
+		assert.NotContains(t, body, "user", "%s: the user is not signed in yet", delivery)
 		token := read(w, body)
-		require.NotEmpty(t, token, "%s: %s", transport, w.Body.String())
+		require.NotEmpty(t, token, "%s: %s", delivery, w.Body.String())
 		session, err := ac.SessionManager.Get(ctx, token)
-		require.NoError(t, err, transport)
-		assert.Equal(t, models.SessionPending, session.State, transport)
-		if transport == core.TransportHeader {
-			assert.NotContains(t, body, "token", "under the header transport the body has no token")
+		require.NoError(t, err, delivery)
+		assert.Equal(t, models.SessionPending, session.State, delivery)
+		if delivery == core.DeliveryHeader {
+			assert.NotContains(t, body, "token", "under the header delivery the body has no token")
 		}
 	}
 }
 
-// The sign-out route sits behind RequireSession, which extends the cookie of
-// a rolling session that is due. The sign-out then removes that cookie. The
+// The sign-out route is authenticated like every route, and the
+// authentication stage extends the cookie of a rolling session that is due. The sign-out then removes that cookie. The
 // response sets it once, and what it sets is the removal.
 func TestSignOutOfARollingSessionSetsTheCookieOnce(t *testing.T) {
-	ac, mounted, err := bootPasswords(t, core.SessionConfig{ExpiresIn: time.Hour, UpdateAge: 2 * time.Hour}, nil) // always due
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{ExpiresIn: time.Hour, UpdateAge: 2 * time.Hour}, core.TokenCarrierConfig{}, nil) // always due
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -303,13 +305,13 @@ func TestSignOutOfARollingSessionSetsTheCookieOnce(t *testing.T) {
 	assert.Error(t, err, "the session is revoked")
 }
 
-// A transport Boot does not know stops it, instead of leaving sign-in
+// A delivery Boot does not know stops it, instead of leaving sign-in
 // without a way to hand the token over.
-func TestBootRefusesAnUnknownSessionTransport(t *testing.T) {
-	_, _, err := bootPasswords(t, core.SessionConfig{Transport: "Header"}, nil)
+func TestBootRefusesAnUnknownTokenDelivery(t *testing.T) {
+	_, _, err := bootPasswords(t, core.SessionConfig{}, core.TokenCarrierConfig{Delivery: "Header"}, nil)
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
-	assert.Contains(t, err.Error(), "Transport")
+	assert.Contains(t, err.Error(), "RouterConfig.Carrier.Delivery")
 }
 
 // The three columns visibilityPlugin contributes to users.

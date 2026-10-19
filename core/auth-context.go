@@ -25,13 +25,17 @@ type AuthContext struct {
 	Crypto         crypto.Services
 	SessionManager SessionManager
 	// SessionConfig is BootConfig.Session with its defaults applied: the
-	// settings the session manager runs with. A route that hands the client
-	// a value of its own reads it to deliver the value the way the session
-	// token travels (Transport), in a cookie that a browser treats like the
-	// session cookie (CookieSameSite, CookieInsecure). It is a copy:
-	// changing it changes nothing.
+	// settings the session manager runs with. It is a copy: changing it
+	// changes nothing.
 	SessionConfig SessionConfig
-	TokenManager  TokenManager
+	// TokenCarrier carries the session token over HTTP, the way
+	// RouterConfig.Carrier says: a sign-in route hands the token to the
+	// client through it (WriteSignIn), and a route that ends its caller's
+	// session takes the token back (Clear). A route that hands the client a
+	// value of its own reads TokenCarrier.Config to deliver it the same way.
+	// Never nil on an AuthContext Boot returns.
+	TokenCarrier *TokenCarrier
+	TokenManager TokenManager
 	// JWT signs and verifies JWTs: internal ones with the key manager's
 	// HMAC key, external ones with keys derived from the master secret
 	// (ADR-0002). Never nil on an AuthContext Boot returns. External tokens

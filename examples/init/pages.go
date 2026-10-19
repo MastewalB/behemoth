@@ -30,8 +30,8 @@ func mountPages(engine *gin.Engine) {
 
 // magicPage finishes a magic link sign-in: the button posts the token to
 // POST /api/auth/magic-link/verify. The example delivers session tokens in
-// the Set-Auth-Token response header (core.TransportHeader), so the page
-// reads it from there; with a cookie transport the browser would keep it.
+// the Set-Auth-Token response header (core.DeliveryHeader), so the page
+// reads it from there; with a cookie delivery the browser would keep it.
 const magicPage = `<!doctype html>
 <meta charset="utf-8">
 <title>Sign in</title>

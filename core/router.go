@@ -46,6 +46,12 @@ type RouterConfig struct {
 	// in. A request without a usable value gets a generated ID. Default
 	// "X-Request-ID".
 	RequestIDHeader string
+
+	// Carrier is where the session token travels over HTTP, and the
+	// attributes of the session cookie. Boot builds AuthContext.TokenCarrier
+	// from it. The zero value is an HttpOnly, Secure, SameSite=Lax cookie
+	// named DefaultSessionCookieName.
+	Carrier TokenCarrierConfig
 }
 
 type Router struct {

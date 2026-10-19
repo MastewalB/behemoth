@@ -123,7 +123,8 @@ An identifier keeps its name unless the new package makes the name stutter or co
 | `TokenKindEmailVerification`, `TokenKindPasswordReset`, `TokenKindMagicLink`, `TokenKindOAuthState`, `TokenKindAPIKey` | `core`, typed `models.TokenKind` | |
 | `TokenBackend` and its values, `TokenKindDef`, `TokenConfig`, `TokenCatalog`, `TokenManager` | `core` | |
 | `SessionState` and its values | removed. Callers use `models.SessionState`. | |
-| `SessionManager`, `SessionMeta`, `SessionRevokedUserDeleted`, `TokenTransport` and its values | `core` | |
+| `SessionManager`, `SessionMeta`, `SessionRevokedUserDeleted` | `core` | |
+| `TokenDelivery` and its values, `SameSiteMode` and its values, `DefaultSessionCookieName`, `TokenCarrierConfig`, `TokenCarrier` | `core` | `web` |
 | `SessionTokenHeader`, `RequireSession`, `RequireFreshSession` | `core` | `web` |
 | `SessionTokenRequest`, `SessionToken`, `SessionTokens`, `SessionTokenAudienceKey`, `SessionTokenClaimsKey` | `core` | |
 | `PathSessionToken` | `core` | `web` |
@@ -135,7 +136,7 @@ An identifier keeps its name unless the new package makes the name stutter or co
 | the crypto aliases in `types/crypto.go` | removed. Callers use `crypto`. | |
 | `types/database.go`, `types/models.go` | deleted | |
 
-The caller plan changes some of these in its own steps: its step 3 moves four `SessionManager` methods to a token carrier and renames `TokenTransport`, and may move `SessionConfig`'s cookie fields with them.
+Step 3 of the caller plan moved four `SessionManager` methods to `TokenCarrier`, renamed `TokenTransport` to `TokenDelivery`, and moved the cookie fields of `SessionConfig` to `TokenCarrierConfig`, which is `RouterConfig.Carrier`. The rows above show the result.
 
 ### `types/cryptotypes`
 

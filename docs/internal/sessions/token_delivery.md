@@ -1,15 +1,16 @@
-# Session token transport
+# Session token delivery
 
-This document explains how a session token reaches the client and comes back: the four transports, the split between the session manager and the route that answers a sign-in, how a sign-out takes the token back, how the cookie follows a session whose expiry rolls, the defaults of `SessionConfig`, and the JSON a sign-in answers with.
+This document explains how a session token reaches the client over HTTP and comes back: the four deliveries, the split between the token carrier, the session manager and the route that answers a sign-in, how a sign-out takes the token back, how the cookie follows a session whose expiry rolls, the defaults of the settings, and the JSON a sign-in answers with.
 
 The code lives in:
 
-- `core/session.go`: `TokenTransport`, `SessionTokenHeader`, the `SessionManager` interface, `RequireSession`, `RequireFreshSession`
+- `core/token_carrier.go`: `TokenDelivery`, `SessionTokenHeader`, `TokenCarrierConfig` (`RouterConfig.Carrier`), `TokenCarrier`
+- `core/session.go`: the `SessionManager` interface, `RequireSession`, `RequireFreshSession`
 - `core/authenticator.go`: `AuthenticateRequests`, the stage the router puts in front of every route (`Router.ApplyAuthentication`)
 - `auth/authenticator.go`: `DefaultAuthenticator`, which resolves the token and applies the rolling expiration
 - `core/auth-options.go`: `SessionConfig`, `WithDefaults`, `Validate`
 - `core/signin.go`: `SignInResult`, `WriteSignIn`
-- `auth/session.go`: `DefaultSessionManager.WriteToken`, `ExtractToken`, `ClearToken`, `Touch`, `ExtendToken`
+- `auth/session.go`: `DefaultSessionManager.Touch`
 - `plugins/emailpassword/email-and-password.go`: `handleSignOut`, the one route that ends its caller's session
 - `models/user.go`: the user's JSON
 
@@ -17,29 +18,43 @@ The code lives in:
 
 ## Two directions, one setting
 
-`SessionConfig.Transport` decides both how a sign-in delivers the token and where a request is expected to carry it. It also decides what a sign-out has to undo, and what has to follow when a session is extended.
+`RouterConfig.Carrier.Delivery` decides both how a sign-in delivers the token and where a request is expected to carry it. It also decides what a sign-out has to undo, and what has to follow when a session is extended.
 
-| Transport | `WriteToken` | `ExtractToken` reads | `ClearToken` | `ExtendToken` |
+| Delivery | `Write` | `Extract` reads | `Clear` | `Extend` |
 | --- | --- | --- | --- | --- |
 | `cookie` | `Set-Cookie` with `CookieName` | the cookie | `Set-Cookie` with `CookieName`, empty and expired, if the request carried the cookie | `Set-Cookie` with the same token and the new expiry |
 | `header` | the `Set-Auth-Token` response header | `Authorization: Bearer` | nothing | nothing |
 | `body` | nothing; returns `true` | `Authorization: Bearer` | nothing | nothing |
 | `both` | the cookie and the header | the header, then the cookie | the expired cookie, if the request carried the token in it | the cookie, if the request carried the token in it |
 
-`header` and `body` differ in delivery only. A client of either sends a bearer token, so `ExtractToken` treats them alike.
+`header` and `body` differ in delivery only. A client of either sends a bearer token, so `Extract` treats them alike.
+
+## The carrier and the session manager
+
+A session has two halves. The session manager (`SessionManager`) creates, resolves, extends, and revokes sessions, and takes a `context.Context`, never a request. The token carrier (`core.TokenCarrier`) is the HTTP half: it moves the raw token between the response, the client, and the next request, and knows nothing of sessions beyond a token and an expiry.
+
+| Step | Session manager | Token carrier |
+| --- | --- | --- |
+| sign-in | `Create` returns the session and its raw token | `Write` hands the token to the client |
+| each request | `Get` resolves the token; `Touch` extends a session that is due | `Extract` reads the token; `Extend` writes the cookie again |
+| sign-out | `Revoke` ends the session | `Clear` takes the token back |
+
+The authentication stage and the sign-in and sign-out routes join the two. A transport other than HTTP would carry the token its own way and call the same session manager, through the authenticator.
+
+`Boot` builds the carrier from `RouterConfig.Carrier`, with its defaults applied, and puts it on `AuthContext.TokenCarrier`. It is a struct and not an interface: what it does follows from its settings alone, and it holds no state besides them.
 
 ## Who writes what
 
-The session manager can set headers on the response, and a cookie is a header. It can't write the body: the route decides what the body is. That is why `WriteToken` returns a value.
+The carrier can set headers on the response, and a cookie is a header. It can't write the body: the route decides what the body is. That is why `Write` returns a value.
 
 ```go
-WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBody bool)
+Write(rctx *RequestContext, rawToken string, expiresAt time.Time) (inBody bool)
 ```
 
 `WriteSignIn` is the one caller in core, and the one function a sign-in route calls:
 
 1. Copies the plugin's extra fields into the body, minus the keys it owns (`user`, `token`, `status`).
-2. Calls `WriteToken`. If it returns `true`, sets `body["token"]`.
+2. Calls `Write` with the session's expiry. If it returns `true`, sets `body["token"]`.
 3. Sets `status: "requires_second_factor"` for a pending session, and `user` otherwise.
 4. Sets `Cache-Control: no-store` and writes the JSON with status `200`.
 
@@ -49,7 +64,7 @@ WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBo
 | `POST /magic-link/verify` | `core.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
 | `POST /oauth/complete` | `core.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
 
-A route that hands the client a value of its own reads `AuthContext.SessionConfig`, the session settings with their defaults, to deliver it the same way. The OAuth plugin's binding value is the one case ([`../plugins/oauth.md`](../plugins/oauth.md)).
+A route that hands the client a value of its own reads `AuthContext.TokenCarrier.Config()`, the carrier's settings with their defaults, to deliver it the same way. The OAuth plugin's binding value is the one case ([`../plugins/oauth.md`](../plugins/oauth.md)).
 
 A pending session's token is delivered like an active one's. The client needs it to present the second factor, and `SessionManager.Get` resolves a pending session by its token.
 
@@ -57,24 +72,24 @@ A flow called from code (`Plugin.SignIn`, `Plugin.Verify`) returns the raw token
 
 ## Taking the token back
 
-Revoking a session ends it on the server. The client still holds the token. A client of the header or body transport keeps the token in its own storage and discards it when it signs out. A browser with the cookie can't do that: the cookie is `HttpOnly`, so no script can remove it, and only a response can. Without one the browser sends the token of a revoked session with every request until the cookie expires.
+Revoking a session ends it on the server. The client still holds the token. A client of the header or body delivery keeps the token in its own storage and discards it when it signs out. A browser with the cookie can't do that: the cookie is `HttpOnly`, so no script can remove it, and only a response can. Without one the browser sends the token of a revoked session with every request until the cookie expires.
 
 ```go
-ClearToken(rctx *RequestContext)
+Clear(rctx *RequestContext)
 ```
 
-`ClearToken` is the counterpart of `WriteToken`. For the cookie transports it sets the session cookie again with no value, `Max-Age=0`, and an `Expires` in 1970:
+`Clear` is the counterpart of `Write`. For the cookie deliveries it sets the session cookie again with no value, `Max-Age=0`, and an `Expires` in 1970:
 
 ```
 Set-Cookie: session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Secure; SameSite=Lax
 ```
 
-- A browser replaces a cookie only with one of the same name, path, and domain. `WriteToken`, `ExtendToken`, and `ClearToken` therefore build the cookie in one function, `DefaultSessionManager.sessionCookie`, and differ in the value and the expiry.
-- `HttpOnly` and `Path=/` are fixed. `Domain`, `SameSite`, and `Secure` come from `SessionConfig.CookieDomain`, `CookieSameSite`, and `CookieInsecure`; the line above shows the defaults. `SessionConfig.Validate` refuses an unknown mode, a domain that is not a host name, and `SameSiteNone` without `Secure`. `Boot` checks the two that depend on `RouterConfig.BaseURL`: see [`../http/origin_check.md`](../http/origin_check.md), "The cookie and the base URL".
-- Invariant: a changed `CookieDomain` does not reach cookies already in browsers. `ClearToken` then emits a cookie of the new domain, and the old one stays until it expires. Its token is refused once the session is gone.
+- A browser replaces a cookie only with one of the same name, path, and domain. `Write`, `Extend`, and `Clear` therefore build the cookie in one function, `TokenCarrier.sessionCookie`, and differ in the value and the expiry.
+- `HttpOnly` and `Path=/` are fixed. `Domain`, `SameSite`, and `Secure` come from `RouterConfig.Carrier.CookieDomain`, `CookieSameSite`, and `CookieInsecure`; the line above shows the defaults. `TokenCarrierConfig.Validate` refuses an unknown mode, a domain that is not a host name, and `SameSiteNone` without `Secure`. `Boot` checks the two that depend on `RouterConfig.BaseURL`: see [`../http/origin_check.md`](../http/origin_check.md), "The cookie and the base URL".
+- Invariant: a changed `CookieDomain` does not reach cookies already in browsers. `Clear` then emits a cookie of the new domain, and the old one stays until it expires. Its token is refused once the session is gone.
 - `Max-Age=0` is what current browsers act on. `Expires` is for a client that reads only that.
 - It writes to the response and nothing else. It does not revoke.
-- It removes the cookie for the request that presented its token in it (`DefaultSessionManager.cookieCarries`, which `ExtendToken` uses too). Under `TransportBoth` the token is read from the `Authorization` header first, and the cookie next to it may be another session's, which is live. A request without the cookie gets no `Set-Cookie`.
+- It removes the cookie for the request that presented its token in it (`TokenCarrier.cookieCarries`, which `Extend` uses too). Under `DeliveryBoth` the token is read from the `Authorization` header first, and the cookie next to it may be another session's, which is live. A request without the cookie gets no `Set-Cookie`.
 
 It has two callers: a route that ended its caller's own session, and the authentication stage when the session a request carries is gone.
 
@@ -82,11 +97,11 @@ It has two callers: a route that ended its caller's own session, and the authent
 
 1. The authentication stage resolves the caller's session, and `RequireSession` lets the request through.
 2. `emailpassword.SignOut` fires the sign-out points and revokes it.
-3. `handleSignOut` calls `ClearToken` and answers `200`.
+3. `handleSignOut` calls `TokenCarrier.Clear` and answers `200`.
 
 A sign-out that did not go through returns at step 2: a hook handler on `auth.signOut.before` refused it, or the revoke failed. The session is then still live, so the cookie stays. Clearing it would leave a live session that no client holds the token of.
 
-`SignOut` does not call `ClearToken` itself, for two reasons. It takes a session id, which may be another client's (an administrator ending a user's session), and the cookie on the response belongs to the caller. It also runs from code, where `HookContext.Request` is nil.
+`SignOut` does not call `Clear` itself, for two reasons. It takes a session id, which may be another client's (an administrator ending a user's session), and the cookie on the response belongs to the caller. It also runs from code, where `HookContext.Request` is nil.
 
 **A session that ends in another request** leaves its cookie in the browser at first: one revoked from another device, by `RevokeAllForUser` (the email change revert), by eviction over `MaxConcurrent`, expired, or deleted with its user. No response went to that browser when it ended. The authentication stage takes the cookie back on the next request that carries it, whatever the route: see *What the session check answers* below. Until that request the cookie is a dead token that grants nothing.
 
@@ -95,62 +110,69 @@ A sign-out that did not go through returns at step 2: a hook handler on `auth.si
 With `SessionConfig.UpdateAge` set, a session in use is extended: `Touch` moves `ExpiresAt` forward by `ExpiresIn` once less than `UpdateAge` is left. The cookie was written at sign-in with `Expires` set to the session's first expiry, and a browser drops a cookie at that date whatever the server thinks. Unless the cookie is written again, a cookie client is signed out `ExpiresIn` after its sign-in while its session is still live.
 
 ```go
-Touch(ctx context.Context, session *models.Session) (*models.Session, error)
-ExtendToken(rctx *RequestContext, rawToken string, session *models.Session) (written bool)
+Touch(ctx context.Context, session *models.Session) (*models.Session, error) // SessionManager
+Extend(rctx *RequestContext, rawToken string, expiresAt time.Time) (written bool) // TokenCarrier
 ```
 
 The authentication stage is where both are called, for every request that carries a token, whatever its route:
 
-1. `ExtractToken` reads the token, and `DefaultAuthenticator` resolves it with `Get`. A request without a usable session goes on as an anonymous caller: see *What the session check answers* below.
+1. `Extract` reads the token, and `DefaultAuthenticator` resolves it with `Get`. A request without a usable session goes on as an anonymous caller: see *What the session check answers* below.
 2. `Touch` is handed the validated session and decides whether an extension is due. It returns the session with its new expiry, or nil when it wrote nothing.
-3. On an extension, `ExtendToken` sets the cookie again with the same token and the new `Expires`, and reports that it did. The extended session is the caller's session, so the handler reads the expiry the client now has.
+3. On an extension, the authenticator reports the extended session in `AuthOutcome.Extended`, and `Extend` sets the cookie again with the same token and the new `Expires`, and reports that it did. The extended session is the caller's session, so the handler reads the expiry the client now has.
 4. The handler runs.
 5. If the cookie was written, the stage sets `Cache-Control: no-store`.
 
 - **Best effort.** A failed `Touch` is not an error of the request. The session is used as it was validated, and nothing is written.
 - **A request that is not due costs nothing.** Steps 1 to 3 run on every authenticated request. `Touch` reads whether an extension is due off the session it is handed (`DefaultSessionManager.extensionDue`: less than `UpdateAge` is left, and never with `UpdateAge` at zero), and returns without touching the database when it is not. With a session cache, where `Get` is answered from the cache, such a request runs no statement at all. Without one it runs the read that validates the token.
 - **When it is due, the row decides.** `Touch` then reads the row and checks again before it writes. The session it was handed may be a cached copy, and another request may have extended or revoked the session a moment earlier. A row that is no longer due, or is revoked, is left alone and `Touch` returns nil. The read and the write happen once per extension.
-- **Only the cookie's own token.** `ExtendToken` writes the cookie when the request carried the token in it. Under `TransportBoth` a request may present the token in the `Authorization` header, which `ExtractToken` reads first, while its cookie holds another session's token. Writing the cookie then would replace that other session's token in the browser.
-- **The header and body transports need nothing.** Their clients keep the token without a date, and the server alone decides when it ends. `ExtendToken` returns false, and no `Set-Auth-Token` is sent: that header is for a sign-in.
+- **Only the cookie's own token.** `Extend` writes the cookie when the request carried the token in it. Under `DeliveryBoth` a request may present the token in the `Authorization` header, which `Extract` reads first, while its cookie holds another session's token. Writing the cookie then would replace that other session's token in the browser.
+- **The header and body deliveries need nothing.** Their clients keep the token without a date, and the server alone decides when it ends. `Extend` returns false, and no `Set-Auth-Token` is sent: that header is for a sign-in.
 - **`no-store` is set after the handler, and overrides it.** The response carries the session token. A handler that marks its responses cacheable does so for the content it wrote and does not know the stage added a credential. A shared cache that stored such a response would hand the token to its next reader. `WriteSignIn` marks its response the same way. This affects the one response per extension.
 
-`[Implementation Detail]` **One `Set-Cookie` per response.** The sign-out route is authenticated like every route. A sign-out of a session that is due would queue two cookies: the extended one from step 3 and the expired one from `ClearToken`. `DefaultSessionManager.setCookie`, which all three writers use, removes a session cookie already queued on the recorder before it adds the new one, so the last write is the only one sent. A response should not set one cookie twice (RFC 6265, section 4.1.1), and here the two would contradict each other.
+`[Implementation Detail]` **One `Set-Cookie` per response.** The sign-out route is authenticated like every route. A sign-out of a session that is due would queue two cookies: the extended one from step 3 and the expired one from `Clear`. `TokenCarrier.setCookie`, which all three writers use, removes a session cookie already queued on the recorder before it adds the new one, so the last write is the only one sent. A response should not set one cookie twice (RFC 6265, section 4.1.1), and here the two would contradict each other.
 
 ## What the session check answers
 
 The authentication stage resolves the token of every request, and a request without a usable session goes on as an anonymous caller that keeps the reason. `RequireSession` writes no response. It returns that reason, and the router maps it like a handler's (`wrapWithErrorMapping`, see [`../http/request_routing.md`](../http/request_routing.md)): the status from the error's category, the public message and the code in the body, one log line.
 
-| What happened | The error it returns | The router answers | `ClearToken` |
+| What happened | The error `RequireSession` returns | The router answers | `Clear` |
 | --- | --- | --- | --- |
-| `ExtractToken` found no token | a session error, `session_missing` | `401 {"error": "missing session token", "code": "session_missing"}` | not called |
-| `Validate` found no session for the token (not found) | a session error, `session_invalid`, wrapping the not-found error | `401 {"error": "invalid session", "code": "session_invalid"}` | called |
-| the session is revoked or expired | `Validate`'s session error, unchanged | `401` with `session_revoked` or `session_expired` | called |
-| the session waits for a second factor | `Validate`'s session error, unchanged | `401` with `session_pending` | not called |
-| anything else went wrong in `Validate`: the database, a key | that error, unchanged | `500` with a generic message; logged at Error | not called |
+| `Extract` found no token | a session error, `session_missing` | `401 {"error": "missing session token", "code": "session_missing"}` | not called |
+| `Get` found no session for the token (not found) | a session error, `session_invalid`, wrapping the not-found error | `401 {"error": "invalid session", "code": "session_invalid"}` | called |
+| the session is revoked or expired | `Get`'s session error, unchanged | `401` with `session_revoked` or `session_expired` | called |
+| the session waits for a second factor | a session error, `session_pending` | `401` with `session_pending` | not called |
+| anything else went wrong in `Get`: the database, a key | that error, unchanged | `500` with a generic message; logged at Error | not called |
 
-- **Not found is translated, once.** To `SessionManager.Get`, a token that resolves to nothing is a not-found error, and the router answers that category with `404`. To a route that needs a session the same token is a request without one. The middleware is the place that knows which of the two it is, so it wraps the error there and `Get` keeps answering a lookup as a lookup.
+The error is the caller's `AuthError`, which the authenticator set; for a request without a token it is nil, and `RequireSession` names `session_missing` itself. The stage calls `Clear` before the route runs, whatever the route, when the authenticator reports `AuthOutcome.Ended`.
+
+- **Not found is translated, once.** To `SessionManager.Get`, a token that resolves to nothing is a not-found error, and the router answers that category with `404`. To a route that needs a session the same token is a request without one. The authenticator is the place that knows which of the two it is, so it wraps the error there and `Get` keeps answering a lookup as a lookup.
 - **A failure is not a refusal.** A `401` tells a client that its session is gone, and a client acts on that by signing the user out. When the database is down the session may be perfectly good, so the error passes through and becomes a `500`, which also puts it in the log at Error and marks the request's span as failed.
-- **A session that is gone loses its cookie.** Invalid, revoked, and expired are final (`sessionIsGone`), so the middleware calls `ClearToken` before it returns the error. The `Set-Cookie` is on the recorder by then, and the router's error mapping adds the status and the body to the same response. A pending session is still live and needs its cookie to present the second factor. An error that is not one of the three says the lookup failed, not what became of the session, so nothing is taken from the client.
+- **A session that is gone loses its cookie.** Invalid, revoked, and expired are final (`sessionIsGone` in `auth/authenticator.go`), so the authenticator reports `Ended` and the stage calls `Clear` before the route runs. The `Set-Cookie` is on the recorder by then, and the route's answer, or the router's mapping of `RequireSession`'s error, goes out in the same response. A pending session is still live and needs its cookie to present the second factor. An error that is not one of the three says the lookup failed, not what became of the session, so nothing is taken from the client.
 - **`RequireFreshSession`** adds one more refusal after these, `session_not_fresh`, also a session error. The session is live, so the cookie stays.
 
 ## Defaults
 
-`SessionConfig.WithDefaults` fills the fields below when they are left at zero, and `NewSessionManager` applies it. The manager's own copy of the configuration is the only one with the defaults in it: `BootConfig.Session`, read anywhere else, may still hold zeros.
+The settings are in two places. `SessionConfig` (`BootConfig.Session`) is the session manager's: how long a session lasts and when it is extended. `TokenCarrierConfig` (`RouterConfig.Carrier`) is the carrier's: where the token travels over HTTP, and the cookie. Each has a `WithDefaults` that fills the fields below when they are left at zero.
+
+`NewSessionManager` applies `SessionConfig.WithDefaults`, and `NewTokenCarrier` applies `TokenCarrierConfig.WithDefaults`. `AuthContext.SessionConfig` and `AuthContext.TokenCarrier.Config()` hold the values with their defaults. `BootConfig`, read anywhere else, may still hold zeros.
 
 | Field | Default |
 | --- | --- |
-| `Transport` | `cookie` |
-| `CookieName` | `session_token` |
-| `ExpiresIn` | 7 days |
-| `PendingExpiresIn` | 10 minutes |
-| `FreshAge` | 15 minutes |
-| `CookieSameSite` | `lax` |
+| `SessionConfig.ExpiresIn` | 7 days |
+| `SessionConfig.PendingExpiresIn` | 10 minutes |
+| `SessionConfig.FreshAge` | 15 minutes |
+| `TokenCarrierConfig.Delivery` | `cookie` |
+| `TokenCarrierConfig.CookieName` | `session_token` |
+| `TokenCarrierConfig.CookieSameSite` | `lax` |
 
 `UpdateAge` is not in the table. Its comment used to name a default of one day, which was never applied, and zero has a working meaning: `Touch` then never extends a session. Applying a day would change that for every application that left it unset, and with an `ExpiresIn` of a day or less it would extend the session on every request. `docs/ongoing.md` has the entry.
 
-`SessionConfig.Validate` reports what no default can repair: a `Transport` that is not one of the four values, a negative duration, a `CookieSameSite` that is not one of the three modes, `SameSiteNone` with `CookieInsecure`, and a `CookieDomain` that is not a host name. `Boot` calls it before it builds the session manager and returns a configuration error.
+Each `Validate` reports what no default can repair, and `Boot` returns its error as a configuration error:
 
-Before this, the comments on the fields named defaults that nothing applied. A zero `Transport` matched no branch of `WriteToken` or `ExtractToken`, so no token was delivered or accepted. A zero `ExpiresIn` or `PendingExpiresIn` made a session expire the moment it was created. `CookieName` was not read.
+- `SessionConfig.Validate`: a negative duration.
+- `TokenCarrierConfig.Validate`: a `Delivery` that is not one of the four values, a `CookieSameSite` that is not one of the three modes, `SameSiteNone` with `CookieInsecure`, and a `CookieDomain` that is not a host name. Its messages name the field as `RouterConfig.Carrier.<Field>`.
+
+Before the defaults were applied, the comments on the fields named defaults that nothing applied: a zero delivery delivered and accepted no token, a zero `ExpiresIn` or `PendingExpiresIn` made a session expire the moment it was created, and the cookie name was not read.
 
 ## The user as JSON
 
@@ -165,26 +187,57 @@ A response carries a user as `AuthContext.Public.Of(user)`: a flat map of the us
 | Test | File | Covers |
 | --- | --- | --- |
 | `TestSessionConfigDefaults`, `TestSessionConfigValidate` | `core/auth_options_test.go` | every default, a set field kept, what `Validate` refuses |
-| `TestSessionManagerWithAZeroConfig` | `tests/store/managers_test.go` | a zero config: session lifetimes, a session that validates, the default cookie |
-| `TestSessionTokenTransports` | same | per transport: what `WriteToken` sets and returns, what `ExtractToken` accepts, the cookie's name, and that `ClearToken` expires that same cookie for the request that carried it, and writes nothing for a request without the cookie or with another session's |
-| `TestSignInDeliversTheTokenByTransport` | `tests/plugins/signin_response_test.go` | through the routes, per transport: where the token arrives and that it arrives nowhere else, the body's shape, the user's keys, `no-store`, sign-out with the token where the client sends it, and that the sign-out response removes the cookie |
+| `TestTokenCarrierConfigDefaults`, `TestTokenCarrierConfigValidate` | `core/token_carrier_test.go` | the same for the carrier's settings, and that `NewTokenCarrier` applies the defaults |
+| `TestTokenCarrierDeliveries` | same | per delivery: what `Write` sets and returns, the cookie's name and expiry, what `Extract` accepts, and that `Clear` expires that same cookie for the request that carried it, and writes nothing for a request without the cookie or with another session's |
+| `TestTokenCarrierCookieAttributes` | same | `Domain`, `SameSite`, and `Secure` from the settings, on the cookie and on its removal; `HttpOnly` and the path fixed |
+| `TestTokenCarrierExtend` | same | the cookie written again with the same token and the new date; nothing for the header and body deliveries, a bearer token next to another session's cookie, or a request without the cookie |
+| `TestTokenCarrierSetsTheCookieOnce` | same | an extension and a removal in one request send one session cookie, the removal, and leave other cookies alone |
+| `TestSessionManagerWithAZeroConfig` | `tests/store/managers_test.go` | a zero config: session lifetimes, a session that validates |
+| `TestSignInDeliversTheTokenByDelivery` | `tests/plugins/signin_response_test.go` | through the routes, per delivery: where the token arrives and that it arrives nowhere else, the body's shape, the user's keys, `no-store`, sign-out with the token where the client sends it, and that the sign-out response removes the cookie |
 | `TestRefusedSignOutKeepsTheCookie` | same | a sign-out a hook handler refused sets no cookie, and the session still validates |
 | `TestSessionTouchExtendsExpiry` | `tests/store/managers_test.go` | `Touch` returns the session it extended, and nil when no extension was due |
 | `TestSessionTouchDecidesFromTheSessionItIsGiven` | same | a session that is not due is not read (one that was never stored shows it); a copy that says due is checked against the row, which may be extended already or revoked |
 | `TestRequireSessionReadsNoMoreThanItNeeds` | same | statements run by one request through `RequireSession`, counted from the adapter's debug log: none with a session cache, one without, with rolling expiration off and on |
-| `TestRequireSessionExtendsTheCookieOfARollingSession` | same | through `RequireSession`: the cookie comes back with the extended session's expiry and the same token, the handler sees the extended session, `no-store` overrides the handler's `Cache-Control`; nothing is written when the session is not due, for the header transport, or when a bearer token's cookie belongs to another session |
+| `TestRequireSessionExtendsTheCookieOfARollingSession` | same | through `RequireSession`: the cookie comes back with the extended session's expiry and the same token, the handler sees the extended session, `no-store` overrides the handler's `Cache-Control`; nothing is written when the session is not due, for the header delivery, or when a bearer token's cookie belongs to another session |
 | `TestSignOutOfARollingSessionSetsTheCookieOnce` | `tests/plugins/signin_response_test.go` | a sign-out of a session that is due answers with one `Set-Cookie`, the removal |
 | `TestRequireSessionTakesBackTheCookieOfASessionThatIsGone` | `tests/store/managers_test.go` | the refusal removes the cookie of a revoked, an expired and a never-issued token; it does not for a pending session, a missing token, a session that is only not fresh, a dead bearer token next to a live cookie, or a failed lookup |
 | `TestASessionEndedElsewhereLosesItsCookie` | `tests/plugins/signin_response_test.go` | through the router: after `RevokeAllForUser`, the next request with the cookie gets `401 session_revoked` and the removal; the one after is `session_missing` |
 | `TestRequireSessionRefusesWithTypedErrors` | `tests/store/managers_test.go` | each refusal is a session error with its code and public message and writes no response; a database failure is passed on as a database error and maps to `500` without its text |
 | `TestSessionCheckThroughTheRouter` | `tests/plugins/emailpassword_test.go` | through the router: `401` with message and code for a missing and an unknown token, nothing logged at Error; with the database closed, `500` without the error's text, logged once as a failed request |
-| `TestSignInPendingSecondFactorCarriesTheToken` | same | the pending body, and its token by header and by body |
-| `TestBootRefusesAnUnknownSessionTransport` | same | the configuration error |
+| `TestSignInPendingSecondFactorCarriesTheToken` | `tests/plugins/signin_response_test.go` | the pending body, and its token by header and by body |
+| `TestBootRefusesAnUnknownTokenDelivery` | same | the configuration error, which names `RouterConfig.Carrier.Delivery` |
 | `TestMagicLinkRoutes` | `tests/plugins/magiclink_test.go` | the verify route delivers the token like the password route |
 
 ---
 
 ## Design decisions
+
+The decisions written before the token carrier existed use the names of that time. `SessionConfig.Transport` and its values `TransportCookie`, `TransportHeader`, `TransportBody`, and `TransportBoth` are now `RouterConfig.Carrier.Delivery` and `DeliveryCookie`, `DeliveryHeader`, `DeliveryBody`, and `DeliveryBoth`. The session manager's `WriteToken`, `ExtractToken`, `ClearToken`, and `ExtendToken` are now `TokenCarrier.Write`, `Extract`, `Clear`, and `Extend`. The first two decisions below explain the move.
+
+### The token travels with a carrier of its own, not the session manager
+
+**Context:** `SessionManager` had four methods that take HTTP types: `WriteToken`, `ExtractToken`, `ClearToken`, and `ExtendToken`. `SessionConfig` held the delivery and the cookie's attributes next to the session lifetimes. A job or another transport that uses the session manager got an interface tied to HTTP, against the guideline that a method on a core interface takes a context ([`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md)). The router's origin check had to read the session settings to learn whether a cookie is in use.
+
+**Options considered:**
+
+- *Keep the methods on the session manager.* No change. The interface stays tied to HTTP, and package `auth` keeps importing `net/http` for them.
+- *A `TokenCarrier` interface, implemented in `auth`.* An application could replace it. What it does follows from its settings alone, and nothing calls for a second implementation.
+- *A `TokenCarrier` struct in the HTTP layer, built from a section of `RouterConfig`.* The settings sit with the router, which also reads them for the origin check. The type moves with the HTTP types when they get a package of their own ([`../plans/package_layout.md`](../plans/package_layout.md)).
+
+**Decision:** the struct, `core.TokenCarrier`, built by `Boot` from `RouterConfig.Carrier` and put on `AuthContext.TokenCarrier`. The delivery and the cookie's settings moved from `SessionConfig` to `TokenCarrierConfig`. The methods take the session's expiry instead of a `*models.Session`, which was all they read of it. `SessionManager` has no method that takes an HTTP type.
+
+**Revisit if:** an application needs to carry the token in a way the four deliveries and the cookie's settings can't express, such as another header name. An interface would then be the place to extend.
+
+### `TokenTransport` is `TokenDelivery`
+
+**Context:** In the rest of the code a transport is HTTP, gRPC, or a WebSocket: `identity.Peer.Transport` says which one a call came over, and the guideline on flows is about transports in that sense. The setting chose among four places in an HTTP message.
+
+**Options considered:**
+
+- *Keep `TokenTransport`.* No rename. One word with two meanings in code that sits side by side: the authentication stage sets `Peer.Transport` to `"http"` and reads the token per the "transport".
+- *`TokenDelivery`.* It names what the setting chooses: where the token is delivered, and where it comes back.
+
+**Decision:** `TokenDelivery`, with `DeliveryCookie`, `DeliveryHeader`, `DeliveryBody`, and `DeliveryBoth`, set in `RouterConfig.Carrier.Delivery`. The values are the same strings as before.
 
 ### `TransportHeader` delivers the token in a response header
 

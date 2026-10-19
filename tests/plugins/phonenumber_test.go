@@ -99,10 +99,10 @@ func bootPhones(t *testing.T, opts phonenumber.Options, hookFn func(reg core.Hoo
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session: core.SessionConfig{Transport: core.TransportHeader},
-		SMS:     core.SMSConfig{Sender: app.sms},
-		HTTP:    app.routes,
-		Hooks:   hookFn,
+		Router: core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		SMS:    core.SMSConfig{Sender: app.sms},
+		HTTP:   app.routes,
+		Hooks:  hookFn,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { app.ac.SMS.Close(context.Background()) })
@@ -684,7 +684,7 @@ func TestPhoneNumberRoutes(t *testing.T) {
 	w = callAs(t, app.ac, route(phonenumber.PathVerify), `{"phone_number":"`+adaNumber+`","code":"`+msg.Code+`"}`, "")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Equal(t, "ada@example.com", read(w.Body.Bytes()).User["email"])
-	assert.NotEmpty(t, w.Header().Get("Set-Auth-Token"), "the token travels by the configured transport")
+	assert.NotEmpty(t, w.Header().Get("Set-Auth-Token"), "the token travels by the configured delivery")
 	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 
 	// A session token that is no good is refused, not ignored.

@@ -716,7 +716,7 @@ func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, e
 //
 // It writes nothing to a response. The session may be another client's, and
 // SignOut also runs where there is no request. A route that signs its own
-// caller out takes the token back afterwards (SessionManager.ClearToken), as
+// caller out takes the token back afterwards (TokenCarrier.Clear), as
 // the plugin's sign-out route does.
 func SignOut(hctx *core.HookContext, sessionID string) error {
 	hctx = core.AsOperation(hctx)
@@ -780,8 +780,8 @@ func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 		return err
 	}
 
-	// The body every sign-in route answers with, and the session token by
-	// whichever transport SessionConfig.Transport names.
+	// The body every sign-in route answers with, and the session token the
+	// way RouterConfig.Carrier says.
 	return core.WriteSignIn(rctx, result, nil)
 }
 
@@ -798,10 +798,10 @@ func (p *Plugin) handleSignOut(rctx *core.RequestContext) error {
 		return err
 	}
 	// The session is the caller's own and it has ended, so the client gives
-	// its token up: with a cookie transport the response removes the cookie.
+	// its token up: with a cookie delivery the response removes the cookie.
 	// A refused sign-out returned above and leaves the token in place, since
 	// its session is still live.
-	rctx.Auth.SessionManager.ClearToken(rctx)
+	rctx.Auth.TokenCarrier.Clear(rctx)
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})
 }
 

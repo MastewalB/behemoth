@@ -58,10 +58,10 @@ The routes sit directly under the router's base path.
 | Route | Body | Result |
 | --- | --- | --- |
 | `POST /sign-up/email` | `email`, `password`, and optionally `firstname`, `lastname`, `image_url` | `201` with `{"user": {...}}`. Other fields in the body are not stored by this plugin. A plugin can take one: the [username](username.md) plugin stores `username`. |
-| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured transport: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
-| `POST /sign-out` | none; needs a valid session | `200` with `{"status": "signed_out"}`, and the session is revoked. With a cookie transport the response also removes the cookie. |
+| `POST /sign-in/email` | `email`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}` when a second factor is pending. The session token arrives by the configured delivery: a cookie, the `Set-Auth-Token` header, or `token` in this body. |
+| `POST /sign-out` | none; needs a valid session | `200` with `{"status": "signed_out"}`, and the session is revoked. With a cookie delivery the response also removes the cookie. |
 
-The user is keyed by column name (for example `id`, `email`, `email_verified`, and `image_url`). [Sessions](sessions.md) describes the transports, the response body, and the user's JSON in full.
+The user is keyed by column name (for example `id`, `email`, `email_verified`, and `image_url`). [Sessions](sessions.md) describes the token deliveries, the response body, and the user's JSON in full.
 
 With `SessionConfig.CaptureIPAndAgent` on, the session created at sign-in records the client's IP address and user agent. The address is resolved with `RouterConfig.TrustedProxies` and `ClientIPHeader`, so behind a load balancer it is the client's and not the proxy's.
 
@@ -77,7 +77,7 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 | `POST /sign-up/email` | the email already has an account | `409` | `{"error": "an account with this email already exists", "code": "email_taken"}` |
 | `POST /sign-in/email` | unknown email, wrong password, or a user who has no password | `401` | `{"error": "invalid email or password", "code": "invalid_credentials"}` |
 | `POST /sign-out` | the request has no session token | `401` | `{"error": "missing session token", "code": "session_missing"}` |
-| `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. With a cookie transport the response also removes the cookie. See [Sessions](sessions.md#protect-your-own-routes). |
+| `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. With a cookie delivery the response also removes the cookie. See [Sessions](sessions.md#protect-your-own-routes). |
 | any | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
 | any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
@@ -193,7 +193,7 @@ user, err := plugin.SetPassword(ctx, userID, newPassword)
 - It does not check who is asking, fires no points, and works with password reset by email off.
 - Call `ValidatePassword` first when a later refusal would cost you something, such as a code already used up.
 
-`emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points. It writes nothing to a response, so the session's cookie stays with its browser. A route of yours that calls it for the caller's own session removes the cookie afterwards with `ac.SessionManager.ClearToken(rctx)`; see [Sessions](sessions.md#write-a-route-that-ends-the-session).
+`emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points. It writes nothing to a response, so the session's cookie stays with its browser. A route of yours that calls it for the caller's own session removes the cookie afterwards with `ac.TokenCarrier.Clear(rctx)`; see [Sessions](sessions.md#write-a-route-that-ends-the-session).
 
 ## Reject a sign-up from a hook
 

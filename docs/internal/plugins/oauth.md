@@ -15,7 +15,7 @@ The code lives in:
 - `plugins/oauth/protocol.go`: what the built-in providers share: the HTTP client, the code exchange, client authentication
 - `plugins/oauth/oidc.go`: the OpenID Connect provider: discovery, the key set, the ID token
 - `plugins/oauth/github.go`: the GitHub provider
-- `core/auth-context.go`: `AuthContext.SessionConfig`, which the routes read
+- `core/token_carrier.go`: `TokenCarrier.Config`, which the routes read through `AuthContext.TokenCarrier`
 - `store/seal.go`: `Store.Seal` and `Store.Open`, which `Begin` uses for the PKCE verifier
 
 ## What the plugin contributes
@@ -164,7 +164,7 @@ Invariants:
 
 ## The routes
 
-Both routes are JSON `POST`s, so the origin check and the refusal of form content types cover them under the cookie transports. Each handler decodes the body, calls one flow, and encodes the result.
+Both routes are JSON `POST`s, so the origin check and the refusal of form content types cover them under the cookie deliveries. Each handler decodes the body, calls one flow, and encodes the result.
 
 | Route | Flow | Answer |
 | --- | --- | --- |
@@ -175,15 +175,15 @@ Each has a route rule per client address, 10 a minute: `oauth.begin.route` and `
 
 ### Where the binding value goes
 
-The handlers read `AuthContext.SessionConfig`, which `Boot` sets to `BootConfig.Session` with its defaults applied. The binding value follows the session token:
+The handlers read `AuthContext.TokenCarrier.Config()`: `RouterConfig.Carrier` with its defaults applied. The binding value follows the session token:
 
-| `SessionConfig.Transport` | Begin's answer | Complete reads it from |
+| `RouterConfig.Carrier.Delivery` | Begin's answer | Complete reads it from |
 | --- | --- | --- |
-| `TransportCookie` | a cookie only | the body, else the cookie |
-| `TransportBoth` | a cookie and the body | the body, else the cookie |
-| `TransportHeader`, `TransportBody` | the body only | the body |
+| `DeliveryCookie` | a cookie only | the body, else the cookie |
+| `DeliveryBoth` | a cookie and the body | the body, else the cookie |
+| `DeliveryHeader`, `DeliveryBody` | the body only | the body |
 
-Accepting a value from the body under `TransportCookie` costs nothing: a page there has no value to send, and a value somebody guessed does not match.
+Accepting a value from the body under `DeliveryCookie` costs nothing: a page there has no value to send, and a value somebody guessed does not match.
 
 The cookie is built in `bindingCookie`:
 
@@ -198,7 +198,7 @@ The cookie is built in `bindingCookie`:
 Invariants:
 
 - **The `__Host-` prefix is what keeps a sibling subdomain out.** Without it, a page on `evil.example.com` could set a cookie for the parent domain with its own binding value, and send the victim's browser to the callback page with its own code and state. With `CookieInsecure` set the prefix can't be used, because a browser accepts it only on a `Secure` cookie, so that development setting loses this protection.
-- **The binding value is in the body only for a transport that already puts the session token where a script reads it.** Under `TransportCookie`, a script on the application's page can neither read the session token nor the binding value.
+- **The binding value is in the body only for a delivery that already puts the session token where a script reads it.** Under `DeliveryCookie`, a script on the application's page can neither read the session token nor the binding value.
 
 `[Limit]` A refused completion leaves its cookie until the sign-in expires. Only a successful one removes it.
 
@@ -395,17 +395,17 @@ An ID token without a `kid` is checked against every key of the set that fits it
 
 ### The binding value follows the session token
 
-**Context:** A started sign-in hands the client a binding value that it shows again at completion. A browser client of the cookie transports should not be able to read it from a script, and a client without cookies has nowhere else to keep it.
+**Context:** A started sign-in hands the client a binding value that it shows again at completion. A browser client of the cookie deliveries should not be able to read it from a script, and a client without cookies has nowhere else to keep it.
 
 **Options considered:**
 
 - *Always a cookie.* One behavior. A native application, whose callback runs in the system browser, does not have the cookie when it completes the sign-in.
-- *Always the body.* One behavior. A script on the page can read a value that an `HttpOnly` cookie would keep from it, which the cookie transports exist to avoid.
-- *The way the session token travels.* A client that already handles the session token one way handles the binding value the same way. The plugin needs to know the transport.
+- *Always the body.* One behavior. A script on the page can read a value that an `HttpOnly` cookie would keep from it, which the cookie deliveries exist to avoid.
+- *The way the session token travels.* A client that already handles the session token one way handles the binding value the same way. The plugin needs to know the delivery.
 
 **Decision:** the way the session token travels. `Boot` puts the session settings on `AuthContext` as `SessionConfig`. The settings and not only the transport, because the cookie also needs the session cookie's `SameSite` and `Secure`.
 
-**Revisit if:** the HTTP side of the session manager moves into a component of its own ("The session manager also carries the token over HTTP" in `docs/ongoing.md`). The cookie would belong there.
+The settings have since moved with the HTTP side of the session manager to the token carrier, as this decision expected. The handlers read them from `AuthContext.TokenCarrier.Config()`, and the transport is now called the delivery. See *The token travels with a carrier of its own* in [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
 
 ### One binding cookie per sign-in
 

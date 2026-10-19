@@ -37,17 +37,17 @@ const (
 )
 
 // BindingCookiePrefix starts the name of the cookie that holds the binding
-// value of a sign-in under the cookie transports. The rest of the name is
+// value of a sign-in under the cookie deliveries. The rest of the name is
 // derived from the sign-in's state, so two sign-ins started in one browser
-// keep a cookie each. With SessionConfig.CookieInsecure off, the default,
-// the name also starts with "__Host-": a browser then accepts the cookie
-// only over HTTPS and only from the host it is sent to.
+// keep a cookie each. With RouterConfig.Carrier.CookieInsecure off, the
+// default, the name also starts with "__Host-": a browser then accepts the
+// cookie only over HTTPS and only from the host it is sent to.
 const BindingCookiePrefix = "behemoth_oauth_"
 
 // handleBegin answers with the URL to send the browser to. The binding value
 // goes where the session token goes: into an HttpOnly cookie under the
-// cookie transports, and into the body for a client that keeps the session
-// token itself. Under TransportBoth it goes to both.
+// cookie deliveries, and into the body for a client that keeps the session
+// token itself. Under DeliveryBoth it goes to both.
 //
 //	{"authorization_url": "https://..."}
 //	{"authorization_url": "https://...", "binding": "..."}
@@ -66,12 +66,12 @@ func (p *Plugin) handleBegin(rctx *core.RequestContext) error {
 		return err
 	}
 
-	cfg := rctx.Auth.SessionConfig
+	cfg := rctx.Auth.TokenCarrier.Config()
 	answer := behemoth.M{keyAuthorizationURL: result.AuthorizationURL}
-	if cfg.Transport.ReadsCookie() {
+	if cfg.Delivery.ReadsCookie() {
 		rctx.Response.Cookie(bindingCookie(cfg, result.State, result.Binding, time.Until(result.ExpiresAt)))
 	}
-	if cfg.Transport != core.TransportCookie {
+	if cfg.Delivery != core.DeliveryCookie {
 		answer[keyBinding] = result.Binding
 	}
 	// The URL holds the state, and the body may hold the binding value.
@@ -80,7 +80,7 @@ func (p *Plugin) handleBegin(rctx *core.RequestContext) error {
 }
 
 // handleComplete takes the binding value from the body, and under the
-// cookie transports from the sign-in's cookie when the body has none. It
+// cookie deliveries from the sign-in's cookie when the body has none. It
 // answers like every sign-in route (core.WriteSignIn), with the redirect
 // target next to the user, and removes the cookie once the sign-in is done.
 // A refused callback is the flow's typed error, which the router maps.
@@ -107,8 +107,8 @@ func (p *Plugin) handleComplete(rctx *core.RequestContext) error {
 		}
 	}
 
-	cfg := rctx.Auth.SessionConfig
-	if req.Binding == "" && req.State != "" && cfg.Transport.ReadsCookie() {
+	cfg := rctx.Auth.TokenCarrier.Config()
+	if req.Binding == "" && req.State != "" && cfg.Delivery.ReadsCookie() {
 		if cookie, err := rctx.Request.Cookie(bindingCookieName(cfg, req.State)); err == nil {
 			req.Binding = cookie.Value
 		}
@@ -118,7 +118,7 @@ func (p *Plugin) handleComplete(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Transport.ReadsCookie() {
+	if cfg.Delivery.ReadsCookie() {
 		// The state is used up, and its binding value with it.
 		rctx.Response.Cookie(bindingCookie(cfg, req.State, "", -1))
 	}
@@ -128,7 +128,7 @@ func (p *Plugin) handleComplete(rctx *core.RequestContext) error {
 // bindingCookieName returns the name of the cookie for the sign-in with
 // state. It carries 16 hex characters of the state's SHA-256 and not the
 // state, which is a URL's to carry.
-func bindingCookieName(cfg core.SessionConfig, state string) string {
+func bindingCookieName(cfg core.TokenCarrierConfig, state string) string {
 	name := BindingCookiePrefix + utils.LookupHashOf(state)[:16]
 	if !cfg.CookieInsecure {
 		// Secure, Path "/" and no Domain, which the prefix requires: a
@@ -143,20 +143,13 @@ func bindingCookieName(cfg core.SessionConfig, state string) string {
 // state, for maxAge. A maxAge of zero or less removes the cookie. SameSite
 // and Secure follow the session cookie: the cookie has to reach the
 // complete route on the same requests the session cookie reaches.
-func bindingCookie(cfg core.SessionConfig, state, value string, maxAge time.Duration) *http.Cookie {
-	sameSite := http.SameSiteLaxMode
-	switch cfg.CookieSameSite {
-	case core.SameSiteStrict:
-		sameSite = http.SameSiteStrictMode
-	case core.SameSiteNone:
-		sameSite = http.SameSiteNoneMode
-	}
+func bindingCookie(cfg core.TokenCarrierConfig, state, value string, maxAge time.Duration) *http.Cookie {
 	seconds := int(maxAge / time.Second)
 	if seconds <= 0 {
 		seconds = -1 // Max-Age=0: remove it
 	}
 	return &http.Cookie{
 		Name: bindingCookieName(cfg, state), Value: value, Path: "/", MaxAge: seconds,
-		HttpOnly: true, Secure: !cfg.CookieInsecure, SameSite: sameSite,
+		HttpOnly: true, Secure: !cfg.CookieInsecure, SameSite: cfg.CookieSameSite.HTTP(),
 	}
 }

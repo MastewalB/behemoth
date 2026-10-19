@@ -8,9 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/MastewalB/behemoth"
@@ -475,115 +472,6 @@ func (sm *DefaultSessionManager) Discard(ctx context.Context, sessions []*models
 
 // SupportsRevocation implements [core.SessionManager].
 func (sm *DefaultSessionManager) SupportsRevocation() bool { return true }
-
-// sessionCookie is the cookie the session token travels in. WriteToken,
-// ExtendToken and ClearToken build it here, because a browser replaces a
-// cookie only with one of the same name, path and domain. HttpOnly and the
-// path are fixed; the domain, SameSite and Secure come from SessionConfig.
-func (sm *DefaultSessionManager) sessionCookie(value string, expires time.Time) *http.Cookie {
-	sameSite := http.SameSiteLaxMode
-	switch sm.cfg.CookieSameSite {
-	case core.SameSiteStrict:
-		sameSite = http.SameSiteStrictMode
-	case core.SameSiteNone:
-		sameSite = http.SameSiteNoneMode
-	}
-	return &http.Cookie{
-		Name: sm.cfg.CookieName, Value: value, Expires: expires,
-		HttpOnly: true, Secure: !sm.cfg.CookieInsecure, SameSite: sameSite,
-		Path: "/", Domain: strings.TrimPrefix(sm.cfg.CookieDomain, "."),
-	}
-}
-
-// setCookie queues the session cookie on the response, in place of one an
-// earlier step of the same request queued. One request can write it twice:
-// RequireSession extends the cookie, and the sign-out route behind it then
-// removes it. A response should not set a cookie twice (RFC 6265, section
-// 4.1.1), so the last write is the only one sent.
-func (sm *DefaultSessionManager) setCookie(rctx *core.RequestContext, cookie *http.Cookie) {
-	headers := rctx.Response.Headers
-	headers["Set-Cookie"] = slices.DeleteFunc(headers["Set-Cookie"], func(queued string) bool {
-		return strings.HasPrefix(queued, cookie.Name+"=")
-	})
-	rctx.Response.Cookie(cookie)
-}
-
-// WriteToken implements [core.SessionManager].
-func (sm *DefaultSessionManager) WriteToken(rctx *core.RequestContext, rawToken string, session *models.Session) (inBody bool) {
-	switch sm.cfg.Transport {
-	case core.TransportCookie, core.TransportBoth:
-		sm.setCookie(rctx, sm.sessionCookie(rawToken, session.ExpiresAt))
-	}
-	switch sm.cfg.Transport {
-	case core.TransportHeader, core.TransportBoth:
-		rctx.Response.SetHeader(core.SessionTokenHeader, rawToken)
-	}
-	// The body is the route's to write, so for TransportBody the caller is
-	// told to put the token there.
-	return sm.cfg.Transport == core.TransportBody
-}
-
-// cookieCarries reports whether r sent rawToken in the session cookie. It
-// is how ExtendToken and ClearToken know that the cookie on the client is
-// the one they are about. Under TransportBoth a request may present its
-// token as a bearer token, and its cookie, if it has one, may be another
-// session's.
-func (sm *DefaultSessionManager) cookieCarries(r *http.Request, rawToken string) bool {
-	sent, err := r.Cookie(sm.cfg.CookieName)
-	return err == nil && sent.Value == rawToken
-}
-
-// ClearToken implements [core.SessionManager].
-func (sm *DefaultSessionManager) ClearToken(rctx *core.RequestContext) {
-	switch sm.cfg.Transport {
-	case core.TransportCookie, core.TransportBoth:
-		// The cookie is removed for the request that presented its token
-		// in it. Another cookie is left alone: its session is still live.
-		token, ok := sm.ExtractToken(rctx.Request)
-		if !ok || !sm.cookieCarries(rctx.Request, token) {
-			return
-		}
-		// An empty cookie that has already expired makes the browser drop
-		// the one it holds. Max-Age says so to current browsers, and the
-		// date to those that only read Expires.
-		expired := sm.sessionCookie("", time.Unix(0, 0))
-		expired.MaxAge = -1
-		sm.setCookie(rctx, expired)
-	}
-}
-
-// ExtendToken implements [core.SessionManager].
-func (sm *DefaultSessionManager) ExtendToken(rctx *core.RequestContext, rawToken string, session *models.Session) (written bool) {
-	switch sm.cfg.Transport {
-	case core.TransportCookie, core.TransportBoth:
-		// Only a client that sent the token in the cookie depends on the
-		// cookie's date.
-		if sm.cookieCarries(rctx.Request, rawToken) {
-			sm.setCookie(rctx, sm.sessionCookie(rawToken, session.ExpiresAt))
-			return true
-		}
-	}
-	return false
-}
-
-// ExtractToken implements [core.SessionManager]. A client of
-// TransportHeader and of TransportBody sends the token the same way, as a
-// bearer token; the two differ only in how the sign-in delivered it.
-func (sm *DefaultSessionManager) ExtractToken(r *http.Request) (string, bool) {
-	switch sm.cfg.Transport {
-	case core.TransportHeader, core.TransportBody, core.TransportBoth:
-		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && token != "" {
-			return token, true
-		}
-	}
-	switch sm.cfg.Transport {
-	case core.TransportCookie, core.TransportBoth:
-		if c, err := r.Cookie(sm.cfg.CookieName); err == nil && c.Value != "" {
-			return c.Value, true
-		}
-	}
-	return "", false
-}
 
 // revokeModel is the single internal path every revocation (explicit eviction,
 // bulk revoke-all) funnels through

@@ -7,7 +7,7 @@ This document describes how a service other than the application checks who a re
 The documents it builds on are:
 
 - [ADR-0002](../decisions/0002-deriving-external-jwt-keys.md): the signing keys are derived from the master secret, behind `ExternalKeySet`.
-- [`../sessions/token_transport.md`](../sessions/token_transport.md): how the session token travels, and `RequireSession`.
+- [`../sessions/token_delivery.md`](../sessions/token_delivery.md): how the session token travels, and `RequireSession`.
 - [`../guidelines/http_contract.md`](../guidelines/http_contract.md) and [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md): the guidelines for the route and the flow.
 
 ## The problem
@@ -24,7 +24,7 @@ A signed-in client exchanges its session for a session token: a JWT signed with 
 
 | Step | Who | What happens |
 | --- | --- | --- |
-| 1 | client | posts to `POST /session/token` with its session, by the configured transport, and optionally an audience |
+| 1 | client | posts to `POST /session/token` with its session, by the configured delivery, and optionally an audience |
 | 2 | Behemoth | checks the session, runs the hook point that may add claims, and signs the token |
 | 3 | client | sends the token to the service as `Authorization: Bearer <token>` |
 | 4 | service | fetches `/.well-known/jwks.json` once and caches it, then checks every token against it: the signature, `iss`, `aud`, and `exp` |
@@ -104,7 +104,7 @@ The keys are derived from the master secret, one EdDSA key per secret version ([
 
 The route follows these security rules:
 
-- **The route is a `POST`.** Under the cookie transports, the origin check refuses a request from another site, which a `GET` would not get.
+- **The route is a `POST`.** Under the cookie deliveries, the origin check refuses a request from another site, which a `GET` would not get.
 - **A pending session gets no token.** A session that still waits for a second factor is not a signed-in user.
 - **The token never reaches a cookie or a URL.** It is a bearer credential for another service. A cookie would send it with every request to Behemoth's host, and a URL ends up in logs and in `Referer` headers.
 - **Behemoth never accepts a session token as a session.** `RequireSession` takes the session's own token only. A session token can't be used to call Behemoth's routes, so a service that receives one can't sign in as the user.

@@ -237,8 +237,9 @@ type BootConfig struct {
 	// environment.
 	Outbound outbound.Options
 
-	// Router configures behemoth's routes: base path, error mapping and
-	// client-IP resolution. Zero value = documented defaults.
+	// Router configures behemoth's routes: base path, error mapping,
+	// client-IP resolution, and how the session token travels over HTTP
+	// (Carrier). Zero value = documented defaults.
 	Router core.RouterConfig
 
 	// HTTP mounts behemoth's routes onto the application's framework
@@ -361,12 +362,19 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err != nil {
 		return nil, errs.NewConfigurationError("Boot", "RouterConfig.TrustedOrigins", err)
 	}
-	// Built whatever the transport, so a malformed BaseURL fails here.
+	// Built whatever the delivery, so a malformed BaseURL fails here.
 	originCheck, err := core.NewOriginCheck(cfg.Router.BaseURL, origins)
 	if err != nil {
 		return nil, errs.NewConfigurationError("Boot", "RouterConfig.BaseURL", err)
 	}
 	if err := cfg.Outbound.Validate(); err != nil {
+		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
+	}
+	if err := cfg.Router.Carrier.Validate(); err != nil {
+		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
+	}
+	carrier := core.NewTokenCarrier(cfg.Router.Carrier)
+	if err := checkCookieAgainstBaseURL(carrier.Config(), cfg.Router.BaseURL); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	ac := &core.AuthContext{
@@ -382,6 +390,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		HTTPClient: outbound.NewClient(cfg.Outbound, tel),
 		// The session manager applies the same defaults to the same value.
 		SessionConfig: cfg.Session.WithDefaults(),
+		TokenCarrier:  carrier,
 		Mailer:        messaging.NewMailer(cfg.Mail, tel),
 		SMS:           messaging.NewSMS(cfg.SMS, tel),
 		Public:        schema.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
@@ -396,9 +405,6 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	ac.Codes = auth.NewCodeManager(ac.Store, cryptoSuite)
 	ac.TokenManager = auth.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token, ac)
 	if err := cfg.Session.Validate(); err != nil {
-		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
-	}
-	if err := checkCookieAgainstBaseURL(cfg.Session, cfg.Router.BaseURL); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	ac.SessionManager = auth.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
@@ -438,9 +444,9 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	router := core.NewRouter(cfg.Router, ac)
 	var globalMiddleware []core.Middleware
 	// A bearer token is never sent by the browser on its own, so only the
-	// cookie transports need the origin check and the refusal of form
+	// cookie deliveries need the origin check and the refusal of form
 	// bodies behind it. Both run before the plugins' middleware.
-	if cfg.Session.WithDefaults().Transport.ReadsCookie() {
+	if carrier.Config().Delivery.ReadsCookie() {
 		globalMiddleware = append(globalMiddleware, originCheck.Middleware(), core.RefuseFormContentTypes())
 	}
 	for _, name := range order {
@@ -463,7 +469,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// Route-scoped rate limiting is baked in once, before any driver sees the routes.
 	// Authentication wraps each route inside its rate limit, so that a refused
 	// request costs no session lookup.
-	router.ApplyAuthentication(ac.Authenticator, ac.SessionManager, ipCfg)
+	router.ApplyAuthentication(ac.Authenticator, carrier, ipCfg)
 	router.ApplyRateLimiting(rateLimiter, app.RateLimits, ipCfg)
 
 	if cfg.HTTP != nil {
@@ -476,8 +482,8 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 }
 
 // checkCookieAgainstBaseURL reports a session cookie that can't work with
-// the base URL, under the transports that set one. baseURL has been parsed
-// by NewOriginCheck already.
+// the base URL, under the deliveries that set one. carrier has its defaults
+// applied, and baseURL has been parsed by NewOriginCheck already.
 //
 //   - SameSiteNone needs a base URL. The browser then sends the cookie with
 //     cross-site requests, the origin check is all that refuses a forged
@@ -485,17 +491,17 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 //   - CookieDomain has to be the base URL's host or a parent of it. A
 //     browser drops a cookie whose Domain does not cover the host that set
 //     it, and every sign-in would then seem to succeed and leave no session.
-func checkCookieAgainstBaseURL(session core.SessionConfig, baseURL string) error {
-	if !session.WithDefaults().Transport.ReadsCookie() {
+func checkCookieAgainstBaseURL(carrier core.TokenCarrierConfig, baseURL string) error {
+	if !carrier.Delivery.ReadsCookie() {
 		return nil
 	}
 	if baseURL == "" {
-		if session.CookieSameSite == core.SameSiteNone {
-			return fmt.Errorf("SessionConfig.CookieSameSite %q needs RouterConfig.BaseURL, which the origin check compares requests with", session.CookieSameSite)
+		if carrier.CookieSameSite == core.SameSiteNone {
+			return fmt.Errorf("RouterConfig.Carrier.CookieSameSite %q needs RouterConfig.BaseURL, which the origin check compares requests with", carrier.CookieSameSite)
 		}
 		return nil
 	}
-	domain := strings.ToLower(strings.TrimPrefix(session.CookieDomain, "."))
+	domain := strings.ToLower(strings.TrimPrefix(carrier.CookieDomain, "."))
 	if domain == "" {
 		return nil
 	}
@@ -504,7 +510,7 @@ func checkCookieAgainstBaseURL(session core.SessionConfig, baseURL string) error
 		return fmt.Errorf("RouterConfig.BaseURL %q: %w", baseURL, err)
 	}
 	if host := strings.ToLower(u.Hostname()); host != domain && !strings.HasSuffix(host, "."+domain) {
-		return fmt.Errorf("SessionConfig.CookieDomain %q does not cover the host of RouterConfig.BaseURL %q, so a browser would drop the session cookie", session.CookieDomain, baseURL)
+		return fmt.Errorf("RouterConfig.Carrier.CookieDomain %q does not cover the host of RouterConfig.BaseURL %q, so a browser would drop the session cookie", carrier.CookieDomain, baseURL)
 	}
 	return nil
 }
@@ -524,7 +530,7 @@ func logBootSummary(ctx context.Context, log telemetry.Logger, order []string, r
 			behemoth.M{"header": cfg.Router.ClientIPHeader})
 	}
 	// Only where routes are served: a worker or a CLI answers no request.
-	if cfg.HTTP != nil && cfg.Router.BaseURL == "" && cfg.Session.WithDefaults().Transport.ReadsCookie() {
+	if cfg.HTTP != nil && cfg.Router.BaseURL == "" && cfg.Router.Carrier.WithDefaults().Delivery.ReadsCookie() {
 		log.Warn(ctx, "RouterConfig.BaseURL is not set; the origin check compares each request's Origin with its Host header, which refuses browser requests behind a proxy that rewrites Host", nil)
 	}
 }

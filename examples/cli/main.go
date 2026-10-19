@@ -66,7 +66,8 @@ func main() {
 	if _, err := engine.Boot(ctx, app, db, engine.BootConfig{
 		Crypto:  cryptoCfg,
 		HTTP:    nethttp.New(mux),
-		Session: core.SessionConfig{ExpiresIn: 24 * time.Hour, Transport: core.TransportHeader},
+		Session: core.SessionConfig{ExpiresIn: 24 * time.Hour},
+		Router:  core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
 	}); err != nil {
 		log.Fatal(err)
 	}

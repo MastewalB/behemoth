@@ -13,7 +13,7 @@ The documents it builds on are:
 - [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md): "Learn about the caller from the context", "A protection belongs to the operation, not to the path", and the places where the code differs today.
 - [`../guidelines/service_ready_components.md`](../guidelines/service_ready_components.md): a hook payload can leave the process.
 - [`../guidelines/http_contract.md`](../guidelines/http_contract.md): an error code that has shipped stays.
-- [`../sessions/token_transport.md`](../sessions/token_transport.md): how the session token travels, and what the session check answers.
+- [`../sessions/token_delivery.md`](../sessions/token_delivery.md): how the session token travels, and what the session check answers.
 - [`session_tokens.md`](session_tokens.md): the JWT issued for other services, which Behemoth never accepts as a credential.
 - [`oauth.md`](oauth.md): account linking, the first new flow that needs the caller's session.
 - [`../telemetry/audit.md`](../telemetry/audit.md): the audit event's actor.
@@ -193,7 +193,7 @@ The transport follows these rules:
 
 These parts of the session API change:
 
-- **The token carrier.** The four HTTP methods of `SessionManager` (`WriteToken`, `ExtractToken`, `ClearToken`, and `ExtendToken`) move to a token carrier that the HTTP layer owns. `SessionManager` keeps the lifecycle, which takes a context.
+- **The token carrier.** The four HTTP methods of `SessionManager` (`WriteToken`, `ExtractToken`, `ClearToken`, and `ExtendToken`) move to a token carrier that the HTTP layer owns. `SessionManager` keeps the lifecycle, which takes a context. Built as `core.TokenCarrier`, with `Write`, `Extract`, `Clear`, and `Extend`. Its settings, the delivery and the cookie's attributes, moved from `SessionConfig` to `RouterConfig.Carrier`. `TokenTransport` is `TokenDelivery`, because a transport here means HTTP or another protocol. See [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
 - **The middleware.** `RequireSession`, `RequireFreshSession`, and the phone number plugin's `optionalSession` become thin wrappers over the caller. `RequireSession` and `RequireFreshSession` stay public, because applications protect their own routes with them. They require a caller that was authenticated with a session, and take no permission, since an application's own routes declare none.
 - **The session in `Values`.** `RequestContext.Values["session"]` and `Values["sessionID"]` go. A handler reads `CallerFrom(rctx.Ctx).Session()`. `docs/api/sessions.md` shows the old keys and changes with them.
 - **`HookContext.Request`.** It stays for handlers that want HTTP details. The session manager, the audit log, and rate-limit rules stop reading it. It becomes an accessor in the HTTP package when the HTTP types leave `core`.
@@ -354,8 +354,6 @@ The caller's package sits below `telemetry`, and a hook callout sends the caller
 ## Open questions
 
 - `Access` and `Peer` are working names.
-- The per-address hook rules either keep the route rules' names (`core.signin.route`, `core.signup.route`, `core.session_token.route`, and each plugin's `Rule*Route`) or get new ones. Every sign-in plugin fires `auth.signIn.before`, so a rule there counts all sign-in methods together unless it keys on the method too. A hook rule also runs after the body is decoded, where a route rule runs before.
-- The new name for `TokenTransport` and `SessionConfig.Transport`, now that the caller's transport means HTTP or another protocol.
 - Whether a session created by impersonation holds every self-service permission.
 
 ## Implementation steps
@@ -364,11 +362,11 @@ The caller's package sits below `telemetry`, and a hook callout sends the caller
 | --- | --- | --- |
 | 1 | Part 1 of [`package_layout.md`](package_layout.md): the packages move to their layout, except for the HTTP types | Done |
 | 2 | The caller's package, `WithCaller`, `CallerFrom`, `System`, `For`, `HookContext.Caller`, the permission catalog, and `Access`, with tests. Nothing reads them yet. | Done |
-| 3 | The authenticator. The router authenticates every call and puts the caller on the context. The token carrier takes the four HTTP methods of `SessionManager`, and `TokenTransport` gets its new name. `RequireSession`, `RequireFreshSession`, and `optionalSession` become wrappers, and the session keys in `RequestContext.Values` go. | In progress. Done: the authenticator, the authentication stage (`AuthenticateRequests`), `RequireSession` and `RequireFreshSession` over the caller, `optionalSession`, and the session keys. Waiting for the new name: the token carrier and `TokenTransport`. |
-| 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules | Not started |
+| 3 | The authenticator. The router authenticates every call and puts the caller on the context. The token carrier takes the four HTTP methods of `SessionManager`, and `TokenTransport` gets its new name, `TokenDelivery`. `RequireSession`, `RequireFreshSession`, and `optionalSession` become wrappers, and the session keys in `RequestContext.Values` go. | Done |
+| 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules. The hook rules get new names that end in `.address`, such as `core.signin.address`, and the route rules they replace go. Every sign-in plugin fires `auth.signIn.before`, so the sign-in rule keys on the address and the sign-in method, which each flow publishes in the operation's `Values`: each method keeps a limit of its own. | Not started |
 | 5 | The flows: the permissions declared, and the flows in the table above require them. The `UserID` fields of `phonenumber.SendRequest`, `phonenumber.VerifyRequest`, and `emailverification.ChangeRequest` go, and so does `SessionTokenRequest.Session`. | Not started |
 | 6 | Admin operations require a privileged caller. The examples, the CLI, and the tests name their callers. | Not started |
-| 7 | The docs: the guideline's list of differences, `docs/api/sessions.md`, `docs/api/hooks.md`, the token transport and audit pages, and the hook context page | Not started |
+| 7 | The docs: the guideline's list of differences, `docs/api/sessions.md`, `docs/api/hooks.md`, the token delivery and audit pages, and the hook context page | Not started |
 
 Each step leaves the code working. Steps 3, 5, and 6 change what an application or a plugin author writes, so they land before a tagged release.
 

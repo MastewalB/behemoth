@@ -57,9 +57,10 @@ engine := gin.New()
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Crypto: cryptoCfg, // the master secret(s) every key is derived from
 	HTTP:   ginadapter.New(engine),
-	Session: core.SessionConfig{
-		ExpiresIn: 24 * time.Hour,
-		Transport: core.TransportHeader,
+	Session: core.SessionConfig{ExpiresIn: 24 * time.Hour},
+	// The session token travels in a header and comes back as a bearer token.
+	Router: core.RouterConfig{
+		Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader},
 	},
 })
 if err != nil {
@@ -78,7 +79,7 @@ curl -X POST localhost:8080/api/auth/sign-in/email \
   -d '{"email":"ada@example.com","password":"correct horse battery"}'
 ```
 
-The sign-in response carries the session token where `Transport` says: here in the `Set-Auth-Token` header, which the client sends back as `Authorization: Bearer <token>`. The default is a cookie.
+The sign-in response carries the session token where `Delivery` says: here in the `Set-Auth-Token` header, which the client sends back as `Authorization: Bearer <token>`. The default is a cookie.
 
 Without a router, call the same flows from code with `plugin.SignUp` and `plugin.SignIn`.
 

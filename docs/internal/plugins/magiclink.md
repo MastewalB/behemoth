@@ -86,7 +86,7 @@ The response time still differs: a known email pays for the token writes, and wi
 | 6 | `SessionManager.Create` | the error is returned |
 | 7 | return a `*core.SignInResult` with `Method: "magiclink"` | |
 
-The route hands the result to `core.WriteSignIn` with the redirect URL as an extra field, so its response and the delivery of the session token are the ones of every sign-in route ([`../sessions/token_transport.md`](../sessions/token_transport.md)).
+The route hands the result to `core.WriteSignIn` with the redirect URL as an extra field, so its response and the delivery of the session token are the ones of every sign-in route ([`../sessions/token_delivery.md`](../sessions/token_delivery.md)).
 
 Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with the code `invalid_magic_link`. The audit event of `auth.signIn.failed` has the real code.
 
@@ -180,7 +180,7 @@ Verification follows these rules:
 | `javascript:alert(1)` | refused | not `http` or `https` |
 | `` (empty) | refused | a caller with an optional redirect checks for empty first |
 
-The same list also says which origins may send a state-changing request under the cookie transports. See [`../http/origin_check.md`](../http/origin_check.md).
+The same list also says which origins may send a state-changing request under the cookie deliveries. See [`../http/origin_check.md`](../http/origin_check.md).
 
 A plugin checks a redirect URL when it receives it, before storing it. The magic link plugin checks at request time and not at verify: a bad URL is then a `400` for the request, and nothing unchecked is kept with the token.
 

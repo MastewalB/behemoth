@@ -5,6 +5,8 @@ This document explains how a request to one of behemoth's HTTP endpoints reaches
 The code lives in:
 
 - `core/router.go`: `Router`, `RouterConfig`, `FrameworkDriver`, the wrapping pipeline
+- `core/authenticator.go`: `AuthenticateRequests` and `Router.ApplyAuthentication`, the stage that turns a request's session token into its caller
+- `core/token_carrier.go`: `TokenCarrier`, which reads the token from a request (`RouterConfig.Carrier`)
 - `core/plugins.go`: `Plugin`, `Route`, `Middleware`, `RequestContext`, `ResponseRecorder`
 - `engine/init.go`: `Boot`, which drives everything below
 - `plugins/adapters/{gin,echo,chi,fiber}`: one `FrameworkDriver` per framework, each in its own module
@@ -90,13 +92,13 @@ type RequestContext struct {
 
 ## Route table construction: `Boot`
 
-One field of `RouterConfig` is read before the router exists: `Boot` builds `AuthContext.Origins` from `TrustedOrigins` when it builds the `AuthContext`, so that a plugin's `Init` and flows can check redirect URLs against it. See [`../plugins/magiclink.md`](../plugins/magiclink.md#trusted-origins).
+Two fields of `RouterConfig` are read before the router exists. `Boot` builds `AuthContext.Origins` from `TrustedOrigins` when it builds the `AuthContext`, so that a plugin's `Init` and flows can check redirect URLs against it. See [`../plugins/magiclink.md`](../plugins/magiclink.md#trusted-origins). It also builds `AuthContext.TokenCarrier` from `Carrier`, which sign-in and sign-out routes use to hand over and take back the session token. See [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
 
 After the AuthContext is fully built and every plugin's `Init` has run, `Boot`:
 
 1. Creates the router: `core.NewRouter(cfg.Router, ac)`. The `AuthContext` is captured here, once.
 2. For each plugin, in dependency order: `router.Mount(name, meta.MountPath, p.Routes())`, and appends `p.Middlewares()` to the global middleware list.
-3. Builds the client-IP configuration from `RouterConfig.TrustedProxies` / `ClientIPHeader` and calls `router.ApplyRateLimiting(rateLimiter, rateLimitCatalog, ipCfg)`.
+3. Builds the client-IP configuration from `RouterConfig.TrustedProxies` / `ClientIPHeader`, and calls `router.ApplyAuthentication(ac.Authenticator, ac.TokenCarrier, ipCfg)`, then `router.ApplyRateLimiting(rateLimiter, rateLimitCatalog, ipCfg)`.
 4. If `cfg.HTTP != nil`: `router.Build(cfg.HTTP, globalMiddleware...)`.
 
 Any error aborts `Boot`. Steps 1–3 run whether or not a driver is configured.
@@ -194,12 +196,13 @@ adapter: build RequestContext (Request, Params, empty Response, Values)
   ├─ withTracing              one span per request; rctx.Ctx carries it         (Build)
   ├─ withMetrics              counts and times the request, by route pattern    (Build)
   ├─ wrapWithErrorMapping     returned error → mapped JSON response             (Build)
-  ├─ origin check             OriginCheck.Middleware, cookie transports only    (Build)
-  ├─ form content types       RefuseFormContentTypes, cookie transports only    (Build)
+  ├─ origin check             OriginCheck.Middleware, cookie deliveries only    (Build)
+  ├─ form content types       RefuseFormContentTypes, cookie deliveries only    (Build)
   ├─ global middleware[0]                                                      (Build)
   ├─ ...
   ├─ global middleware[n]     every plugin's Middlewares(), dependency order    (Build)
   ├─ route rate limit         most specific matching RouteRateLimitRule, if any (ApplyRateLimiting)
+  ├─ authentication           AuthenticateRequests: the caller on rctx.Ctx      (ApplyAuthentication)
   ├─ route middleware[0]                                                       (Mount)
   ├─ ...
   ├─ route middleware[n]      Route.Middlewares                                (Mount)
@@ -211,6 +214,7 @@ adapter: Response.Flush(writer)  — or 500 if the chain returned an error
 How each step builds it:
 
 - **`Mount`:** `h = route.Middlewares[0](... route.Middlewares[n](route.Handler))`, iterated in reverse so `Middlewares[0]` ends up outermost and runs first.
+- **`ApplyAuthentication`:** for each route, `h = AuthenticateRequests(authn, carrier, ipCfg)(h)`. Every route gets it, and a public one too: the stage reads the token where `RouterConfig.Carrier` says, has the authenticator build the caller, puts the caller on `rctx.Ctx` in place of any caller already there, and has the carrier remove the cookie of a session that is gone or extend the cookie of a session that rolled. It refuses nothing. `RequireSession`, a route middleware, refuses a request whose caller is not signed in. It is applied before `ApplyRateLimiting`, so a rate-limited request is refused before it costs a session lookup. See [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
 - **`ApplyRateLimiting`:** for each route, `BestRouteMatch` picks the single most specific `RouteRateLimitRule` for its method and **match path** (below). No match, or a `Disabled` best match, leaves the route untouched; otherwise `h = rateLimitWrap(h, rule, ...)`, which calls `RateLimiter.CheckRouteLimit` and returns its error instead of calling `h` when the limit is exceeded. Resolved once at boot, not per request.
 
   `[Convention, important]` **Rule paths are relative to `BasePath`.** Core and plugins declare rules without knowing the developer's `BasePath` (core's sign-in rule is `POST /sign-in/email`) so the router records, for every route, the path rules are matched against:
