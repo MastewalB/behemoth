@@ -26,7 +26,7 @@ const (
 // forgery: it refuses a state-changing request that a browser sent from a
 // page of another origin. Boot builds one from RouterConfig.BaseURL and
 // RouterConfig.TrustedOrigins, and puts its Middleware in front of every
-// behemoth route when SessionConfig.Transport reads a cookie.
+// behemoth route when RouterConfig.Carrier.Delivery reads a cookie.
 //
 // It looks at the request's headers only. It reads no cookie and no session,
 // so it covers sign-in and sign-up like the routes behind a session.

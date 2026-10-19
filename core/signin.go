@@ -34,7 +34,7 @@ func (r *SignInResult) AuditSubject() (subjectType, subjectID string) {
 // Keys of the JSON body WriteSignIn answers with.
 const (
 	SignInUserKey   = "user"   // the signed-in user
-	SignInTokenKey  = "token"  // the session token, under TransportBody only
+	SignInTokenKey  = "token"  // the session token, under DeliveryBody only
 	SignInStatusKey = "status" // SignInStatusSecondFactor, when one is pending
 )
 
@@ -44,23 +44,23 @@ const SignInStatusSecondFactor = "requires_second_factor"
 
 // WriteSignIn answers a route with a finished sign-in. Every sign-in route
 // calls it, so that a client parses one shape whichever plugin signed the
-// user in, and so that the session token reaches the client by whichever
-// transport is configured:
+// user in, and so that the session token reaches the client the way
+// RouterConfig.Carrier says:
 //
 //	{"user": {...}}                                  the session is active; the user's public columns
 //	{"status": "requires_second_factor"}             a second factor is pending
-//	{"user": {...}, "token": "..."}                  the same, under TransportBody
+//	{"user": {...}, "token": "..."}                  the same, under DeliveryBody
 //	{"status": "requires_second_factor", "token": "..."}
 //
-// It hands the token to the session manager first (SessionManager.WriteToken:
-// the cookie, the response header), and adds it to the body when the manager
+// It hands the token to the token carrier first (TokenCarrier.Write: the
+// cookie, the response header), and adds it to the body when the carrier
 // says the body is where it goes. A pending session's token is delivered
 // like an active one's: the client needs it to present the second factor.
 //
 // extra is added to the body, for what a plugin returns next to the user,
 // such as the magic link plugin's redirect URL. It can't replace the keys
 // above. The response is marked Cache-Control: no-store: it carries a
-// credential in every transport.
+// credential in every delivery.
 func WriteSignIn(rctx *RequestContext, result *SignInResult, extra behemoth.M) error {
 	body := behemoth.M{}
 	maps.Copy(body, extra)
@@ -78,7 +78,7 @@ func WriteSignIn(rctx *RequestContext, result *SignInResult, extra behemoth.M) e
 		}
 		body[SignInUserKey] = user
 	}
-	if rctx.Auth.SessionManager.WriteToken(rctx, result.RawToken, result.Session) {
+	if rctx.Auth.TokenCarrier.Write(rctx, result.RawToken, result.Session.ExpiresAt) {
 		body[SignInTokenKey] = result.RawToken
 	}
 	rctx.Response.SetHeader("Cache-Control", "no-store")

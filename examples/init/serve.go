@@ -125,12 +125,15 @@ func boot(ctx context.Context, driver core.FrameworkDriver, tel *telemetry.Telem
 			ExpiresIn:         24 * time.Hour,
 			PendingExpiresIn:  10 * time.Minute,
 			CaptureIPAndAgent: true, // sessions record the client's address and user agent
-			Transport:         core.TransportHeader,
 		},
-		// KV, RateLimit, Token and Router left at their defaults: no KV
-		// store (sessions and rate limits use the DB), routes under
-		// /api/auth. A magic link request that names a redirect to another
-		// origin would need that origin in Router.TrustedOrigins.
+		// The session token travels in the Set-Auth-Token header, and comes
+		// back as a bearer token. The rest of the router is left at its
+		// defaults: routes under /api/auth. A magic link request that names
+		// a redirect to another origin would need that origin in
+		// Router.TrustedOrigins.
+		Router: core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		// KV, RateLimit and Token left at their defaults: no KV store
+		// (sessions and rate limits use the DB).
 	})
 	if err != nil {
 		sqlDB.Close()

@@ -676,7 +676,7 @@ func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
 	}
 
 	// The body every sign-in route answers with, plus the redirect, and
-	// the session token by whichever transport SessionConfig.Transport names.
+	// the session token the way RouterConfig.Carrier says.
 	return core.WriteSignIn(rctx, result.SignInResult, behemoth.M{keyRedirectURL: result.RedirectURL})
 }
 

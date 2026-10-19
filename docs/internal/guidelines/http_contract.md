@@ -24,9 +24,9 @@ A client never sees hooks, the store, migrations, or the router adapters. Those 
 | Request body keys | `email`, `password`, `redirect_url` | the input type's `FromMap` |
 | Response body | `{"user": {...}}`, `{"status": "ok"}` | the handler, `WriteSignIn`, `PublicView` |
 | Error status and code | `401` with `invalid_credentials` | the `DomainError`'s category and code, the error mapper |
-| The request's `Content-Type` | `application/json`; a form type is refused under the cookie transports | `core.RefuseFormContentTypes` |
+| The request's `Content-Type` | `application/json`; a form type is refused under the cookie deliveries | `core.RefuseFormContentTypes` |
 | Response headers | `Set-Cookie`, `Set-Auth-Token`, `Retry-After`, `X-Request-ID` | the session manager, the router |
-| Where the session token travels | a cookie, a bearer token | `SessionConfig.Transport` |
+| Where the session token travels | a cookie, a bearer token | `RouterConfig.Carrier.Delivery` |
 
 A change to a row of this table reaches every client. A question to ask before a change to a route: would a client written against yesterday's response still work?
 
@@ -60,7 +60,7 @@ A client ignores keys it does not know, so a new key is safe. A renamed or remov
 
 | Answer | Shape | Written by |
 | --- | --- | --- |
-| A finished sign-in | `{"user": {...}}`, or `{"status": "requires_second_factor"}`, with `token` under the body transport | `core.WriteSignIn` |
+| A finished sign-in | `{"user": {...}}`, or `{"status": "requires_second_factor"}`, with `token` under the body delivery | `core.WriteSignIn` |
 | A user | `{"user": {...}}`, the public columns | `AuthContext.Public.Of` |
 | An action with nothing to return | `{"status": "<what happened>"}` | the handler |
 | An error | `{"error": "<message>", "code": "<code>"}` | the router's error mapper |
@@ -89,7 +89,7 @@ The same reasoning applies between plugins. A plugin's routes work without anoth
 
 ### Deliver the session token through the session manager
 
-A sign-in route calls `WriteSignIn`, which asks the session manager where the token goes. A route that also puts the raw token in its body hands scripts the token that an `HttpOnly` cookie keeps from them. A client relies on `SessionConfig.Transport` naming every place the token appears.
+A sign-in route calls `WriteSignIn`, which asks the token carrier where the token goes. A route that also puts the raw token in its body hands scripts the token that an `HttpOnly` cookie keeps from them. A client relies on `RouterConfig.Carrier.Delivery` naming every place the token appears.
 
 ### Point an email link at a page of the application
 
@@ -107,7 +107,7 @@ The page posts the token to behemoth. `docs/internal/plugins/magiclink.md` has t
 
 The plan is one core client with client plugins, and thin packages per framework:
 
-- **The core client** sends requests, keeps a bearer token where the transport needs one, turns an error body into one error type (status, code, message, request ID, retry delay) and holds the session's state.
+- **The core client** sends requests, keeps a bearer token where the delivery needs one, turns an error body into one error type (status, code, message, request ID, retry delay) and holds the session's state.
 - **A client plugin** matches one server plugin and adds its methods and types. Email and password is a client plugin like the others, since it is optional on the server.
 - **A framework package** (Svelte, SvelteKit, React) takes a client and adds reactivity or server integration. It does not know about plugins.
 

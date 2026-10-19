@@ -175,7 +175,7 @@ func TestOAuthWithAnOIDCProvider(t *testing.T) {
 	app, err := bootOAuth(t, oauth.Options{
 		Providers:  []oauth.ProviderConfig{{Kind: oauth.KindOIDC, ID: "acme", Issuer: fake.srv.URL, ClientID: "client-1", ClientSecret: secret}},
 		HTTPClient: fake.client(),
-	}, nil, withTransport(core.TransportCookie))
+	}, nil, withDelivery(core.DeliveryCookie))
 	require.NoError(t, err)
 
 	signIn := func(iss string) routeAnswer {

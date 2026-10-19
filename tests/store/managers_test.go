@@ -291,11 +291,11 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 	_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
 	require.NoError(t, err)
 	sm := auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t),
-		core.SessionConfig{Transport: core.TransportHeader, ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
 		&passDispatcher{}, nil, managersAuth, nil)
 
 	reached := 0
-	handler := requireSession(sm, func(*core.RequestContext) error {
+	handler := requireSession(sm, core.DeliveryHeader, func(*core.RequestContext) error {
 		reached++
 		return nil
 	})
@@ -373,9 +373,10 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 		cfg.PendingExpiresIn = time.Minute
 		return auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t), cfg, &passDispatcher{}, nil, managersAuth, nil)
 	}
-	// request sends cookie and bearer through the middleware mw builds, and
-	// returns the response and the middleware's error.
-	request := func(sm core.SessionManager, mw func(core.SessionManager) core.Middleware, cookie, bearer string) (*core.RequestContext, error) {
+	// request sends cookie and bearer, carried the way delivery says,
+	// through the middleware mw builds, and returns the response and the
+	// middleware's error.
+	request := func(sm core.SessionManager, delivery core.TokenDelivery, mw func(core.SessionManager) core.Middleware, cookie, bearer string) (*core.RequestContext, error) {
 		req := httptest.NewRequest(http.MethodGet, "/me", nil)
 		if cookie != "" {
 			req.AddCookie(&http.Cookie{Name: "session_token", Value: cookie})
@@ -384,7 +385,7 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 		rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
-		return rctx, authenticated(sm, mw(sm)(func(*core.RequestContext) error { return nil }))(rctx)
+		return rctx, authenticated(sm, delivery, mw(sm)(func(*core.RequestContext) error { return nil }))(rctx)
 	}
 	// requireSessionMW is RequireSession in the form request takes.
 	requireSessionMW := func(core.SessionManager) core.Middleware { return core.RequireSession() }
@@ -412,39 +413,38 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 		"expired":      {expiredToken, errs.CodeSessionExpired},
 		"never issued": {"never-issued", errs.CodeSessionInvalid},
 	} {
-		rctx, err := request(sm, requireSessionMW, tc.token, "")
+		rctx, err := request(sm, "", requireSessionMW, tc.token, "")
 		assert.True(t, errs.IsCode(err, tc.code), "%s: %v", name, err)
 		assert.True(t, removed(rctx), "%s: the cookie is removed: %q", name, rctx.Response.Headers.Values("Set-Cookie"))
 	}
 
 	// Not gone: the client still needs its cookie, or has none.
-	rctx, err := request(sm, requireSessionMW, pendingToken, "")
+	rctx, err := request(sm, "", requireSessionMW, pendingToken, "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a session that waits for its second factor keeps its cookie")
 
-	rctx, err = request(sm, requireSessionMW, "", "")
+	rctx, err = request(sm, "", requireSessionMW, "", "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "no cookie came, none is removed")
 
 	neverFresh := manager(core.SessionConfig{FreshAge: time.Nanosecond})
-	rctx, err = request(neverFresh, core.RequireFreshSession, liveToken, "")
+	rctx, err = request(neverFresh, "", core.RequireFreshSession, liveToken, "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionNotFresh), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a session that is only too old for this route is still live")
 
-	// Both transports: the bearer token is read first. A dead one says
+	// Both deliveries: the bearer token is read first. A dead one says
 	// nothing about the cookie next to it, which is another session's.
-	both := manager(core.SessionConfig{Transport: core.TransportBoth})
-	rctx, err = request(both, requireSessionMW, liveToken, revokedToken)
+	rctx, err = request(sm, core.DeliveryBoth, requireSessionMW, liveToken, revokedToken)
 	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "the live session's cookie stays")
-	rctx, err = request(both, requireSessionMW, revokedToken, "")
+	rctx, err = request(sm, core.DeliveryBoth, requireSessionMW, revokedToken, "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	assert.True(t, removed(rctx), "the dead session's own cookie goes")
 
 	// The database fails: nothing is known about the session, so nothing
 	// is taken from the client.
 	require.NoError(t, sqlDB.Close())
-	rctx, err = request(sm, requireSessionMW, liveToken, "")
+	rctx, err = request(sm, "", requireSessionMW, liveToken, "")
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryDatabase), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a failed lookup removes no cookie")
@@ -486,7 +486,7 @@ func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
 		require.NotEmpty(t, rec.Logger.At(slog.LevelDebug), "%s: creating the session ran statements, so they are being counted", name)
 
 		reached := false
-		handler := requireSession(sm, func(*core.RequestContext) error {
+		handler := requireSession(sm, "", func(*core.RequestContext) error {
 			reached = true
 			return nil
 		})
@@ -835,7 +835,7 @@ func TestTokenListForSubject(t *testing.T) {
 // still valid but older.
 func TestSessionFreshness(t *testing.T) {
 	ctx := context.Background()
-	sm, _ := newSessionManager(t, core.SessionConfig{FreshAge: 150 * time.Millisecond, Transport: core.TransportHeader})
+	sm, _ := newSessionManager(t, core.SessionConfig{FreshAge: 150 * time.Millisecond})
 	active, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	pending, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
@@ -845,7 +845,7 @@ func TestSessionFreshness(t *testing.T) {
 	assert.False(t, sm.IsFresh(nil))
 
 	reached := 0
-	handler := authenticated(sm, core.RequireFreshSession(sm)(func(rctx *core.RequestContext) error {
+	handler := authenticated(sm, core.DeliveryHeader, core.RequireFreshSession(sm)(func(rctx *core.RequestContext) error {
 		reached++
 		_, ok := identity.CallerFrom(rctx.Ctx).Session()
 		assert.True(t, ok, "it does what RequireSession does first")
@@ -888,7 +888,7 @@ func TestSessionFreshness(t *testing.T) {
 }
 
 // A session manager built with a zero SessionConfig works: sessions last
-// the documented default, and the token travels in the default cookie.
+// the documented default.
 func TestSessionManagerWithAZeroConfig(t *testing.T) {
 	ctx := context.Background()
 	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), core.SessionConfig{}, &passDispatcher{}, nil, managersAuth, nil)
@@ -901,152 +901,6 @@ func TestSessionManagerWithAZeroConfig(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(core.DefaultSessionPendingExpiresIn), pending.ExpiresAt, time.Minute)
 	_, err = sm.Validate(ctx, raw)
 	require.NoError(t, err, "the session did not expire the moment it was created")
-
-	rctx := &core.RequestContext{Response: core.NewResponseRecorder(), Values: behemoth.M{}}
-	assert.False(t, sm.WriteToken(rctx, raw, active))
-	assert.Contains(t, rctx.Response.Headers.Get("Set-Cookie"), "session_token="+raw, "the default transport is the cookie")
-}
-
-// The session cookie carries the attributes SessionConfig names, and the
-// cookie that removes it carries the same ones: a browser replaces a cookie
-// only with one of the same name, path and domain.
-func TestSessionCookieAttributes(t *testing.T) {
-	ctx := context.Background()
-	for name, tc := range map[string]struct {
-		cfg      core.SessionConfig
-		domain   string
-		sameSite http.SameSite
-		secure   bool
-	}{
-		"the defaults":      {core.SessionConfig{}, "", http.SameSiteLaxMode, true},
-		"a domain":          {core.SessionConfig{CookieDomain: "example.com"}, "example.com", http.SameSiteLaxMode, true},
-		"a domain as .host": {core.SessionConfig{CookieDomain: ".example.com"}, "example.com", http.SameSiteLaxMode, true},
-		"strict":            {core.SessionConfig{CookieSameSite: core.SameSiteStrict}, "", http.SameSiteStrictMode, true},
-		"none":              {core.SessionConfig{CookieSameSite: core.SameSiteNone}, "", http.SameSiteNoneMode, true},
-		"without Secure":    {core.SessionConfig{CookieInsecure: true}, "", http.SameSiteLaxMode, false},
-	} {
-		require.NoError(t, tc.cfg.Validate(), name)
-		sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
-		session, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
-		require.NoError(t, err, name)
-
-		rctx := &core.RequestContext{Response: core.NewResponseRecorder(), Values: behemoth.M{}}
-		sm.WriteToken(rctx, raw, session)
-		req := httptest.NewRequest(http.MethodPost, "/x", nil)
-		req.AddCookie(&http.Cookie{Name: "session_token", Value: raw})
-		cleared := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
-		sm.ClearToken(cleared)
-
-		for step, headers := range map[string]http.Header{"written": rctx.Response.Headers, "removed": cleared.Response.Headers} {
-			cookies := (&http.Response{Header: headers}).Cookies()
-			require.Len(t, cookies, 1, "%s, %s", name, step)
-			c := cookies[0]
-			assert.Equal(t, tc.domain, c.Domain, "%s, %s: Domain", name, step)
-			assert.Equal(t, tc.sameSite, c.SameSite, "%s, %s: SameSite", name, step)
-			assert.Equal(t, tc.secure, c.Secure, "%s, %s: Secure", name, step)
-			assert.True(t, c.HttpOnly, "%s, %s: HttpOnly is fixed", name, step)
-			assert.Equal(t, "/", c.Path, "%s, %s: the path is fixed", name, step)
-		}
-	}
-}
-
-// Each transport hands the token over in its own place, and reads it back
-// from where its client sends it.
-func TestSessionTokenTransports(t *testing.T) {
-	ctx := context.Background()
-	for name, tc := range map[string]struct {
-		cfg        core.SessionConfig
-		cookie     string // the cookie's name when one is set, "" when none is
-		header     bool   // the token is in Set-Auth-Token
-		inBody     bool   // the route is told to put it in the body
-		readCookie bool   // a request's cookie is accepted
-		readBearer bool   // a request's Authorization header is accepted
-	}{
-		"cookie":        {core.SessionConfig{Transport: core.TransportCookie}, "session_token", false, false, true, false},
-		"cookie, named": {core.SessionConfig{Transport: core.TransportCookie, CookieName: "sid"}, "sid", false, false, true, false},
-		"header":        {core.SessionConfig{Transport: core.TransportHeader}, "", true, false, false, true},
-		"body":          {core.SessionConfig{Transport: core.TransportBody}, "", false, true, false, true},
-		"both":          {core.SessionConfig{Transport: core.TransportBoth, CookieName: "sid"}, "sid", true, false, true, true},
-	} {
-		sm, _ := newSessionManager(t, tc.cfg)
-		session, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
-		require.NoError(t, err, name)
-
-		rctx := &core.RequestContext{Response: core.NewResponseRecorder(), Values: behemoth.M{}}
-		assert.Equal(t, tc.inBody, sm.WriteToken(rctx, raw, session), "%s: in the body", name)
-		setCookie := rctx.Response.Headers.Get("Set-Cookie")
-		if tc.cookie == "" {
-			assert.Empty(t, setCookie, "%s: no cookie", name)
-		} else {
-			assert.True(t, strings.HasPrefix(setCookie, tc.cookie+"="+raw+";"), "%s: Set-Cookie = %q", name, setCookie)
-			assert.Contains(t, setCookie, "HttpOnly", name)
-		}
-		wantHeader := ""
-		if tc.header {
-			wantHeader = raw
-		}
-		assert.Equal(t, wantHeader, rctx.Response.Headers.Get(core.SessionTokenHeader), "%s: %s", name, core.SessionTokenHeader)
-		assert.Empty(t, rctx.Values, "%s: nothing is parked in the request's values", name)
-
-		cookieName := tc.cfg.CookieName
-		if cookieName == "" {
-			cookieName = "session_token"
-		}
-		withCookie := httptest.NewRequest(http.MethodGet, "/x", nil)
-		withCookie.AddCookie(&http.Cookie{Name: cookieName, Value: raw})
-		got, ok := sm.ExtractToken(withCookie)
-		assert.Equal(t, tc.readCookie, ok, "%s: reads the cookie", name)
-		if tc.readCookie {
-			assert.Equal(t, raw, got, name)
-		}
-		withBearer := httptest.NewRequest(http.MethodGet, "/x", nil)
-		withBearer.Header.Set("Authorization", "Bearer "+raw)
-		got, ok = sm.ExtractToken(withBearer)
-		assert.Equal(t, tc.readBearer, ok, "%s: reads the Authorization header", name)
-		if tc.readBearer {
-			assert.Equal(t, raw, got, name)
-		}
-		_, ok = sm.ExtractToken(httptest.NewRequest(http.MethodGet, "/x", nil))
-		assert.False(t, ok, "%s: a request without a token", name)
-
-		// ClearToken takes back what WriteToken handed over, from the
-		// request that presented it. A browser replaces a cookie only with
-		// one of the same name and path, so the cookie it sets is the one
-		// above, emptied and expired. A transport without a cookie has
-		// nothing to take back.
-		clear := func(req *http.Request) *core.RequestContext {
-			cleared := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
-			sm.ClearToken(cleared)
-			return cleared
-		}
-		cleared := clear(withCookie)
-		if tc.cookie == "" {
-			assert.Empty(t, cleared.Response.Headers, "%s: ClearToken writes nothing", name)
-		} else {
-			written := (&http.Response{Header: rctx.Response.Headers}).Cookies()
-			gone := (&http.Response{Header: cleared.Response.Headers}).Cookies()
-			require.Len(t, written, 1, name)
-			require.Len(t, gone, 1, name)
-			assert.Equal(t, written[0].Name, gone[0].Name, "%s: the same cookie", name)
-			assert.Equal(t, written[0].Path, gone[0].Path, "%s: the same path", name)
-			assert.Empty(t, gone[0].Value, "%s: no token in it", name)
-			assert.Negative(t, gone[0].MaxAge, "%s: Max-Age=0, which deletes it", name)
-			assert.True(t, gone[0].Expires.Before(time.Now()), "%s: and an Expires in the past", name)
-			assert.True(t, gone[0].HttpOnly && gone[0].Secure, "%s: with the attributes of the cookie it replaces", name)
-			assert.Equal(t, written[0].SameSite, gone[0].SameSite, name)
-			assert.Empty(t, cleared.Response.Headers.Get(core.SessionTokenHeader), "%s: no token header", name)
-		}
-		// A request that did not present its token in the cookie keeps
-		// whatever cookie it has: under TransportBoth the token may come as
-		// a bearer token next to the cookie of another session.
-		assert.Empty(t, clear(withBearer).Response.Headers, "%s: no cookie in the request, none to remove", name)
-		otherCookie := httptest.NewRequest(http.MethodGet, "/x", nil)
-		otherCookie.Header.Set("Authorization", "Bearer "+raw)
-		otherCookie.AddCookie(&http.Cookie{Name: cookieName, Value: "another-sessions-token"})
-		if tc.readBearer {
-			assert.Empty(t, clear(otherCookie).Response.Headers, "%s: the cookie is another session's", name)
-		}
-	}
 }
 
 // RequireSession applies the rolling expiration, and the cookie has to
@@ -1055,10 +909,10 @@ func TestSessionTokenTransports(t *testing.T) {
 func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 	ctx := context.Background()
 	const ownCacheControl = "private, max-age=60"
-	// request sends one request through RequireSession to a handler that
-	// sets a Cache-Control of its own. It returns the response and the
-	// session the handler saw.
-	request := func(sm core.SessionManager, cookie, bearer string) (*core.RequestContext, identity.SessionRef) {
+	// request sends one request, with its token carried the way delivery
+	// says, through RequireSession to a handler that sets a Cache-Control
+	// of its own. It returns the response and the session the handler saw.
+	request := func(sm core.SessionManager, delivery core.TokenDelivery, cookie, bearer string) (*core.RequestContext, identity.SessionRef) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, "/me", nil)
 		if cookie != "" {
@@ -1069,7 +923,7 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 		}
 		var seen identity.SessionRef
 		reached := false
-		handler := requireSession(sm, func(rctx *core.RequestContext) error {
+		handler := requireSession(sm, delivery, func(rctx *core.RequestContext) error {
 			seen, reached = identity.CallerFrom(rctx.Ctx).Session()
 			rctx.Response.SetHeader("Cache-Control", ownCacheControl)
 			return rctx.Response.JSON(http.StatusOK, behemoth.M{})
@@ -1089,7 +943,7 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 	created, raw, err := rolling.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(10 * time.Millisecond)
-	rctx, seen := request(rolling, raw, "")
+	rctx, seen := request(rolling, "", raw, "")
 	assert.True(t, seen.ExpiresAt.After(created.ExpiresAt), "the handler sees the session with its new expiry")
 	set := cookies(rctx)
 	require.Len(t, set, 1)
@@ -1105,36 +959,34 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 	fixed, _ := newSessionManager(t, core.SessionConfig{})
 	created, raw, err = fixed.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	rctx, seen = request(fixed, raw, "")
+	rctx, seen = request(fixed, "", raw, "")
 	assert.True(t, seen.ExpiresAt.Equal(created.ExpiresAt))
 	assert.Empty(t, cookies(rctx))
 	assert.Equal(t, ownCacheControl, rctx.Response.Headers.Get("Cache-Control"))
 
-	// The header transport: the session is extended, and its client keeps
+	// The header delivery: the session is extended, and its client keeps
 	// the token without a date, so the response hands out nothing.
-	byHeader, _ := newSessionManager(t, core.SessionConfig{Transport: core.TransportHeader, UpdateAge: alwaysDue})
-	created, raw, err = byHeader.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
+	created, raw, err = rolling.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(10 * time.Millisecond)
-	rctx, seen = request(byHeader, "", raw)
+	rctx, seen = request(rolling, core.DeliveryHeader, "", raw)
 	assert.True(t, seen.ExpiresAt.After(created.ExpiresAt))
 	assert.Empty(t, cookies(rctx))
 	assert.Empty(t, rctx.Response.Headers.Get(core.SessionTokenHeader))
 	assert.Equal(t, ownCacheControl, rctx.Response.Headers.Get("Cache-Control"))
 
-	// Both transports: the cookie is extended for the client that sent the
+	// Both deliveries: the cookie is extended for the client that sent the
 	// token in it. A bearer token is read first, and the cookie next to it
 	// may be another session's, which must not be overwritten.
-	both, _ := newSessionManager(t, core.SessionConfig{Transport: core.TransportBoth, UpdateAge: alwaysDue})
-	_, asBearer, err := both.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
+	_, asBearer, err := rolling.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	_, inCookie, err := both.Create(ctx, "u2", core.SessionMeta{State: models.SessionActive})
+	_, inCookie, err := rolling.Create(ctx, "u2", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	rctx, seen = request(both, inCookie, asBearer)
+	rctx, seen = request(rolling, core.DeliveryBoth, inCookie, asBearer)
 	assert.Equal(t, "u1", seen.UserID, "the bearer token's session")
 	assert.Empty(t, cookies(rctx), "the cookie is another session's")
 	assert.Equal(t, ownCacheControl, rctx.Response.Headers.Get("Cache-Control"))
-	rctx, seen = request(both, inCookie, "")
+	rctx, seen = request(rolling, core.DeliveryBoth, inCookie, "")
 	assert.Equal(t, "u2", seen.UserID)
 	set = cookies(rctx)
 	require.Len(t, set, 1)
@@ -1192,24 +1044,26 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 }
 
 // authenticated wraps next in the stage the router puts in front of every
-// route, over sm's sessions.
-func authenticated(sm core.SessionManager, next core.HandlerFunc) core.HandlerFunc {
-	return core.AuthenticateRequests(auth.NewAuthenticator(sm, nil), sm, nil)(next)
+// route, over sm's sessions, with the token carried the way delivery says
+// ("" is the cookie).
+func authenticated(sm core.SessionManager, delivery core.TokenDelivery, next core.HandlerFunc) core.HandlerFunc {
+	carrier := core.NewTokenCarrier(core.TokenCarrierConfig{Delivery: delivery})
+	return core.AuthenticateRequests(auth.NewAuthenticator(sm, nil), carrier, nil)(next)
 }
 
 // requireSession is what a route behind RequireSession runs: the
 // authentication stage, then RequireSession, then next.
-func requireSession(sm core.SessionManager, next core.HandlerFunc) core.HandlerFunc {
-	return authenticated(sm, core.RequireSession()(next))
+func requireSession(sm core.SessionManager, delivery core.TokenDelivery, next core.HandlerFunc) core.HandlerFunc {
+	return authenticated(sm, delivery, core.RequireSession()(next))
 }
 
 // The authentication stage replaces any caller the context carried, so a
 // middleware in front of Behemoth can't plant an identity: a request without
 // a token is anonymous, whatever its context said.
 func TestAuthenticationReplacesAPlantedCaller(t *testing.T) {
-	sm, _ := newSessionManager(t, core.SessionConfig{Transport: core.TransportHeader})
+	sm, _ := newSessionManager(t, core.SessionConfig{})
 	reached := false
-	handler := requireSession(sm, func(*core.RequestContext) error {
+	handler := requireSession(sm, core.DeliveryHeader, func(*core.RequestContext) error {
 		reached = true
 		return nil
 	})

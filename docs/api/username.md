@@ -87,7 +87,7 @@ A `409` shows that a username exists, as the email/password plugin's `email_take
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `POST /sign-in/username` | `username`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | The same as `POST /sign-in/email`: `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}`, and the session token by the configured transport. See [Sessions](sessions.md). |
+| `POST /sign-in/username` | `username`, `password`. Other fields are not used by sign-in, but handlers on `auth.signIn.before` see them. | The same as `POST /sign-in/email`: `200` with `{"user": {...}}`, or `{"status": "requires_second_factor"}`, and the session token by the configured delivery. See [Sessions](sessions.md). |
 
 | When | Status | Body |
 | --- | --- | --- |

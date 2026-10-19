@@ -4,25 +4,22 @@ A sign-in creates a session and gives the client a token for it. The client send
 
 ## Configuration
 
-Sessions are configured with `BootConfig.Session`. Every field is optional.
+Two settings shape sessions. `BootConfig.Session` says how long a session lasts. `BootConfig.Router.Carrier` says how its token travels over HTTP, and sets the cookie's attributes. Every field of both is optional.
 
 ```go
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Session: core.SessionConfig{
-		ExpiresIn: 24 * time.Hour,
-		Transport: core.TransportHeader,
+	Session: core.SessionConfig{ExpiresIn: 24 * time.Hour},
+	Router: core.RouterConfig{
+		Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader},
 	},
 	// ...
 })
 ```
 
+`BootConfig.Session`, a `core.SessionConfig`:
+
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `Transport` | `core.TransportCookie` | Where the token travels. See [Transports](#transports). |
-| `CookieName` | `session_token` | The cookie's name, for the transports that use one. |
-| `CookieDomain` | empty | The cookie's `Domain` attribute, a host name such as `example.com`. Empty sends the cookie only to the host that set it. See [Cookie attributes](#cookie-attributes). |
-| `CookieSameSite` | `core.SameSiteLax` | The cookie's `SameSite` attribute: `core.SameSiteLax`, `core.SameSiteStrict`, or `core.SameSiteNone`. |
-| `CookieInsecure` | false | Leaves `Secure` off the cookie, for development over plain HTTP. |
 | `ExpiresIn` | 7 days | How long a session lasts. |
 | `PendingExpiresIn` | 10 minutes | How long a session lasts while it waits for a second factor. |
 | `UpdateAge` | 0, off | Rolling expiration: a session in use is extended by `ExpiresIn` once less than `UpdateAge` is left of it. At zero a session ends `ExpiresIn` after its sign-in, however much it is used. Keep it well below `ExpiresIn`: a value that is not smaller extends the session, with a database write, on every request. See [Rolling expiration](#rolling-expiration). |
@@ -31,20 +28,30 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 | `EvictOldestOnLimit` | false | At the limit, end the oldest session to make room. When false, the new sign-in is refused. |
 | `CaptureIPAndAgent` | false | Record the client's IP address and user agent on the session. |
 
-A `Transport` that is not one of the four values, a negative duration, and a cookie setting that can't work are configuration errors from `Boot`. See [Cookie attributes](#cookie-attributes) for the cookie settings `Boot` refuses.
+`BootConfig.Router.Carrier`, a `core.TokenCarrierConfig`:
 
-## Transports
-
-The transport names where the token travels in both directions: how a sign-in hands it to the client, and where the client's requests carry it.
-
-| `Transport` | The sign-in response has the token in | A request carries it in |
+| Field | Default | Meaning |
 | --- | --- | --- |
-| `core.TransportCookie` | a `Set-Cookie` header | the cookie |
-| `core.TransportHeader` | the `Set-Auth-Token` header | `Authorization: Bearer <token>` |
-| `core.TransportBody` | the JSON body, under `token` | `Authorization: Bearer <token>` |
-| `core.TransportBoth` | the cookie and `Set-Auth-Token` | either |
+| `Delivery` | `core.DeliveryCookie` | Where the token travels. See [Token delivery](#token-delivery). |
+| `CookieName` | `session_token` | The cookie's name, for the deliveries that use one. |
+| `CookieDomain` | empty | The cookie's `Domain` attribute, a host name such as `example.com`. Empty sends the cookie only to the host that set it. See [Cookie attributes](#cookie-attributes). |
+| `CookieSameSite` | `core.SameSiteLax` | The cookie's `SameSite` attribute: `core.SameSiteLax`, `core.SameSiteStrict`, or `core.SameSiteNone`. |
+| `CookieInsecure` | false | Leaves `Secure` off the cookie, for development over plain HTTP. |
 
-**Cookie.** The browser stores the token and sends it by itself. By default the cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, with the path `/` and no `Domain`, and expires with the session. See [Cookie attributes](#cookie-attributes) to change the domain, `SameSite`, or `Secure`. When [rolling expiration](#rolling-expiration) extends the session, the cookie is set again with the new date. Scripts on the page can't read it, and can't delete it either: the sign-out response removes it. See [Sign out](#sign-out). This is the choice for a browser application served from the same site as the API. Behemoth checks where each state-changing request comes from under this transport. See [Cross-site requests](#cross-site-requests).
+A negative duration, a `Delivery` that is not one of the four values, and a cookie setting that can't work are configuration errors from `Boot`. See [Cookie attributes](#cookie-attributes) for the cookie settings `Boot` refuses.
+
+## Token delivery
+
+The delivery names where the token travels in both directions: how a sign-in hands it to the client, and where the client's requests carry it.
+
+| `Delivery` | The sign-in response has the token in | A request carries it in |
+| --- | --- | --- |
+| `core.DeliveryCookie` | a `Set-Cookie` header | the cookie |
+| `core.DeliveryHeader` | the `Set-Auth-Token` header | `Authorization: Bearer <token>` |
+| `core.DeliveryBody` | the JSON body, under `token` | `Authorization: Bearer <token>` |
+| `core.DeliveryBoth` | the cookie and `Set-Auth-Token` | either |
+
+**Cookie.** The browser stores the token and sends it by itself. By default the cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, with the path `/` and no `Domain`, and expires with the session. See [Cookie attributes](#cookie-attributes) to change the domain, `SameSite`, or `Secure`. When [rolling expiration](#rolling-expiration) extends the session, the cookie is set again with the new date. Scripts on the page can't read it, and can't delete it either: the sign-out response removes it. See [Sign out](#sign-out). This is the choice for a browser application served from the same site as the API. Behemoth checks where each state-changing request comes from under this delivery. See [Cross-site requests](#cross-site-requests).
 
 **Header.** The client reads the token from `Set-Auth-Token`, keeps it, and sends it as a bearer token. This suits mobile apps, command-line tools, and other servers.
 
@@ -58,9 +65,9 @@ curl -i -X POST localhost:8080/api/auth/sign-in/email -H 'Content-Type: applicat
 curl -X POST localhost:8080/api/auth/sign-out -H 'Authorization: Bearer r8_x6fau4053kWPOukmnuUFxoY8iz...'
 ```
 
-A browser script on another origin can read a response header only when your CORS configuration exposes it. With the header transport and a browser client, add `Set-Auth-Token` to `Access-Control-Expose-Headers`. Without it the sign-in succeeds and the script sees no token.
+A browser script on another origin can read a response header only when your CORS configuration exposes it. With the header delivery and a browser client, add `Set-Auth-Token` to `Access-Control-Expose-Headers`. Without it the sign-in succeeds and the script sees no token.
 
-**Body.** The token is a field of the sign-in response's JSON. The client sends it back the same way as with the header transport, as a bearer token. Only the delivery differs. Choose it when reading a response header is awkward for your client, for example a cross-origin browser script.
+**Body.** The token is a field of the sign-in response's JSON. The client sends it back the same way as with the header delivery, as a bearer token. Only the way the sign-in hands it over differs. Choose it when reading a response header is awkward for your client, for example a cross-origin browser script.
 
 ```json
 {"user": {"id": "8b41...", "email": "ada@example.com"}, "token": "r8_x6fau4053kWPOukmnuUFxoY8iz..."}
@@ -72,7 +79,7 @@ There is no combination with the body. A token is never read from a request's bo
 
 ### Cookie attributes
 
-`HttpOnly` and the path `/` are fixed. Three fields of `SessionConfig` set the rest:
+`HttpOnly` and the path `/` are fixed. Three fields of `RouterConfig.Carrier` set the rest:
 
 | Your setup | Set |
 | --- | --- |
@@ -83,11 +90,13 @@ There is no combination with the body. A token is never read from a request's bo
 
 ```go
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Session: core.SessionConfig{
-		CookieDomain:   "example.com",
-		CookieSameSite: core.SameSiteStrict,
+	Router: core.RouterConfig{
+		BaseURL: "https://auth.example.com",
+		Carrier: core.TokenCarrierConfig{
+			CookieDomain:   "example.com",
+			CookieSameSite: core.SameSiteStrict,
+		},
 	},
-	Router: core.RouterConfig{BaseURL: "https://auth.example.com"},
 	// ...
 })
 ```
@@ -97,7 +106,7 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 - A `CookieSameSite` that is not one of the three values.
 - A `CookieDomain` that is not a host name. A leading dot is accepted and ignored.
 - `core.SameSiteNone` with `CookieInsecure`. Browsers accept `SameSite=None` on a `Secure` cookie only.
-- `core.SameSiteNone` under a cookie transport without `RouterConfig.BaseURL`. The browser then sends the cookie with cross-site requests, and the [origin check](#cross-site-requests) is what refuses a forged one.
+- `core.SameSiteNone` under a cookie delivery without `RouterConfig.BaseURL`. The browser then sends the cookie with cross-site requests, and the [origin check](#cross-site-requests) is what refuses a forged one.
 - A `CookieDomain` that is neither the host of `RouterConfig.BaseURL` nor a parent of it. A browser drops such a cookie.
 
 With `core.SameSiteStrict`, a user who follows a link from another site to your application arrives without the cookie, and appears signed out until the next navigation.
@@ -112,7 +121,7 @@ Every route that signs a user in answers with the same JSON, whichever plugin it
 | --- | --- |
 | signed in | `{"user": {...}}` |
 | a second factor is pending | `{"status": "requires_second_factor"}` |
-| either, with `TransportBody` | the same, plus `"token": "..."` |
+| either, with `core.DeliveryBody` | the same, plus `"token": "..."` |
 
 The response follows these rules:
 
@@ -155,13 +164,13 @@ A session is "used" by any request to one of Behemoth's routes that carries its 
 
 Only the request that crosses the threshold writes to the database. The others cost nothing extra: with a session cache (`BootConfig.KV`), a request whose session is not due is checked without a database query.
 
-What the client sees depends on the transport:
+What the client sees depends on the delivery:
 
-| `Transport` | The response of the request that extended the session | What the client does |
+| `Delivery` | The response of the request that extended the session | What the client does |
 | --- | --- | --- |
-| `core.TransportCookie` | sets the cookie again, with the same token and the new expiry | nothing |
-| `core.TransportHeader`, `core.TransportBody` | has nothing to add | nothing. The client keeps the token without a date, and the server decides when it ends. |
-| `core.TransportBoth` | sets the cookie again if the request carried the token in the cookie | nothing |
+| `core.DeliveryCookie` | sets the cookie again, with the same token and the new expiry | nothing |
+| `core.DeliveryHeader`, `core.DeliveryBody` | has nothing to add | nothing. The client keeps the token without a date, and the server decides when it ends. |
+| `core.DeliveryBoth` | sets the cookie again if the request carried the token in the cookie | nothing |
 
 For a route of yours, here `/me`, and a session that is due:
 
@@ -180,13 +189,13 @@ The extension behaves as follows:
 
 ## Sign out
 
-`POST /sign-out` of the `emailpassword` plugin revokes the session the request carries. What happens to the token on the client depends on the transport:
+`POST /sign-out` of the `emailpassword` plugin revokes the session the request carries. What happens to the token on the client depends on the delivery:
 
-| `Transport` | The sign-out response | What the client does |
+| `Delivery` | The sign-out response | What the client does |
 | --- | --- | --- |
-| `core.TransportCookie` | replaces the cookie with an empty one that has expired, so the browser drops it | nothing |
-| `core.TransportHeader`, `core.TransportBody` | has nothing to remove | discards the token it kept |
-| `core.TransportBoth` | removes the cookie, if the request carried its token in the cookie | discards the token if it kept one from the header |
+| `core.DeliveryCookie` | replaces the cookie with an empty one that has expired, so the browser drops it | nothing |
+| `core.DeliveryHeader`, `core.DeliveryBody` | has nothing to remove | discards the token it kept |
+| `core.DeliveryBoth` | removes the cookie, if the request carried its token in the cookie | discards the token if it kept one from the header |
 
 ```bash
 curl -i -X POST localhost:8080/api/auth/sign-out --cookie 'session_token=r8_x6fau4053kWPOukmnuUFxoY8iz...'
@@ -201,7 +210,7 @@ A session can also end without a sign-out from that browser: it was revoked from
 
 ## Cross-site requests
 
-A browser attaches the session cookie to every request to your API, including one that a page of another site caused. Under `core.TransportCookie` and `core.TransportBoth`, Behemoth therefore refuses a `POST`, `PUT`, `PATCH`, or `DELETE` to one of its routes that a browser sent from an origin it does not trust. The check also covers sign-in and sign-up, which need no cookie. Under `core.TransportHeader` and `core.TransportBody` there is no check.
+A browser attaches the session cookie to every request to your API, including one that a page of another site caused. Under `core.DeliveryCookie` and `core.DeliveryBoth`, Behemoth therefore refuses a `POST`, `PUT`, `PATCH`, or `DELETE` to one of its routes that a browser sent from an origin it does not trust. The check also covers sign-in and sign-up, which need no cookie. Under `core.DeliveryHeader` and `core.DeliveryBody` there is no check.
 
 Configure the check with two fields of `BootConfig.Router`:
 
@@ -239,7 +248,7 @@ curl -i -X POST https://auth.example.com/api/auth/sign-in/email \
 
 ### Form content types
 
-Under the same two transports, Behemoth also refuses a state-changing request whose `Content-Type` is `text/plain`, `application/x-www-form-urlencoded`, or `multipart/form-data`. These are the types an HTML form can send to another origin. The answer is `415` with the code `unsupported_content_type`. A request with another `Content-Type`, or with none, passes.
+Under the same two deliveries, Behemoth also refuses a state-changing request whose `Content-Type` is `text/plain`, `application/x-www-form-urlencoded`, or `multipart/form-data`. These are the types an HTML form can send to another origin. The answer is `415` with the code `unsupported_content_type`. A request with another `Content-Type`, or with none, passes.
 
 Send JSON bodies as `application/json`. `curl -d` sends `application/x-www-form-urlencoded` unless you name the type:
 
@@ -263,7 +272,7 @@ Refusals are counted in the `behemoth.http.origin_refused` metric by `reason`. S
 	Middlewares: []core.Middleware{core.RequireSession()}},
 ```
 
-The router authenticates every request before its route runs: it reads the token where the transport says, and puts the caller on the request's context. `core.RequireSession` answers `401` unless the caller signed in with a valid active session. Your handler reads the session from the caller with `identity.CallerFrom(rctx.Ctx).Session()`, and the user is `Session().UserID`. With `UpdateAge` set, a session that is due has been extended by then, and the session your handler reads has the new expiry. See [Rolling expiration](#rolling-expiration).
+The router authenticates every request before its route runs: it reads the token where the delivery says, and puts the caller on the request's context. `core.RequireSession` answers `401` unless the caller signed in with a valid active session. Your handler reads the session from the caller with `identity.CallerFrom(rctx.Ctx).Session()`, and the user is `Session().UserID`. With `UpdateAge` set, a session that is due has been extended by then, and the session your handler reads has the new expiry. See [Rolling expiration](#rolling-expiration).
 
 A request it refuses does not reach your handler. The response is JSON with a message and a code your client can act on:
 
@@ -275,7 +284,7 @@ A request it refuses does not reach your handler. The response is JSON with a me
 | has the token of an expired session | `401` | `{"error": "session expired", "code": "session_expired"}` | removed |
 | has the token of a session that waits for a second factor | `401` | `{"error": "additional verification required", "code": "session_pending"}` | kept: the client needs it to present the second factor |
 
-A session that is invalid, revoked, or expired does not come back, so with a cookie transport the response also removes the cookie. The router does this for any request that carries such a token, whatever its route. A browser can't delete it itself, and would send the dead token with every request until the cookie expired. With `core.TransportBoth` this applies when the token came in the cookie. A request that sent a bearer token keeps its cookie. Clients of the header and body transports hold the token themselves and discard it when they get one of these codes.
+A session that is invalid, revoked, or expired does not come back, so with a cookie delivery the response also removes the cookie. The router does this for any request that carries such a token, whatever its route. A browser can't delete it itself, and would send the dead token with every request until the cookie expired. With `core.DeliveryBoth` this applies when the token came in the cookie. A request that sent a bearer token keeps its cookie. Clients of the header and body deliveries hold the token themselves and discard it when they get one of these codes.
 
 A `401` always means the client has no usable session. If Behemoth could not check the session, because the database is down for example, the answer is `500` with a generic message, and the error is logged. No cookie is removed, and a client should not sign its user out on a `500`.
 
@@ -303,18 +312,18 @@ if err != nil {
 	return err
 }
 result := &core.SignInResult{User: user, Session: session, RawToken: rawToken, Method: "myplugin"}
-return core.WriteSignIn(rctx, result, nil) // the body above, and the token by the configured transport
+return core.WriteSignIn(rctx, result, nil) // the body above, and the token by the configured delivery
 ```
 
-`WriteSignIn` is what makes the token arrive. If you write the response yourself, call `ac.SessionManager.WriteToken(rctx, rawToken, session)`. It sets the cookie or the header. It returns `true` when the transport is the body, and then putting the token in your JSON is up to you.
+`WriteSignIn` is what makes the token arrive. If you write the response yourself, call `ac.TokenCarrier.Write(rctx, rawToken, session.ExpiresAt)`. It sets the cookie or the header. It returns `true` when the delivery is the body, and then putting the token in your JSON is up to you.
 
 A flow called from code, such as `emailpassword.Plugin.SignIn`, returns the raw token in its result and delivers nothing. The caller decides what to do with it.
 
-A route that gives the client a value of its own, to be sent back later, can deliver it the way the session token travels. `ac.SessionConfig` holds the session settings with their defaults applied: `Transport`, and the cookie's `CookieSameSite` and `CookieInsecure`. The OAuth plugin does this with its binding value. See [OAuth](oauth.md#build-the-callback-page).
+A route that gives the client a value of its own, to be sent back later, can deliver it the way the session token travels. `ac.TokenCarrier.Config()` returns the carrier's settings with their defaults applied: `Delivery`, and the cookie's `CookieSameSite` and `CookieInsecure`. The OAuth plugin does this with its binding value. See [OAuth](oauth.md#build-the-callback-page).
 
 ## Write a route that ends the session
 
-A route that ends its caller's own session takes the token back afterwards with `ClearToken`, the counterpart of `WriteToken`. With a cookie transport it removes the cookie the request presented its token in, and it does nothing for the other transports.
+A route that ends its caller's own session takes the token back afterwards with `ac.TokenCarrier.Clear`, the counterpart of `Write`. With a cookie delivery it removes the cookie the request presented its token in, and it does nothing for the other deliveries.
 
 ```go
 func signOutEverywhere(rctx *core.RequestContext) error {
@@ -322,7 +331,7 @@ func signOutEverywhere(rctx *core.RequestContext) error {
 	if err := rctx.Auth.SessionManager.RevokeAllForUser(rctx.Ctx, session.UserID, "signed_out_everywhere", ""); err != nil {
 		return err
 	}
-	rctx.Auth.SessionManager.ClearToken(rctx) // after the revoke succeeded
+	rctx.Auth.TokenCarrier.Clear(rctx) // after the revoke succeeded
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})
 }
 ```

@@ -15,7 +15,7 @@
 // The two routes, POST /sign-in/oauth and POST /oauth/complete, are JSON
 // calls of the application's own pages. The binding value travels the way
 // the session token does: in an HttpOnly cookie under the cookie
-// transports, and in the response body for a client that keeps the session
+// deliveries, and in the response body for a client that keeps the session
 // token itself.
 //
 // Three kinds of provider ship with the plugin and are configured as data

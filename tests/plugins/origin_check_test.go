@@ -18,16 +18,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// bootWithRouter boots the email/password plugin alone with a session
-// transport and a router configuration.
-func bootWithRouter(t *testing.T, transport core.TokenTransport, router core.RouterConfig) (*core.AuthContext, mountedRoutes, error) {
+// bootWithRouter boots the email/password plugin alone with a token
+// delivery and a router configuration.
+func bootWithRouter(t *testing.T, delivery core.TokenDelivery, router core.RouterConfig) (*core.AuthContext, mountedRoutes, error) {
 	t.Helper()
-	return bootWithSession(t, core.SessionConfig{Transport: transport}, router)
+	router.Carrier.Delivery = delivery
+	return bootRouter(t, router)
 }
 
-// bootWithSession boots the email/password plugin alone with a session and
-// a router configuration.
-func bootWithSession(t *testing.T, session core.SessionConfig, router core.RouterConfig) (*core.AuthContext, mountedRoutes, error) {
+// bootRouter boots the email/password plugin alone with a router
+// configuration.
+func bootRouter(t *testing.T, router core.RouterConfig) (*core.AuthContext, mountedRoutes, error) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "origin.db"))
 	require.NoError(t, err)
@@ -42,29 +43,28 @@ func bootWithSession(t *testing.T, session core.SessionConfig, router core.Route
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session: session,
-		Router:  router,
-		HTTP:    mounted,
+		Router: router,
+		HTTP:   mounted,
 	})
 	return ac, mounted, err
 }
 
 // Boot puts the origin check in front of every route when the session token
-// travels in a cookie, and leaves it out for the bearer transports, whose
+// travels in a cookie, and leaves it out for the bearer deliveries, whose
 // token a browser never sends by itself.
-func TestBootInstallsTheOriginCheckForCookieTransports(t *testing.T) {
+func TestBootInstallsTheOriginCheckForCookieDeliveries(t *testing.T) {
 	const body = `{"email":"nobody@example.com","password":"correct horse battery"}`
 	router := core.RouterConfig{BaseURL: "https://auth.example.com", TrustedOrigins: []string{"https://app.example.com"}}
 
-	for transport, checked := range map[core.TokenTransport]bool{
-		"":                   true, // the default is the cookie
-		core.TransportCookie: true,
-		core.TransportBoth:   true,
-		core.TransportHeader: false,
-		core.TransportBody:   false,
+	for delivery, checked := range map[core.TokenDelivery]bool{
+		"":                  true, // the default is the cookie
+		core.DeliveryCookie: true,
+		core.DeliveryBoth:   true,
+		core.DeliveryHeader: false,
+		core.DeliveryBody:   false,
 	} {
-		t.Run("transport "+string(transport), func(t *testing.T) {
-			ac, mounted, err := bootWithRouter(t, transport, router)
+		t.Run("delivery "+string(delivery), func(t *testing.T) {
+			ac, mounted, err := bootWithRouter(t, delivery, router)
 			require.NoError(t, err)
 			signIn := mounted["/api/auth/sign-in/email"]
 
@@ -78,7 +78,7 @@ func TestBootInstallsTheOriginCheckForCookieTransports(t *testing.T) {
 			}
 
 			// A form's content type is refused behind the origin check,
-			// under the same transports.
+			// under the same deliveries.
 			w = callHeaders(t, ac, signIn, body, map[string]string{"Origin": "https://auth.example.com", "Content-Type": "text/plain"})
 			if checked {
 				assert.Equal(t, http.StatusUnsupportedMediaType, w.Code)
@@ -100,11 +100,11 @@ func TestBootInstallsTheOriginCheckForCookieTransports(t *testing.T) {
 	}
 }
 
-// A base URL that is not an origin fails Boot whatever the transport, and
+// A base URL that is not an origin fails Boot whatever the delivery, and
 // not the first request.
 func TestBootRefusesAMalformedBaseURL(t *testing.T) {
-	for _, transport := range []core.TokenTransport{core.TransportCookie, core.TransportHeader} {
-		_, _, err := bootWithRouter(t, transport, core.RouterConfig{BaseURL: "auth.example.com/api"})
+	for _, delivery := range []core.TokenDelivery{core.DeliveryCookie, core.DeliveryHeader} {
+		_, _, err := bootWithRouter(t, delivery, core.RouterConfig{BaseURL: "auth.example.com/api"})
 		require.Error(t, err)
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 	}
@@ -115,20 +115,20 @@ func TestBootRefusesAMalformedBaseURL(t *testing.T) {
 // compare with, and one whose domain does not cover behemoth's host.
 func TestBootChecksTheSessionCookieAgainstTheBaseURL(t *testing.T) {
 	for name, tc := range map[string]struct {
-		session core.SessionConfig
+		carrier core.TokenCarrierConfig
 		baseURL string
 		refused string // "" = Boot succeeds
 	}{
-		"SameSite none without a base URL":       {core.SessionConfig{CookieSameSite: core.SameSiteNone}, "", "BaseURL"},
-		"SameSite none with a base URL":          {core.SessionConfig{CookieSameSite: core.SameSiteNone}, "https://auth.example.com", ""},
-		"SameSite none under a bearer transport": {core.SessionConfig{CookieSameSite: core.SameSiteNone, Transport: core.TransportHeader}, "", ""},
-		"a domain that is the host":              {core.SessionConfig{CookieDomain: "auth.example.com"}, "https://auth.example.com", ""},
-		"a domain that is a parent of the host":  {core.SessionConfig{CookieDomain: ".Example.com"}, "https://auth.example.com:8443", ""},
-		"a domain of another site":               {core.SessionConfig{CookieDomain: "example.org"}, "https://auth.example.com", "CookieDomain"},
-		"a domain that only ends alike":          {core.SessionConfig{CookieDomain: "ample.com"}, "https://auth.example.com", "CookieDomain"},
-		"a domain without a base URL":            {core.SessionConfig{CookieDomain: "example.com"}, "", ""},
+		"SameSite none without a base URL":      {core.TokenCarrierConfig{CookieSameSite: core.SameSiteNone}, "", "BaseURL"},
+		"SameSite none with a base URL":         {core.TokenCarrierConfig{CookieSameSite: core.SameSiteNone}, "https://auth.example.com", ""},
+		"SameSite none under a bearer delivery": {core.TokenCarrierConfig{CookieSameSite: core.SameSiteNone, Delivery: core.DeliveryHeader}, "", ""},
+		"a domain that is the host":             {core.TokenCarrierConfig{CookieDomain: "auth.example.com"}, "https://auth.example.com", ""},
+		"a domain that is a parent of the host": {core.TokenCarrierConfig{CookieDomain: ".Example.com"}, "https://auth.example.com:8443", ""},
+		"a domain of another site":              {core.TokenCarrierConfig{CookieDomain: "example.org"}, "https://auth.example.com", "CookieDomain"},
+		"a domain that only ends alike":         {core.TokenCarrierConfig{CookieDomain: "ample.com"}, "https://auth.example.com", "CookieDomain"},
+		"a domain without a base URL":           {core.TokenCarrierConfig{CookieDomain: "example.com"}, "", ""},
 	} {
-		_, _, err := bootWithSession(t, tc.session, core.RouterConfig{BaseURL: tc.baseURL})
+		_, _, err := bootRouter(t, core.RouterConfig{BaseURL: tc.baseURL, Carrier: tc.carrier})
 		if tc.refused == "" {
 			assert.NoError(t, err, name)
 			continue

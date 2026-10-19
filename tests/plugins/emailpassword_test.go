@@ -89,8 +89,9 @@ func authContext(t *testing.T) *core.AuthContext {
 		Dispatcher: passDispatcher{},
 		Public:     dbschema.NewPublicView([]dbschema.Table{models.UserTableSchema()}),
 		SessionManager: auth.NewSessionManager(st, nil, c,
-			core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+			core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
 			passDispatcher{}, nil, nil, nil),
+		TokenCarrier: core.NewTokenCarrier(core.TokenCarrierConfig{Delivery: core.DeliveryHeader}),
 	}
 }
 
@@ -287,7 +288,8 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Router:  core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
 		Hooks: func(reg core.HookRegistry) error {
 			for _, point := range []core.HookPoint{hooks.HookSignUpAfter, hooks.HookSignInAfter, hooks.HookSignOutAfter} {
 				if err := reg.OnAfter(point, observe(point), nil); err != nil {
@@ -317,11 +319,13 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.NotEmpty(t, rawToken)
 
-	// Sign-out with its route middleware, the way the router mounts it.
+	// Sign-out with its route middleware behind the authentication stage,
+	// the way the router mounts it.
 	signOut := routes["/sign-out"].Handler
 	for i := len(routes["/sign-out"].Middlewares) - 1; i >= 0; i-- {
 		signOut = routes["/sign-out"].Middlewares[i](signOut)
 	}
+	signOut = core.AuthenticateRequests(ac.Authenticator, ac.TokenCarrier, nil)(signOut)
 	signOutWith := func(token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
 		if token != "" {
@@ -658,7 +662,8 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
 		Telemetry: tel,
 		HTTP:      mounted,
 	})
@@ -919,9 +924,9 @@ func TestEmailPasswordLogging(t *testing.T) {
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
 		Telemetry: tel,
-		Router:    core.RouterConfig{ClientIPHeader: "X-Real-IP"}, // no TrustedProxies: the header is ignored
+		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, ClientIPHeader: "X-Real-IP"}, // no TrustedProxies: the header is ignored
 		HTTP:      mounted,
 	})
 	require.NoError(t, err)
@@ -1016,7 +1021,8 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
 		Telemetry: tel,
 		HTTP:      mounted,
 	})
@@ -1090,7 +1096,8 @@ func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
 		Telemetry: tel,
 		Hooks:     appHooks,
 	})
@@ -1173,11 +1180,13 @@ func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, about.Events, 4, "created, signed up, one failed sign-in, signed in")
 
-	// Sign-out through its route middleware: the actor is the session's user.
+	// Sign-out through its route middleware, behind the authentication
+	// stage: the actor is the session's user.
 	signOut := routes["/sign-out"].Handler
 	for i := len(routes["/sign-out"].Middlewares) - 1; i >= 0; i-- {
 		signOut = routes["/sign-out"].Middlewares[i](signOut)
 	}
+	signOut = core.AuthenticateRequests(ac.Authenticator, ac.TokenCarrier, nil)(signOut)
 	req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
 	req.Header.Set("Authorization", "Bearer "+rawToken)
 	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}

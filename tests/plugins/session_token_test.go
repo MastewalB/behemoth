@@ -66,7 +66,8 @@ func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg co
 	require.NoError(t, err)
 	cfg := engine.BootConfig{
 		Crypto:  crypto.Config{Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1}},
-		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Router:  core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
 		JWT:     jwtCfg,
 		Hooks:   hookFn,
 		HTTP:    app.mounted,

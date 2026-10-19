@@ -7,7 +7,7 @@ The code lives in:
 - `core/origin_check.go`: `OriginCheck`, `NewOriginCheck`, the refusal reasons, `RefuseFormContentTypes`
 - `core/origins.go`: `TrustedOrigins`, `parseOrigin`, `originOf`
 - `core/router.go`: `RouterConfig.BaseURL`, `RouterConfig.TrustedOrigins`
-- `core/session.go`: `TokenTransport.ReadsCookie`
+- `core/token_carrier.go`: `TokenDelivery.ReadsCookie`, `TokenCarrierConfig` (`RouterConfig.Carrier`)
 - `engine/init.go`: `Boot`, which builds the check and decides whether it runs
 - `engine/init.go`: `checkCookieAgainstBaseURL`, which ties the cookie's attributes to the base URL
 - `errs/origin.go`: `CodeUntrustedOrigin`, `CodeUnsupportedContentType`
@@ -16,7 +16,7 @@ The code lives in:
 
 ## The problem
 
-Under the cookie transports a browser attaches the session cookie to every request to behemoth's host, whichever page caused the request. A page of another origin can therefore make a signed-in user's browser send a state-changing request.
+Under the cookie deliveries a browser attaches the session cookie to every request to behemoth's host, whichever page caused the request. A page of another origin can therefore make a signed-in user's browser send a state-changing request.
 
 The cookie's `SameSite=Lax` attribute stops the cookie on a cross-site `POST`. It leaves two cases open:
 
@@ -46,7 +46,7 @@ Every refusal is one error for a client: a `CategoryForbidden` error with the co
 
 `RouterConfig.BaseURL` names it: a scheme, a host and an optional port, without `BasePath`. `NewOriginCheck` parses it with `parseOrigin`, the function behind `NewTrustedOrigins`, so both settings accept and refuse the same values. `Boot` returns a malformed one as a configuration error, whatever the transport.
 
-With `BaseURL` empty, the check builds the own origin for each request from the request's `Host` header and the scheme the `Origin` header named. Only the host and the port are compared this way. `logBootSummary` writes a Warn line when `BaseURL` is empty, a cookie transport is on and `BootConfig.HTTP` is set. A process that mounts no routes gets no warning.
+With `BaseURL` empty, the check builds the own origin for each request from the request's `Host` header and the scheme the `Origin` header named. Only the host and the port are compared this way. `logBootSummary` writes a Warn line when `BaseURL` is empty, a cookie delivery is on and `BootConfig.HTTP` is set. A process that mounts no routes gets no warning.
 
 ## The refusal of form content types
 
@@ -56,11 +56,11 @@ Handlers decode their body as JSON whatever its `Content-Type` says. A page of a
 
 It is a second layer. The origin check already refuses those requests from another origin. This one holds when the check passed a browser it should not have: one that sent no `Origin` and no `Sec-Fetch-Site`.
 
-Invariant: no route of behemoth reads a form body. A route that has to, such as an OAuth callback a provider posts, is refused under the cookie transports until the middleware gets an exemption per route. See "No route can accept a form body under the cookie transports" in `docs/ongoing.md`.
+Invariant: no route of behemoth reads a form body. A route that has to, such as an OAuth callback a provider posts, is refused under the cookie deliveries until the middleware gets an exemption per route. See "No route can accept a form body under the cookie deliveries" in `docs/ongoing.md`.
 
 ## The cookie and the base URL
 
-`SessionConfig.CookieSameSite` and `CookieDomain` decide when a browser sends the session cookie, so `Boot` checks them against the base URL (`checkCookieAgainstBaseURL`), under the cookie transports only:
+`RouterConfig.Carrier.CookieSameSite` and `CookieDomain` decide when a browser sends the session cookie, so `Boot` checks them against the base URL (`checkCookieAgainstBaseURL`), under the cookie deliveries only:
 
 - **`SameSiteNone` needs `BaseURL`.** The browser then sends the cookie with cross-site requests, and the origin check is all that refuses a forged one. Without a base URL the check compares with the `Host` header and ignores the scheme.
 - **`CookieDomain` has to cover the host of `BaseURL`.** A browser drops a cookie whose `Domain` is neither the host that set it nor a parent of it. Sign-in would answer `200` and leave no session.
@@ -78,9 +78,9 @@ request scope -> tracing -> metrics -> error mapping -> origin check -> form con
 - **Inside error mapping.** A refusal is mapped, logged once at Debug and counted in `behemoth.http.requests` like any other rejection.
 - **Outside the plugins' middleware and the rate limit.** A forged request runs no plugin code. It also does not count against the per-address limit of the user whose browser sent it.
 
-`Boot` adds both middlewares when `SessionConfig.Transport` is `cookie` or `both` (`TokenTransport.ReadsCookie`). Under `header` and `body` no request is authenticated by something the browser sends on its own, so the check would refuse requests and protect nothing.
+`Boot` adds both middlewares when `RouterConfig.Carrier.Delivery` is `cookie` or `both` (`TokenDelivery.ReadsCookie`). Under `header` and `body` no request is authenticated by something the browser sends on its own, so the check would refuse requests and protect nothing.
 
-Invariant: the check is the only thing that stands between a cross-origin page and a sign-in under the cookie transports. A route mounted outside `Router.Build`, or a `Build` call that leaves the middleware out, has no protection.
+Invariant: the check is the only thing that stands between a cross-origin page and a sign-in under the cookie deliveries. A route mounted outside `Router.Build`, or a `Build` call that leaves the middleware out, has no protection.
 
 ## Deferred
 
@@ -137,26 +137,26 @@ These parts are deferred:
 
 ### The base URL is optional
 
-**Context:** Behemoth does not own the server, and learns its public origin only if the application says it. Requiring the setting would fail `Boot` for every application on a cookie transport.
+**Context:** Behemoth does not own the server, and learns its public origin only if the application says it. Requiring the setting would fail `Boot` for every application on a cookie delivery.
 
 **Options considered:**
 
-- *Require `BaseURL` under the cookie transports.* Exact, scheme included. Every existing application and test has to set it before it boots again.
+- *Require `BaseURL` under the cookie deliveries.* Exact, scheme included. Every existing application and test has to set it before it boots again.
 - *List the own origin in `TrustedOrigins`.* No new field. The list would then mix where a browser may be sent with where behemoth lives, and later uses of the base URL, such as an OAuth callback, would need the field anyway.
 - *Optional, with the `Host` header as the fallback.* Works unconfigured for an application reached directly. The scheme is not compared, because behind a proxy that ends TLS the request arrives over plain HTTP. A proxy that rewrites `Host` makes every browser request fail, which is visible at once.
 
 **Decision:** optional, with a Warn line at `Boot`. The fallback fails closed.
 
-**Revisit if:** the Warn line is ignored in practice and applications run in production on the fallback. `BaseURL` would then become required under the cookie transports.
+**Revisit if:** the Warn line is ignored in practice and applications run in production on the fallback. `BaseURL` would then become required under the cookie deliveries.
 
-### Installed for the cookie transports only
+### Installed for the cookie deliveries only
 
-**Context:** `SessionConfig.Transport` decides whether a request is ever authenticated by a cookie.
+**Context:** `RouterConfig.Carrier.Delivery` decides whether a request is ever authenticated by a cookie.
 
 **Options considered:**
 
 - *Always.* One behavior to describe. A bearer-only API would refuse a browser front end on another origin until it is listed, and gain nothing: a bearer token is sent by a script that already holds it.
-- *When the transport reads a cookie.* The check runs where a forged request can do something.
+- *When the delivery reads a cookie.* The check runs where a forged request can do something.
 
 **Decision:** `cookie` and `both`. Under `both` a request that carries a bearer token is checked as well, because the stage runs before anything reads the token.
 
@@ -170,7 +170,7 @@ These parts are deferred:
 - *Refuse the three types a form can send.* Those are the only ones that reach behemoth from another origin without a preflight. A client that sends JSON under one of them is refused, which in practice is `curl -d` without a header.
 - *Leave it to the origin check.* Nothing breaks, and there is one layer.
 
-**Decision:** refuse the three, under the cookie transports only. A bearer-only API gains nothing from it, and its `curl -d` callers would break.
+**Decision:** refuse the three, under the cookie deliveries only. A bearer-only API gains nothing from it, and its `curl -d` callers would break.
 
 **Revisit if:** a route has to accept a form, or a contract file makes each route's content type explicit and the check can move there.
 
@@ -193,6 +193,6 @@ These parts are deferred:
 | `TestNewOriginCheckRefusesABadBaseURL` | `core/origin_check_test.go` | the values `NewOriginCheck` refuses |
 | `TestOriginCheckMiddlewareInThePipeline` | `core/origin_check_test.go` | the `403` body, and that a refused request reaches no later stage |
 | `TestRefuseFormContentTypes` | `core/origin_check_test.go` | the three refused types, the types that pass, and a `GET` |
-| `TestBootInstallsTheOriginCheckForCookieTransports` | `tests/plugins/origin_check_test.go` | both middlewares per transport, on the sign-in route |
+| `TestBootInstallsTheOriginCheckForCookieDeliveries` | `tests/plugins/origin_check_test.go` | both middlewares per delivery, on the sign-in route |
 | `TestBootChecksTheSessionCookieAgainstTheBaseURL` | `tests/plugins/origin_check_test.go` | `SameSiteNone` without a base URL, and a domain that does not cover the host |
 | `TestBootRefusesAMalformedBaseURL` | `tests/plugins/origin_check_test.go` | the configuration error |

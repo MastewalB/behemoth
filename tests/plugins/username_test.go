@@ -63,9 +63,9 @@ func bootUsernames(t *testing.T, opts username.Options, hookFn func(reg core.Hoo
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session: core.SessionConfig{Transport: core.TransportHeader},
-		HTTP:    app.routes,
-		Hooks:   hookFn,
+		Router: core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		HTTP:   app.routes,
+		Hooks:  hookFn,
 	})
 	require.NoError(t, err)
 	return app
@@ -355,7 +355,7 @@ func TestUsernameRoutes(t *testing.T) {
 	w = call(t, app.ac, signIn, `{"username":"Ada","password":"correct horse","captchaToken":"x"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
-	assert.NotEmpty(t, w.Header().Get("Set-Auth-Token"), "the token travels by the configured transport")
+	assert.NotEmpty(t, w.Header().Get("Set-Auth-Token"), "the token travels by the configured delivery")
 	body.User = nil
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.Equal(t, "ada@example.com", body.User["email"])

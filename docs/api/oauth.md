@@ -18,7 +18,7 @@ Three kinds of provider ship with the plugin and are configured as data: any Ope
 | 6 | your callback page | posts the code, the state, and the binding value to `POST /oauth/complete` |
 | 7 | plugin | checks the state and the binding value, redeems the code at the provider, and creates a session |
 
-The provider sends the browser to your page and not to Behemoth, and every call to Behemoth is a JSON `POST`. A sign-in therefore answers like every other sign-in route, whichever session transport you use.
+The provider sends the browser to your page and not to Behemoth, and every call to Behemoth is a JSON `POST`. A sign-in therefore answers like every other sign-in route, whichever token delivery you use.
 
 The binding value ties step 7 to the client that made step 1. A browser that is sent to your callback page with somebody else's code and state does not have it, so the sign-in is refused.
 
@@ -177,11 +177,11 @@ Your callback page receives the browser at `<CallbackURL>/<provider id>`, with `
 
 The binding value comes back the way it went out:
 
-| Session transport | `POST /sign-in/oauth` returns the binding value | Your page sends it back |
+| Token delivery | `POST /sign-in/oauth` returns the binding value | Your page sends it back |
 | --- | --- | --- |
-| `TransportCookie`, the default | in an `HttpOnly` cookie. The body has no `binding`. | The browser sends the cookie. Call with `credentials: "include"` when Behemoth is on another origin. |
-| `TransportHeader`, `TransportBody` | in the body, as `binding` | Keep it where the page can read it after the redirect, such as `sessionStorage`, and send it as `binding`. |
-| `TransportBoth` | in both | Either way. |
+| `DeliveryCookie`, the default | in an `HttpOnly` cookie. The body has no `binding`. | The browser sends the cookie. Call with `credentials: "include"` when Behemoth is on another origin. |
+| `DeliveryHeader`, `DeliveryBody` | in the body, as `binding` | Keep it where the page can read it after the redirect, such as `sessionStorage`, and send it as `binding`. |
+| `DeliveryBoth` | in both | Either way. |
 
 Never put the binding value in a URL. Whoever has the code, the state, and the binding value can complete the sign-in.
 
@@ -192,7 +192,7 @@ const begun = await fetch("/api/auth/sign-in/oauth", {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ provider: "google", redirect_url: "/dashboard" }),
 }).then((r) => r.json());
-if (begun.binding) sessionStorage.setItem("oauth_binding", begun.binding); // header and body transports
+if (begun.binding) sessionStorage.setItem("oauth_binding", begun.binding); // header and body deliveries
 location.assign(begun.authorization_url);
 
 // On your callback page, at /auth/callback/google.
@@ -212,13 +212,13 @@ When the provider sends `error` instead of `code`, the user did not sign in at t
 
 ### The binding cookie
 
-Under the cookie transports the cookie is named `__Host-behemoth_oauth_` followed by 16 characters derived from the state, so two sign-ins started in one browser keep a cookie each. It has these attributes:
+Under the cookie deliveries the cookie is named `__Host-behemoth_oauth_` followed by 16 characters derived from the state, so two sign-ins started in one browser keep a cookie each. It has these attributes:
 
 - `HttpOnly`, `Path=/`, and no `Domain`. A browser sends it only to Behemoth's host.
-- `Secure`, and the `SameSite` of the session cookie (`SessionConfig.CookieSameSite`). It reaches `POST /oauth/complete` on the requests that the session cookie reaches.
+- `Secure`, and the `SameSite` of the session cookie (`RouterConfig.Carrier.CookieSameSite`). It reaches `POST /oauth/complete` on the requests that the session cookie reaches.
 - `Max-Age` until the sign-in expires. A completed sign-in removes it.
 
-With `SessionConfig.CookieInsecure` set, the cookie has no `Secure` attribute and its name has no `__Host-` prefix, which a browser accepts only with `Secure`.
+With `RouterConfig.Carrier.CookieInsecure` set, the cookie has no `Secure` attribute and its name has no `__Host-` prefix, which a browser accepts only with `Secure`.
 
 ## Routes
 
@@ -227,7 +227,7 @@ Paths are below the router's base path, `/api/auth` by default.
 | Route | Body | Result |
 | --- | --- | --- |
 | `POST /sign-in/oauth` (`oauth.PathBegin`) | `provider`, and optionally `redirect_url`. Other fields go to handlers on `auth.oauth.beforeBegin`. | `200` with `{"authorization_url": "..."}`, and `binding` for a client without cookies. Sent with `Cache-Control: no-store`. |
-| `POST /oauth/complete` (`oauth.PathComplete`) | `provider`, `code`, `state`, `iss` when the provider sent it, and `binding` for a client without cookies | `200` with `{"user": {...}, "redirect_url": "..."}`, or `{"status": "requires_second_factor", "redirect_url": "..."}` when a second factor is pending. The session token arrives by the configured transport. See [Sessions](sessions.md#the-sign-in-response). |
+| `POST /oauth/complete` (`oauth.PathComplete`) | `provider`, `code`, `state`, `iss` when the provider sent it, and `binding` for a client without cookies | `200` with `{"user": {...}, "redirect_url": "..."}`, or `{"status": "requires_second_factor", "redirect_url": "..."}` when a second factor is pending. The session token arrives by the configured delivery. See [Sessions](sessions.md#the-sign-in-response). |
 
 `redirect_url` is checked like the magic link's. It is a path on your own site, or an absolute URL whose origin is in `RouterConfig.TrustedOrigins`. See [The redirect URL](magiclink.md#the-redirect-url). Your page does the redirect.
 

@@ -78,8 +78,8 @@ func stateOf(t *testing.T, begun routeAnswer) string {
 	return state
 }
 
-func withTransport(transport core.TokenTransport) func(*engine.BootConfig) {
-	return func(cfg *engine.BootConfig) { cfg.Session.Transport = transport }
+func withDelivery(delivery core.TokenDelivery) func(*engine.BootConfig) {
+	return func(cfg *engine.BootConfig) { cfg.Router.Carrier.Delivery = delivery }
 }
 
 func completeBody(state string, extra ...string) string {
@@ -90,11 +90,11 @@ func completeBodyFor(provider, state string, extra ...string) string {
 	return `{"provider":"` + provider + `","code":"code-from-provider","state":"` + state + `"` + strings.Join(extra, "") + `}`
 }
 
-// Under the cookie transport the binding value never reaches a script: it is
+// Under the cookie delivery the binding value never reaches a script: it is
 // an HttpOnly cookie of the sign-in, and the complete route reads it from
 // there. The answer is the one every sign-in route gives.
-func TestOAuthRoutesUnderTheCookieTransport(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(core.TransportCookie))
+func TestOAuthRoutesUnderTheCookieDelivery(t *testing.T) {
+	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(core.DeliveryCookie))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -140,7 +140,7 @@ func TestOAuthRoutesUnderTheCookieTransport(t *testing.T) {
 // Two sign-ins started in one browser, from two tabs, keep a cookie each.
 // Either one can be completed.
 func TestOAuthRoutesKeepACookiePerSignIn(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(core.TransportCookie))
+	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(core.DeliveryCookie))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -160,9 +160,9 @@ func TestOAuthRoutesKeepACookiePerSignIn(t *testing.T) {
 // A client that keeps the session token itself gets the binding value in
 // the body and sends it back in the body. No cookie is set.
 func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
-	for _, transport := range []core.TokenTransport{core.TransportHeader, core.TransportBody} {
-		t.Run(string(transport), func(t *testing.T) {
-			app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(transport))
+	for _, delivery := range []core.TokenDelivery{core.DeliveryHeader, core.DeliveryBody} {
+		t.Run(string(delivery), func(t *testing.T) {
+			app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(delivery))
 			require.NoError(t, err)
 			app.google.identity = ada
 
@@ -178,7 +178,7 @@ func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
 			done := app.post(t, oauth.PathComplete, completeBody(stateOf(t, begun), `,"binding":"`+binding+`"`))
 			require.Equal(t, http.StatusOK, done.StatusCode, done.body)
 			assert.Empty(t, done.Cookies())
-			if transport == core.TransportHeader {
+			if delivery == core.DeliveryHeader {
 				assert.NotEmpty(t, done.Header.Get(core.SessionTokenHeader))
 			} else {
 				assert.NotEmpty(t, done.body["token"])
@@ -187,10 +187,10 @@ func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
 	}
 }
 
-// Under TransportBoth the binding value goes both ways, as the session token
+// Under DeliveryBoth the binding value goes both ways, as the session token
 // does, and either way back works.
-func TestOAuthRoutesUnderTransportBoth(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(core.TransportBoth))
+func TestOAuthRoutesUnderDeliveryBoth(t *testing.T) {
+	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(core.DeliveryBoth))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -211,7 +211,7 @@ func TestOAuthRoutesUnderTransportBoth(t *testing.T) {
 func TestOAuthBindingCookieFollowsTheSessionCookie(t *testing.T) {
 	t.Run("a front end on another site", func(t *testing.T) {
 		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) {
-			cfg.Session.Transport, cfg.Session.CookieSameSite = core.TransportCookie, core.SameSiteNone
+			cfg.Router.Carrier.Delivery, cfg.Router.Carrier.CookieSameSite = core.DeliveryCookie, core.SameSiteNone
 			cfg.Router.BaseURL = "https://auth.example.com"
 		})
 		require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestOAuthBindingCookieFollowsTheSessionCookie(t *testing.T) {
 	})
 	t.Run("development over plain HTTP", func(t *testing.T) {
 		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) {
-			cfg.Session.Transport, cfg.Session.CookieInsecure = core.TransportCookie, true
+			cfg.Router.Carrier.Delivery, cfg.Router.Carrier.CookieInsecure = core.DeliveryCookie, true
 		})
 		require.NoError(t, err)
 		app.google.identity = ada
@@ -270,14 +270,13 @@ func TestOAuthRoutesAreRateLimited(t *testing.T) {
 	}
 }
 
-// Boot puts the session settings on the AuthContext with their defaults
-// applied, so a deployment that sets no transport gets the cookie one here
-// too.
-func TestOAuthRoutesReadTheSessionDefaults(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withTransport(""))
+// Boot builds the token carrier with its defaults applied, so a deployment
+// that sets no delivery gets the cookie one here too.
+func TestOAuthRoutesReadTheCarrierDefaults(t *testing.T) {
+	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(""))
 	require.NoError(t, err)
-	assert.Equal(t, core.TransportCookie, app.ac.SessionConfig.Transport)
-	assert.Equal(t, core.DefaultSessionCookieName, app.ac.SessionConfig.CookieName)
+	assert.Equal(t, core.DeliveryCookie, app.ac.TokenCarrier.Config().Delivery)
+	assert.Equal(t, core.DefaultSessionCookieName, app.ac.TokenCarrier.Config().CookieName)
 
 	begun := app.post(t, oauth.PathBegin, `{"provider":"google"}`)
 	assert.NotContains(t, begun.body, "binding")

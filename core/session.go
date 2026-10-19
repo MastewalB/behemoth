@@ -2,13 +2,16 @@ package core
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 )
 
+// SessionManager creates, resolves, extends and revokes sessions. It knows
+// nothing of HTTP: the token carrier (TokenCarrier) hands a session's token
+// to a client and reads it from a request, and the authenticator
+// (Authenticator) joins the two on every request.
 type SessionManager interface {
 	// Create starts a session for userID in meta.State and returns it with
 	// its raw token. Pass the context of the request being handled: the
@@ -30,13 +33,14 @@ type SessionManager interface {
 	Promote(ctx context.Context, sessionID string) (*models.Session, error)
 
 	// Touch applies the rolling expiration: it extends a session in use
-	// once less than SessionConfig.UpdateAge is left of it. RequireSession
-	// calls it on every authenticated request, with the session Validate
-	// returned. Whether an extension is due is read off that session, so a
-	// request that is not due costs no read and no write. It returns the
-	// session with its new expiry when it extended it, and nil when it did
-	// not. The caller then extends the client's copy of the token
-	// (ExtendToken).
+	// once less than SessionConfig.UpdateAge is left of it. The
+	// authenticator calls it on every request that carries a session's
+	// token, with the session it resolved. Whether an extension is due is
+	// read off that session, so a request that is not due costs no read and
+	// no write. It returns the session with its new expiry when it extended
+	// it, and nil when it did not. The caller then extends the client's
+	// copy of the token, as the authentication stage does with
+	// TokenCarrier.Extend.
 	Touch(ctx context.Context, session *models.Session) (*models.Session, error)
 
 	Revoke(ctx context.Context, sessionID string, reason string) error
@@ -68,54 +72,6 @@ type SessionManager interface {
 
 	ListForUser(ctx context.Context, userID any) ([]*models.Session, error)
 
-	// WriteToken hands a new session's token to the client the way
-	// SessionConfig.Transport says: a Set-Cookie header for
-	// TransportCookie, the SessionTokenHeader response header for
-	// TransportHeader, both for TransportBoth.
-	//
-	// For TransportBody it writes nothing, because the body is the route's
-	// to write. It returns true then, and the route puts the token in its
-	// JSON body. WriteSignIn does both steps, and is what a sign-in route
-	// calls; a route that calls WriteToken itself has to act on the result.
-	WriteToken(rctx *RequestContext, rawToken string, session *models.Session) (inBody bool)
-
-	// ClearToken takes the token back from the client once the session the
-	// request presented has ended: a route calls it after it ended its
-	// caller's own session, such as sign-out, and RequireSession calls it
-	// when it finds the session gone. It is the counterpart of WriteToken.
-	// For TransportCookie and TransportBoth it sets the session cookie
-	// again, empty and already expired, so that the browser drops it: the
-	// cookie is HttpOnly, which a script can't remove. It does so for the
-	// request that presented its token in that cookie. Under TransportBoth
-	// a request that came with a bearer token keeps its cookie, which may
-	// be another session's. For TransportHeader and TransportBody it writes
-	// nothing, because the client holds the token itself and discards it.
-	//
-	// It only writes to the response. Ending the session is Revoke's job,
-	// and a route calls ClearToken after the revoke has succeeded.
-	ClearToken(rctx *RequestContext)
-
-	// ExtendToken keeps the client's copy of the token in step with a
-	// session that Touch extended. A browser drops a cookie at the date the
-	// cookie was set with, however long the session lasts on the server, so
-	// for TransportCookie and TransportBoth it sets the cookie again with
-	// session's new expiry. It does so only when the request carried
-	// rawToken in that cookie: under TransportBoth a request may present the
-	// token as a bearer token while its cookie holds another session's. For
-	// TransportHeader and TransportBody it writes nothing, because those
-	// clients keep the token without a date.
-	//
-	// It reports whether it wrote the cookie. The response then carries the
-	// session token, and the caller keeps it out of caches, as RequireSession
-	// does with Cache-Control: no-store.
-	ExtendToken(rctx *RequestContext, rawToken string, session *models.Session) (written bool)
-
-	// ExtractToken reads the token from a request per Transport: the
-	// session cookie, the Authorization header ("Bearer <token>"), or
-	// either. The header is where a client of TransportHeader and of
-	// TransportBody sends it.
-	ExtractToken(r *http.Request) (string, bool)
-
 	// SupportsRevocation lets callers (admin UI, HTTP layer) know whether
 	// Revoke/RevokeAllForUser are meaningful or a no-op; false for purely
 	// stateless/self-verifying implementations.
@@ -138,50 +94,6 @@ type SessionMeta struct {
 	UserAgent string
 	State     models.SessionState // Active or Pending: set by the caller (SignIn passes Active or Pending depending on whether 2FA is required)
 }
-
-// TokenTransport is where the session token travels, in both directions:
-// how a sign-in hands it to the client, and where the client's later
-// requests carry it.
-//
-//	transport  the sign-in response has it in      a request carries it in
-//	cookie     a Set-Cookie header                 the cookie
-//	header     the Set-Auth-Token header           Authorization: Bearer <token>
-//	body       the JSON body, under "token"        Authorization: Bearer <token>
-//	both       the cookie and Set-Auth-Token       either
-type TokenTransport string
-
-const (
-	// TransportCookie keeps the token in an HttpOnly cookie, which the
-	// browser stores and sends by itself and scripts can't read. The
-	// default.
-	TransportCookie TokenTransport = "cookie"
-	// TransportHeader returns the token in the SessionTokenHeader response
-	// header. The client keeps it and sends it as a bearer token. A browser
-	// script on another origin can read the header only if the application
-	// exposes it (Access-Control-Expose-Headers).
-	TransportHeader TokenTransport = "header"
-	// TransportBody returns the token in the JSON body of the sign-in
-	// response, under SignInTokenKey. It differs from TransportHeader in
-	// that one respect: the client sends it back the same way, as a bearer
-	// token. Nothing is ever read from a request's body.
-	TransportBody TokenTransport = "body"
-	// TransportBoth is the cookie and the header together: a sign-in sets
-	// both, and a request may carry either. It is for an application with
-	// browser and non-browser clients, or one moving between the two.
-	TransportBoth TokenTransport = "both"
-)
-
-// ReadsCookie reports whether a request under t is authenticated by a cookie
-// the browser attaches by itself. Those are the transports a cross-site
-// request can abuse, and the ones Boot installs the origin check for.
-func (t TokenTransport) ReadsCookie() bool {
-	return t == TransportCookie || t == TransportBoth
-}
-
-// SessionTokenHeader is the response header a sign-in returns the session
-// token in under TransportHeader and TransportBoth. It mirrors Set-Cookie:
-// the server sets a credential, and the client stores it.
-const SessionTokenHeader = "Set-Auth-Token"
 
 // RequireFreshSession is RequireSession plus a check that the session is
 // fresh (SessionManager.IsFresh). A session that is valid but too old gets a

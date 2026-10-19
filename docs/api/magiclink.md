@@ -76,7 +76,7 @@ The routes sit directly under the router's base path.
 | Route | Body | Result |
 | --- | --- | --- |
 | `POST /sign-in/magic-link` | `email`, and optionally `redirect_url` and `metadata` (an object) | `200` with `{"status": "ok"}` |
-| `POST /magic-link/verify` | `token` | `200` with `{"user": {...}, "redirect_url": "..."}`, or `{"status": "requires_second_factor", "redirect_url": "..."}` when a second factor is pending. It is the body every sign-in answers with, plus the redirect, and the session token arrives by the configured transport; see [Sessions](sessions.md#the-sign-in-response). |
+| `POST /magic-link/verify` | `token` | `200` with `{"user": {...}, "redirect_url": "..."}`, or `{"status": "requires_second_factor", "redirect_url": "..."}` when a second factor is pending. It is the body every sign-in answers with, plus the redirect, and the session token arrives by the configured delivery; see [Sessions](sessions.md#the-sign-in-response). |
 
 **The request route answers the same whether or not the email has an account.** An unknown email, a link that could not be issued, and a failed send are all a `200` with the same body, so the response does not show which addresses are registered. The plugin does not create accounts: an unknown email gets no link.
 

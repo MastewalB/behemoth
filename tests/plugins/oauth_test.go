@@ -96,7 +96,7 @@ type oauthApp struct {
 }
 
 // bootOAuth boots the plugin alone over a fresh database, with one trusted
-// origin and the header transport, and mounts its routes. Options left
+// origin and the header delivery, and mounts its routes. Options left
 // empty get a provider "google" and a callback URL. configure may change
 // the BootConfig before Boot. It returns Boot's error, for the tests of the
 // options.
@@ -124,8 +124,8 @@ func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg core.HookRegist
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
-		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
-		Router:  core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Router:  core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, TrustedOrigins: []string{"https://app.example.com"}},
 		Hooks:   hookFn,
 		HTTP:    app.mounted,
 	}

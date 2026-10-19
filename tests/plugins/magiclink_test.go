@@ -102,8 +102,8 @@ func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg core.Ho
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
-		Router:    core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, TrustedOrigins: []string{"https://app.example.com"}},
 		Mail:      core.MailConfig{Sender: app.outbox},
 		Telemetry: tel,
 		HTTP:      app.mounted,
@@ -271,7 +271,7 @@ func TestMagicLinkRoutes(t *testing.T) {
 	assert.Equal(t, user.ID, body.User.ID)
 	assert.Equal(t, "/dashboard", body.RedirectURL)
 	// The route answers like every sign-in: the session token travels by
-	// the configured transport, here the response header.
+	// the configured delivery, here the response header.
 	session, err := app.ac.SessionManager.Validate(context.Background(), w.Header().Get(core.SessionTokenHeader))
 	require.NoError(t, err, "the %s header carries the session token", core.SessionTokenHeader)
 	assert.Equal(t, user.ID, session.UserID)

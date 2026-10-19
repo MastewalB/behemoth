@@ -33,7 +33,7 @@ Core already has the pieces a sign-in plugin needs:
 - **Accounts.** `accounts` is unique on `(provider_id, account_id)`. The store seals `access_token`, `refresh_token`, and `id_token` (`store/seal.go`).
 - **Single-use tokens.** `TokenManager.Consume` checks and invalidates a token in one step.
 - **Redirect checks.** `core.TrustedRedirect` accepts a path on the application's site, or a URL whose origin is in `RouterConfig.TrustedOrigins`.
-- **One sign-in answer.** `core.WriteSignIn` answers every sign-in route, and delivers the session token by whichever transport is configured.
+- **One sign-in answer.** `core.WriteSignIn` answers every sign-in route, and delivers the session token by whichever delivery is configured.
 - **Sign-in points.** Core declares `auth.signIn.*` and `auth.signUp.*`, and `SignInResult.Method` names the plugin that signed the user in.
 
 `core.TokenKindOAuthState` exists as a constant only. No plugin declares the kind yet.
@@ -43,7 +43,7 @@ Core already has the pieces a sign-in plugin needs:
 The first version includes:
 
 - sign-in and sign-up through a generic OpenID Connect provider, Google, and GitHub
-- every session transport, because the sign-in is answered through `core.WriteSignIn`
+- every token delivery, because the sign-in is answered through `core.WriteSignIn`
 - explicit linking of a provider account to an existing user
 
 The first version leaves out:
@@ -108,9 +108,9 @@ Both follow `transport_neutral_flows.md`. They take a context and typed input, a
 
 Each flow has one route, and both routes are JSON calls. The route of `Complete` answers through `core.WriteSignIn`, with the redirect target as an extra key, as the magic link plugin's verify route does.
 
-The binding value ties the two calls to one client. How the client keeps it depends on the transport:
+The binding value ties the two calls to one client. How the client keeps it depends on the token delivery:
 
-- **Under the cookie transports,** the route of `Begin` sets it in a cookie, and the route of `Complete` reads it from there.
+- **Under the cookie deliveries,** the route of `Begin` sets it in a cookie, and the route of `Complete` reads it from there.
 - **A client without cookies** gets the value in the answer of `Begin`, keeps it, and sends it with `Complete`.
 
 `Complete` fires core's `auth.signIn.*` points, as the magic link plugin does. A hook handler and the audit log then see one kind of sign-in, whichever plugin made it. The points include `auth.signIn.credentialsVerified`, so a second-factor plugin can still make the session pending.
@@ -122,7 +122,7 @@ The provider sends the browser back to a page of the application, not to a route
 The callback follows these rules:
 
 - **The redirect URI is an option of the plugin.** It names the application's page, as `LinkURL` does for the magic link plugin. `Init` checks it, and the same value is registered at the provider.
-- **The session arrives like any sign-in.** The session token travels by whichever transport is configured. No route of Behemoth redirects a browser.
+- **The session arrives like any sign-in.** The session token travels by whichever delivery is configured. No route of Behemoth redirects a browser.
 - **A failure is a typed error.** The route returns the flow's error, and the router answers with a status and an exported code, as for every other route.
 - **The code is in the page's URL.** It stays there until the page replaces the URL. PKCE makes a leaked code useless without the verifier, which never leaves Behemoth.
 
@@ -179,7 +179,7 @@ Each value in the sequence has its own path:
 | Authorization code and state | from the provider to the callback page, in the URL, then to `Complete`, in the body | the browser and the page's scripts |
 | PKCE verifier | none. It stays in the authorization transaction. | Behemoth |
 | Binding value | from `Begin` to the client, and back with `Complete` | the client that called `Begin` |
-| Session token | from `Complete` to the client, by the configured transport | the client, as after any sign-in |
+| Session token | from `Complete` to the client, by the configured delivery | the client, as after any sign-in |
 
 The session token never appears in a URL.
 
@@ -189,7 +189,7 @@ The session token never appears in a URL.
 
 Three rules shape the design. Each one states what breaks without it.
 
-**The state is bound to the client that started the sign-in.** A check that the state exists in the database is not enough. An attacker can start a sign-in, and then send a victim's browser to the callback page with the attacker's own state and authorization code. The page posts them, and the victim is signed in as the attacker. What the victim enters then lands in the attacker's account. `Complete` compares the state with the binding value, which only the client that called `Begin` holds. Under the cookie transports, the binding value is in a cookie whose name starts with `__Host-`, which a browser accepts only from the exact host over HTTPS.
+**The state is bound to the client that started the sign-in.** A check that the state exists in the database is not enough. An attacker can start a sign-in, and then send a victim's browser to the callback page with the attacker's own state and authorization code. The page posts them, and the victim is signed in as the attacker. What the victim enters then lands in the attacker's account. `Complete` compares the state with the binding value, which only the client that called `Begin` holds. Under the cookie deliveries, the binding value is in a cookie whose name starts with `__Host-`, which a browser accepts only from the exact host over HTTPS.
 
 **A user is found by `(provider, subject)`, never by email.** An email from a provider is a claim. It can change, and the provider may not have verified it. A lookup by email turns every enabled provider into a way into every account. [Account linking](#account-linking) has the conditions under which an email may link two accounts.
 
@@ -199,10 +199,10 @@ Three rules shape the design. Each one states what breaks without it.
 
 | Threat | Control |
 | --- | --- |
-| A forged callback signs the victim in as the attacker | Bind the state to the client with the binding value, a `__Host-` cookie under the cookie transports. The state is single use and short-lived. |
+| A forged callback signs the victim in as the attacker | Bind the state to the client with the binding value, a `__Host-` cookie under the cookie deliveries. The state is single use and short-lived. |
 | Account takeover through a matching email | Find the user by `(provider, subject)`. Link explicitly by default. Auto-link only when both emails are verified. |
 | A forged callback links the attacker's provider account | Record the intent, the user, and the session in the state. `Complete` requires the same session. |
-| A forged request from another site to `Begin` or `Complete` | Both routes take a JSON `POST`. Under the cookie transports, the origin check and the refusal of form content types cover them. |
+| A forged request from another site to `Begin` or `Complete` | Both routes take a JSON `POST`. Under the cookie deliveries, the origin check and the refusal of form content types cover them. |
 | Code interception or injection | The code passes through the callback page's URL. `Begin` creates a PKCE verifier and a nonce for every transaction. Every built-in provider sends the S256 challenge, and an OpenID Connect provider checks the nonce. |
 | Provider mix-up | Use one redirect URI per provider, record the provider in the state, and check the `iss` parameter when the provider sends it. |
 | Forged or replayed ID token | Verify the signature against the provider's keys with an algorithm allowlist. Then check `iss`, `aud`, `exp`, and `nonce`. |
@@ -292,10 +292,10 @@ The cost is the extra step. A user who signed up with a password and later choos
 
 **Options considered:**
 
-- *A callback route of Behemoth that redirects.* The application builds no page. The route is a `GET` that signs the user in, and it can deliver a session only by cookie. The header and body transports then need a single-use handoff code that the client redeems, with a verifier of its own. A failure reaches the application as a query parameter and not as a typed error. A wrapper for another transport still depends on this HTTP route.
-- *A page of the application that posts the code and the state.* The route answers through `WriteSignIn` under every transport, a failure is a typed error, and a gRPC wrapper can expose both flows. Each application builds the page, and the redirect URI becomes an option. The code passes through the page's scripts, and a provider that posts the callback reaches the application and not Behemoth.
+- *A callback route of Behemoth that redirects.* The application builds no page. The route is a `GET` that signs the user in, and it can deliver a session only by cookie. The header and body deliveries then need a single-use handoff code that the client redeems, with a verifier of its own. A failure reaches the application as a query parameter and not as a typed error. A wrapper for another transport still depends on this HTTP route.
+- *A page of the application that posts the code and the state.* The route answers through `WriteSignIn` under every delivery, a failure is a typed error, and a gRPC wrapper can expose both flows. Each application builds the page, and the redirect URI becomes an option. The code passes through the page's scripts, and a provider that posts the callback reaches the application and not Behemoth.
 
-**Decision:** the page of the application. An earlier plan to support only the cookie transport in the first version is dropped with it. That limit came from the handoff code, which this design does not need.
+**Decision:** the page of the application. An earlier plan to support only the cookie delivery in the first version is dropped with it. That limit came from the handoff code, which this design does not need.
 
 **Revisit if:** applications without a front end of their own need the flow. A callback route that redirects can then be added as a second HTTP wrapper over the same `Complete`.
 
@@ -344,7 +344,7 @@ The plugin is built in this order. Each step ends with its tests and its docs.
 
 These entries in `docs/ongoing.md` affect the design:
 
-- **"No route can accept a form body under the cookie transports".** The entry names an OAuth callback as a route that needs the exemption. With the callback on a page of the application, the plugin has no such route. A provider's form post goes to the application.
+- **"No route can accept a form body under the cookie deliveries".** The entry names an OAuth callback as a route that needs the exemption. With the callback on a page of the application, the plugin has no such route. A provider's form post goes to the application.
 - **"Nothing removes old sessions, tokens, or rate-limit counters".** Every `Begin` writes a state row, and nothing purges them. The key-value backend suits the `oauth_state` kind, because an entry there expires by itself.
 
 ## Integration with goth
