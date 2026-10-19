@@ -17,6 +17,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -26,7 +27,6 @@ import (
 	"github.com/MastewalB/behemoth/tests/testutils"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -549,9 +549,9 @@ func (usernamePlugin) Register(reg types.HookRegistry) error {
 // data.user.beforeCreate handler shapes the stored user.
 func TestBootWiresStoreToPluginHooks(t *testing.T) {
 	ctx := context.Background()
-	app, err := bmth.Prepare([]types.Plugin{usernamePlugin{}}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{usernamePlugin{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{Crypto: crypto.Config{
+	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{Crypto: crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 	}})
 	require.NoError(t, err)
@@ -576,13 +576,13 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 	cryptoCfg := crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 	}
-	app, err := bmth.Prepare([]types.Plugin{usernamePlugin{}}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{usernamePlugin{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	var sawUsername any
 	rejected := errors.New("rejected by the application")
 	reject := false
-	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: cryptoCfg,
 		Hooks: func(reg types.HookRegistry) error {
 			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
@@ -619,9 +619,9 @@ func TestBootRegistersApplicationHooks(t *testing.T) {
 	assert.True(t, errs.IsNotFound(err), "the application's after-hook error rolled the user back: %v", err)
 
 	// A registration error is a boot error.
-	app, err = bmth.Prepare(nil, bmth.PrepareConfig{})
+	app, err = engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
-	_, err = bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
+	_, err = engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: cryptoCfg,
 		Hooks: func(reg types.HookRegistry) error {
 			return reg.OnBefore("no.such.point", func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) { return p, nil }, nil)
@@ -639,17 +639,17 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 	}
 	pluginName := usernamePlugin{}.Meta().Name
 
-	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, "app", app.AppName, "the default name")
 
-	app, err = bmth.Prepare([]types.Plugin{usernamePlugin{}}, bmth.PrepareConfig{AppName: "shop"})
+	app, err = engine.Prepare([]types.Plugin{usernamePlugin{}}, engine.PrepareConfig{AppName: "shop"})
 	require.NoError(t, err)
 	assert.Equal(t, "shop", app.AppName)
 
 	// The application asks to run before the plugin, which names it "shop".
 	var sawUsername any = "unset"
-	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: cryptoCfg,
 		Hooks: func(reg types.HookRegistry) error {
 			return reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
@@ -662,11 +662,11 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 	require.NoError(t, ac.Store.CreateUser(ctx, &models.User{Email: "grace@example.com"}))
 	assert.NotEqual(t, "grace", sawUsername, "the application's handler ran before the plugin's")
 
-	for name, cfg := range map[string]bmth.PrepareConfig{
+	for name, cfg := range map[string]engine.PrepareConfig{
 		"an application named core":   {AppName: "core"},
 		"a plugin named like the app": {AppName: pluginName},
 	} {
-		_, err = bmth.Prepare([]types.Plugin{usernamePlugin{}}, cfg)
+		_, err = engine.Prepare([]types.Plugin{usernamePlugin{}}, cfg)
 		assert.Error(t, err, name)
 	}
 }
@@ -675,11 +675,11 @@ func TestAppNameIsConfigurableAndChecked(t *testing.T) {
 // instead of being dropped by the chain ordering.
 func TestSecondHandlerOnAPointIsRejected(t *testing.T) {
 	ctx := context.Background()
-	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
 	pass := func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) { return row, nil }
 
-	_, err = bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
+	_, err = engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
@@ -739,10 +739,10 @@ func (p *signupPlugin) Register(reg types.HookRegistry) error {
 func TestDataHooksSeeTheRequestBeingHandled(t *testing.T) {
 	ctx := context.Background()
 	plugin := &signupPlugin{}
-	app, err := bmth.Prepare([]types.Plugin{plugin}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	driver := &capturingDriver{}
-	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		HTTP: driver,
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
@@ -784,19 +784,19 @@ func (d noTransactionsDB) CheckTransactions(context.Context) error { return d.er
 // refuses to start when they don't: hooked writes would fail later.
 func TestBootChecksTheDatabaseHasTransactions(t *testing.T) {
 	ctx := context.Background()
-	cfg := bmth.BootConfig{Crypto: crypto.Config{
+	cfg := engine.BootConfig{Crypto: crypto.Config{
 		Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 	}}
-	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	standalone := errs.NewConfigurationError("test", "standalone server", nil)
-	_, err = bmth.Boot(ctx, app, noTransactionsDB{Database: usersDB(t), err: standalone}, cfg)
+	_, err = engine.Boot(ctx, app, noTransactionsDB{Database: usersDB(t), err: standalone}, cfg)
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	assert.ErrorIs(t, err, standalone)
 
-	_, err = bmth.Boot(ctx, app, noTransactionsDB{Database: usersDB(t)}, cfg)
+	_, err = engine.Boot(ctx, app, noTransactionsDB{Database: usersDB(t)}, cfg)
 	assert.NoError(t, err, "a database whose check passes boots")
 }
 
@@ -1019,7 +1019,7 @@ func TestDeleteUserCallsItsHooksInOneTransaction(t *testing.T) {
 // cascading foreign key alone, the token would keep working from the cache.
 func TestDeleteUserUnderBoot(t *testing.T) {
 	ctx := context.Background()
-	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
 	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "delete.db")+"?_busy_timeout=10000")
 	require.NoError(t, err)
@@ -1051,7 +1051,7 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 	}
 	kv := &memoryKV{entries: map[string]string{}}
 	tel, rec := telemetrytest.New()
-	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(sqlDB, app.Resolver), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(sqlDB, app.Resolver), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
@@ -1119,11 +1119,11 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 // transaction, and can't fail the write.
 func TestCommittedDataPointsUnderBoot(t *testing.T) {
 	ctx := context.Background()
-	app, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	var seen []string
-	ac, err := bmth.Boot(ctx, app, usersDB(t), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, usersDB(t), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},

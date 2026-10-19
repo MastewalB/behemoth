@@ -14,12 +14,12 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
@@ -40,19 +40,19 @@ func serve(ctx context.Context) error {
 		return err
 	}
 
-	engine := gin.New()
+	ginEngine := gin.New()
 	if obs.tracerProvider != nil {
 		// The application's own tracing middleware, registered before any
 		// route. It continues the caller's trace or starts one, and puts the
 		// span on the request's context. behemoth reads no trace headers:
 		// its behemoth.request span is a child of this one because it is
 		// started from that context.
-		engine.Use(otelgin.Middleware("behemoth-example", otelgin.WithTracerProvider(obs.tracerProvider)))
+		ginEngine.Use(otelgin.Middleware("behemoth-example", otelgin.WithTracerProvider(obs.tracerProvider)))
 	}
-	engine.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "my app") })
-	mountPages(engine) // the pages the mailed links open
+	ginEngine.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "my app") })
+	mountPages(ginEngine) // the pages the mailed links open
 
-	ac, _, sqlDB, err := boot(ctx, ginadapter.New(engine), obs.tel)
+	ac, _, sqlDB, err := boot(ctx, ginadapter.New(ginEngine), obs.tel)
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func serve(ctx context.Context) error {
 	if addr == "" {
 		addr = ":8080"
 	}
-	server := &http.Server{Addr: addr, Handler: engine}
+	server := &http.Server{Addr: addr, Handler: ginEngine}
 	failed := make(chan error, 1)
 	go func() { failed <- server.ListenAndServe() }()
 	log.Printf("listening on %s", addr)
@@ -93,7 +93,7 @@ func serve(ctx context.Context) error {
 func boot(ctx context.Context, driver types.FrameworkDriver, tel *telemetry.Telemetry) (*types.AuthContext, *emailpassword.Plugin, *sql.DB, error) {
 	// 1. Declarations: plugins, hooks, tokens, rate limits, schema -> resolver.
 	all, ep := plugins()
-	app, err := bmth.Prepare(all, prepareConfig())
+	app, err := engine.Prepare(all, prepareConfig())
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -111,7 +111,7 @@ func boot(ctx context.Context, driver types.FrameworkDriver, tel *telemetry.Tele
 		sqlDB.Close()
 		return nil, nil, nil, err
 	}
-	ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 		Crypto:    cryptoCfg,
 		HTTP:      driver,
 		Telemetry: tel,

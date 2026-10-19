@@ -7,7 +7,7 @@ The code lives in:
 - `types/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `Limit`, the rule types, `AtomicIncrementer`, `RateLimiter`
 - `ratelimit/fixed_window.go`: `FixedWindow`, the one algorithm
 - `ratelimit/limiter.go`, `ratelimit/catalog.go`: `DefaultRateLimiter`, `NewDefaultRateLimiter`, `DefaultRateLimitCatalog`, `resolveRateLimitStore`, `dbCounterStore`
-- `types/init/init.go`: `CoreDeclareRateLimitRules`
+- `engine/init.go`: `CoreDeclareRateLimitRules`
 - `store/rate_limits.go`: `IncrementRateLimit`, `PurgeExpiredRateLimits`
 - `storage/adapters/redis/redis.go`: `RedisAdapter.Increment`
 - `models/rate_limit.go`: the `rate_limits` table
@@ -297,12 +297,12 @@ These limits apply:
 | Test | File | Covers |
 | --- | --- | --- |
 | `TestFixedWindow` | `ratelimit/fixed_window_test.go` | allowed up to `Max`, refused after, retry-after from the window's end and its caps, a failing counter |
-| `TestRateLimitRulesNameTheirAlgorithm` | `types/init/dispatcher_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on route and hook rules, also when the rule has its own `Limiter` |
-| `TestRateLimiterMetrics` | `types/init/dispatcher_test.go` | `evaluate`: the three results, the audit event |
+| `TestRateLimitRulesNameTheirAlgorithm` | `dispatch/dispatcher_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on route and hook rules, also when the rule has its own `Limiter` |
+| `TestRateLimiterMetrics` | `dispatch/dispatcher_test.go` | `evaluate`: the three results, the audit event |
 | `TestStoreContract/*/RateLimits` | `tests/store/contract_test.go` | the database counter on every backend: concurrent counts, the window's end, the reset |
 | `TestRedisIncrement` | `tests/storage/kv_storage_test.go` | the Redis counter: concurrent counts, the expiry, the reset, a counter without an expiry |
 | `TestHookRateLimitRulesKeyOnPublishedValues` | `tests/plugins/emailpassword_test.go` | hook rules under a real `Boot`, without a request: per email on sign-up and sign-in (normalized, and not moved by a handler's rewrite), per user on session create, per kind and subject on token issue. A sign-in without an email and a token without a subject are not counted |
-| `TestHookRuleIsSkippedWhenItDoesNotApply` | `types/init/dispatcher_test.go` | `CheckHookLimit`: a rule whose `KeyFunc` returns `false` is skipped and counted as `skipped`, the point's other rules still run, `"", true` is counted |
+| `TestHookRuleIsSkippedWhenItDoesNotApply` | `dispatch/dispatcher_test.go` | `CheckHookLimit`: a rule whose `KeyFunc` returns `false` is skipped and counted as `skipped`, the point's other rules still run, `"", true` is counted |
 | `TestKeyByValues` | `types/ratelimit_test.go` | the joined key, and `false` for a missing, nil or empty entry |
 | `TestSignInRouteIsRateLimited` | `tests/plugins/emailpassword_test.go` | both core rules through the router: the 11th attempt is a `429` with `Retry-After`, another address is not affected, the two routes count separately, a refused sign-up creates nothing |
 

@@ -6,7 +6,7 @@ The guidelines are suggestions for new code and for changes. They do not describ
 
 The code it refers to lives in:
 
-- `types/init/init.go`: `Prepare`, `Boot`, `BootConfig`, `PrepareConfig`
+- `engine/init.go`: `Prepare`, `Boot`, `BootConfig`, `PrepareConfig`
 - `plugins/*`: each plugin's `Options`, `New`, and `Init`
 - `types/mail.go`: `MailSender`, `MailMessage`
 - `crypto/`: `SecretSource`, `WatchableSecretSource`, `PollingWatcher`

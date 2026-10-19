@@ -26,7 +26,7 @@ Non-goals:
 | `Do`, `ReadLimited` | `outbound/outbound.go` | send a request, and read a bounded answer |
 | `GetJSON`, `PostForm` | `outbound/helpers.go` | the two shapes of call the OAuth plugin makes |
 | `CheckURL` | `outbound/url.go` | the rule for a URL that receives a credential or serves a key: `https`, or `http` on a loopback address |
-| `BootConfig.Outbound`, `AuthContext.HTTPClient` | `types/init/init.go`, `types/auth-context.go` | one client per `Boot`, built before any plugin's `Init` |
+| `BootConfig.Outbound`, `AuthContext.HTTPClient` | `engine/init.go`, `types/auth-context.go` | one client per `Boot`, built before any plugin's `Init` |
 | `providerHTTP` | `plugins/oauth/protocol.go` | the OAuth plugin's calls, on `Options.HTTPClient` or else `AuthContext.HTTPClient` |
 
 ## The rules

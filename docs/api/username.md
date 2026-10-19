@@ -15,9 +15,9 @@ import (
 passwords := emailpassword.New(emailpassword.Options{})
 names := username.New(passwords, username.Options{})
 
-app, err := bmth.Prepare([]types.Plugin{passwords, names}, bmth.PrepareConfig{})
+app, err := engine.Prepare([]types.Plugin{passwords, names}, engine.PrepareConfig{})
 // ...
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{ /* ... */ })
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{ /* ... */ })
 ```
 
 The setup has these requirements:

@@ -2,7 +2,7 @@
 // *http.ServeMux, the standard library's router:
 //
 //	mux := http.NewServeMux()
-//	ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{HTTP: nethttp.New(mux), ...})
+//	ac, err := engine.Boot(ctx, app, db, engine.BootConfig{HTTP: nethttp.New(mux), ...})
 //
 // It needs nothing outside the standard library, so unlike the gin, echo,
 // chi and fiber adapters it is part of behemoth's own module. The mux and

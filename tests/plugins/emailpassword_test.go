@@ -19,6 +19,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
@@ -29,7 +30,6 @@ import (
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -265,7 +265,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{emailpassword.PluginName}, app.Order)
 
@@ -283,7 +283,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 			return nil
 		}
 	}
-	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -360,12 +360,12 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	veto := errs.NewInvalidInputError("test", "user", "this email domain is not allowed", nil)
 	var failures []types.FailureReason
-	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -440,7 +440,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	_, err = p.SignUp(ctx, behemoth.M{"email": "early@example.com", "password": "correct horse"})
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "a flow called before Boot is a configuration error: %v", err)
 
-	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	type seen struct {
@@ -468,7 +468,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	}
 	after := func(hctx *types.HookContext, _ any) error { record(hctx); return nil }
 
-	_, err = bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	_, err = engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -652,9 +652,9 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 
 	tel, rec := telemetrytest.New()
 	mounted := mountedRoutes{}
-	app, err := bmth.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -714,8 +714,8 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 	limited := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
 	require.Len(t, limited, 2)
 	assert.Equal(t, "203.0.113.7", limited[0].IPAddress)
-	assert.Equal(t, bmth.RuleSignInRoute, limited[0].Metadata["rule"])
-	assert.Equal(t, bmth.RuleSignUpRoute, limited[1].Metadata["rule"])
+	assert.Equal(t, engine.RuleSignInRoute, limited[0].Metadata["rule"])
+	assert.Equal(t, engine.RuleSignUpRoute, limited[1].Metadata["rule"])
 }
 
 // limitsPlugin declares a token kind and one hook rate-limit rule per firing
@@ -767,9 +767,9 @@ CREATE TABLE tokens (
 
 	tel, rec := telemetrytest.New()
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := bmth.Prepare([]types.Plugin{p, limitsPlugin{}}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{p, limitsPlugin{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -913,9 +913,9 @@ func TestEmailPasswordLogging(t *testing.T) {
 	tel, rec := telemetrytest.New()
 	mounted := mountedRoutes{}
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil).WithLogger(tel.Logger), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil).WithLogger(tel.Logger), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -1010,9 +1010,9 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 
 	tel, rec := telemetrytest.New()
 	mounted := mountedRoutes{}
-	app, err := bmth.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := bmth.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
@@ -1084,9 +1084,9 @@ func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg type
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
+	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
-	ac, err := bmth.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), bmth.BootConfig{
+	ac, err := engine.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},

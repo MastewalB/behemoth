@@ -41,9 +41,9 @@ plugin := oauth.New(oauth.Options{
 	CallbackURL: "https://app.example.com/auth/callback",
 })
 
-app, err := bmth.Prepare([]types.Plugin{plugin}, bmth.PrepareConfig{})
+app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
 // ...
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Router: types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
 	// ...
 })

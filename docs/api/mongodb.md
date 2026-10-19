@@ -7,7 +7,7 @@ This page covers what is different when Behemoth runs on MongoDB: what the serve
 ```go
 import mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
 
-app, err := bmth.Prepare(plugins, prepareCfg)
+app, err := engine.Prepare(plugins, prepareCfg)
 if err != nil {
 	return err
 }
@@ -18,7 +18,7 @@ if err := db.EnsureIndexes(ctx, app.Schemas.All()); err != nil {
 	return err
 }
 
-ac, err := bmth.Boot(ctx, app, db, bootCfg)
+ac, err := engine.Boot(ctx, app, db, bootCfg)
 ```
 
 Two things are required, and `Boot` checks both:

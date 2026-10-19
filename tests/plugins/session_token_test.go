@@ -16,6 +16,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/keysource"
 	"github.com/MastewalB/behemoth/models"
@@ -23,7 +24,6 @@ import (
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,7 +52,7 @@ type tokenApp struct {
 	raw     string
 }
 
-func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg types.HookRegistry) error, configure ...func(*bmth.BootConfig)) (*tokenApp, error) {
+func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg types.HookRegistry) error, configure ...func(*engine.BootConfig)) (*tokenApp, error) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "tokens.db"))
@@ -62,9 +62,9 @@ func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg ty
 	require.NoError(t, err)
 
 	app := &tokenApp{mounted: mountedRoutes{}}
-	prepared, err := bmth.Prepare(nil, bmth.PrepareConfig{})
+	prepared, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
-	cfg := bmth.BootConfig{
+	cfg := engine.BootConfig{
 		Crypto:  crypto.Config{Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1}},
 		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
 		JWT:     jwtCfg,
@@ -74,7 +74,7 @@ func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg ty
 	for _, fn := range configure {
 		fn(&cfg)
 	}
-	app.ac, err = bmth.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), cfg)
+	app.ac, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (app *tokenApp) verifyElsewhere(t *testing.T, token, audience string) (jwt.
 func TestSessionTokenIsVerifiedWithVerifyJWT(t *testing.T) {
 	ctx := context.Background()
 	mux := http.NewServeMux()
-	app, err := bootSessionTokens(t, sessionTokenConfig(), nil, func(cfg *bmth.BootConfig) { cfg.HTTP = nethttp.New(mux) })
+	app, err := bootSessionTokens(t, sessionTokenConfig(), nil, func(cfg *engine.BootConfig) { cfg.HTTP = nethttp.New(mux) })
 	require.NoError(t, err)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -370,7 +370,7 @@ func TestSessionTokenConfiguration(t *testing.T) {
 	audiences := map[crypto.JWTKind][]string{crypto.JWTExternal: {apiAudience}}
 
 	app, err := bootSessionTokens(t, crypto.JWTConfig{Audiences: audiences, TTL: map[crypto.JWTKind]time.Duration{crypto.JWTExternal: 5 * time.Minute}}, nil,
-		func(cfg *bmth.BootConfig) { cfg.Router.BaseURL = tokenIssuer })
+		func(cfg *engine.BootConfig) { cfg.Router.BaseURL = tokenIssuer })
 	require.NoError(t, err)
 	issued := app.issue(t, "")
 	require.Equal(t, http.StatusOK, issued.status, issued.body)

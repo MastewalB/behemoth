@@ -212,14 +212,14 @@ import (
 	"context"
 
 	"github.com/MastewalB/behemoth/migration"
-	bmth "github.com/MastewalB/behemoth/types/init"
+	"github.com/MastewalB/behemoth/engine"
 )
 
-func Prepare() (*bmth.PreparedApp, error) {
-	return bmth.Prepare(nil, bmth.PrepareConfig{Migration: migration.MigrationConfig{FolderPath: "migrations"}})
+func Prepare() (*engine.PreparedApp, error) {
+	return engine.Prepare(nil, engine.PrepareConfig{Migration: migration.MigrationConfig{FolderPath: "migrations"}})
 }
 
-func MigrationBackend(context.Context, *bmth.PreparedApp) (migration.Backend, error) {
+func MigrationBackend(context.Context, *engine.PreparedApp) (migration.Backend, error) {
 	return migration.Backend{Introspector: empty{}}, nil
 }
 

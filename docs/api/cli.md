@@ -32,20 +32,20 @@ import (
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
+	"github.com/MastewalB/behemoth/engine"
 )
 
 // Prepare returns what the application declares. It opens no connection.
-func Prepare() (*bmth.PreparedApp, error) {
+func Prepare() (*engine.PreparedApp, error) {
 	plugins := []types.Plugin{emailpassword.New(emailpassword.Options{})}
-	return bmth.Prepare(plugins, bmth.PrepareConfig{
+	return engine.Prepare(plugins, engine.PrepareConfig{
 		Migration: migration.MigrationConfig{FolderPath: "migrations"},
 		Schema:    declareSchema, // your own tables, if you have any
 	})
 }
 
 // MigrationBackend opens the database the command compares with.
-func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error) {
+func MigrationBackend(ctx context.Context, app *engine.PreparedApp) (migration.Backend, error) {
 	db, err := OpenDB(ctx) // your own function: sql.Open and a ping
 	if err != nil {
 		return migration.Backend{}, err
@@ -60,7 +60,7 @@ Your server calls the same `Prepare` and passes its result to `Boot`:
 app, err := auth.Prepare()
 // ...
 db := postgres.NewPostgresAdapter(sqlDB, app.Resolver)
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{ /* ... */ })
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{ /* ... */ })
 ```
 
 Because both start from one function, the tables a migration creates are the tables your server reads. `MigrationBackend` is the only code you write for the command alone.
@@ -250,7 +250,7 @@ The launcher returns the command's own exit code. It returns 1 itself when it ca
 `postgres.MigrationBackend` is available for PostgreSQL only. For MySQL, SQLite, or SQL Server, fill `migration.Backend` yourself from the module's driver. `generate` needs `Introspector`, and `Renderer` for the script. `migrate` also needs `Driver` and `DB`: the module's driver and its adapter:
 
 ```go
-func MigrationBackend(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error) {
+func MigrationBackend(ctx context.Context, app *engine.PreparedApp) (migration.Backend, error) {
 	db, err := OpenDB(ctx)
 	if err != nil {
 		return migration.Backend{}, err

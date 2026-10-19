@@ -29,9 +29,9 @@ import (
 passwords := emailpassword.New(emailpassword.Options{})
 phones := phonenumber.New(passwords, phonenumber.Options{})
 
-app, err := bmth.Prepare([]types.Plugin{passwords, phones}, bmth.PrepareConfig{})
+app, err := engine.Prepare([]types.Plugin{passwords, phones}, engine.PrepareConfig{})
 // ...
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	SMS: types.SMSConfig{
 		Sender: types.SMSSenderFunc(func(ctx context.Context, msg types.SMSMessage) error {
 			return provider.Send(ctx, msg.To, "Your code is "+msg.Code)

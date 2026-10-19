@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -78,8 +78,8 @@ func stateOf(t *testing.T, begun routeAnswer) string {
 	return state
 }
 
-func withTransport(transport types.TokenTransport) func(*bmth.BootConfig) {
-	return func(cfg *bmth.BootConfig) { cfg.Session.Transport = transport }
+func withTransport(transport types.TokenTransport) func(*engine.BootConfig) {
+	return func(cfg *engine.BootConfig) { cfg.Session.Transport = transport }
 }
 
 func completeBody(state string, extra ...string) string {
@@ -210,7 +210,7 @@ func TestOAuthRoutesUnderTransportBoth(t *testing.T) {
 // and the prefix that needs it when the session cookie does.
 func TestOAuthBindingCookieFollowsTheSessionCookie(t *testing.T) {
 	t.Run("a front end on another site", func(t *testing.T) {
-		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *bmth.BootConfig) {
+		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) {
 			cfg.Session.Transport, cfg.Session.CookieSameSite = types.TransportCookie, types.SameSiteNone
 			cfg.Router.BaseURL = "https://auth.example.com"
 		})
@@ -220,7 +220,7 @@ func TestOAuthBindingCookieFollowsTheSessionCookie(t *testing.T) {
 		assert.True(t, cookie.Secure)
 	})
 	t.Run("development over plain HTTP", func(t *testing.T) {
-		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *bmth.BootConfig) {
+		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) {
 			cfg.Session.Transport, cfg.Session.CookieInsecure = types.TransportCookie, true
 		})
 		require.NoError(t, err)

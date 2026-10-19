@@ -7,7 +7,7 @@ A sign-in creates a session and gives the client a token for it. The client send
 Sessions are configured with `BootConfig.Session`. Every field is optional.
 
 ```go
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Session: types.SessionConfig{
 		ExpiresIn: 24 * time.Hour,
 		Transport: types.TransportHeader,
@@ -82,7 +82,7 @@ There is no combination with the body. A token is never read from a request's bo
 | Development over plain HTTP on a host other than `localhost` | `CookieInsecure: true` |
 
 ```go
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Session: types.SessionConfig{
 		CookieDomain:   "example.com",
 		CookieSameSite: types.SameSiteStrict,
@@ -206,7 +206,7 @@ A browser attaches the session cookie to every request to your API, including on
 Configure the check with two fields of `BootConfig.Router`:
 
 ```go
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Router: types.RouterConfig{
 		BaseURL:        "https://auth.example.com",
 		TrustedOrigins: []string{"https://app.example.com"},

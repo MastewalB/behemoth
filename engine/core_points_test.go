@@ -1,4 +1,4 @@
-package types
+package engine
 
 import (
 	"github.com/MastewalB/behemoth/dispatch"

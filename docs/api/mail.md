@@ -5,7 +5,7 @@ Some plugins have to send a message: a sign-in link, a link that confirms an add
 ## Setup
 
 ```go
-ac, err := bmth.Boot(ctx, app, db, bmth.BootConfig{
+ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	Mail: types.MailConfig{
 		Sender: types.MailSenderFunc(func(ctx context.Context, msg types.MailMessage) error {
 			return mailQueue.Enqueue(ctx, msg.To, subjectFor(msg.Kind), msg.URL)

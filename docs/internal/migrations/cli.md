@@ -46,8 +46,8 @@ behemoth migrate takes the same route to migration.Migrate and RunManagedApply.
 **The `cli` package.** The commands as a library. An application gives it two functions:
 
 ```go
-type PrepareFunc func() (*bmth.PreparedApp, error)
-type BackendFunc func(ctx context.Context, app *bmth.PreparedApp) (migration.Backend, error)
+type PrepareFunc func() (*engine.PreparedApp, error)
+type BackendFunc func(ctx context.Context, app *engine.PreparedApp) (migration.Backend, error)
 
 func Main(prepare PrepareFunc, backend BackendFunc)                                             // os.Args, exits
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, prepare PrepareFunc, backend BackendFunc) int

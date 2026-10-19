@@ -13,12 +13,12 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
-	bmth "github.com/MastewalB/behemoth/types/init"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -317,7 +317,7 @@ func TestEmailChangeRoutes(t *testing.T) {
 	ctx := context.Background()
 	opts := changeOptions()
 	opts.ChangeLimit = types.Limit{Max: 20, Window: time.Minute}
-	app := bootVerification(t, opts, func(cfg *bmth.BootConfig) { cfg.Session.FreshAge = 400 * time.Millisecond })
+	app := bootVerification(t, opts, func(cfg *engine.BootConfig) { cfg.Session.FreshAge = 400 * time.Millisecond })
 	change := app.mounted["/api/auth"+emailverification.PathChange]
 	confirm := app.mounted["/api/auth"+emailverification.PathChangeConfirm]
 	revert := app.mounted["/api/auth"+emailverification.PathChangeRevert]
@@ -423,9 +423,9 @@ func TestEmailChangeIsOptIn(t *testing.T) {
 		"a negative revert window": {ChangeLinkURL: "https://app.example.com/change", RevertLinkURL: "https://app.example.com/undo", RevertTTL: -time.Hour},
 	} {
 		opts.LinkURL = "https://app.example.com/verify"
-		prepared, err := bmth.Prepare([]types.Plugin{emailverification.New(opts)}, bmth.PrepareConfig{})
+		prepared, err := engine.Prepare([]types.Plugin{emailverification.New(opts)}, engine.PrepareConfig{})
 		require.NoError(t, err, name)
-		_, err = bmth.Boot(ctx, prepared, app.ac.DB, bmth.BootConfig{
+		_, err = engine.Boot(ctx, prepared, app.ac.DB, engine.BootConfig{
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 			},

@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-19
 - **Deciders:** MastewalB
-- **Affects:** `types` (`Access`, `PermissionCatalog`, `PluginInitContext`), `identity` (the grant), `types/init` (`Boot`), every plugin with a self-service flow or an admin operation, and plugins written outside this repository
+- **Affects:** `types` (`Access`, `PermissionCatalog`, `PluginInitContext`), `identity` (the grant), `engine` (`Boot`), every plugin with a self-service flow or an admin operation, and plugins written outside this repository
 
 ## Context and problem
 
