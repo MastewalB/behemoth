@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/oauth"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,49 +22,49 @@ import (
 // were given during a test.
 type signInTrace struct {
 	signInBefore []behemoth.M
-	signInAfter  []*types.SignInResult
-	signInFailed []types.FailureReason
+	signInAfter  []*core.SignInResult
+	signInFailed []core.FailureReason
 	signUpBefore []behemoth.M
 	signUpAfter  []*models.User
-	signUpFailed []types.FailureReason
+	signUpFailed []core.FailureReason
 	// provider is HookValueProvider as each auth.signIn.after handler saw it.
 	provider []any
 	// signUpGate, when set, decides for the handler on auth.signUp.before.
 	// An owner has one handler per point, and that one is the trace's.
-	signUpGate types.BeforeHookFunc
+	signUpGate core.BeforeHookFunc
 }
 
 // register attaches the trace's handlers, and then more, if any.
-func (tr *signInTrace) register(more ...func(reg types.HookRegistry) error) func(reg types.HookRegistry) error {
-	return func(reg types.HookRegistry) error {
-		before := func(into *[]behemoth.M) types.BeforeHookFunc {
-			return func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+func (tr *signInTrace) register(more ...func(reg core.HookRegistry) error) func(reg core.HookRegistry) error {
+	return func(reg core.HookRegistry) error {
+		before := func(into *[]behemoth.M) core.BeforeHookFunc {
+			return func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 				*into = append(*into, payload)
 				return nil, nil
 			}
 		}
-		failed := func(into *[]types.FailureReason) types.FailedHookFunc {
-			return func(_ *types.HookContext, reason types.FailureReason) error {
+		failed := func(into *[]core.FailureReason) core.FailedHookFunc {
+			return func(_ *core.HookContext, reason core.FailureReason) error {
 				*into = append(*into, reason)
 				return nil
 			}
 		}
 		steps := []error{
 			reg.OnBefore(hooks.HookSignInBefore, before(&tr.signInBefore), nil),
-			reg.OnAfter(hooks.HookSignInAfter, func(hctx *types.HookContext, result any) error {
-				tr.signInAfter = append(tr.signInAfter, result.(*types.SignInResult))
+			reg.OnAfter(hooks.HookSignInAfter, func(hctx *core.HookContext, result any) error {
+				tr.signInAfter = append(tr.signInAfter, result.(*core.SignInResult))
 				tr.provider = append(tr.provider, hctx.Values[oauth.HookValueProvider])
 				return nil
 			}, nil),
 			reg.OnFailed(hooks.HookSignInFailed, failed(&tr.signInFailed), nil),
-			reg.OnBefore(hooks.HookSignUpBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+			reg.OnBefore(hooks.HookSignUpBefore, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 				tr.signUpBefore = append(tr.signUpBefore, payload)
 				if tr.signUpGate != nil {
 					return tr.signUpGate(hctx, payload)
 				}
 				return nil, nil
 			}, nil),
-			reg.OnAfter(hooks.HookSignUpAfter, func(_ *types.HookContext, result any) error {
+			reg.OnAfter(hooks.HookSignUpAfter, func(_ *core.HookContext, result any) error {
 				tr.signUpAfter = append(tr.signUpAfter, result.(*models.User))
 				return nil
 			}, nil),
@@ -424,8 +424,8 @@ func TestOAuthCompletePassesTheSecondFactorPoint(t *testing.T) {
 	ctx := context.Background()
 	var trace signInTrace
 	answer := "stepUp"
-	app, err := bootOAuth(t, oauth.Options{}, trace.register(func(reg types.HookRegistry) error {
-		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	app, err := bootOAuth(t, oauth.Options{}, trace.register(func(reg core.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			if answer == "refuse" {
 				return nil, errs.NewUnauthorized("test", "account_suspended", "account suspended")
 			}
@@ -446,7 +446,7 @@ func TestOAuthCompletePassesTheSecondFactorPoint(t *testing.T) {
 	_, err = app.plugin.Complete(ctx, app.begin(t, app.google, ""))
 	assert.True(t, hasCode(err, errs.CategoryUnauthorized, "account_suspended"), "the handler's error is returned: %v", err)
 	reason := trace.signInFailed[len(trace.signInFailed)-1]
-	assert.Equal(t, types.FailureRejectedByHook, reason.Code)
+	assert.Equal(t, core.FailureRejectedByHook, reason.Code)
 	assert.Equal(t, result.User.ID, reason.SubjectID)
 	assert.Equal(t, 1, app.count(t, "sessions", "1 = 1"), "the refused sign-in has no session")
 }
@@ -455,7 +455,7 @@ func TestOAuthCompletePassesTheSecondFactorPoint(t *testing.T) {
 // and the sign-in then count as refused, and nothing is written.
 func TestOAuthCompleteSignUpCanBeRefused(t *testing.T) {
 	ctx := context.Background()
-	trace := signInTrace{signUpGate: func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	trace := signInTrace{signUpGate: func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 		if email, _ := payload["email"].(string); !strings.HasSuffix(email, "@example.com") {
 			return nil, errs.NewUnauthorized("test", "domain_not_allowed", "sign-up is by invitation")
 		}
@@ -468,8 +468,8 @@ func TestOAuthCompleteSignUpCanBeRefused(t *testing.T) {
 	_, err = app.plugin.Complete(ctx, app.begin(t, app.google, ""))
 	assert.True(t, hasCode(err, errs.CategoryUnauthorized, "domain_not_allowed"), "the handler's error is returned: %v", err)
 	require.Len(t, trace.signUpFailed, 1)
-	assert.Equal(t, types.FailureRejectedByHook, trace.signUpFailed[0].Code)
-	assert.Equal(t, types.FailureRejectedByHook, trace.lastFailure(t))
+	assert.Equal(t, core.FailureRejectedByHook, trace.signUpFailed[0].Code)
+	assert.Equal(t, core.FailureRejectedByHook, trace.lastFailure(t))
 	assert.Zero(t, app.count(t, "users", "1 = 1"))
 	assert.Zero(t, app.count(t, "accounts", "1 = 1"))
 	assert.Empty(t, trace.signUpAfter)
@@ -493,7 +493,7 @@ func TestOAuthCompleteLosesARaceForANewUser(t *testing.T) {
 			var winner *models.User
 			// The other request commits between this one's lookups and its
 			// insert.
-			trace := signInTrace{signUpGate: func(hctx *types.HookContext, _ behemoth.M) (behemoth.M, error) {
+			trace := signInTrace{signUpGate: func(hctx *core.HookContext, _ behemoth.M) (behemoth.M, error) {
 				if winner != nil {
 					return nil, nil
 				}

@@ -3,7 +3,7 @@
 //
 // A sign-in has two flows. Begin starts it: it creates the state, the PKCE
 // verifier, the nonce and the binding value of one sign-in, keeps them as a
-// single-use token of kind types.TokenKindOAuthState, and returns the URL at
+// single-use token of kind core.TokenKindOAuthState, and returns the URL at
 // the provider to send the browser to. The provider sends the browser back
 // to a page of the application (Options.CallbackURL) with an authorization
 // code and the state. Complete takes both with the binding value, redeems
@@ -35,12 +35,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 )
 
 // PluginName is the name the plugin registers under (PluginMeta.Name). It
@@ -60,13 +60,13 @@ const (
 	// HookBeginBefore runs on Begin's input: "provider", "redirect_url" and
 	// the keys of BeginRequest.Extra. A handler may rewrite them or stop the
 	// sign-in.
-	HookBeginBefore types.HookPoint = "auth.oauth.beforeBegin"
+	HookBeginBefore core.HookPoint = "auth.oauth.beforeBegin"
 	// HookBeginAfter runs once a sign-in has started, with a *BeginResult
 	// whose AuthorizationURL and Binding are empty.
-	HookBeginAfter types.HookPoint = "auth.oauth.afterBegin"
+	HookBeginAfter core.HookPoint = "auth.oauth.afterBegin"
 	// HookBeginFailed fires for a sign-in that a handler or a rate limit
 	// refused to start: code "rejected_by_hook".
-	HookBeginFailed types.HookPoint = "auth.oauth.beginFailed"
+	HookBeginFailed core.HookPoint = "auth.oauth.beginFailed"
 )
 
 // providerID is the form of a provider's id. The length is that of the
@@ -105,7 +105,7 @@ type Options struct {
 
 	// StateTTL is how long a started sign-in can be finished: the time a
 	// user has to sign in at the provider. Zero means DefaultStateTTL.
-	// TokenConfig.TTLOverrides for types.TokenKindOAuthState takes
+	// TokenConfig.TTLOverrides for core.TokenKindOAuthState takes
 	// precedence.
 	StateTTL time.Duration
 }
@@ -118,10 +118,10 @@ type Options struct {
 type Plugin struct {
 	opts        Options
 	providers   map[string]Provider
-	authContext *types.AuthContext
+	authContext *core.AuthContext
 	log         telemetry.Logger
-	complete    func(hctx *types.HookContext, in completeInput) (*types.SignInResult, error)
-	signUp      func(hctx *types.HookContext, in signUpInput) (*models.User, error)
+	complete    func(hctx *core.HookContext, in completeInput) (*core.SignInResult, error)
+	signUp      func(hctx *core.HookContext, in signUpInput) (*models.User, error)
 }
 
 // New returns the plugin configured with opts. Values left at zero take
@@ -142,19 +142,19 @@ func RedirectURI(callbackURL, providerID string) string {
 	return strings.TrimRight(callbackURL, "/") + "/" + providerID
 }
 
-// Meta implements [types.Plugin]. The plugin depends on no other plugin and
+// Meta implements [core.Plugin]. The plugin depends on no other plugin and
 // has no mount path.
-func (p *Plugin) Meta() types.PluginMeta {
-	return types.PluginMeta{Name: PluginName}
+func (p *Plugin) Meta() core.PluginMeta {
+	return core.PluginMeta{Name: PluginName}
 }
 
-// Version implements [types.Plugin].
+// Version implements [core.Plugin].
 func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
-// Declare implements [types.Plugin]. The plugin declares:
-//   - the token kind types.TokenKindOAuthState: single use, and kept in the
+// Declare implements [core.Plugin]. The plugin declares:
+//   - the token kind core.TokenKindOAuthState: single use, and kept in the
 //     database, so that the plugin works without a key-value storage;
 //   - the auth.oauth.* points around Begin. None is audited: Begin needs no
 //     session and is not about an account;
@@ -163,16 +163,16 @@ func (p *Plugin) Version() string {
 //
 // It declares no sign-in points: core declares auth.signIn.* and
 // auth.signUp.*.
-func (p *Plugin) Declare(ic *types.PluginInitContext) error {
-	if err := ic.Tokens.Declare(types.TokenKindDef{
-		Kind: types.TokenKindOAuthState, SingleUse: true, DefaultTTL: p.opts.StateTTL, Backend: types.TokenBackendDB,
+func (p *Plugin) Declare(ic *core.PluginInitContext) error {
+	if err := ic.Tokens.Declare(core.TokenKindDef{
+		Kind: core.TokenKindOAuthState, SingleUse: true, DefaultTTL: p.opts.StateTTL, Backend: core.TokenBackendDB,
 	}); err != nil {
 		return err
 	}
-	for _, def := range []types.HookPointDef{
-		{Point: HookBeginBefore, Phase: types.BeforeHookPhase},
-		{Point: HookBeginAfter, Phase: types.AfterHookPhase},
-		{Point: HookBeginFailed, Phase: types.FailedHookPhase},
+	for _, def := range []core.HookPointDef{
+		{Point: HookBeginBefore, Phase: core.BeforeHookPhase},
+		{Point: HookBeginAfter, Phase: core.AfterHookPhase},
+		{Point: HookBeginFailed, Phase: core.FailedHookPhase},
 	} {
 		if err := ic.Hooks.Declare(def); err != nil {
 			return err
@@ -183,9 +183,9 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	// client down and can't be used to keep another one out. Begin needs no
 	// session and writes a token for every call.
 	byAddress := func(_ *http.Request, ip string) string { return ip }
-	for _, rule := range []types.RouteRateLimitRule{
-		{Name: RuleBeginRoute, Method: http.MethodPost, Path: PathBegin, KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute}},
-		{Name: RuleCompleteRoute, Method: http.MethodPost, Path: PathComplete, KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute}},
+	for _, rule := range []core.RouteRateLimitRule{
+		{Name: RuleBeginRoute, Method: http.MethodPost, Path: PathBegin, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
+		{Name: RuleCompleteRoute, Method: http.MethodPost, Path: PathComplete, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
 	} {
 		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
 			return err
@@ -194,25 +194,25 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	return nil
 }
 
-// Register implements [types.Plugin]. The plugin attaches no handlers to
+// Register implements [core.Plugin]. The plugin attaches no handlers to
 // other points.
-func (p *Plugin) Register(reg types.HookRegistry) error {
+func (p *Plugin) Register(reg core.HookRegistry) error {
 	return nil
 }
 
-// Middlewares implements [types.Plugin]. The plugin has no middleware.
-func (p *Plugin) Middlewares() []types.Middleware {
+// Middlewares implements [core.Plugin]. The plugin has no middleware.
+func (p *Plugin) Middlewares() []core.Middleware {
 	return nil
 }
 
-// Init implements [types.Plugin]. It checks the options, builds the
+// Init implements [core.Plugin]. It checks the options, builds the
 // built-in providers, keeps the AuthContext and wraps the flows with their
 // hook points. A missing provider, a ProviderConfig that is incomplete or
 // whose client secret can't be read, a provider id that is malformed,
 // reserved or used twice, and a CallbackURL that is not usable are
 // configuration errors. Init calls no provider: a provider that is down
 // fails the sign-ins, not the boot.
-func (p *Plugin) Init(ac *types.AuthContext) error {
+func (p *Plugin) Init(ac *core.AuthContext) error {
 	const op = "oauth.Init"
 	if p.opts.StateTTL < 0 {
 		return errs.NewConfigurationError(op, fmt.Sprintf("Options.StateTTL is negative: %s", p.opts.StateTTL), nil)
@@ -275,32 +275,32 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	if ac.Telemetry != nil {
 		p.log = telemetry.Named(ac.Telemetry.Logger, PluginName)
 	}
-	p.complete = types.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.completeBody)
-	p.signUp = types.WithLifecycle(ac.Dispatcher, hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed, p.signUpBody)
+	p.complete = core.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.completeBody)
+	p.signUp = core.WithLifecycle(ac.Dispatcher, hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed, p.signUpBody)
 	return nil
 }
 
 // operation builds the HookContext one flow call runs with. Its Values start
 // as a copy of the operation ctx already belongs to, if any, and Request is
 // the request ctx carries, or nil.
-func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, error) {
+func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
-	return &types.HookContext{
+	return &core.HookContext{
 		Ctx:     ctx,
 		Auth:    p.authContext,
-		Values:  types.NestedHookValues(ctx),
-		Request: types.RequestFrom(ctx),
+		Values:  core.NestedHookValues(ctx),
+		Request: core.RequestFrom(ctx),
 	}, nil
 }
 
-// Routes implements [types.Plugin].
-func (p *Plugin) Routes() []types.Route {
-	return []types.Route{
+// Routes implements [core.Plugin].
+func (p *Plugin) Routes() []core.Route {
+	return []core.Route{
 		{Method: http.MethodPost, Path: PathBegin, Handler: p.handleBegin},
 		{Method: http.MethodPost, Path: PathComplete, Handler: p.handleComplete},
 	}
 }
 
-var _ types.Plugin = (*Plugin)(nil)
+var _ core.Plugin = (*Plugin)(nil)

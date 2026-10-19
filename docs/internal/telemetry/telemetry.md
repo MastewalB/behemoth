@@ -19,7 +19,7 @@ The code lives in:
 - `telemetry/telemetrytest/`: recording sinks for tests.
 - `telemetry/adapters/otel/`: the OpenTelemetry backend, in its own module.
 - `store/audit.go`, `store/instrument.go`, `models/audit.go`: the audit log's storage, and the wrapper that measures and traces database operations.
-- `types/router.go`, `engine/init.go`, `auth/`: the call sites.
+- `core/router.go`, `engine/init.go`, `auth/`: the call sites.
 
 ---
 

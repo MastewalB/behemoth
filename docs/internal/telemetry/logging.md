@@ -150,6 +150,6 @@ One Info line, `behemoth booted`:
 
 One Warn line per configuration that is valid but probably a mistake. There is one check so far:
 
-- `RouterConfig.ClientIPHeader` is set and `TrustedProxies` is empty. `types.ClientIP` ignores the header unless the direct peer is a trusted proxy, so every request is attributed to its direct peer. Behind a load balancer that means one address for all clients, and per-IP rate limits apply to everyone together.
+- `RouterConfig.ClientIPHeader` is set and `TrustedProxies` is empty. `core.ClientIP` ignores the header unless the direct peer is a trusted proxy, so every request is attributed to its direct peer. Behind a load balancer that means one address for all clients, and per-IP rate limits apply to everyone together.
 
 New checks go in `logBootSummary`. A configuration that cannot work is an error from `Boot`, not a warning.

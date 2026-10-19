@@ -45,7 +45,7 @@ The signing keys are derived from your master secret (`crypto.Config.Secrets`), 
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `POST /session/token` (`types.PathSessionToken`), below the base path | empty, `{}`, or `{"audience": "..."}` with one of the configured audiences | `200` with `{"token": "...", "expires_at": "2026-10-14T10:15:00Z", "audience": "..."}`, sent with `Cache-Control: no-store` |
+| `POST /session/token` (`core.PathSessionToken`), below the base path | empty, `{}`, or `{"audience": "..."}` with one of the configured audiences | `200` with `{"token": "...", "expires_at": "2026-10-14T10:15:00Z", "audience": "..."}`, sent with `Cache-Control: no-store` |
 | `GET /.well-known/jwks.json` | none | `200` with the public keys as a JWK set (RFC 7517), sent with `Cache-Control: public, max-age=300` |
 
 The token route requires an active session, sent the way `SessionConfig.Transport` says. It answers like every protected route when there is none.
@@ -118,15 +118,15 @@ A session token is a credential for other services only. Behemoth never accepts 
 | Point | Phase | What the handler gets |
 | --- | --- | --- |
 | `auth.sessionToken.beforeIssue` (`hooks.HookSessionTokenBeforeIssue`) | before | payload `userID`, `sessionID`, `audience`, and `claims`, an empty object. Set keys of `claims` to add them to the token under `custom`. Nothing else is read back. Return an error to refuse the token. |
-| `auth.sessionToken.afterIssue` (`hooks.HookSessionTokenAfterIssue`) | after | a `*types.SessionToken` without the token: its id, user, session, audience, and expiry |
+| `auth.sessionToken.afterIssue` (`hooks.HookSessionTokenAfterIssue`) | after | a `*core.SessionToken` without the token: its id, user, session, audience, and expiry |
 | `auth.sessionToken.issueFailed` (`hooks.HookSessionTokenIssueFailed`) | failed | code `rejected_by_hook` |
 
 `hctx.Values[hooks.HookValueUserID]` and `hctx.Values[hooks.HookValueSessionID]` hold the user and the session on all three, for a rate-limit rule per user or per session. None of the three is audited.
 
 ```go
-reg.OnBefore(hooks.HookSessionTokenBeforeIssue, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+reg.OnBefore(hooks.HookSessionTokenBeforeIssue, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 	userID, _ := payload[hooks.HookValueUserID].(string)
-	claims, _ := payload[types.SessionTokenClaimsKey].(behemoth.M)
+	claims, _ := payload[core.SessionTokenClaimsKey].(behemoth.M)
 	claims["roles"] = ROLES_OF(userID)
 	return payload, nil
 }, nil)
@@ -139,7 +139,7 @@ Replace `ROLES_OF` with your own lookup.
 `ac.SessionTokens.Issue` is the flow behind the route, for a transport other than HTTP:
 
 ```go
-issued, err := ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: session, Audience: "https://api.example.com"})
+issued, err := ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: session, Audience: "https://api.example.com"})
 // issued.Token, issued.ExpiresAt, issued.ID
 ```
 

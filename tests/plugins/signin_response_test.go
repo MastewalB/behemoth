@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -23,14 +25,12 @@ import (
 	"github.com/MastewalB/behemoth/plugins/magiclink"
 	dbschema "github.com/MastewalB/behemoth/schema"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // bootPasswords boots the email/password plugin alone with session.
-func bootPasswords(t *testing.T, session types.SessionConfig, hookFn func(types.HookRegistry) error) (*types.AuthContext, mountedRoutes, error) {
+func bootPasswords(t *testing.T, session core.SessionConfig, hookFn func(core.HookRegistry) error) (*core.AuthContext, mountedRoutes, error) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "signin.db"))
 	require.NoError(t, err)
@@ -39,7 +39,7 @@ func bootPasswords(t *testing.T, session types.SessionConfig, hookFn func(types.
 	require.NoError(t, err)
 
 	mounted := mountedRoutes{}
-	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	ac, err := engine.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
@@ -54,14 +54,14 @@ func bootPasswords(t *testing.T, session types.SessionConfig, hookFn func(types.
 
 // callHeaders invokes a mounted route the way call does, with request
 // headers: the cookie or the bearer token of a signed-in client.
-func callHeaders(t *testing.T, ac *types.AuthContext, route types.Route, body string, headers map[string]string) *httptest.ResponseRecorder {
+func callHeaders(t *testing.T, ac *core.AuthContext, route core.Route, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(body))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
@@ -81,16 +81,16 @@ func callHeaders(t *testing.T, ac *types.AuthContext, route types.Route, body st
 func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
-		session types.SessionConfig
+		session core.SessionConfig
 		cookie  string // the cookie's name when the token is in one
 		header  bool   // the token is in Set-Auth-Token
 		body    bool   // the token is in the JSON body
 	}{
-		"nothing set":   {types.SessionConfig{}, "session_token", false, false},
-		"cookie, named": {types.SessionConfig{Transport: types.TransportCookie, CookieName: "sid"}, "sid", false, false},
-		"header":        {types.SessionConfig{Transport: types.TransportHeader}, "", true, false},
-		"body":          {types.SessionConfig{Transport: types.TransportBody}, "", false, true},
-		"both":          {types.SessionConfig{Transport: types.TransportBoth}, "session_token", true, false},
+		"nothing set":   {core.SessionConfig{}, "session_token", false, false},
+		"cookie, named": {core.SessionConfig{Transport: core.TransportCookie, CookieName: "sid"}, "sid", false, false},
+		"header":        {core.SessionConfig{Transport: core.TransportHeader}, "", true, false},
+		"body":          {core.SessionConfig{Transport: core.TransportBody}, "", false, true},
+		"both":          {core.SessionConfig{Transport: core.TransportBoth}, "session_token", true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ac, mounted, err := bootPasswords(t, tc.session, nil)
@@ -131,8 +131,8 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 				assert.True(t, cookies[0].HttpOnly)
 				fromCookie = cookies[0].Value
 			}
-			fromHeader := w.Header().Get(types.SessionTokenHeader)
-			assert.Equal(t, tc.header, fromHeader != "", "%s header", types.SessionTokenHeader)
+			fromHeader := w.Header().Get(core.SessionTokenHeader)
+			assert.Equal(t, tc.header, fromHeader != "", "%s header", core.SessionTokenHeader)
 			assert.Equal(t, tc.body, signedIn.Token != "", "token in the body: %s", w.Body.String())
 
 			// Wherever it arrived, it is the session's token, and the route
@@ -176,7 +176,7 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 				assert.Empty(t, gone[0].Value)
 				assert.Negative(t, gone[0].MaxAge, "Max-Age=0 deletes the cookie")
 			}
-			assert.Empty(t, out.Header().Get(types.SessionTokenHeader), "a sign-out hands out no token")
+			assert.Empty(t, out.Header().Get(core.SessionTokenHeader), "a sign-out hands out no token")
 		})
 	}
 }
@@ -186,7 +186,7 @@ func TestSignInDeliversTheTokenByTransport(t *testing.T) {
 // behind the session check is refused, and the refusal removes the cookie.
 func TestASessionEndedElsewhereLosesItsCookie(t *testing.T) {
 	ctx := context.Background()
-	ac, mounted, err := bootPasswords(t, types.SessionConfig{}, nil)
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, nil)
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -220,12 +220,12 @@ func TestASessionEndedElsewhereLosesItsCookie(t *testing.T) {
 // leaves the cookie alone, because the client still needs it for a session
 // that is live.
 func TestRefusedSignOutKeepsTheCookie(t *testing.T) {
-	refuse := func(reg types.HookRegistry) error {
-		return reg.OnBefore(hooks.HookSignOutBefore, func(*types.HookContext, behemoth.M) (behemoth.M, error) {
+	refuse := func(reg core.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignOutBefore, func(*core.HookContext, behemoth.M) (behemoth.M, error) {
 			return nil, errs.NewInvalidInputError("test", "session", "not now", nil)
 		}, nil)
 	}
-	ac, mounted, err := bootPasswords(t, types.SessionConfig{}, refuse)
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, refuse)
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -245,22 +245,22 @@ func TestRefusedSignOutKeepsTheCookie(t *testing.T) {
 // needs it to present the second factor.
 func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 	ctx := context.Background()
-	stepUp := func(reg types.HookRegistry) error {
-		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	stepUp := func(reg core.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			payload["requireStepUp"] = true
 			return payload, nil
 		}, nil)
 	}
-	for transport, read := range map[types.TokenTransport]func(w *httptest.ResponseRecorder, body map[string]any) string{
-		types.TransportBody: func(_ *httptest.ResponseRecorder, body map[string]any) string {
+	for transport, read := range map[core.TokenTransport]func(w *httptest.ResponseRecorder, body map[string]any) string{
+		core.TransportBody: func(_ *httptest.ResponseRecorder, body map[string]any) string {
 			token, _ := body["token"].(string)
 			return token
 		},
-		types.TransportHeader: func(w *httptest.ResponseRecorder, _ map[string]any) string {
-			return w.Header().Get(types.SessionTokenHeader)
+		core.TransportHeader: func(w *httptest.ResponseRecorder, _ map[string]any) string {
+			return w.Header().Get(core.SessionTokenHeader)
 		},
 	} {
-		ac, mounted, err := bootPasswords(t, types.SessionConfig{Transport: transport}, stepUp)
+		ac, mounted, err := bootPasswords(t, core.SessionConfig{Transport: transport}, stepUp)
 		require.NoError(t, err)
 		call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 		w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -275,7 +275,7 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 		session, err := ac.SessionManager.Get(ctx, token)
 		require.NoError(t, err, transport)
 		assert.Equal(t, models.SessionPending, session.State, transport)
-		if transport == types.TransportHeader {
+		if transport == core.TransportHeader {
 			assert.NotContains(t, body, "token", "under the header transport the body has no token")
 		}
 	}
@@ -285,7 +285,7 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 // a rolling session that is due. The sign-out then removes that cookie. The
 // response sets it once, and what it sets is the removal.
 func TestSignOutOfARollingSessionSetsTheCookieOnce(t *testing.T) {
-	ac, mounted, err := bootPasswords(t, types.SessionConfig{ExpiresIn: time.Hour, UpdateAge: 2 * time.Hour}, nil) // always due
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{ExpiresIn: time.Hour, UpdateAge: 2 * time.Hour}, nil) // always due
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -306,7 +306,7 @@ func TestSignOutOfARollingSessionSetsTheCookieOnce(t *testing.T) {
 // A transport Boot does not know stops it, instead of leaving sign-in
 // without a way to hand the token over.
 func TestBootRefusesAnUnknownSessionTransport(t *testing.T) {
-	_, _, err := bootPasswords(t, types.SessionConfig{Transport: "Header"}, nil)
+	_, _, err := bootPasswords(t, core.SessionConfig{Transport: "Header"}, nil)
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	assert.Contains(t, err.Error(), "Transport")
@@ -323,12 +323,12 @@ var (
 // not, and fills them when a user is created.
 type visibilityPlugin struct{}
 
-func (visibilityPlugin) Meta() types.PluginMeta          { return types.PluginMeta{Name: "visibility"} }
-func (visibilityPlugin) Version() string                 { return "0.0.0" }
-func (visibilityPlugin) Init(*types.AuthContext) error   { return nil }
-func (visibilityPlugin) Routes() []types.Route           { return nil }
-func (visibilityPlugin) Middlewares() []types.Middleware { return nil }
-func (visibilityPlugin) Declare(ic *types.PluginInitContext) error {
+func (visibilityPlugin) Meta() core.PluginMeta          { return core.PluginMeta{Name: "visibility"} }
+func (visibilityPlugin) Version() string                { return "0.0.0" }
+func (visibilityPlugin) Init(*core.AuthContext) error   { return nil }
+func (visibilityPlugin) Routes() []core.Route           { return nil }
+func (visibilityPlugin) Middlewares() []core.Middleware { return nil }
+func (visibilityPlugin) Declare(ic *core.PluginInitContext) error {
 	for _, c := range []dbschema.ColumnContribution{
 		planField.Contribution(dbschema.Column{Type: dbschema.ColTypeString, Length: 32, Nullable: true, Public: true}),
 		betaField.Contribution(dbschema.Column{Type: dbschema.ColTypeBoolean, Nullable: true, Public: true}),
@@ -340,8 +340,8 @@ func (visibilityPlugin) Declare(ic *types.PluginInitContext) error {
 	}
 	return nil
 }
-func (visibilityPlugin) Register(reg types.HookRegistry) error {
-	return reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
+func (visibilityPlugin) Register(reg core.HookRegistry) error {
+	return reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *core.HookContext, row behemoth.M) (behemoth.M, error) {
 		row[planField.Name], row[betaField.Name], row[riskField.Name] = "pro", true, "flagged: disposable email domain"
 		return row, nil
 	}, nil)
@@ -370,7 +370,7 @@ ALTER TABLE users ADD COLUMN risk_note TEXT;`)
 		ChangeLinkURL: "https://app.example.com/change",
 		RevertLinkURL: "https://app.example.com/undo",
 	})
-	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{}), links, verification, visibilityPlugin{}}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{emailpassword.New(emailpassword.Options{}), links, verification, visibilityPlugin{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	// The adapter is built with the resolver, so it reads the contributed
 	// columns into the model.
@@ -378,16 +378,16 @@ ALTER TABLE users ADD COLUMN risk_note TEXT;`)
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Mail: types.MailConfig{Sender: mail},
+		Mail: core.MailConfig{Sender: mail},
 		HTTP: mounted,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { ac.Mailer.Close(context.Background()) })
 
 	// lastMail waits for a message of kind and returns the latest.
-	lastMail := func(kind types.MailKind) types.MailMessage {
+	lastMail := func(kind core.MailKind) core.MailMessage {
 		t.Helper()
-		var found types.MailMessage
+		var found core.MailMessage
 		require.Eventually(t, func() bool {
 			mail.mu.Lock()
 			defer mail.mu.Unlock()
@@ -418,18 +418,18 @@ ALTER TABLE users ADD COLUMN risk_note TEXT;`)
 	check("sign-up", call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`), http.StatusCreated)
 	check("sign-in", call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`), http.StatusOK)
 
-	verify := lastMail(types.MailEmailVerification)
+	verify := lastMail(core.MailEmailVerification)
 	check("email verify", call(t, ac, mounted["/api/auth"+emailverification.PathVerify], `{"token":"`+verify.Token+`"}`), http.StatusOK)
 
 	require.Equal(t, http.StatusOK, call(t, ac, mounted["/api/auth"+magiclink.PathRequest], `{"email":"ada@example.com"}`).Code)
-	link := lastMail(types.MailMagicLink)
+	link := lastMail(core.MailMagicLink)
 	check("magic link verify", call(t, ac, mounted["/api/auth"+magiclink.PathVerify], `{"token":"`+link.Token+`"}`), http.StatusOK)
 
 	user, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
 	require.NoError(t, err)
 	_, err = verification.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "ada@new.example.com"})
 	require.NoError(t, err)
-	change := lastMail(types.MailEmailChange)
+	change := lastMail(core.MailEmailChange)
 	check("email change confirm", call(t, ac, mounted["/api/auth"+emailverification.PathChangeConfirm], `{"token":"`+change.Token+`"}`), http.StatusOK)
 
 	// On the server the column is where it was: the plugin that owns it,

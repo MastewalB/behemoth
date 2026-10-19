@@ -7,12 +7,12 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 )
 
 type countingAudit struct{ events int }
@@ -21,11 +21,11 @@ func (a *countingAudit) Record(context.Context, telemetry.AuditEvent) error { a.
 
 // afterDispatcher builds a dispatcher with one audited after-phase point and
 // the given handlers on it, in order.
-func afterDispatcher(t *testing.T, audit telemetry.AuditRecorder, handlers ...types.AfterHookFunc) (*DefaultDispatcher, types.HookPoint) {
+func afterDispatcher(t *testing.T, audit telemetry.AuditRecorder, handlers ...core.AfterHookFunc) (*DefaultDispatcher, core.HookPoint) {
 	t.Helper()
-	const point types.HookPoint = "data.test.afterCreate"
+	const point core.HookPoint = "data.test.afterCreate"
 	catalog := NewDefaultHookCatalog()
-	def := types.HookPointDef{Point: point, Owner: "core", Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}}
+	def := core.HookPointDef{Point: point, Owner: "core", Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}}
 	if err := catalog.Declare(def); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func afterDispatcher(t *testing.T, audit telemetry.AuditRecorder, handlers ...ty
 	for i, h := range handlers {
 		chain[i] = registeredHandler{plugin: "test", handler: h}
 	}
-	chains := map[types.HookPoint][]registeredHandler{point: chain}
+	chains := map[core.HookPoint][]registeredHandler{point: chain}
 	return NewDefaultDispatcher(catalog, chains, nil, nil, telemetry.New(nil, audit, nil)), point
 }
 
@@ -45,11 +45,11 @@ func TestRunAfterTxStopsAtTheFirstError(t *testing.T) {
 	var ran []int
 	audit := &countingAudit{}
 	d, point := afterDispatcher(t, audit,
-		func(*types.HookContext, any) error { ran = append(ran, 1); return nil },
-		func(*types.HookContext, any) error { ran = append(ran, 2); return rejected },
-		func(*types.HookContext, any) error { ran = append(ran, 3); return nil },
+		func(*core.HookContext, any) error { ran = append(ran, 1); return nil },
+		func(*core.HookContext, any) error { ran = append(ran, 2); return rejected },
+		func(*core.HookContext, any) error { ran = append(ran, 3); return nil },
 	)
-	hctx := &types.HookContext{Ctx: context.Background()}
+	hctx := &core.HookContext{Ctx: context.Background()}
 
 	err := d.RunAfterTx(hctx, point, nil)
 	if !errors.Is(err, rejected) {
@@ -74,10 +74,10 @@ func TestRunAfterTxStopsAtTheFirstError(t *testing.T) {
 }
 
 func TestRunAfterTxSucceedsAndTurnsPanicsIntoErrors(t *testing.T) {
-	hctx := &types.HookContext{Ctx: context.Background()}
+	hctx := &core.HookContext{Ctx: context.Background()}
 
 	audit := &countingAudit{}
-	d, point := afterDispatcher(t, audit, func(*types.HookContext, any) error { return nil })
+	d, point := afterDispatcher(t, audit, func(*core.HookContext, any) error { return nil })
 	if err := d.RunAfterTx(hctx, point, nil); err != nil {
 		t.Fatalf("RunAfterTx = %v, want nil", err)
 	}
@@ -88,7 +88,7 @@ func TestRunAfterTxSucceedsAndTurnsPanicsIntoErrors(t *testing.T) {
 		t.Errorf("a successful RunAfterTx recorded %d audit events, want 1", audit.events)
 	}
 
-	d, point = afterDispatcher(t, nil, func(*types.HookContext, any) error { panic("boom") })
+	d, point = afterDispatcher(t, nil, func(*core.HookContext, any) error { panic("boom") })
 	err := d.RunAfterTx(hctx, point, nil)
 	if !errs.IsCategory(err, errs.CategoryInternal) {
 		t.Errorf("a panicking handler returned %v, want an internal error", err)
@@ -97,18 +97,18 @@ func TestRunAfterTxSucceedsAndTurnsPanicsIntoErrors(t *testing.T) {
 
 // beforeDispatcher builds a dispatcher with one before-phase point and the
 // given handlers on it, in order.
-func beforeDispatcher(t *testing.T, handlers ...types.BeforeHookFunc) (*DefaultDispatcher, types.HookPoint) {
+func beforeDispatcher(t *testing.T, handlers ...core.BeforeHookFunc) (*DefaultDispatcher, core.HookPoint) {
 	t.Helper()
-	const point types.HookPoint = "data.test.beforeCreate"
+	const point core.HookPoint = "data.test.beforeCreate"
 	catalog := NewDefaultHookCatalog()
-	if err := catalog.Declare(types.HookPointDef{Point: point, Owner: "core", Phase: types.BeforeHookPhase}); err != nil {
+	if err := catalog.Declare(core.HookPointDef{Point: point, Owner: "core", Phase: core.BeforeHookPhase}); err != nil {
 		t.Fatal(err)
 	}
 	chain := make([]registeredHandler, len(handlers))
 	for i, h := range handlers {
 		chain[i] = registeredHandler{plugin: "test", handler: h}
 	}
-	chains := map[types.HookPoint][]registeredHandler{point: chain}
+	chains := map[core.HookPoint][]registeredHandler{point: chain}
 	return NewDefaultDispatcher(catalog, chains, nil, nil, telemetry.New(nil, nil, nil)), point
 }
 
@@ -116,41 +116,41 @@ func beforeDispatcher(t *testing.T, handlers ...types.BeforeHookFunc) (*DefaultD
 // wherever it sits in the chain. The next handler and the caller get a map
 // they can write to, and a rewrite made before or after the nil is kept.
 func TestRunBeforeTreatsANilPayloadAsUnchanged(t *testing.T) {
-	validate := func(*types.HookContext, behemoth.M) (behemoth.M, error) { return nil, nil }
-	set := func(key string) types.BeforeHookFunc {
-		return func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+	validate := func(*core.HookContext, behemoth.M) (behemoth.M, error) { return nil, nil }
+	set := func(key string) core.BeforeHookFunc {
+		return func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) {
 			p[key] = true // panics on a nil map
 			return p, nil
 		}
 	}
-	replace := func(*types.HookContext, behemoth.M) (behemoth.M, error) {
+	replace := func(*core.HookContext, behemoth.M) (behemoth.M, error) {
 		return behemoth.M{"replaced": true}, nil
 	}
-	inPlace := func(_ *types.HookContext, p behemoth.M) (behemoth.M, error) {
+	inPlace := func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) {
 		p["inPlace"] = true
 		return nil, nil
 	}
-	empty := func(*types.HookContext, behemoth.M) (behemoth.M, error) { return behemoth.M{}, nil }
+	empty := func(*core.HookContext, behemoth.M) (behemoth.M, error) { return behemoth.M{}, nil }
 
 	tests := []struct {
 		name     string
-		handlers []types.BeforeHookFunc
+		handlers []core.BeforeHookFunc
 		input    behemoth.M
 		want     behemoth.M
 	}{
-		{"only handler", []types.BeforeHookFunc{validate}, behemoth.M{"email": "a@b.c"}, behemoth.M{"email": "a@b.c"}},
-		{"first handler", []types.BeforeHookFunc{validate, set("second")}, behemoth.M{"email": "a@b.c"}, behemoth.M{"email": "a@b.c", "second": true}},
-		{"middle handler", []types.BeforeHookFunc{set("first"), validate, set("third")}, behemoth.M{}, behemoth.M{"first": true, "third": true}},
-		{"last handler keeps an earlier replacement", []types.BeforeHookFunc{replace, validate}, behemoth.M{"email": "a@b.c"}, behemoth.M{"replaced": true}},
-		{"a change made in place is kept", []types.BeforeHookFunc{inPlace}, behemoth.M{}, behemoth.M{"inPlace": true}},
-		{"an empty map is a rewrite", []types.BeforeHookFunc{empty}, behemoth.M{"email": "a@b.c"}, behemoth.M{}},
+		{"only handler", []core.BeforeHookFunc{validate}, behemoth.M{"email": "a@b.c"}, behemoth.M{"email": "a@b.c"}},
+		{"first handler", []core.BeforeHookFunc{validate, set("second")}, behemoth.M{"email": "a@b.c"}, behemoth.M{"email": "a@b.c", "second": true}},
+		{"middle handler", []core.BeforeHookFunc{set("first"), validate, set("third")}, behemoth.M{}, behemoth.M{"first": true, "third": true}},
+		{"last handler keeps an earlier replacement", []core.BeforeHookFunc{replace, validate}, behemoth.M{"email": "a@b.c"}, behemoth.M{"replaced": true}},
+		{"a change made in place is kept", []core.BeforeHookFunc{inPlace}, behemoth.M{}, behemoth.M{"inPlace": true}},
+		{"an empty map is a rewrite", []core.BeforeHookFunc{empty}, behemoth.M{"email": "a@b.c"}, behemoth.M{}},
 		{"nil input, no handlers", nil, nil, behemoth.M{}},
-		{"nil input reaches a handler as an empty map", []types.BeforeHookFunc{set("first")}, nil, behemoth.M{"first": true}},
+		{"nil input reaches a handler as an empty map", []core.BeforeHookFunc{set("first")}, nil, behemoth.M{"first": true}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			d, point := beforeDispatcher(t, tc.handlers...)
-			got, err := d.RunBefore(&types.HookContext{Ctx: context.Background()}, point, tc.input)
+			got, err := d.RunBefore(&core.HookContext{Ctx: context.Background()}, point, tc.input)
 			if err != nil {
 				t.Fatalf("RunBefore = %v, want nil", err)
 			}
@@ -168,15 +168,15 @@ func TestRunBeforeTreatsANilPayloadAsUnchanged(t *testing.T) {
 // declared with, is a configuration error from every method. No handler runs.
 func TestDispatchOfUndeclaredOrWrongPhasePointIsAConfigurationError(t *testing.T) {
 	ran := false
-	d, afterPoint := afterDispatcher(t, nil, func(*types.HookContext, any) error { ran = true; return nil })
-	hctx := &types.HookContext{Ctx: context.Background()}
-	const undeclared types.HookPoint = "data.test.undeclared"
+	d, afterPoint := afterDispatcher(t, nil, func(*core.HookContext, any) error { ran = true; return nil })
+	hctx := &core.HookContext{Ctx: context.Background()}
+	const undeclared core.HookPoint = "data.test.undeclared"
 
-	for _, point := range []types.HookPoint{undeclared, afterPoint} {
+	for _, point := range []core.HookPoint{undeclared, afterPoint} {
 		if _, err := d.RunBefore(hctx, point, nil); !errs.IsCategory(err, errs.CategoryConfiguration) {
 			t.Errorf("RunBefore(%q) = %v, want a configuration error", point, err)
 		}
-		if err := d.Fail(hctx, point, types.FailureReason{}); !errs.IsCategory(err, errs.CategoryConfiguration) {
+		if err := d.Fail(hctx, point, core.FailureReason{}); !errs.IsCategory(err, errs.CategoryConfiguration) {
 			t.Errorf("Fail(%q) = %v, want a configuration error", point, err)
 		}
 	}
@@ -189,7 +189,7 @@ func TestDispatchOfUndeclaredOrWrongPhasePointIsAConfigurationError(t *testing.T
 	if ran {
 		t.Error("a handler ran on a dispatch that should have been rejected")
 	}
-	if err := d.Fail(hctx, "", types.FailureReason{}); err != nil {
+	if err := d.Fail(hctx, "", core.FailureReason{}); err != nil {
 		t.Errorf("Fail with no point = %v, want nil", err)
 	}
 }
@@ -199,13 +199,13 @@ const coreOwner = "core"
 
 func TestCheckDataHookPointsRejectsUndeclaredAndWrongPhase(t *testing.T) {
 	catalog := NewDefaultHookCatalog()
-	for _, def := range []types.HookPointDef{
-		{Point: "data.t.beforeCreate", Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: "data.t.afterCreate", Owner: coreOwner, Phase: types.AfterHookPhase},
-		{Point: "data.t.beforeUpdate", Owner: coreOwner, Phase: types.BeforeHookPhase},
-		{Point: "data.t.afterUpdate", Owner: coreOwner, Phase: types.BeforeHookPhase}, // wrong phase
-		{Point: "data.t.created", Owner: coreOwner, Phase: types.AfterHookPhase},
-		{Point: "data.t.updated", Owner: coreOwner, Phase: types.AfterHookPhase},
+	for _, def := range []core.HookPointDef{
+		{Point: "data.t.beforeCreate", Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: "data.t.afterCreate", Owner: coreOwner, Phase: core.AfterHookPhase},
+		{Point: "data.t.beforeUpdate", Owner: coreOwner, Phase: core.BeforeHookPhase},
+		{Point: "data.t.afterUpdate", Owner: coreOwner, Phase: core.BeforeHookPhase}, // wrong phase
+		{Point: "data.t.created", Owner: coreOwner, Phase: core.AfterHookPhase},
+		{Point: "data.t.updated", Owner: coreOwner, Phase: core.AfterHookPhase},
 	} {
 		if err := catalog.Declare(def); err != nil {
 			t.Fatal(err)
@@ -229,18 +229,18 @@ func TestCheckDataHookPointsRejectsUndeclaredAndWrongPhase(t *testing.T) {
 // site left them empty, on a copy: the site's context is not changed, and
 // the copy shares its Values.
 func TestDispatcherSetsPointAndPhaseOnACopy(t *testing.T) {
-	var seen *types.HookContext
-	d, point := afterDispatcher(t, nil, func(hctx *types.HookContext, _ any) error {
+	var seen *core.HookContext
+	d, point := afterDispatcher(t, nil, func(hctx *core.HookContext, _ any) error {
 		seen = hctx
 		hctx.Values["note"] = "from the handler"
 		return nil
 	})
 
-	site := &types.HookContext{Ctx: context.Background(), Values: behemoth.M{}}
+	site := &core.HookContext{Ctx: context.Background(), Values: behemoth.M{}}
 	if err := d.RunAfter(site, point, nil); err != nil {
 		t.Fatal(err)
 	}
-	if seen.Point != point || seen.Phase != types.AfterHookPhase {
+	if seen.Point != point || seen.Phase != core.AfterHookPhase {
 		t.Errorf("handler saw point %q phase %q", seen.Point, seen.Phase)
 	}
 	if site.Point != "" || site.Phase != "" {
@@ -251,7 +251,7 @@ func TestDispatcherSetsPointAndPhaseOnACopy(t *testing.T) {
 	}
 
 	// A context without Values must not make a handler's write panic.
-	if err := d.RunAfterTx(&types.HookContext{Ctx: context.Background()}, point, nil); err != nil {
+	if err := d.RunAfterTx(&core.HookContext{Ctx: context.Background()}, point, nil); err != nil {
 		t.Fatalf("a nil Values map reached the handler: %v", err)
 	}
 }
@@ -261,28 +261,28 @@ func TestDispatcherSetsPointAndPhaseOnACopy(t *testing.T) {
 func TestDispatcherMetrics(t *testing.T) {
 	tel, rec := telemetrytest.New()
 	catalog := NewDefaultHookCatalog()
-	for _, def := range []types.HookPointDef{
-		{Point: hooks.HookSignInAfter, Owner: "core", Phase: types.AfterHookPhase},
-		{Point: hooks.HookSignInFailed, Owner: "core", Phase: types.FailedHookPhase},
-		{Point: hooks.HookTokenAfterIssue, Owner: "core", Phase: types.AfterHookPhase},
+	for _, def := range []core.HookPointDef{
+		{Point: hooks.HookSignInAfter, Owner: "core", Phase: core.AfterHookPhase},
+		{Point: hooks.HookSignInFailed, Owner: "core", Phase: core.FailedHookPhase},
+		{Point: hooks.HookTokenAfterIssue, Owner: "core", Phase: core.AfterHookPhase},
 	} {
 		if err := catalog.Declare(def); err != nil {
 			t.Fatal(err)
 		}
 	}
-	chains := map[types.HookPoint][]registeredHandler{
+	chains := map[core.HookPoint][]registeredHandler{
 		hooks.HookSignInAfter: {
-			{plugin: "mailer", handler: types.AfterHookFunc(func(*types.HookContext, any) error { return errors.New("smtp down") })},
-			{plugin: "analytics", handler: types.AfterHookFunc(func(*types.HookContext, any) error { return nil })},
+			{plugin: "mailer", handler: core.AfterHookFunc(func(*core.HookContext, any) error { return errors.New("smtp down") })},
+			{plugin: "analytics", handler: core.AfterHookFunc(func(*core.HookContext, any) error { return nil })},
 		},
 	}
 	d := NewDefaultDispatcher(catalog, chains, nil, nil, tel)
-	hctx := &types.HookContext{Ctx: context.Background()}
+	hctx := &core.HookContext{Ctx: context.Background()}
 
 	if err := d.RunAfter(hctx, hooks.HookSignInAfter, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalid_credentials"}); err != nil {
+	if err := d.Fail(hctx, hooks.HookSignInFailed, core.FailureReason{Code: "invalid_credentials"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.RunAfter(hctx, hooks.HookTokenAfterIssue, &models.Token{Kind: "password_reset"}); err != nil {

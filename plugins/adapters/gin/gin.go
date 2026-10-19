@@ -12,7 +12,7 @@ import (
 	"regexp"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,9 +34,9 @@ func toGinPath(path string) string {
 	return pathParam.ReplaceAllString(path, ":$1")
 }
 
-// Mount implements [types.FrameworkDriver]. gin panics on a route it
+// Mount implements [core.FrameworkDriver]. gin panics on a route it
 // already has; that panic is returned as an error instead.
-func (gd *GinDriver) Mount(routes ...types.Route) error {
+func (gd *GinDriver) Mount(routes ...core.Route) error {
 	for _, rt := range routes {
 		if err := gd.handle(rt); err != nil {
 			return err
@@ -45,7 +45,7 @@ func (gd *GinDriver) Mount(routes ...types.Route) error {
 	return nil
 }
 
-func (gd *GinDriver) handle(rt types.Route) (err error) {
+func (gd *GinDriver) handle(rt core.Route) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("gin: cannot mount %s %s: %v", rt.Method, rt.Path, r)
@@ -66,19 +66,19 @@ func (gd *GinDriver) handle(rt types.Route) (err error) {
 	return nil
 }
 
-func buildRequestContext(c *gin.Context) *types.RequestContext {
+func buildRequestContext(c *gin.Context) *core.RequestContext {
 	params := make(map[string]string, len(c.Params))
 	for _, p := range c.Params {
 		params[p.Key] = p.Value
 	}
 
-	return &types.RequestContext{
+	return &core.RequestContext{
 		Ctx:      c.Request.Context(),
 		Request:  c.Request,
-		Response: types.NewResponseRecorder(),
+		Response: core.NewResponseRecorder(),
 		Values:   make(behemoth.M),
 		Params:   params,
 	}
 }
 
-var _ types.FrameworkDriver = (*GinDriver)(nil)
+var _ core.FrameworkDriver = (*GinDriver)(nil)

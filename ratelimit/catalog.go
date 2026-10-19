@@ -5,28 +5,28 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 )
 
 type DefaultRateLimitCatalog struct {
 	frozen      bool
 	mu          sync.RWMutex
-	hookCatalog types.HookCatalog // read-only reference, for cross-validating Point at Declare time
+	hookCatalog core.HookCatalog // read-only reference, for cross-validating Point at Declare time
 
-	rules      map[types.HookPoint][]types.HookRateLimitRule
-	routeRules []types.RouteRateLimitRule
+	rules      map[core.HookPoint][]core.HookRateLimitRule
+	routeRules []core.RouteRateLimitRule
 	names      map[string]bool
 }
 
-func NewRateLimitCatalog(hooks types.HookCatalog) *DefaultRateLimitCatalog {
+func NewRateLimitCatalog(hooks core.HookCatalog) *DefaultRateLimitCatalog {
 	return &DefaultRateLimitCatalog{
 		hookCatalog: hooks,
-		rules:       map[types.HookPoint][]types.HookRateLimitRule{},
+		rules:       map[core.HookPoint][]core.HookRateLimitRule{},
 		names:       map[string]bool{},
 	}
 }
 
-func (c *DefaultRateLimitCatalog) DeclareHookRateLimitRule(rule types.HookRateLimitRule) error {
+func (c *DefaultRateLimitCatalog) DeclareHookRateLimitRule(rule core.HookRateLimitRule) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -54,7 +54,7 @@ func (c *DefaultRateLimitCatalog) DeclareHookRateLimitRule(rule types.HookRateLi
 	if !ok {
 		return fmt.Errorf("ratelimitcatalog: rule %q targets undeclared hook point %q", rule.Name, rule.Point)
 	}
-	if def.Phase != types.BeforeHookPhase {
+	if def.Phase != core.BeforeHookPhase {
 		return fmt.Errorf("ratelimitcatalog: rule %q targets point %q (phase %q) - rate-limit rules may only target Before-phase points", rule.Name, rule.Point, def.Phase)
 	}
 
@@ -63,13 +63,13 @@ func (c *DefaultRateLimitCatalog) DeclareHookRateLimitRule(rule types.HookRateLi
 	return nil
 }
 
-func (c *DefaultRateLimitCatalog) RulesForHook(point types.HookPoint) []types.HookRateLimitRule {
+func (c *DefaultRateLimitCatalog) RulesForHook(point core.HookPoint) []core.HookRateLimitRule {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.rules[point] // safe to return directly post-boot
 }
 
-func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule types.RouteRateLimitRule) error {
+func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule core.RouteRateLimitRule) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -103,7 +103,7 @@ func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule types.RouteRate
 	return nil
 }
 
-func (c *DefaultRateLimitCatalog) RulesForRoute() []types.RouteRateLimitRule {
+func (c *DefaultRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.routeRules // safe to hand out directly post-freeze
@@ -111,4 +111,4 @@ func (c *DefaultRateLimitCatalog) RulesForRoute() []types.RouteRateLimitRule {
 
 func (c *DefaultRateLimitCatalog) Freeze() { c.mu.Lock(); c.frozen = true; c.mu.Unlock() }
 
-var _ types.RateLimitCatalog = (*DefaultRateLimitCatalog)(nil)
+var _ core.RateLimitCatalog = (*DefaultRateLimitCatalog)(nil)

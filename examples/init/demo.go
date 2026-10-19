@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 )
 
 // trace logs one hook handler call: who ran, on which point and phase, where
@@ -15,7 +15,7 @@ import (
 // Reading the output of one sign-up top to bottom shows how Values travel:
 // the points of one operation share a map, and an operation nested in
 // another (the user write inside the sign-up) starts with a copy of it.
-func trace(owner string, hctx *types.HookContext, msg string) {
+func trace(owner string, hctx *core.HookContext, msg string) {
 	keys := make([]string, 0, len(hctx.Values))
 	for k := range hctx.Values {
 		keys = append(keys, k)
@@ -27,7 +27,7 @@ func trace(owner string, hctx *types.HookContext, msg string) {
 
 // source says how the operation was started. HookContext.Request is nil for
 // the signup command, which calls the flows without an HTTP request.
-func source(hctx *types.HookContext) string {
+func source(hctx *core.HookContext) string {
 	if hctx.Request == nil {
 		return "cli"
 	}

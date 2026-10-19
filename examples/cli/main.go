@@ -32,12 +32,12 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/examples/cli/auth"
 	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
-	"github.com/MastewalB/behemoth/types"
 )
 
 func main() {
@@ -66,7 +66,7 @@ func main() {
 	if _, err := engine.Boot(ctx, app, db, engine.BootConfig{
 		Crypto:  cryptoCfg,
 		HTTP:    nethttp.New(mux),
-		Session: types.SessionConfig{ExpiresIn: 24 * time.Hour, Transport: types.TransportHeader},
+		Session: core.SessionConfig{ExpiresIn: 24 * time.Hour, Transport: core.TransportHeader},
 	}); err != nil {
 		log.Fatal(err)
 	}

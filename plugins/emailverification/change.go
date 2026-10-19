@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -64,33 +64,33 @@ const (
 	// HookChangeRequestBefore runs on a change request: "userID", "email"
 	// (the new address), "redirect_url" and "metadata". A handler may
 	// rewrite the last two or stop the request.
-	HookChangeRequestBefore types.HookPoint = "auth.emailChange.beforeRequest"
+	HookChangeRequestBefore core.HookPoint = "auth.emailChange.beforeRequest"
 	// HookChangeRequestAfter runs once both messages are on their way,
 	// with a *ChangeResult.
-	HookChangeRequestAfter types.HookPoint = "auth.emailChange.afterRequest"
+	HookChangeRequestAfter core.HookPoint = "auth.emailChange.afterRequest"
 	// HookChangeRequestFailed fires for a request that started no change:
 	// codes "issue_failed", "notice_failed", "email_taken", "send_failed" and
 	// "rejected_by_hook".
-	HookChangeRequestFailed types.HookPoint = "auth.emailChange.requestFailed"
+	HookChangeRequestFailed core.HookPoint = "auth.emailChange.requestFailed"
 
 	// HookChangeConfirmBefore runs before a change is applied. Veto only.
-	HookChangeConfirmBefore types.HookPoint = "auth.emailChange.beforeConfirm"
+	HookChangeConfirmBefore core.HookPoint = "auth.emailChange.beforeConfirm"
 	// HookChangeConfirmAfter runs once the address is changed, with the
 	// *models.User.
-	HookChangeConfirmAfter types.HookPoint = "auth.emailChange.afterConfirm"
+	HookChangeConfirmAfter core.HookPoint = "auth.emailChange.afterConfirm"
 	// HookChangeConfirmFailed fires for a confirm that was refused: codes
 	// "invalid_link", "user_not_found", "email_changed", "email_taken" and
 	// "rejected_by_hook".
-	HookChangeConfirmFailed types.HookPoint = "auth.emailChange.confirmFailed"
+	HookChangeConfirmFailed core.HookPoint = "auth.emailChange.confirmFailed"
 
 	// HookChangeRevertBefore runs before a change is undone. Veto only.
-	HookChangeRevertBefore types.HookPoint = "auth.emailChange.beforeRevert"
+	HookChangeRevertBefore core.HookPoint = "auth.emailChange.beforeRevert"
 	// HookChangeRevertAfter runs once the change is undone and the user's
 	// sessions have ended, with the *models.User.
-	HookChangeRevertAfter types.HookPoint = "auth.emailChange.afterRevert"
+	HookChangeRevertAfter core.HookPoint = "auth.emailChange.afterRevert"
 	// HookChangeRevertFailed fires for a revert that was refused: codes
 	// "invalid_link", "user_not_found", "email_taken" and "rejected_by_hook".
-	HookChangeRevertFailed types.HookPoint = "auth.emailChange.revertFailed"
+	HookChangeRevertFailed core.HookPoint = "auth.emailChange.revertFailed"
 )
 
 // Names of the flow's rate-limit rules.
@@ -109,7 +109,7 @@ const (
 )
 
 // Keys of MailMessage.Data on the flow's two messages
-// (types.MailEmailChange and types.MailEmailChangeNotice).
+// (core.MailEmailChange and core.MailEmailChangeNotice).
 const (
 	DataOldEmail = "oldEmail" // the address the account has
 	DataNewEmail = "newEmail" // the address that was asked for
@@ -201,7 +201,7 @@ type ChangeResult struct {
 	ExpiresAt time.Time // when the confirmation link stops working
 }
 
-// AuditSubject implements [types.AuditSubject]: a change is about its user.
+// AuditSubject implements [core.AuditSubject]: a change is about its user.
 func (r *ChangeResult) AuditSubject() (subjectType, subjectID string) {
 	if r == nil {
 		return "", ""
@@ -234,25 +234,25 @@ func (p *Plugin) changeEnabled() bool {
 
 // declareChange declares what the flow needs: its two token kinds, nine
 // points and four rate-limit rules.
-func (p *Plugin) declareChange(ic *types.PluginInitContext, byAddress func(*http.Request, string) string) error {
-	for _, def := range []types.TokenKindDef{
-		{Kind: TokenKindEmailChange, SingleUse: true, DefaultTTL: p.opts.ChangeTTL, Backend: types.TokenBackendDB},
-		{Kind: TokenKindEmailChangeRevert, SingleUse: true, DefaultTTL: p.opts.RevertTTL, Backend: types.TokenBackendDB},
+func (p *Plugin) declareChange(ic *core.PluginInitContext, byAddress func(*http.Request, string) string) error {
+	for _, def := range []core.TokenKindDef{
+		{Kind: TokenKindEmailChange, SingleUse: true, DefaultTTL: p.opts.ChangeTTL, Backend: core.TokenBackendDB},
+		{Kind: TokenKindEmailChangeRevert, SingleUse: true, DefaultTTL: p.opts.RevertTTL, Backend: core.TokenBackendDB},
 	} {
 		if err := ic.Tokens.Declare(def); err != nil {
 			return err
 		}
 	}
 
-	for _, flow := range [][3]types.HookPoint{
+	for _, flow := range [][3]core.HookPoint{
 		{HookChangeRequestBefore, HookChangeRequestAfter, HookChangeRequestFailed},
 		{HookChangeConfirmBefore, HookChangeConfirmAfter, HookChangeConfirmFailed},
 		{HookChangeRevertBefore, HookChangeRevertAfter, HookChangeRevertFailed},
 	} {
-		for _, def := range []types.HookPointDef{
-			{Point: flow[0], Phase: types.BeforeHookPhase},
-			{Point: flow[1], Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-			{Point: flow[2], Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+		for _, def := range []core.HookPointDef{
+			{Point: flow[0], Phase: core.BeforeHookPhase},
+			{Point: flow[1], Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+			{Point: flow[2], Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 		} {
 			if err := ic.Hooks.Declare(def); err != nil {
 				return err
@@ -260,8 +260,8 @@ func (p *Plugin) declareChange(ic *types.PluginInitContext, byAddress func(*http
 		}
 	}
 
-	perMinute := types.Limit{Max: 10, Window: time.Minute}
-	for _, rule := range []types.RouteRateLimitRule{
+	perMinute := core.Limit{Max: 10, Window: time.Minute}
+	for _, rule := range []core.RouteRateLimitRule{
 		{Name: RuleChangeRoute, Method: http.MethodPost, Path: PathChange, KeyFunc: byAddress, Limit: perMinute},
 		{Name: RuleChangeConfirmRoute, Method: http.MethodPost, Path: PathChangeConfirm, KeyFunc: byAddress, Limit: perMinute},
 		{Name: RuleChangeRevertRoute, Method: http.MethodPost, Path: PathChangeRevert, KeyFunc: byAddress, Limit: perMinute},
@@ -272,14 +272,14 @@ func (p *Plugin) declareChange(ic *types.PluginInitContext, byAddress func(*http
 	}
 	// Per user on the request itself: every request mails the current
 	// address, whoever makes it.
-	return ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 		Name: RuleChangeUser, Point: HookChangeRequestBefore,
-		KeyFunc: types.KeyByValues(hooks.HookValueUserID), Limit: p.opts.ChangeLimit,
+		KeyFunc: core.KeyByValues(hooks.HookValueUserID), Limit: p.opts.ChangeLimit,
 	})
 }
 
 // initChange checks the flow's options and wraps its three flows.
-func (p *Plugin) initChange(ac *types.AuthContext) error {
+func (p *Plugin) initChange(ac *core.AuthContext) error {
 	const op = "emailverification.Init"
 	if p.opts.ChangeLinkURL == "" || p.opts.RevertLinkURL == "" {
 		return errs.NewConfigurationError(op,
@@ -296,19 +296,19 @@ func (p *Plugin) initChange(ac *types.AuthContext) error {
 	if p.revertURL, err = parseLinkURL(op, "RevertLinkURL", p.opts.RevertLinkURL); err != nil {
 		return err
 	}
-	p.changeRequest = types.WithLifecycle(ac.Dispatcher, HookChangeRequestBefore, HookChangeRequestAfter, HookChangeRequestFailed, p.changeRequestBody)
-	p.changeConfirm = types.WithLifecycle(ac.Dispatcher, HookChangeConfirmBefore, HookChangeConfirmAfter, HookChangeConfirmFailed, p.changeConfirmBody)
-	p.changeRevert = types.WithLifecycle(ac.Dispatcher, HookChangeRevertBefore, HookChangeRevertAfter, HookChangeRevertFailed, p.changeRevertBody)
+	p.changeRequest = core.WithLifecycle(ac.Dispatcher, HookChangeRequestBefore, HookChangeRequestAfter, HookChangeRequestFailed, p.changeRequestBody)
+	p.changeConfirm = core.WithLifecycle(ac.Dispatcher, HookChangeConfirmBefore, HookChangeConfirmAfter, HookChangeConfirmFailed, p.changeConfirmBody)
+	p.changeRevert = core.WithLifecycle(ac.Dispatcher, HookChangeRevertBefore, HookChangeRevertAfter, HookChangeRevertFailed, p.changeRevertBody)
 	return nil
 }
 
 // changeRoutes returns the flow's routes. A request needs a fresh session:
 // a stolen session that is hours old can't start a change. The other two
 // are opened from a mailbox, by whoever holds the link, and need none.
-func (p *Plugin) changeRoutes() []types.Route {
-	return []types.Route{
+func (p *Plugin) changeRoutes() []core.Route {
+	return []core.Route{
 		{Method: http.MethodPost, Path: PathChange, Handler: p.handleChange,
-			Middlewares: []types.Middleware{types.RequireFreshSession(p.authContext.SessionManager)}},
+			Middlewares: []core.Middleware{core.RequireFreshSession(p.authContext.SessionManager)}},
 		{Method: http.MethodPost, Path: PathChangeConfirm, Handler: p.handleChangeConfirm},
 		{Method: http.MethodPost, Path: PathChangeRevert, Handler: p.handleChangeRevert},
 	}
@@ -316,7 +316,7 @@ func (p *Plugin) changeRoutes() []types.Route {
 
 // changeOperation is operation for the change flow: it also refuses when
 // the flow is off.
-func (p *Plugin) changeOperation(ctx context.Context, op string) (*types.HookContext, error) {
+func (p *Plugin) changeOperation(ctx context.Context, op string) (*core.HookContext, error) {
 	hctx, err := p.operation(ctx, op)
 	if err != nil {
 		return nil, err
@@ -331,10 +331,10 @@ func (p *Plugin) changeOperation(ctx context.Context, op string) (*types.HookCon
 // RequestChange starts a change of req.UserID's email to req.NewEmail. The
 // user's address does not change yet. Two messages go out:
 //
-//   - to the current address, a notice (types.MailEmailChangeNotice) with a
+//   - to the current address, a notice (core.MailEmailChangeNotice) with a
 //     link that undoes the change for Options.RevertTTL. The call waits for
 //     the mail sender to take it: without the notice there is no change.
-//   - to the new address, a link that confirms it (types.MailEmailChange),
+//   - to the new address, a link that confirms it (core.MailEmailChange),
 //     in the background.
 //
 // A new request replaces the user's pending one. It fires
@@ -364,7 +364,7 @@ func (p *Plugin) RequestChange(ctx context.Context, req ChangeRequest) (*ChangeR
 	return p.changeRequest(hctx, req)
 }
 
-func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (*ChangeResult, error) {
+func (p *Plugin) changeRequestBody(hctx *core.HookContext, req ChangeRequest) (*ChangeResult, error) {
 	const op = "emailverification.RequestChange"
 	ac := hctx.Auth
 
@@ -372,7 +372,7 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	if !utils.IsValidEmail(newEmail) {
 		return nil, errs.NewInvalidInputError(op, keyEmail, "invalid email", nil)
 	}
-	if req.RedirectURL != "" && !types.TrustedRedirect(ac.Origins, req.RedirectURL) {
+	if req.RedirectURL != "" && !core.TrustedRedirect(ac.Origins, req.RedirectURL) {
 		return nil, errs.NewInvalidInputError(op, "redirect_url", "redirect URL is not allowed", nil)
 	}
 	user, err := ac.Store.FindUserByID(hctx.Ctx, req.UserID)
@@ -388,7 +388,7 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	}
 
 	failed := func(code string, cause error) error {
-		if failErr := ac.Dispatcher.Fail(hctx, HookChangeRequestFailed, types.FailureReason{
+		if failErr := ac.Dispatcher.Fail(hctx, HookChangeRequestFailed, core.FailureReason{
 			Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID,
 		}); failErr != nil {
 			return failErr
@@ -417,8 +417,8 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	if err != nil {
 		return nil, failed("issue_failed", err)
 	}
-	err = ac.Mailer.Send(hctx.Ctx, types.MailMessage{
-		Kind: types.MailEmailChangeNotice, To: current, URL: withToken(p.revertURL, rawRevert), Token: rawRevert,
+	err = ac.Mailer.Send(hctx.Ctx, core.MailMessage{
+		Kind: core.MailEmailChangeNotice, To: current, URL: withToken(p.revertURL, rawRevert), Token: rawRevert,
 		ExpiresAt: revert.ExpiresAt, User: user, Data: data, Metadata: req.Metadata,
 	})
 	if err != nil {
@@ -445,8 +445,8 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	}
 	// In the background, like a verification link: if it is lost, the user
 	// asks again. An error here means the message was not queued.
-	err = ac.Mailer.SendAsync(hctx.Ctx, types.MailMessage{
-		Kind: types.MailEmailChange, To: newEmail, URL: withToken(p.changeURL, rawToken), Token: rawToken,
+	err = ac.Mailer.SendAsync(hctx.Ctx, core.MailMessage{
+		Kind: core.MailEmailChange, To: newEmail, URL: withToken(p.changeURL, rawToken), Token: rawToken,
 		ExpiresAt: token.ExpiresAt, User: user, Data: data, Metadata: req.Metadata,
 	})
 	if err != nil {
@@ -479,7 +479,7 @@ func errEmailTaken(op string) error {
 // subject), and the address the token would write in the payload. A token
 // that does not check out still goes through the flow, which refuses it and
 // fires the failed point.
-func (p *Plugin) readChangeToken(hctx *types.HookContext, kind models.TokenKind, rawToken, emailKey string) (*models.Token, changeTokenInput, error) {
+func (p *Plugin) readChangeToken(hctx *core.HookContext, kind models.TokenKind, rawToken, emailKey string) (*models.Token, changeTokenInput, error) {
 	in := changeTokenInput{token: rawToken}
 	token, err := p.authContext.TokenManager.Verify(hctx.Ctx, kind, rawToken)
 	if err != nil {
@@ -531,8 +531,8 @@ func (p *Plugin) ConfirmChange(ctx context.Context, rawToken string) (*VerifyRes
 // refuseChange fires point for a confirm or a revert that is refused, and
 // returns result, the error the caller is given. userID is the audit
 // event's subject, when the token named a user.
-func refuseChange(hctx *types.HookContext, point types.HookPoint, code string, cause error, userID string, result error) error {
-	reason := types.FailureReason{Code: code, Cause: cause}
+func refuseChange(hctx *core.HookContext, point core.HookPoint, code string, cause error, userID string, result error) error {
+	reason := core.FailureReason{Code: code, Cause: cause}
 	if userID != "" {
 		reason.SubjectType, reason.SubjectID = models.UserTable, userID
 	}
@@ -542,7 +542,7 @@ func refuseChange(hctx *types.HookContext, point types.HookPoint, code string, c
 	return result
 }
 
-func (p *Plugin) changeConfirmBody(hctx *types.HookContext, in changeTokenInput) (*models.User, error) {
+func (p *Plugin) changeConfirmBody(hctx *core.HookContext, in changeTokenInput) (*models.User, error) {
 	const op = "emailverification.ConfirmChange"
 	ac := hctx.Auth
 	refuse := func(code string, cause error, userID string, result error) error {
@@ -618,7 +618,7 @@ func (p *Plugin) RevertChange(ctx context.Context, rawToken string) (*models.Use
 	return p.changeRevert(hctx, in)
 }
 
-func (p *Plugin) changeRevertBody(hctx *types.HookContext, in changeTokenInput) (*models.User, error) {
+func (p *Plugin) changeRevertBody(hctx *core.HookContext, in changeTokenInput) (*models.User, error) {
 	const op = "emailverification.RevertChange"
 	ac := hctx.Auth
 	refuse := func(code string, cause error, userID string, result error) error {
@@ -697,7 +697,7 @@ func (p *Plugin) changeRevertBody(hctx *types.HookContext, in changeTokenInput) 
 // It answers a request for an address that is taken like one that was sent
 // its links, so a signed-in user can't use it to learn which addresses have
 // an account.
-func (p *Plugin) handleChange(rctx *types.RequestContext) error {
+func (p *Plugin) handleChange(rctx *core.RequestContext) error {
 	const op = "emailverification.RequestChange"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
@@ -720,7 +720,7 @@ func (p *Plugin) handleChange(rctx *types.RequestContext) error {
 }
 
 // changeToken reads the token from the body of a confirm or revert request.
-func changeToken(rctx *types.RequestContext, op string) (string, error) {
+func changeToken(rctx *core.RequestContext, op string) (string, error) {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return "", errs.NewValidationError(op, "request", err)
@@ -732,7 +732,7 @@ func changeToken(rctx *types.RequestContext, op string) (string, error) {
 	return rawToken, nil
 }
 
-func (p *Plugin) handleChangeConfirm(rctx *types.RequestContext) error {
+func (p *Plugin) handleChangeConfirm(rctx *core.RequestContext) error {
 	rawToken, err := changeToken(rctx, "emailverification.ConfirmChange")
 	if err != nil {
 		return err
@@ -745,12 +745,12 @@ func (p *Plugin) handleChangeConfirm(rctx *types.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{types.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
+	return rctx.Response.JSON(http.StatusOK, behemoth.M{core.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
 }
 
 // handleChangeRevert answers without the user: the caller holds a link from
 // a mailbox and no session, and every session has just ended.
-func (p *Plugin) handleChangeRevert(rctx *types.RequestContext) error {
+func (p *Plugin) handleChangeRevert(rctx *core.RequestContext) error {
 	rawToken, err := changeToken(rctx, "emailverification.RevertChange")
 	if err != nil {
 		return err

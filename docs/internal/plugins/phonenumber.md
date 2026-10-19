@@ -6,7 +6,7 @@ It rests on two core components that were built for it: the SMS sender ([`../mai
 
 ## What the plugin contributes
 
-| `types.Plugin` method | Result | Why |
+| `core.Plugin` method | Result | Why |
 | --- | --- | --- |
 | `Meta` | name `phonenumber`, a dependency on `emailpassword`, no mount path | the password is that plugin's |
 | `Declare` | the `phone_number` column, six points (nine with reset), a route rule per route and one hook rule per number | codes are core's, so no table and no token kind |
@@ -28,7 +28,7 @@ The two data handlers enforce this for every other writer:
 | an update that sets a number, without the note | refused, `phone_number_unconfirmed_change` |
 | an update that sets a number, with the note for that number | checked against other users (`phone_number_taken`), then stored |
 
-**The note.** `write` starts an operation (`types.BeginOperation`) and puts the number in its `Values` under `phonenumber.confirmed`. The update's data handlers start from a copy of those `Values`, so `onUserUpdate` finds the note and compares it with the number in the changes. A `Store.UpdateUser` from anywhere else has no note.
+**The note.** `write` starts an operation (`core.BeginOperation`) and puts the number in its `Values` under `phonenumber.confirmed`. The update's data handlers start from a copy of those `Values`, so `onUserUpdate` finds the note and compares it with the number in the changes. A `Store.UpdateUser` from anywhere else has no note.
 
 The note follows these rules:
 

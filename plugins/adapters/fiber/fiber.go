@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -43,14 +43,14 @@ func toFiberPath(path string) string {
 	return pathParam.ReplaceAllString(path, ":$1")
 }
 
-// Mount implements [types.FrameworkDriver].
+// Mount implements [core.FrameworkDriver].
 //
 // Fiber accepts a route it already has and runs the one registered first,
 // so a behemoth route that repeats one of the application's would never be
 // reached. Conflicts with the application's existing routes are therefore
 // checked here, by method and path. Panics fiber raises for an invalid route
 // are returned as errors.
-func (fd *FiberDriver) Mount(routes ...types.Route) error {
+func (fd *FiberDriver) Mount(routes ...core.Route) error {
 	cfg := fd.app.Config()
 	existing := map[routeKey]bool{}
 	for _, rt := range fd.app.GetRoutes(true) { // true leaves out middleware registered with Use
@@ -87,7 +87,7 @@ func newRouteKey(cfg fiber.Config, method, path string) routeKey {
 	return routeKey{strings.ToUpper(method), path}
 }
 
-func (fd *FiberDriver) handle(rt types.Route, unescapeParams bool) (err error) {
+func (fd *FiberDriver) handle(rt core.Route, unescapeParams bool) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("fiber: cannot mount %s %s: %v", rt.Method, rt.Path, r)
@@ -115,7 +115,7 @@ func (fd *FiberDriver) handle(rt types.Route, unescapeParams bool) (err error) {
 	return nil
 }
 
-func buildRequestContext(c fiber.Ctx, unescapeParams bool) (*types.RequestContext, error) {
+func buildRequestContext(c fiber.Ctx, unescapeParams bool) (*core.RequestContext, error) {
 	req, err := newRequest(c)
 	if err != nil {
 		return nil, err
@@ -134,10 +134,10 @@ func buildRequestContext(c fiber.Ctx, unescapeParams bool) (*types.RequestContex
 		params[name] = value
 	}
 
-	return &types.RequestContext{
+	return &core.RequestContext{
 		Ctx:      req.Context(),
 		Request:  req,
-		Response: types.NewResponseRecorder(),
+		Response: core.NewResponseRecorder(),
 		Values:   make(behemoth.M),
 		Params:   params,
 	}, nil
@@ -229,4 +229,4 @@ func (w *responseWriter) Write(b []byte) (int, error) {
 	return w.c.Write(b)
 }
 
-var _ types.FrameworkDriver = (*FiberDriver)(nil)
+var _ core.FrameworkDriver = (*FiberDriver)(nil)

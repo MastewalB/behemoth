@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -21,7 +22,6 @@ import (
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +34,7 @@ const (
 
 type resetApp struct {
 	plugin  *emailpassword.Plugin
-	ac      *types.AuthContext
+	ac      *core.AuthContext
 	outbox  *outbox
 	rec     *telemetrytest.Recorder
 	mounted mountedRoutes
@@ -44,7 +44,7 @@ type resetApp struct {
 // database, and signs up "ada@example.com", whose email is not verified.
 // The request waits for the sender unless opts says otherwise, so a test
 // reads the outbox without polling.
-func bootReset(t *testing.T, opts emailpassword.ResetOptions, hookFn func(reg types.HookRegistry) error) (*resetApp, *models.User) {
+func bootReset(t *testing.T, opts emailpassword.ResetOptions, hookFn func(reg core.HookRegistry) error) (*resetApp, *models.User) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "reset.db"))
@@ -61,14 +61,14 @@ func bootReset(t *testing.T, opts emailpassword.ResetOptions, hookFn func(reg ty
 	tel, rec := telemetrytest.New()
 	app.rec = rec
 
-	prepared, err := engine.Prepare([]types.Plugin{app.plugin}, engine.PrepareConfig{})
+	prepared, err := engine.Prepare([]core.Plugin{app.plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	app.ac, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
-		Mail:      types.MailConfig{Sender: app.outbox},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Mail:      core.MailConfig{Sender: app.outbox},
 		Telemetry: tel,
 		HTTP:      app.mounted,
 		Hooks:     hookFn,
@@ -86,7 +86,7 @@ func (app *resetApp) signIn(password string) (*emailpassword.SignInResult, error
 }
 
 // link requests a reset for Ada and returns the message that was sent.
-func (app *resetApp) link(t *testing.T) types.MailMessage {
+func (app *resetApp) link(t *testing.T) core.MailMessage {
 	t.Helper()
 	_, err := app.plugin.RequestPasswordReset(context.Background(), emailpassword.ResetRequest{Email: resetEmail})
 	require.NoError(t, err)
@@ -105,14 +105,14 @@ func TestPasswordResetRequestAndConfirm(t *testing.T) {
 	ctx := context.Background()
 	var befores []behemoth.M
 	var afters []any
-	app, user := bootReset(t, emailpassword.ResetOptions{WaitForSend: true}, func(reg types.HookRegistry) error {
-		if err := reg.OnBefore(emailpassword.HookResetBefore, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	app, user := bootReset(t, emailpassword.ResetOptions{WaitForSend: true}, func(reg core.HookRegistry) error {
+		if err := reg.OnBefore(emailpassword.HookResetBefore, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			befores = append(befores, payload)
 			return behemoth.M{"password": "swapped by a handler"}, nil
 		}, nil); err != nil {
 			return err
 		}
-		return reg.OnAfter(emailpassword.HookResetAfter, func(_ *types.HookContext, result any) error {
+		return reg.OnAfter(emailpassword.HookResetAfter, func(_ *core.HookContext, result any) error {
 			afters = append(afters, result)
 			return nil
 		}, nil)
@@ -131,7 +131,7 @@ func TestPasswordResetRequestAndConfirm(t *testing.T) {
 	sent, err := p.RequestPasswordReset(ctx, emailpassword.ResetRequest{Email: "  Ada@Example.com ", Metadata: behemoth.M{"locale": "fr"}})
 	require.NoError(t, err)
 	first := app.outbox.last(t)
-	assert.Equal(t, types.MailPasswordReset, first.Kind)
+	assert.Equal(t, core.MailPasswordReset, first.Kind)
 	assert.Equal(t, resetEmail, first.To, "normalized")
 	assert.Equal(t, behemoth.M{"locale": "fr"}, first.Metadata, "passed to the sender as given")
 	assert.Equal(t, user.ID, first.User.ID)
@@ -174,7 +174,7 @@ func TestPasswordResetRequestAndConfirm(t *testing.T) {
 	assert.Error(t, err, "the session from before the reset has ended")
 
 	// The owner is told, in the background, by a message without a link.
-	require.Eventually(t, func() bool { return app.outbox.last(t).Kind == types.MailPasswordChanged }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return app.outbox.last(t).Kind == core.MailPasswordChanged }, 5*time.Second, time.Millisecond)
 	notice := app.outbox.last(t)
 	assert.Equal(t, resetEmail, notice.To)
 	assert.Equal(t, user.ID, notice.User.ID)
@@ -264,7 +264,7 @@ func TestPasswordResetRoutes(t *testing.T) {
 	w = call(t, app.ac, confirm, `{"token":"`+link.Token+`","password":"`+resetNewPassword+`"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.JSONEq(t, `{"status":"password_reset"}`, w.Body.String())
-	assert.Empty(t, w.Header().Get(types.SessionTokenHeader), "a reset does not sign the user in")
+	assert.Empty(t, w.Header().Get(core.SessionTokenHeader), "a reset does not sign the user in")
 	_, err := app.signIn(resetNewPassword)
 	require.NoError(t, err)
 
@@ -277,7 +277,7 @@ func TestPasswordResetRoutes(t *testing.T) {
 // answers the same for an email without an account.
 func TestPasswordResetRequestsAreLimitedPerEmail(t *testing.T) {
 	ctx := context.Background()
-	app, _ := bootReset(t, emailpassword.ResetOptions{WaitForSend: true, RequestLimit: types.Limit{Max: 2, Window: time.Minute}}, nil)
+	app, _ := bootReset(t, emailpassword.ResetOptions{WaitForSend: true, RequestLimit: core.Limit{Max: 2, Window: time.Minute}}, nil)
 	limited := func(email string) bool {
 		_, err := app.plugin.RequestPasswordReset(ctx, emailpassword.ResetRequest{Email: email})
 		return errs.IsCategory(err, errs.CategoryRateLimited)
@@ -347,7 +347,7 @@ func TestPasswordResetWithoutAPasswordAndLeavingEmailUnverified(t *testing.T) {
 // Reset is off without a link URL: no routes, no mail sender needed. Turned
 // on, it needs a sender and an absolute URL, and a missing one stops Boot.
 func TestPasswordResetOptions(t *testing.T) {
-	boot := func(t *testing.T, opts emailpassword.ResetOptions, sender types.MailSender) (*emailpassword.Plugin, mountedRoutes, error) {
+	boot := func(t *testing.T, opts emailpassword.ResetOptions, sender core.MailSender) (*emailpassword.Plugin, mountedRoutes, error) {
 		t.Helper()
 		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "reset-opts.db"))
 		require.NoError(t, err)
@@ -356,18 +356,18 @@ func TestPasswordResetOptions(t *testing.T) {
 		require.NoError(t, err)
 		p := emailpassword.New(emailpassword.Options{Reset: opts})
 		mounted := mountedRoutes{}
-		prepared, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
+		prepared, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
 		require.NoError(t, err)
 		_, err = engine.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 			},
-			Mail: types.MailConfig{Sender: sender},
+			Mail: core.MailConfig{Sender: sender},
 			HTTP: mounted,
 		})
 		return p, mounted, err
 	}
-	sender := types.MailSenderFunc(func(context.Context, types.MailMessage) error { return nil })
+	sender := core.MailSenderFunc(func(context.Context, core.MailMessage) error { return nil })
 
 	t.Run("off by default", func(t *testing.T) {
 		p, mounted, err := boot(t, emailpassword.ResetOptions{}, nil)
@@ -381,7 +381,7 @@ func TestPasswordResetOptions(t *testing.T) {
 	})
 	for name, tc := range map[string]struct {
 		opts   emailpassword.ResetOptions
-		sender types.MailSender
+		sender core.MailSender
 	}{
 		"no sender":           {emailpassword.ResetOptions{LinkURL: "https://app.example.com/auth/reset"}, nil},
 		"a relative link URL": {emailpassword.ResetOptions{LinkURL: "/auth/reset"}, sender},

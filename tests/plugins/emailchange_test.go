@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +38,7 @@ func (app *verificationApp) verifiedUser(t *testing.T, email string) (user *mode
 	ctx := context.Background()
 	user = &models.User{Email: email, EmailVerified: true}
 	require.NoError(t, app.ac.Store.CreateUser(ctx, user))
-	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: models.SessionActive})
+	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	return user, rawSession
 }
@@ -46,7 +46,7 @@ func (app *verificationApp) verifiedUser(t *testing.T, email string) (user *mode
 // mails waits until n messages have been sent in all and returns them. A
 // change request's notice is sent before the request returns and its
 // confirmation in the background, so the notice comes first.
-func (app *verificationApp) mails(t *testing.T, n int) []types.MailMessage {
+func (app *verificationApp) mails(t *testing.T, n int) []core.MailMessage {
 	t.Helper()
 	require.Eventually(t, func() bool { return app.outbox.count() >= n }, 5*time.Second, time.Millisecond, "message %d was not sent", n)
 	app.outbox.mu.Lock()
@@ -57,7 +57,7 @@ func (app *verificationApp) mails(t *testing.T, n int) []types.MailMessage {
 
 // requestChange asks for a change and returns the notice and the
 // confirmation it sent, which are messages n-1 and n.
-func (app *verificationApp) requestChange(t *testing.T, userID, newEmail string, n int) (notice, confirm types.MailMessage) {
+func (app *verificationApp) requestChange(t *testing.T, userID, newEmail string, n int) (notice, confirm core.MailMessage) {
 	t.Helper()
 	_, err := app.plugin.RequestChange(context.Background(), emailverification.ChangeRequest{UserID: userID, NewEmail: newEmail})
 	require.NoError(t, err)
@@ -109,14 +109,14 @@ func TestEmailChangeConfirmAndRevert(t *testing.T) {
 	notice, confirm := msgs[0], msgs[1]
 	addresses := behemoth.M{emailverification.DataOldEmail: "ada@example.com", emailverification.DataNewEmail: "ada@new.example.com"}
 
-	assert.Equal(t, types.MailEmailChangeNotice, notice.Kind)
+	assert.Equal(t, core.MailEmailChangeNotice, notice.Kind)
 	assert.Equal(t, "ada@example.com", notice.To, "the notice goes to the address the account has")
 	assert.True(t, strings.HasPrefix(notice.URL, "https://app.example.com/auth/undo-email-change?token="), notice.URL)
 	assert.Equal(t, addresses, notice.Data)
 	assert.Equal(t, behemoth.M{"locale": "fr"}, notice.Metadata)
 	assert.WithinDuration(t, time.Now().Add(emailverification.DefaultRevertTTL), notice.ExpiresAt, time.Minute)
 
-	assert.Equal(t, types.MailEmailChange, confirm.Kind)
+	assert.Equal(t, core.MailEmailChange, confirm.Kind)
 	assert.Equal(t, "ada@new.example.com", confirm.To, "the confirmation goes to the address asked for")
 	assert.True(t, strings.HasPrefix(confirm.URL, "https://app.example.com/auth/change-email?token="), confirm.URL)
 	assert.Equal(t, addresses, confirm.Data)
@@ -146,7 +146,7 @@ func TestEmailChangeConfirmAndRevert(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, 2, app.outbox.count(), "neither write sent a verification link: both addresses were confirmed by a link")
 
-	for _, point := range []types.HookPoint{
+	for _, point := range []core.HookPoint{
 		emailverification.HookChangeRequestAfter, emailverification.HookChangeConfirmAfter, emailverification.HookChangeRevertAfter,
 	} {
 		events := app.rec.Audit.OfType(string(point))
@@ -238,7 +238,7 @@ func TestEmailChangeToAnAddressThatIsTaken(t *testing.T) {
 	_, err := app.plugin.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "Grace@example.com"})
 	assert.ErrorIs(t, err, emailverification.ErrEmailTaken)
 	msgs := app.mails(t, 1)
-	assert.Equal(t, types.MailEmailChangeNotice, msgs[0].Kind, "the account's own address is still told")
+	assert.Equal(t, core.MailEmailChangeNotice, msgs[0].Kind, "the account's own address is still told")
 	failed := app.rec.Audit.OfType(string(emailverification.HookChangeRequestFailed))
 	require.Len(t, failed, 1)
 	assert.Equal(t, "email_taken", failed[0].Metadata["code"])
@@ -255,7 +255,7 @@ func TestEmailChangeToAnAddressThatIsTaken(t *testing.T) {
 	_, err = app.plugin.ConfirmChange(ctx, confirm.Token)
 	require.NoError(t, err)
 	app.verifiedUser(t, "ada@example.com")
-	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: models.SessionActive})
+	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	_, err = app.plugin.RevertChange(ctx, notice.Token)
 	assert.True(t, emailTaken(err), "%v", err)
@@ -281,7 +281,7 @@ func TestEmailChangeNeedsItsNotice(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	msgs := app.mails(t, 1)
-	assert.Equal(t, types.MailEmailChangeNotice, msgs[0].Kind, "no confirmation was sent to the new address")
+	assert.Equal(t, core.MailEmailChangeNotice, msgs[0].Kind, "no confirmation was sent to the new address")
 	_, err = app.plugin.RevertChange(ctx, msgs[0].Token)
 	assert.True(t, invalidChangeLink(err), "the link of the notice that was not sent is revoked: %v", err)
 	failed := app.rec.Audit.OfType(string(emailverification.HookChangeRequestFailed))
@@ -290,14 +290,14 @@ func TestEmailChangeNeedsItsNotice(t *testing.T) {
 }
 
 // callAs invokes a mounted route the way call does, with a session token.
-func callAs(t *testing.T, ac *types.AuthContext, route types.Route, body, rawSession string) *httptest.ResponseRecorder {
+func callAs(t *testing.T, ac *core.AuthContext, route core.Route, body, rawSession string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(body))
 	if rawSession != "" {
 		req.Header.Set("Authorization", "Bearer "+rawSession)
 	}
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
@@ -316,7 +316,7 @@ func callAs(t *testing.T, ac *types.AuthContext, route types.Route, body, rawSes
 func TestEmailChangeRoutes(t *testing.T) {
 	ctx := context.Background()
 	opts := changeOptions()
-	opts.ChangeLimit = types.Limit{Max: 20, Window: time.Minute}
+	opts.ChangeLimit = core.Limit{Max: 20, Window: time.Minute}
 	app := bootVerification(t, opts, func(cfg *engine.BootConfig) { cfg.Session.FreshAge = 400 * time.Millisecond })
 	change := app.mounted["/api/auth"+emailverification.PathChange]
 	confirm := app.mounted["/api/auth"+emailverification.PathChangeConfirm]
@@ -354,7 +354,7 @@ func TestEmailChangeRoutes(t *testing.T) {
 	stale := callAs(t, app.ac, change, `{"email":"ada@late.example.com"}`, rawSession)
 	assert.Equal(t, http.StatusUnauthorized, stale.Code)
 	assert.Contains(t, stale.Body.String(), errs.CodeSessionNotFresh)
-	_, signedInAgain, err := app.ac.SessionManager.Create(ctx, user.ID, types.SessionMeta{State: models.SessionActive})
+	_, signedInAgain, err := app.ac.SessionManager.Create(ctx, user.ID, core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, callAs(t, app.ac, change, `{"email":"ada@late.example.com"}`, signedInAgain).Code, "signing in again makes a fresh session")
 	msgs = app.mails(t, 5) // the taken address got a notice and no confirmation
@@ -386,7 +386,7 @@ func TestEmailChangeRoutes(t *testing.T) {
 func TestEmailChangeRequestsAreLimitedPerUser(t *testing.T) {
 	ctx := context.Background()
 	opts := changeOptions()
-	opts.ChangeLimit = types.Limit{Max: 2, Window: time.Minute}
+	opts.ChangeLimit = core.Limit{Max: 2, Window: time.Minute}
 	app := bootVerification(t, opts)
 	user, _ := app.verifiedUser(t, "ada@example.com")
 	other, _ := app.verifiedUser(t, "grace@example.com")
@@ -423,13 +423,13 @@ func TestEmailChangeIsOptIn(t *testing.T) {
 		"a negative revert window": {ChangeLinkURL: "https://app.example.com/change", RevertLinkURL: "https://app.example.com/undo", RevertTTL: -time.Hour},
 	} {
 		opts.LinkURL = "https://app.example.com/verify"
-		prepared, err := engine.Prepare([]types.Plugin{emailverification.New(opts)}, engine.PrepareConfig{})
+		prepared, err := engine.Prepare([]core.Plugin{emailverification.New(opts)}, engine.PrepareConfig{})
 		require.NoError(t, err, name)
 		_, err = engine.Boot(ctx, prepared, app.ac.DB, engine.BootConfig{
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 			},
-			Mail: types.MailConfig{Sender: app.outbox},
+			Mail: core.MailConfig{Sender: app.outbox},
 		})
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "emailverification", name)

@@ -284,7 +284,7 @@ Only tables that fire hooks get a transaction. `store.Hooks.Fires(table)` answer
 The store passes itself to every `store.Hooks` method, and `dataHooks` publishes it as `HookContext.Tx`. Inside a hooked write it is the store bound to the transaction.
 
 ```go
-registry.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, result any) error {
+registry.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, result any) error {
 	user := result.(*models.User)
 	// Commits or rolls back with the user.
 	return hctx.Tx.CreateAccount(hctx.Ctx, &models.Account{UserID: user.ID /* ... */})
@@ -297,7 +297,7 @@ registry.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, result
 - **Any other table** (a plugin's or the application's) goes through `Tx.DB()`, the `behemoth.Database` the store itself writes through. On a transaction-bound store it is the adapter bound to that transaction.
 
 ```go
-registry.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, result any) error {
+registry.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, result any) error {
 	user := result.(*models.User)
 	return hctx.Tx.DB().Create(hctx.Ctx, &Profile{UserID: user.ID})
 }, nil)

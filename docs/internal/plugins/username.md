@@ -4,7 +4,7 @@ This document explains how `plugins/username` adds usernames on top of the email
 
 ## What the plugin contributes
 
-| `types.Plugin` method | Result | Why |
+| `core.Plugin` method | Result | Why |
 | --- | --- | --- |
 | `Meta` | name `username`, a dependency on `emailpassword`, no mount path | `emailpassword` is initialized first, and the route sits next to `/sign-in/email` |
 | `Declare` | the `username` and `display_username` columns on `users`, and a route rate-limit rule per route | the column is the plugin's; core's sign-in rule is bound to `/sign-in/email` |

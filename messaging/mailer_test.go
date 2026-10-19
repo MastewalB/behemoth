@@ -9,23 +9,23 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // Send waits for the sender and returns its error. Without a sender both
 // ways of sending are a configuration error.
 func TestMailerSendWaits(t *testing.T) {
 	ctx := context.Background()
-	none := NewMailer(types.MailConfig{}, nil)
+	none := NewMailer(core.MailConfig{}, nil)
 	if none.Configured() {
 		t.Error("a mailer without a sender says it is configured")
 	}
 	for name, err := range map[string]error{
-		"Send":      none.Send(ctx, types.MailMessage{}),
-		"SendAsync": none.SendAsync(ctx, types.MailMessage{}),
+		"Send":      none.Send(ctx, core.MailMessage{}),
+		"SendAsync": none.SendAsync(ctx, core.MailMessage{}),
 	} {
 		if !errs.IsCategory(err, errs.CategoryConfiguration) {
 			t.Errorf("%s without a sender returned %v, want a configuration error", name, err)
@@ -33,9 +33,9 @@ func TestMailerSendWaits(t *testing.T) {
 	}
 
 	down := errors.New("smtp down")
-	var got []types.MailMessage
+	var got []core.MailMessage
 	tel, rec := telemetrytest.New()
-	m := NewMailer(types.MailConfig{Sender: types.MailSenderFunc(func(_ context.Context, msg types.MailMessage) error {
+	m := NewMailer(core.MailConfig{Sender: core.MailSenderFunc(func(_ context.Context, msg core.MailMessage) error {
 		got = append(got, msg)
 		if msg.To == "fail@example.com" {
 			return down
@@ -45,10 +45,10 @@ func TestMailerSendWaits(t *testing.T) {
 	if !m.Configured() {
 		t.Error("a mailer with a sender says it is not configured")
 	}
-	if err := m.Send(ctx, types.MailMessage{Kind: types.MailMagicLink, To: "ada@example.com"}); err != nil {
+	if err := m.Send(ctx, core.MailMessage{Kind: core.MailMagicLink, To: "ada@example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Send(ctx, types.MailMessage{Kind: types.MailMagicLink, To: "fail@example.com"}); !errors.Is(err, down) {
+	if err := m.Send(ctx, core.MailMessage{Kind: core.MailMagicLink, To: "fail@example.com"}); !errors.Is(err, down) {
 		t.Errorf("Send returned %v, want the sender's error", err)
 	}
 	if len(got) != 2 {
@@ -69,9 +69,9 @@ func TestMailerSendAsync(t *testing.T) {
 	var mu sync.Mutex
 	var sent []string
 	tel, rec := telemetrytest.New()
-	m := NewMailer(types.MailConfig{
+	m := NewMailer(core.MailConfig{
 		Workers: 1, QueueSize: 2,
-		Sender: types.MailSenderFunc(func(ctx context.Context, msg types.MailMessage) error {
+		Sender: core.MailSenderFunc(func(ctx context.Context, msg core.MailMessage) error {
 			<-release
 			if err := ctx.Err(); err != nil {
 				return err
@@ -91,8 +91,8 @@ func TestMailerSendAsync(t *testing.T) {
 
 	// The request's context ends as soon as the message is queued.
 	ctx, cancel := context.WithCancel(context.Background())
-	msg := func(to string) types.MailMessage {
-		return types.MailMessage{Kind: types.MailEmailVerification, To: to}
+	msg := func(to string) core.MailMessage {
+		return core.MailMessage{Kind: core.MailEmailVerification, To: to}
 	}
 	if err := m.SendAsync(ctx, msg("ada@example.com")); err != nil {
 		t.Fatal(err)

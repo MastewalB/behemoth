@@ -29,11 +29,11 @@ import (
 passwords := emailpassword.New(emailpassword.Options{})
 phones := phonenumber.New(passwords, phonenumber.Options{})
 
-app, err := engine.Prepare([]types.Plugin{passwords, phones}, engine.PrepareConfig{})
+app, err := engine.Prepare([]core.Plugin{passwords, phones}, engine.PrepareConfig{})
 // ...
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	SMS: types.SMSConfig{
-		Sender: types.SMSSenderFunc(func(ctx context.Context, msg types.SMSMessage) error {
+	SMS: core.SMSConfig{
+		Sender: core.SMSSenderFunc(func(ctx context.Context, msg core.SMSMessage) error {
 			return provider.Send(ctx, msg.To, "Your code is "+msg.Code)
 		}),
 	},
@@ -47,13 +47,13 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 - Build the database adapter with `app.Resolver`, as for any plugin that adds a column to a core table.
 - On SQLite, open the database with `_txlock=immediate`. See [Username](username.md#setup) for the reason.
 
-Your sender gets three kinds of message, as a `types.SMSMessage` with the code in `Code`:
+Your sender gets three kinds of message, as a `core.SMSMessage` with the code in `Code`:
 
 | `Kind` | When |
 | --- | --- |
-| `types.SMSPhoneVerification` | a signed-in user is adding a number |
-| `types.SMSSignIn` | a user is signing in by code |
-| `types.SMSPasswordReset` | a user asked to reset their password |
+| `core.SMSPhoneVerification` | a signed-in user is adding a number |
+| `core.SMSSignIn` | a user is signing in by code |
+| `core.SMSPasswordReset` | a user asked to reset their password |
 
 ## Options
 
@@ -140,10 +140,10 @@ The refusal behaves as follows:
 Password reset is off until you set `Options.PasswordReset`. A text message is a weaker proof than a link in a mailbox: a number can be moved to another SIM. Turn it on when your users have no usable email, or accept that trade. The flow has three steps:
 
 1. The client posts the number to `POST /phone-number/request-password-reset`.
-2. The user receives a code (`types.SMSPasswordReset`).
+2. The user receives a code (`core.SMSPasswordReset`).
 3. The client posts the number, the code, and the new password to `POST /phone-number/reset-password`.
 
-The reset itself is the email/password plugin's: the same password rules, every session of the user ends, no session is created, and the user gets the `types.MailPasswordChanged` notice when a mail sender is configured. The password is checked before the code, so a refused password does not cost a try.
+The reset itself is the email/password plugin's: the same password rules, every session of the user ends, no session is created, and the user gets the `core.MailPasswordChanged` notice when a mail sender is configured. The password is checked before the code, so a refused password does not cost a try.
 
 ## Call the flows from code
 
@@ -167,7 +167,7 @@ The flows behave as follows:
 
 - `SendCode` and `RequestPasswordReset` tell a caller in code what the routes hide. `sent.Sent` is false when no code went out, and `sent.Reason` is `phonenumber.ReasonNoAccount`, `ReasonNumberTaken`, `ReasonAlreadySet`, or `ReasonSendFailed`. Their only errors are a number that is not E.164, a rate limit, a hook's rejection, and a failure of the system.
 - `Verify(ctx, VerifyRequest{...})` is `AddNumber` with a `UserID` and `SignInWithCode` without. The route calls it.
-- `SignIn` and `SignInWithCode` return the raw session token and deliver nothing. From a route of your own, hand the result to `types.WriteSignIn`.
+- `SignIn` and `SignInWithCode` return the raw session token and deliver nothing. From a route of your own, hand the result to `core.WriteSignIn`.
 - `SetPhoneNumber` does not check who is asking.
 - Before `Boot`, the flows return a configuration error.
 

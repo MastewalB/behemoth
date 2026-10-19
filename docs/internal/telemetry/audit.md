@@ -102,17 +102,17 @@ The two data events have types of their own (`user.created`, not `data.user.afte
 
 ## How the dispatcher builds an event
 
-A point declared with `Audit: &types.AuditSpec{}` records one event per dispatch, after its chain. `DefaultDispatcher.auditEvent` builds it from what the dispatcher can see.
+A point declared with `Audit: &core.AuditSpec{}` records one event per dispatch, after its chain. `DefaultDispatcher.auditEvent` builds it from what the dispatcher can see.
 
 **Subject**, first match:
 
 1. `FailureReason.SubjectType` and `SubjectID`, for a failed point. The sign-in flow sets them once it has found the user, so a wrong password is recorded as an attempt on that account.
-2. The result (`auditSubject`): a `*models.Session` is its own subject; a result implementing `types.AuditSubject` says what it is about (`types.SignInResult`, `magiclink.LinkResult`, and `emailpassword.ResetRequestResult` name their user); any other `behemoth.Model` is its table and primary key.
+2. The result (`auditSubject`): a `*models.Session` is its own subject; a result implementing `core.AuditSubject` says what it is about (`core.SignInResult`, `magiclink.LinkResult`, and `emailpassword.ResetRequestResult` name their user); any other `behemoth.Model` is its table and primary key.
 3. `HookContext.Values[HookValueUserID]`, the user the operation concerns.
 
 **Actor**, first match:
 
-1. The user of the session the request was authenticated with: `RequestContext.Values["session"]`, which `types.RequireSession` sets.
+1. The user of the session the request was authenticated with: `RequestContext.Values["session"]`, which `core.RequireSession` sets.
 2. For a successful operation inside a request, the user the subject belongs to. This covers sign-up and sign-in, where no session exists yet and the user acts for themselves.
 3. Otherwise `anonymous` inside a request and `system` outside one.
 
@@ -125,7 +125,7 @@ A failed operation is never attributed to its subject. A wrong password for an a
 | `Outcome` | `failure` for `Fail`, otherwise left to normalization (`success`) |
 | `Metadata` | for `Fail`: `FailureReason.Metadata`, then `code`, and when the reason has a cause, `cause` (the error's text) and `causeCode` (the code of a cause that is a `DomainError` with one). For a token result: `kind`. |
 | `SessionID` | the request's session; else the result's, when it is a session; else `Values[HookValueSessionID]` |
-| `IPAddress` | `types.ClientIP` with the router's proxy configuration, so it is the same address a session and a rate limit see |
+| `IPAddress` | `core.ClientIP` with the router's proxy configuration, so it is the same address a session and a rate limit see |
 | `UserAgent` | the request's `User-Agent` header |
 
 `causeCode` is what tells one hook refusal from another. Every one of them has the `code` `rejected_by_hook`, since the firing site can't know which handler refused, and the handler's own error code (`email_not_verified`, `rate_limited`) is in `causeCode`. The metric attribute is still the reason's `code`, so a plugin's error codes do not become metric label values.

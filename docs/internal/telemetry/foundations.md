@@ -14,15 +14,15 @@ The code lives in:
 - `telemetry/metrics.go`: the metrics interface and catalog, described in `metrics.md`
 - `telemetry/tracer.go`: the tracer interface and span names, described in `tracing.md`
 - `telemetry/telemetrytest/`: in-memory sinks for tests
-- `types/router.go`: `withRequestScope`, which assigns the request ID
+- `core/router.go`: `withRequestScope`, which assigns the request ID
 
 ## Place among other packages
 
-`telemetry` imports the root package (for `behemoth.M` and `behemoth.Model`) and `errs` (for `DomainError`). It imports nothing else from behemoth, so every other package can import it: `types`, `store`, `crypto`, `auth`, `migration`, and the adapter modules.
+`telemetry` imports the root package (for `behemoth.M` and `behemoth.Model`) and `errs` (for `DomainError`). It imports nothing else from behemoth, so every other package can import it: `core`, `store`, `crypto`, `auth`, `migration`, and the adapter modules.
 
 It relates to the error taxonomy in two ways. It follows the same split: behemoth owns interfaces and names, something external does the work. And `ErrorFields` is the bridge between them, turning a `DomainError` into log fields.
 
-`types.AuditSpec` stayed in `types`, next to `HookPointDef`, because it is part of a hook point's declaration and not of a sink.
+`core.AuditSpec` stayed in `core`, next to `HookPointDef`, because it is part of a hook point's declaration and not of a sink.
 
 ## `Telemetry`, `New`, and `OrDefault`
 

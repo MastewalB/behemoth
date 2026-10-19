@@ -27,22 +27,22 @@ verification := emailverification.New(emailverification.Options{
 	LinkURL: "https://app.example.com/auth/verify-email",
 })
 
-app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{}), verification}, engine.PrepareConfig{})
+app, err := engine.Prepare([]core.Plugin{emailpassword.New(emailpassword.Options{}), verification}, engine.PrepareConfig{})
 // ...
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Mail: types.MailConfig{Sender: sender}, // see Mail
+	Mail: core.MailConfig{Sender: sender}, // see Mail
 	// ...
 })
 ```
 
-The plugin's name is `emailverification` (`emailverification.PluginName`). It depends on no other plugin and needs no table of its own. The link goes out as a `types.MailMessage` with `Kind` set to `types.MailEmailVerification`; [Mail](mail.md) describes the sender.
+The plugin's name is `emailverification` (`emailverification.PluginName`). It depends on no other plugin and needs no table of its own. The link goes out as a `core.MailMessage` with `Kind` set to `core.MailEmailVerification`; [Mail](mail.md) describes the sender.
 
 ## Options
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `LinkURL` | required | The page of your application the link points to. Absolute, `http` or `https`. The plugin adds the token as the `token` query parameter. |
-| `TTL` | 24 hours | How long a link works. `TokenConfig.TTLOverrides[types.TokenKindEmailVerification]` takes precedence. |
+| `TTL` | 24 hours | How long a link works. `TokenConfig.TTLOverrides[core.TokenKindEmailVerification]` takes precedence. |
 | `SendLimit` | 5 per 15 minutes | Links sent per email. See [Rate limits](#rate-limits). |
 | `RequireVerified` | false | Refuse the sign-in of a user whose email is not verified. See [Require a verified email](#require-a-verified-email). |
 | `ChangeLinkURL`, `RevertLinkURL` | none | The two pages of the email change flow. Setting both turns the flow on. See [Change an email address](#change-an-email-address). |
@@ -134,8 +134,8 @@ Your mail sender gets two more kinds of message. Both carry the two addresses in
 
 | `Kind` | Sent to | `URL` | Write it as |
 | --- | --- | --- | --- |
-| `types.MailEmailChangeNotice` | the current address | the page at `RevertLinkURL` | "A change of your address to `newEmail` was requested. If this was not you, undo it." |
-| `types.MailEmailChange` | the new address | the page at `ChangeLinkURL` | "Confirm that this is your new address." |
+| `core.MailEmailChangeNotice` | the current address | the page at `RevertLinkURL` | "A change of your address to `newEmail` was requested. If this was not you, undo it." |
+| `core.MailEmailChange` | the new address | the page at `ChangeLinkURL` | "Confirm that this is your new address." |
 
 `Data` comes from the plugin. `Metadata` is still what the request carried.
 
@@ -166,7 +166,7 @@ The change flow behaves as follows:
 
 ### A recent sign-in is required
 
-`POST /email/change` uses `types.RequireFreshSession`: the session has to be valid and has to have signed in, or passed its second factor, within `SessionConfig.FreshAge` (15 minutes by default). A session that is older gets `401` with the code `session_not_fresh`. Your client asks the user to sign in again and retries.
+`POST /email/change` uses `core.RequireFreshSession`: the session has to be valid and has to have signed in, or passed its second factor, within `SessionConfig.FreshAge` (15 minutes by default). A session that is older gets `401` with the code `session_not_fresh`. Your client asks the user to sign in again and retries.
 
 This is what stops someone who got hold of a long-lived session, for example from a shared computer, from moving the account to their own address. Nothing refreshes a session in place, so signing in again is the only way to get a fresh one.
 
@@ -174,10 +174,10 @@ You can put the same check on a route of your own ([Sessions](sessions.md#fresh-
 
 ```go
 {Method: http.MethodPost, Path: "/account/delete", Handler: deleteAccount,
-	Middlewares: []types.Middleware{types.RequireFreshSession(ac.SessionManager)}},
+	Middlewares: []core.Middleware{core.RequireFreshSession(ac.SessionManager)}},
 ```
 
-It does what `types.RequireSession` does first, so use it alone.
+It does what `core.RequireSession` does first, so use it alone.
 
 ### What the revert link does
 

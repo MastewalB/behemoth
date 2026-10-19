@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-19
 - **Deciders:** MastewalB
-- **Affects:** `types` (`HookContext`, `Access`, `Authenticator`), `identity` (new), `engine` (the dispatcher, the rate limiter, `Boot`), `auth` (`DefaultSessionManager`), `telemetry` (`NormalizeAuditEvent`), the router, every plugin's flows
+- **Affects:** `core` (`HookContext`, `Access`, `Authenticator`), `identity` (new), `engine` (the dispatcher, the rate limiter, `Boot`), `auth` (`DefaultSessionManager`), `telemetry` (`NormalizeAuditEvent`), the router, every plugin's flows
 
 ## Context and problem
 
@@ -17,10 +17,10 @@ The readers don't all take the same inputs:
 | A flow that another plugin's flow calls, such as `emailpassword.SignInWith` from the username plugin | a `context.Context` and typed input |
 | A hook handler, a hook rate-limit rule, the audit event builder | a `*HookContext` |
 | `SessionManager.Create` | a `context.Context` and a `SessionMeta` |
-| A data hook, fired from inside a store write | a `context.Context`, passed through the store, which never imports `types` |
+| A data hook, fired from inside a store write | a `context.Context`, passed through the store, which never imports `core` |
 | `telemetry.NormalizeAuditEvent` | a `context.Context` |
 
-Two values already travel in the context for this reason. `types.ContextWithRequest` carries the HTTP request, and `types.ContextWithHookValues` carries an operation's `Values` "because the code in between, the store and the managers, takes only a context." The caller replaces the request as the value these readers learn the caller from.
+Two values already travel in the context for this reason. `core.ContextWithRequest` carries the HTTP request, and `core.ContextWithHookValues` carries an operation's `Values` "because the code in between, the store and the managers, takes only a context." The caller replaces the request as the value these readers learn the caller from.
 
 ## Decision drivers
 
@@ -103,7 +103,7 @@ The context is Go's place for request-scoped data that crosses API boundaries. T
 
 - [`../plans/caller.md`](../plans/caller.md): the caller, its principals, the authenticator, and the permissions
 - [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md): "Learn about the caller from the context"
-- `types/plugins.go`: `ContextWithRequest`, `ContextWithHookValues`
+- `core/plugins.go`: `ContextWithRequest`, `ContextWithHookValues`
 - `messaging/sendqueue.go`: the send queue keeps the context's values with `context.WithoutCancel`
 - [The `context` package documentation](https://pkg.go.dev/context)
 - [Go Concurrency Patterns: Context](https://go.dev/blog/context), on the Go blog

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/gofiber/fiber/v3"
 )
 
-func ok(*types.RequestContext) error { return nil }
+func ok(*core.RequestContext) error { return nil }
 
 // serve sends req through app and returns the response with its body read.
 func serve(t *testing.T, app *fiber.App, req *http.Request) (*http.Response, string) {
@@ -34,7 +34,7 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 	app := fiber.New()
 	app.Get("/api/auth/taken", func(c fiber.Ctx) error { return c.SendStatus(http.StatusTeapot) })
 
-	echoParam := types.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *types.RequestContext) error {
+	echoParam := core.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *core.RequestContext) error {
 		return rctx.Response.JSON(http.StatusOK, map[string]string{"id": rctx.Param("id")})
 	}}
 	if err := New(app).Mount(echoParam); err != nil {
@@ -46,7 +46,7 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 		t.Errorf("got %d %s, want 200 {\"id\":\"42\"}", resp.StatusCode, body)
 	}
 
-	conflict := types.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: ok}
+	conflict := core.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: ok}
 	if err := New(app).Mount(conflict); err == nil {
 		t.Error("expected an error for a route the app already has")
 	}
@@ -59,8 +59,8 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 
 func TestMountRejectsDuplicatesWithinOneCall(t *testing.T) {
 	err := New(fiber.New()).Mount(
-		types.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
-		types.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
+		core.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
+		core.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
 	)
 	if err == nil {
 		t.Error("expected an error for the same route twice")
@@ -70,7 +70,7 @@ func TestMountRejectsDuplicatesWithinOneCall(t *testing.T) {
 func TestMountConflictsWithAllMethodsRoute(t *testing.T) {
 	app := fiber.New()
 	app.All("/api/auth/any", func(c fiber.Ctx) error { return nil })
-	if err := New(app).Mount(types.Route{Method: http.MethodPost, Path: "/api/auth/any", Handler: ok}); err == nil {
+	if err := New(app).Mount(core.Route{Method: http.MethodPost, Path: "/api/auth/any", Handler: ok}); err == nil {
 		t.Error("expected a conflict with a route registered for all methods")
 	}
 }
@@ -78,7 +78,7 @@ func TestMountConflictsWithAllMethodsRoute(t *testing.T) {
 // Fiber matches paths without case and without a trailing slash unless the
 // app is configured otherwise, and the conflict check follows the app.
 func TestMountConflictFollowsTheAppsMatching(t *testing.T) {
-	route := types.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: ok}
+	route := core.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: ok}
 	existing := func(c fiber.Ctx) error { return nil }
 
 	loose := fiber.New()
@@ -102,7 +102,7 @@ func TestMiddlewareOnThePathIsNotAConflict(t *testing.T) {
 		c.Set("X-Seen-By", "middleware")
 		return c.Next()
 	})
-	if err := New(app).Mount(types.Route{Method: http.MethodGet, Path: "/api/auth", Handler: ok}); err != nil {
+	if err := New(app).Mount(core.Route{Method: http.MethodGet, Path: "/api/auth", Handler: ok}); err != nil {
 		t.Fatal(err)
 	}
 	resp, _ := serve(t, app, httptest.NewRequest(http.MethodGet, "/api/auth", nil))
@@ -112,7 +112,7 @@ func TestMiddlewareOnThePathIsNotAConflict(t *testing.T) {
 }
 
 func TestInvalidRouteIsErrorNotPanic(t *testing.T) {
-	err := New(fiber.New()).Mount(types.Route{Method: "BREW", Path: "/api/auth/x", Handler: ok})
+	err := New(fiber.New()).Mount(core.Route{Method: "BREW", Path: "/api/auth/x", Handler: ok})
 	if err == nil {
 		t.Error("expected an error for a method fiber rejects")
 	}
@@ -120,7 +120,7 @@ func TestInvalidRouteIsErrorNotPanic(t *testing.T) {
 
 func TestHandlerFailureIsInternalServerError(t *testing.T) {
 	app := fiber.New()
-	if err := New(app).Mount(types.Route{Method: http.MethodGet, Path: "/api/auth/fail", Handler: func(*types.RequestContext) error {
+	if err := New(app).Mount(core.Route{Method: http.MethodGet, Path: "/api/auth/fail", Handler: func(*core.RequestContext) error {
 		return http.ErrHandlerTimeout // routes arrive mapped; a returned error means the response could not be built
 	}}); err != nil {
 		t.Fatal(err)
@@ -142,9 +142,9 @@ func TestRequestIsBuiltFromFibersRequest(t *testing.T) {
 		return c.Next()
 	})
 
-	var got *types.RequestContext
+	var got *core.RequestContext
 	var body string
-	if err := New(app).Mount(types.Route{Method: http.MethodPost, Path: "/api/auth/echo/{name}", Handler: func(rctx *types.RequestContext) error {
+	if err := New(app).Mount(core.Route{Method: http.MethodPost, Path: "/api/auth/echo/{name}", Handler: func(rctx *core.RequestContext) error {
 		got = rctx
 		b, err := io.ReadAll(rctx.Request.Body)
 		body = string(b)
@@ -197,13 +197,13 @@ func TestRequestIsBuiltFromFibersRequest(t *testing.T) {
 func TestResponseIsWrittenToFiber(t *testing.T) {
 	app := fiber.New()
 	err := New(app).Mount(
-		types.Route{Method: http.MethodPost, Path: "/api/auth/sign-in", Handler: func(rctx *types.RequestContext) error {
+		core.Route{Method: http.MethodPost, Path: "/api/auth/sign-in", Handler: func(rctx *core.RequestContext) error {
 			rctx.Response.Cookie(&http.Cookie{Name: "session_token", Value: "tok", HttpOnly: true})
 			rctx.Response.Cookie(&http.Cookie{Name: "csrf", Value: "c"})
 			rctx.Response.SetHeader("X-Request-ID", "req-1")
 			return rctx.Response.JSON(http.StatusCreated, map[string]bool{"ok": true})
 		}},
-		types.Route{Method: http.MethodGet, Path: "/api/auth/verify", Handler: func(rctx *types.RequestContext) error {
+		core.Route{Method: http.MethodGet, Path: "/api/auth/verify", Handler: func(rctx *core.RequestContext) error {
 			rctx.Response.Redirect(http.StatusFound, "https://app.example.com/welcome")
 			return nil
 		}},
@@ -241,7 +241,7 @@ func TestResponseIsWrittenToFiber(t *testing.T) {
 func TestUnparsableRequestURIIsBadRequest(t *testing.T) {
 	app := fiber.New()
 	called := false
-	if err := New(app).Mount(types.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(*types.RequestContext) error {
+	if err := New(app).Mount(core.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(*core.RequestContext) error {
 		called = true
 		return nil
 	}}); err != nil {
@@ -261,8 +261,8 @@ func TestUnparsableRequestURIIsBadRequest(t *testing.T) {
 // same after the second has been served.
 func TestRequestStaysValidAfterTheHandler(t *testing.T) {
 	app := fiber.New()
-	kept := make(chan *types.RequestContext, 2)
-	if err := New(app).Mount(types.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *types.RequestContext) error {
+	kept := make(chan *core.RequestContext, 2)
+	if err := New(app).Mount(core.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *core.RequestContext) error {
 		kept <- rctx
 		return nil
 	}}); err != nil {

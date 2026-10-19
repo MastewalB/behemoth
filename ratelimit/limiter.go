@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // dbCounterStore counts in the rate_limits table: the AtomicIncrementer used
@@ -25,16 +25,16 @@ func (s *dbCounterStore) Increment(ctx context.Context, key string, ttl time.Dur
 // Boot built for each algorithm, over the counter storage it resolved
 // (newLimiters); a rule's own Limiter takes its place.
 type DefaultRateLimiter struct {
-	catalog  types.RateLimitCatalog
-	limiters map[types.RateLimitAlgorithm]types.Limiter
-	cfg      types.RateLimitConfig
+	catalog  core.RateLimitCatalog
+	limiters map[core.RateLimitAlgorithm]core.Limiter
+	cfg      core.RateLimitConfig
 	tel      *telemetry.Telemetry
 }
 
 // NewDefaultRateLimiter returns the rate limiter of the rules in catalog. It
 // counts attempts in kv when kv can count atomically, as the Redis adapter
 // can, and in the rate_limits table through st otherwise.
-func NewDefaultRateLimiter(catalog types.RateLimitCatalog, kv behemoth.KeyValueStorage, st *store.Store, cfg types.RateLimitConfig, tel *telemetry.Telemetry) (*DefaultRateLimiter, error) {
+func NewDefaultRateLimiter(catalog core.RateLimitCatalog, kv behemoth.KeyValueStorage, st *store.Store, cfg core.RateLimitConfig, tel *telemetry.Telemetry) (*DefaultRateLimiter, error) {
 	counter, err := resolveRateLimitStore(kv, st)
 	if err != nil {
 		return nil, err
@@ -44,23 +44,23 @@ func NewDefaultRateLimiter(catalog types.RateLimitCatalog, kv behemoth.KeyValueS
 
 // knownAlgorithms are the algorithms a rule may name; newLimiters builds a
 // Limiter for each. The catalog rejects any other name at Prepare.
-var knownAlgorithms = map[types.RateLimitAlgorithm]bool{types.AlgorithmFixedWindow: true}
+var knownAlgorithms = map[core.RateLimitAlgorithm]bool{core.AlgorithmFixedWindow: true}
 
 // newLimiters builds the Limiter of every known algorithm over counter.
-func newLimiters(counter types.AtomicIncrementer) map[types.RateLimitAlgorithm]types.Limiter {
-	return map[types.RateLimitAlgorithm]types.Limiter{
-		types.AlgorithmFixedWindow: NewFixedWindow(counter),
+func newLimiters(counter core.AtomicIncrementer) map[core.RateLimitAlgorithm]core.Limiter {
+	return map[core.RateLimitAlgorithm]core.Limiter{
+		core.AlgorithmFixedWindow: NewFixedWindow(counter),
 	}
 }
 
 // limiterFor returns the Limiter a rule is evaluated with: its own, or the
 // one built for its algorithm, where an empty name means the fixed window.
-func (rl *DefaultRateLimiter) limiterFor(rule string, algorithm types.RateLimitAlgorithm, own types.Limiter) (types.Limiter, error) {
+func (rl *DefaultRateLimiter) limiterFor(rule string, algorithm core.RateLimitAlgorithm, own core.Limiter) (core.Limiter, error) {
 	if own != nil {
 		return own, nil
 	}
 	if algorithm == "" {
-		algorithm = types.AlgorithmFixedWindow
+		algorithm = core.AlgorithmFixedWindow
 	}
 	if l, ok := rl.limiters[algorithm]; ok {
 		return l, nil
@@ -77,10 +77,10 @@ func (rl *DefaultRateLimiter) limiterFor(rule string, algorithm types.RateLimitA
 // author would not find out. The check comes before the rule's own Limiter
 // is accepted, because the lockout is the rate limiter's to enforce, not the
 // Limiter's.
-func checkRateLimitRule(name string, action types.RateLimitAction, algorithm types.RateLimitAlgorithm, own types.Limiter, limit types.Limit) error {
+func checkRateLimitRule(name string, action core.RateLimitAction, algorithm core.RateLimitAlgorithm, own core.Limiter, limit core.Limit) error {
 	switch action {
-	case "", types.ActionReject:
-	case types.ActionLockout:
+	case "", core.ActionReject:
+	case core.ActionLockout:
 		return fmt.Errorf("ratelimit: rule %q uses ActionLockout, which is not built; use ActionReject", name)
 	default:
 		return fmt.Errorf("ratelimit: rule %q names an unknown Action %q", name, action)
@@ -97,7 +97,7 @@ func checkRateLimitRule(name string, action types.RateLimitAction, algorithm typ
 	return nil
 }
 
-func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.HookPoint, hctx *types.HookContext) error {
+func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point core.HookPoint, hctx *core.HookContext) error {
 	// UNLIKE RouteRule (single most-specific match wins), every declared
 	// HookPointRule for a point is evaluated and must ALL pass — this is
 	// deliberate, not an inconsistency: two independent plugins might each
@@ -131,8 +131,8 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point types.Ho
 	return nil
 }
 
-func (rl *DefaultRateLimiter) CheckRouteLimit(ctx context.Context, rule types.RouteRateLimitRule, r *http.Request, ipCfg *types.ClientIPConfig) error {
-	ip := types.ClientIP(r, ipCfg)
+func (rl *DefaultRateLimiter) CheckRouteLimit(ctx context.Context, rule core.RouteRateLimitRule, r *http.Request, ipCfg *core.ClientIPConfig) error {
+	ip := core.ClientIP(r, ipCfg)
 	key := rule.Name + ":" + rule.KeyFunc(r, ip)
 	limiter, err := rl.limiterFor(rule.Name, rule.Algorithm, rule.Limiter)
 	if err != nil {
@@ -145,9 +145,9 @@ func (rl *DefaultRateLimiter) CheckRouteLimit(ctx context.Context, rule types.Ro
 	return nil
 }
 
-func (rl *DefaultRateLimiter) GetBestMatchforRoute(ctx context.Context, method, path string) (types.RouteRateLimitRule, bool) {
+func (rl *DefaultRateLimiter) GetBestMatchforRoute(ctx context.Context, method, path string) (core.RouteRateLimitRule, bool) {
 	rules := rl.catalog.RulesForRoute()
-	return types.BestRouteMatch(rules, method, path)
+	return core.BestRouteMatch(rules, method, path)
 }
 
 // evaluate is the shared core: it asks the rule's limiter and turns a
@@ -163,9 +163,9 @@ func (rl *DefaultRateLimiter) evaluate(
 	ctx context.Context,
 	name, key string,
 	ip string, // the client address, when the caller resolved one; recorded in the audit event
-	algo types.Limiter,
-	limit types.Limit,
-	action types.RateLimitAction,
+	algo core.Limiter,
+	limit core.Limit,
+	action core.RateLimitAction,
 	lockoutFor time.Duration,
 ) error {
 	var spanAttrs behemoth.M
@@ -217,7 +217,7 @@ func (rl *DefaultRateLimiter) handleStoreFailure(ctx context.Context, rule strin
 	if rl.tel != nil {
 		rl.tel.Logger.Warn(ctx, "rate limit store unavailable", telemetry.ErrorFields(err, behemoth.M{"rule": rule}))
 	}
-	if rl.cfg.FailureMode == types.FailClosed {
+	if rl.cfg.FailureMode == core.FailClosed {
 		return errs.NewRateLimited(rule, rule, 0)
 	}
 	return nil // FailOpen request proceeds
@@ -226,13 +226,13 @@ func (rl *DefaultRateLimiter) handleStoreFailure(ctx context.Context, rule strin
 // resolveRateLimitStore picks where counters are kept: the key-value storage
 // when it can count atomically (the Redis adapter), otherwise the
 // rate_limits table.
-func resolveRateLimitStore(kv behemoth.KeyValueStorage, st *store.Store) (types.AtomicIncrementer, error) {
+func resolveRateLimitStore(kv behemoth.KeyValueStorage, st *store.Store) (core.AtomicIncrementer, error) {
 	if kv != nil {
-		if inc, ok := kv.(types.AtomicIncrementer); ok {
+		if inc, ok := kv.(core.AtomicIncrementer); ok {
 			return inc, nil
 		}
 	}
 	return &dbCounterStore{store: st}, nil
 }
 
-var _ types.RateLimiter = (*DefaultRateLimiter)(nil)
+var _ core.RateLimiter = (*DefaultRateLimiter)(nil)

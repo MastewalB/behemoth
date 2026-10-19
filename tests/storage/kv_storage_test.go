@@ -6,15 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MastewalB/behemoth/core"
 	redisAdapter "github.com/MastewalB/behemoth/storage/adapters/redis"
 	"github.com/MastewalB/behemoth/tests/testutils"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Boot finds the Redis adapter's counter through this interface.
-var _ types.AtomicIncrementer = (*redisAdapter.RedisAdapter)(nil)
+var _ core.AtomicIncrementer = (*redisAdapter.RedisAdapter)(nil)
 
 func TestRedisStorage(t *testing.T) {
 	ctx := context.Background()

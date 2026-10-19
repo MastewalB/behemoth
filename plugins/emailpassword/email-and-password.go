@@ -13,12 +13,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -41,30 +41,30 @@ const pluginVersion = "0.1.0"
 // points and their rate-limit rules.
 type Plugin struct {
 	opts        Options
-	authContext *types.AuthContext
+	authContext *core.AuthContext
 	log         telemetry.Logger
-	signUp      func(hctx *types.HookContext, in behemoth.M) (*models.User, error)
-	signIn      func(hctx *types.HookContext, in IdentifierCredentials) (*SignInResult, error)
+	signUp      func(hctx *core.HookContext, in behemoth.M) (*models.User, error)
+	signIn      func(hctx *core.HookContext, in IdentifierCredentials) (*SignInResult, error)
 
 	// Set by Init when reset is enabled, nil otherwise.
 	resetURL     *url.URL
-	resetRequest func(hctx *types.HookContext, in ResetRequest) (*ResetRequestResult, error)
-	reset        func(hctx *types.HookContext, in resetInput) (*models.User, error)
+	resetRequest func(hctx *core.HookContext, in ResetRequest) (*ResetRequestResult, error)
+	reset        func(hctx *core.HookContext, in resetInput) (*models.User, error)
 }
 
-// Meta implements [types.Plugin]. The plugin depends on no other plugin and
+// Meta implements [core.Plugin]. The plugin depends on no other plugin and
 // has no mount path, so its routes sit directly under the router's base path
 // (for example /api/auth/sign-in/email).
-func (p *Plugin) Meta() types.PluginMeta {
-	return types.PluginMeta{Name: PluginName}
+func (p *Plugin) Meta() core.PluginMeta {
+	return core.PluginMeta{Name: PluginName}
 }
 
-// Version implements [types.Plugin].
+// Version implements [core.Plugin].
 func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
-// Declare implements [types.Plugin]. Without password reset the plugin
+// Declare implements [core.Plugin]. Without password reset the plugin
 // declares nothing:
 //   - hook points: it fires core's auth.signUp.*, auth.signIn.* and
 //     auth.signOut.* points, which core declares before any plugin's Declare
@@ -78,24 +78,24 @@ func (p *Plugin) Version() string {
 // With password reset enabled it declares the reset's token kind, points and
 // rate-limit rules (declareReset). Password change for a signed-in user is
 // not built.
-func (p *Plugin) Declare(ic *types.PluginInitContext) error {
+func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 	if p.opts.Reset.enabled() {
 		return p.declareReset(ic)
 	}
 	return nil
 }
 
-// Register implements [types.Plugin]. The plugin attaches no handlers to
+// Register implements [core.Plugin]. The plugin attaches no handlers to
 // other points; its contribution is its routes. A second-factor plugin, by
 // contrast, would register on auth.signIn.credentialsVerified here.
-func (p *Plugin) Register(reg types.HookRegistry) error {
+func (p *Plugin) Register(reg core.HookRegistry) error {
 	return nil
 }
 
-// Middlewares implements [types.Plugin]. The plugin has no middleware that
+// Middlewares implements [core.Plugin]. The plugin has no middleware that
 // should run on every route of the application. The session check that
 // sign-out needs is attached to that route alone (see Routes).
-func (p *Plugin) Middlewares() []types.Middleware {
+func (p *Plugin) Middlewares() []core.Middleware {
 	return nil
 }
 
@@ -107,7 +107,7 @@ const (
 
 // Options configures the plugin. The zero value is usable.
 //
-// The email and password rules live here and not on types.AuthContext: this
+// The email and password rules live here and not on core.AuthContext: this
 // plugin is the only place a password enters the system, at sign-up and at a
 // password reset. A plugin that also sets passwords (an admin screen) should
 // depend on this one and go through it, so the rules have one owner.
@@ -155,17 +155,17 @@ func New(opts Options) *Plugin {
 	if opts.Reset.TTL == 0 {
 		opts.Reset.TTL = DefaultResetTTL
 	}
-	if opts.Reset.RequestLimit == (types.Limit{}) {
-		opts.Reset.RequestLimit = types.Limit{Max: 5, Window: 15 * time.Minute}
+	if opts.Reset.RequestLimit == (core.Limit{}) {
+		opts.Reset.RequestLimit = core.Limit{Max: 5, Window: 15 * time.Minute}
 	}
 	return &Plugin{opts: opts}
 }
 
-// Init implements [types.Plugin]. It checks the options, keeps the
+// Init implements [core.Plugin]. It checks the options, keeps the
 // AuthContext and wraps the sign-up and sign-in flows with their hook points,
 // and the reset flows when reset is enabled (initReset). Passwords are hashed
 // with the AuthContext's Crypto.Passwords.
-func (p *Plugin) Init(ac *types.AuthContext) error {
+func (p *Plugin) Init(ac *core.AuthContext) error {
 	if p.opts.MinPasswordLength < 1 || p.opts.MaxPasswordLength < p.opts.MinPasswordLength {
 		return errs.NewConfigurationError("emailpassword.Init",
 			fmt.Sprintf("password length limits are invalid: min %d, max %d", p.opts.MinPasswordLength, p.opts.MaxPasswordLength), nil)
@@ -178,8 +178,8 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	if ac.Telemetry != nil {
 		p.log = telemetry.Named(ac.Telemetry.Logger, PluginName)
 	}
-	p.signUp = types.WithLifecycle(ac.Dispatcher, hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed, p.signUpBody)
-	p.signIn = types.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.signInBody)
+	p.signUp = core.WithLifecycle(ac.Dispatcher, hooks.HookSignUpBefore, hooks.HookSignUpAfter, hooks.HookSignUpFailed, p.signUpBody)
+	p.signIn = core.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.signInBody)
 	if p.opts.Reset.enabled() {
 		return p.initReset(ac)
 	}
@@ -199,22 +199,22 @@ func (p *Plugin) validatePassword(password string) error {
 	return nil
 }
 
-// Routes implements [types.Plugin]. The two reset routes are added only when
+// Routes implements [core.Plugin]. The two reset routes are added only when
 // reset is enabled.
-func (p *Plugin) Routes() []types.Route {
-	routes := []types.Route{
+func (p *Plugin) Routes() []core.Route {
+	routes := []core.Route{
 		{Method: http.MethodPost, Path: "/sign-up/email", Handler: p.handleSignUp},
 		{Method: http.MethodPost, Path: "/sign-in/email", Handler: p.handleSignIn},
 		{Method: http.MethodPost, Path: "/sign-out", Handler: p.handleSignOut,
-			Middlewares: []types.Middleware{
-				types.RequireSession(p.authContext.SessionManager),
+			Middlewares: []core.Middleware{
+				core.RequireSession(p.authContext.SessionManager),
 			},
 		},
 	}
 	if p.opts.Reset.enabled() {
 		routes = append(routes,
-			types.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
-			types.Route{Method: http.MethodPost, Path: PathResetConfirm, Handler: p.handleResetConfirm},
+			core.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
+			core.Route{Method: http.MethodPost, Path: PathResetConfirm, Handler: p.handleResetConfirm},
 		)
 	}
 	return routes
@@ -392,7 +392,7 @@ func errEmailTaken() error {
 	}
 }
 
-func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*models.User, error) {
+func (p *Plugin) signUpBody(hctx *core.HookContext, userData behemoth.M) (*models.User, error) {
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
 
@@ -414,7 +414,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 	if err == nil {
 		hashPassword(hctx, password) // timing mitigation, unchanged
-		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, types.FailureReason{Code: "user_exists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
+		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, core.FailureReason{Code: "user_exists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
 			return nil, err
 		}
 		return nil, errEmailTaken()
@@ -463,8 +463,8 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 		// or afterCreate, or a classified store error. An untyped one is a
 		// failure of the system: the router answers 500 without its text
 		// and logs it.
-		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignUpFailed, err,
-			types.FailureReason{Metadata: behemoth.M{hooks.HookValueEmail: email}})
+		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignUpFailed, err,
+			core.FailureReason{Metadata: behemoth.M{hooks.HookValueEmail: email}})
 	}
 
 	return user, nil
@@ -474,7 +474,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 // a sign-up and of a refused sign-in, where it runs to keep the response
 // time the same, so a trace shows it by name. The span lives here and not in
 // the hasher because PasswordHasher's methods take no context.
-func hashPassword(hctx *types.HookContext, password string) (string, error) {
+func hashPassword(hctx *core.HookContext, password string) (string, error) {
 	_, span := hctx.Auth.Telemetry.StartSpan(hctx.Ctx, telemetry.SpanPasswordHash, nil)
 	hash, err := hctx.Auth.Crypto.Passwords.Hash(password)
 	telemetry.FinishSpan(span, err)
@@ -500,7 +500,7 @@ func errInvalidCredentials(identifier string) error {
 // signInBody is the one sign-in by password. How the user is found is the
 // credentials' (creds.Find): by email for SignIn, by another plugin's
 // identifier for SignInWith. Everything after the lookup is the same.
-func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials) (*SignInResult, error) {
+func (p *Plugin) signInBody(hctx *core.HookContext, creds IdentifierCredentials) (*SignInResult, error) {
 	ac := hctx.Auth
 	hasher := ac.Crypto.Passwords
 	dispatcher := ac.Dispatcher
@@ -513,7 +513,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 			if creds.normalize != nil {
 				attempted = creds.normalize(attempted)
 			}
-			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
+			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, core.FailureReason{
 				Code: "user_not_found", Metadata: behemoth.M{creds.Key: attempted},
 			}); err != nil {
 				return nil, err
@@ -525,8 +525,8 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 
 	// Every rejection from here on is an attempt on a known account, and
 	// its audit event says which.
-	rejected := func(code string, cause error) types.FailureReason {
-		return types.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID}
+	rejected := func(code string, cause error) core.FailureReason {
+		return core.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID}
 	}
 
 	// The password lives on the user's "credential" account. A user without
@@ -566,8 +566,8 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
-		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
-			types.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
+		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
+			core.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
 
 	state := models.SessionActive
@@ -578,7 +578,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 	// The session manager reads the IP address and user agent from the
 	// request on hctx.Ctx, so sign-in also works without one (a job, another
 	// plugin calling in).
-	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{State: state})
+	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state})
 	if err != nil {
 		return nil, err
 	}
@@ -590,10 +590,10 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 	return &SignInResult{User: user, Session: session, RawToken: rawToken, Method: method}, nil
 }
 
-// SignInResult is types.SignInResult, the result every sign-in plugin
+// SignInResult is core.SignInResult, the result every sign-in plugin
 // returns and hands to auth.signIn.after. The name is kept here for callers
 // of SignIn.
-type SignInResult = types.SignInResult
+type SignInResult = core.SignInResult
 
 // SignUp creates a user with an email and a password, and the user's
 // credential account. input holds the sign-up fields under their column
@@ -685,7 +685,7 @@ func (p *Plugin) SignInWith(ctx context.Context, creds IdentifierCredentials) (*
 // rewrites the payload's email does not move the attempt to another count.
 // A call without an email leaves no entry, and removes the one inherited
 // from an enclosing operation, so a rule per email does not apply to it.
-func publishEmail(hctx *types.HookContext, email string) {
+func publishEmail(hctx *core.HookContext, email string) {
 	if email = store.NormalizeEmail(email); email == "" {
 		delete(hctx.Values, hooks.HookValueEmail)
 		return
@@ -696,15 +696,15 @@ func publishEmail(hctx *types.HookContext, email string) {
 // operation builds the HookContext one flow call runs with. Its Values start
 // as a copy of the operation ctx already belongs to, if any, and Request is
 // the request ctx carries, or nil.
-func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, error) {
+func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
-	return &types.HookContext{
+	return &core.HookContext{
 		Ctx:     ctx,
 		Auth:    p.authContext,
-		Values:  types.NestedHookValues(ctx),
-		Request: types.RequestFrom(ctx),
+		Values:  core.NestedHookValues(ctx),
+		Request: core.RequestFrom(ctx),
 	}, nil
 }
 
@@ -717,8 +717,8 @@ func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, 
 // SignOut also runs where there is no request. A route that signs its own
 // caller out takes the token back afterwards (SessionManager.ClearToken), as
 // the plugin's sign-out route does.
-func SignOut(hctx *types.HookContext, sessionID string) error {
-	hctx = types.AsOperation(hctx)
+func SignOut(hctx *core.HookContext, sessionID string) error {
+	hctx = core.AsOperation(hctx)
 	hctx.Values[hooks.HookValueSessionID] = sessionID // for the operation's later points and its audit event
 	ac := hctx.Auth
 	// The returned payload is not read: a handler can stop the sign-out, but
@@ -738,7 +738,7 @@ func SignOut(hctx *types.HookContext, sessionID string) error {
 // password, a conflict (409) for an email that is taken. A hook handler's
 // typed rejection keeps its own status. Anything else is a failure of the
 // system: the router answers 500 without the error's text and logs it.
-func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
+func (p *Plugin) handleSignUp(rctx *core.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("emailpassword.SignUp", "request", err)
@@ -754,7 +754,7 @@ func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusCreated, behemoth.M{types.SignInUserKey: view})
+	return rctx.Response.JSON(http.StatusCreated, behemoth.M{core.SignInUserKey: view})
 }
 
 // handleSignIn returns the flow's error unchanged, and the router maps and
@@ -762,7 +762,7 @@ func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 // unauthorized error (401), and a hook handler's typed rejection keeps its
 // own status. Anything else is a failure of the system: the router answers
 // 500 without the error's text and logs it at Error.
-func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
+func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 	// The body is decoded as a map so that fields other than the email and
 	// password reach the before handlers, in creds.Extra.
 	var body behemoth.M
@@ -781,7 +781,7 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 
 	// The body every sign-in route answers with, and the session token by
 	// whichever transport SessionConfig.Transport names.
-	return types.WriteSignIn(rctx, result, nil)
+	return core.WriteSignIn(rctx, result, nil)
 }
 
 // handleSignOut returns SignOut's error unchanged, like handleSignIn. A typed
@@ -789,9 +789,9 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 // longer exists). A failed revoke is a 500 from the router, which does not
 // send the error's text. After a sign-out that went through, it takes the
 // session token back from the client.
-func (p *Plugin) handleSignOut(rctx *types.RequestContext) error {
+func (p *Plugin) handleSignOut(rctx *core.RequestContext) error {
 	sessionID, _ := rctx.Values["sessionID"].(string) // populated by session middleware upstream
-	hctx := &types.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
+	hctx := &core.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
 	if err := SignOut(hctx, sessionID); err != nil {
 		return err
 	}
@@ -803,4 +803,4 @@ func (p *Plugin) handleSignOut(rctx *types.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})
 }
 
-var _ types.Plugin = (*Plugin)(nil)
+var _ core.Plugin = (*Plugin)(nil)

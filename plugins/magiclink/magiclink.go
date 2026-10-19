@@ -19,12 +19,12 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -45,13 +45,13 @@ const (
 	// HookRequestBefore runs on a link request's input: "email",
 	// "redirect_url" and "metadata". A handler may rewrite them or stop the
 	// request.
-	HookRequestBefore types.HookPoint = "auth.magicLink.beforeRequest"
+	HookRequestBefore core.HookPoint = "auth.magicLink.beforeRequest"
 	// HookRequestAfter runs once the link has been handed to the mail
 	// sender, with a *LinkResult.
-	HookRequestAfter types.HookPoint = "auth.magicLink.afterRequest"
+	HookRequestAfter core.HookPoint = "auth.magicLink.afterRequest"
 	// HookRequestFailed fires for a request that sent no link: codes
 	// "user_not_found", "issue_failed", "send_failed" and "rejected_by_hook".
-	HookRequestFailed types.HookPoint = "auth.magicLink.requestFailed"
+	HookRequestFailed core.HookPoint = "auth.magicLink.requestFailed"
 )
 
 // Names of the rate-limit rules the plugin declares. An application that
@@ -159,7 +159,7 @@ type LinkResult struct {
 	ExpiresAt time.Time
 }
 
-// AuditSubject implements [types.AuditSubject]: a link request is about the
+// AuditSubject implements [core.AuditSubject]: a link request is about the
 // user the link signs in.
 func (r *LinkResult) AuditSubject() (subjectType, subjectID string) {
 	if r == nil {
@@ -171,7 +171,7 @@ func (r *LinkResult) AuditSubject() (subjectType, subjectID string) {
 // VerifyResult is what Verify returns: the sign-in, and where the request
 // for the link asked to go afterwards.
 type VerifyResult struct {
-	*types.SignInResult
+	*core.SignInResult
 	// RedirectURL is LinkRequest.RedirectURL, checked against the trusted
 	// origins when the link was requested. Empty when none was given.
 	RedirectURL string
@@ -198,7 +198,7 @@ func (v *verifyInput) FromMap(map[string]any) error { return nil }
 
 // Options configures the plugin. LinkURL is required, and so is a mail
 // sender in BootConfig.Mail: the plugin sends nothing itself. The link goes
-// out as a types.MailMessage of kind types.MailMagicLink.
+// out as a core.MailMessage of kind core.MailMagicLink.
 type Options struct {
 	// WaitForSend chooses how the link is handed to the mail sender.
 	//
@@ -221,13 +221,13 @@ type Options struct {
 	LinkURL string
 
 	// TTL is how long a link works. Zero means DefaultTTL.
-	// TokenConfig.TTLOverrides for types.TokenKindMagicLink takes precedence.
+	// TokenConfig.TTLOverrides for core.TokenKindMagicLink takes precedence.
 	TTL time.Duration
 
 	// RequestLimit bounds link requests per email, from any caller: the
 	// route, a CLI, another plugin. It keeps one address from being sent
 	// link after link. Zero means 5 per 15 minutes.
-	RequestLimit types.Limit
+	RequestLimit core.Limit
 
 	// LeaveEmailUnverified turns off marking the address as verified. By
 	// default a verified link sets EmailVerified on a user who did not have
@@ -246,10 +246,10 @@ type Options struct {
 type Plugin struct {
 	opts        Options
 	linkURL     *url.URL
-	authContext *types.AuthContext
+	authContext *core.AuthContext
 	log         telemetry.Logger
-	request     func(hctx *types.HookContext, in LinkRequest) (*LinkResult, error)
-	verify      func(hctx *types.HookContext, in verifyInput) (*types.SignInResult, error)
+	request     func(hctx *core.HookContext, in LinkRequest) (*LinkResult, error)
+	verify      func(hctx *core.HookContext, in verifyInput) (*core.SignInResult, error)
 }
 
 // New returns the plugin configured with opts. Values left at zero take
@@ -259,26 +259,26 @@ func New(opts Options) *Plugin {
 	if opts.TTL == 0 {
 		opts.TTL = DefaultTTL
 	}
-	if opts.RequestLimit == (types.Limit{}) {
-		opts.RequestLimit = types.Limit{Max: 5, Window: 15 * time.Minute}
+	if opts.RequestLimit == (core.Limit{}) {
+		opts.RequestLimit = core.Limit{Max: 5, Window: 15 * time.Minute}
 	}
 	return &Plugin{opts: opts}
 }
 
-// Meta implements [types.Plugin]. The plugin depends on no other plugin and
+// Meta implements [core.Plugin]. The plugin depends on no other plugin and
 // has no mount path, so its routes sit directly under the router's base path
 // (for example /api/auth/sign-in/magic-link).
-func (p *Plugin) Meta() types.PluginMeta {
-	return types.PluginMeta{Name: PluginName}
+func (p *Plugin) Meta() core.PluginMeta {
+	return core.PluginMeta{Name: PluginName}
 }
 
-// Version implements [types.Plugin].
+// Version implements [core.Plugin].
 func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
-// Declare implements [types.Plugin]. The plugin declares:
-//   - the token kind types.TokenKindMagicLink: single use, kept in the
+// Declare implements [core.Plugin]. The plugin declares:
+//   - the token kind core.TokenKindMagicLink: single use, kept in the
 //     database, so that a new link can revoke the user's earlier ones and a
 //     deleted user's links go with the user;
 //   - the auth.magicLink.* points around a link request;
@@ -286,17 +286,17 @@ func (p *Plugin) Version() string {
 //     address, and link requests per email.
 //
 // It declares no table and no sign-in points: core declares auth.signIn.*.
-func (p *Plugin) Declare(ic *types.PluginInitContext) error {
-	if err := ic.Tokens.Declare(types.TokenKindDef{
-		Kind: types.TokenKindMagicLink, SingleUse: true, DefaultTTL: p.opts.TTL, Backend: types.TokenBackendDB,
+func (p *Plugin) Declare(ic *core.PluginInitContext) error {
+	if err := ic.Tokens.Declare(core.TokenKindDef{
+		Kind: core.TokenKindMagicLink, SingleUse: true, DefaultTTL: p.opts.TTL, Backend: core.TokenBackendDB,
 	}); err != nil {
 		return err
 	}
 
-	for _, def := range []types.HookPointDef{
-		{Point: HookRequestBefore, Phase: types.BeforeHookPhase},
-		{Point: HookRequestAfter, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookRequestFailed, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+	for _, def := range []core.HookPointDef{
+		{Point: HookRequestBefore, Phase: core.BeforeHookPhase},
+		{Point: HookRequestAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookRequestFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 	} {
 		if err := ic.Hooks.Declare(def); err != nil {
 			return err
@@ -306,9 +306,9 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	// Per address on the routes, like core's sign-in rule: it slows one
 	// client down and can't be used to keep another one out.
 	byAddress := func(_ *http.Request, ip string) string { return ip }
-	for _, rule := range []types.RouteRateLimitRule{
-		{Name: RuleRequestRoute, Method: http.MethodPost, Path: PathRequest, KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute}},
-		{Name: RuleVerifyRoute, Method: http.MethodPost, Path: PathVerify, KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute}},
+	for _, rule := range []core.RouteRateLimitRule{
+		{Name: RuleRequestRoute, Method: http.MethodPost, Path: PathRequest, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
+		{Name: RuleVerifyRoute, Method: http.MethodPost, Path: PathVerify, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
 	} {
 		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
 			return err
@@ -317,26 +317,26 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 	// Per email on the request itself, so it also holds for RequestLink
 	// called from code. It counts requests for unknown emails too, and so
 	// answers the same for both.
-	return ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 		Name: RuleRequestEmail, Point: HookRequestBefore,
-		KeyFunc: types.KeyByValues(hooks.HookValueEmail), Limit: p.opts.RequestLimit,
+		KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.RequestLimit,
 	})
 }
 
-// Register implements [types.Plugin]. The plugin attaches no handlers to
+// Register implements [core.Plugin]. The plugin attaches no handlers to
 // other points.
-func (p *Plugin) Register(reg types.HookRegistry) error {
+func (p *Plugin) Register(reg core.HookRegistry) error {
 	return nil
 }
 
-// Middlewares implements [types.Plugin]. The plugin has no middleware.
-func (p *Plugin) Middlewares() []types.Middleware {
+// Middlewares implements [core.Plugin]. The plugin has no middleware.
+func (p *Plugin) Middlewares() []core.Middleware {
 	return nil
 }
 
-// Init implements [types.Plugin]. It checks the options, keeps the
+// Init implements [core.Plugin]. It checks the options, keeps the
 // AuthContext and wraps the two flows with their hook points.
-func (p *Plugin) Init(ac *types.AuthContext) error {
+func (p *Plugin) Init(ac *core.AuthContext) error {
 	const op = "magiclink.Init"
 	if ac.Mailer == nil || !ac.Mailer.Configured() {
 		return errs.NewConfigurationError(op, "no mail sender is configured; set BootConfig.Mail.Sender: the plugin does not send email itself", nil)
@@ -355,14 +355,14 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	if ac.Telemetry != nil {
 		p.log = telemetry.Named(ac.Telemetry.Logger, PluginName)
 	}
-	p.request = types.WithLifecycle(ac.Dispatcher, HookRequestBefore, HookRequestAfter, HookRequestFailed, p.requestBody)
-	p.verify = types.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.verifyBody)
+	p.request = core.WithLifecycle(ac.Dispatcher, HookRequestBefore, HookRequestAfter, HookRequestFailed, p.requestBody)
+	p.verify = core.WithLifecycle(ac.Dispatcher, hooks.HookSignInBefore, hooks.HookSignInAfter, hooks.HookSignInFailed, p.verifyBody)
 	return nil
 }
 
-// Routes implements [types.Plugin].
-func (p *Plugin) Routes() []types.Route {
-	return []types.Route{
+// Routes implements [core.Plugin].
+func (p *Plugin) Routes() []core.Route {
+	return []core.Route{
 		{Method: http.MethodPost, Path: PathRequest, Handler: p.handleRequest},
 		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify},
 	}
@@ -398,7 +398,7 @@ func (p *Plugin) RequestLink(ctx context.Context, req LinkRequest) (*LinkResult,
 	return p.request(hctx, req)
 }
 
-func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkResult, error) {
+func (p *Plugin) requestBody(hctx *core.HookContext, req LinkRequest) (*LinkResult, error) {
 	const op = "magiclink.RequestLink"
 	ac := hctx.Auth
 
@@ -408,7 +408,7 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 	if !utils.IsValidEmail(email) {
 		return nil, errs.NewInvalidInputError(op, keyEmail, "invalid email", nil)
 	}
-	if req.RedirectURL != "" && !types.TrustedRedirect(ac.Origins, req.RedirectURL) {
+	if req.RedirectURL != "" && !core.TrustedRedirect(ac.Origins, req.RedirectURL) {
 		return nil, errs.NewInvalidInputError(op, "redirect_url", "redirect URL is not allowed", nil)
 	}
 
@@ -418,7 +418,7 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 			return nil, err // infra error (DB down): not "no such user"
 		}
 		// Sign-up by link is not built: an unknown email gets no link.
-		if failErr := ac.Dispatcher.Fail(hctx, HookRequestFailed, types.FailureReason{
+		if failErr := ac.Dispatcher.Fail(hctx, HookRequestFailed, core.FailureReason{
 			Code: "user_not_found", Metadata: behemoth.M{hooks.HookValueEmail: email},
 		}); failErr != nil {
 			return nil, failErr
@@ -429,7 +429,7 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 	// From here on a failure is one of a known account, and its audit event
 	// says which.
 	failed := func(code string, cause error) error {
-		if failErr := ac.Dispatcher.Fail(hctx, HookRequestFailed, types.FailureReason{
+		if failErr := ac.Dispatcher.Fail(hctx, HookRequestFailed, core.FailureReason{
 			Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID,
 		}); failErr != nil {
 			return failErr
@@ -440,14 +440,14 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 	// One live link per user. The subject is the user's id and not the
 	// email, so Store.DeleteUser removes the links with the user. The email
 	// the link was sent to is kept next to it and checked at verify.
-	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, types.TokenKindMagicLink, user.ID); err != nil {
+	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, core.TokenKindMagicLink, user.ID); err != nil {
 		return nil, failed("issue_failed", err)
 	}
 	meta := behemoth.M{keyEmail: email}
 	if req.RedirectURL != "" {
 		meta[keyRedirectURL] = req.RedirectURL
 	}
-	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, types.TokenKindMagicLink, user.ID, meta)
+	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, core.TokenKindMagicLink, user.ID, meta)
 	if err != nil {
 		return nil, failed("issue_failed", err)
 	}
@@ -457,8 +457,8 @@ func (p *Plugin) requestBody(hctx *types.HookContext, req LinkRequest) (*LinkRes
 	query.Set(keyToken, rawToken)
 	link.RawQuery = query.Encode()
 
-	msg := types.MailMessage{
-		Kind: types.MailMagicLink, To: email, URL: link.String(), Token: rawToken,
+	msg := core.MailMessage{
+		Kind: core.MailMagicLink, To: email, URL: link.String(), Token: rawToken,
 		ExpiresAt: token.ExpiresAt, User: user, Metadata: req.Metadata,
 	}
 	if p.opts.WaitForSend {
@@ -519,7 +519,7 @@ func (p *Plugin) Verify(ctx context.Context, rawToken string) (*VerifyResult, er
 	// and fires auth.signIn.failed.
 	in := verifyInput{token: rawToken}
 	var redirect string
-	token, err := p.authContext.TokenManager.Verify(ctx, types.TokenKindMagicLink, rawToken)
+	token, err := p.authContext.TokenManager.Verify(ctx, core.TokenKindMagicLink, rawToken)
 	switch {
 	case err == nil:
 		in.email, _ = token.MetadataJSON[keyEmail].(string)
@@ -536,24 +536,24 @@ func (p *Plugin) Verify(ctx context.Context, rawToken string) (*VerifyResult, er
 	return &VerifyResult{SignInResult: result, RedirectURL: redirect}, nil
 }
 
-func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*types.SignInResult, error) {
+func (p *Plugin) verifyBody(hctx *core.HookContext, in verifyInput) (*core.SignInResult, error) {
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
 
-	token, err := ac.TokenManager.Consume(hctx.Ctx, types.TokenKindMagicLink, in.token)
+	token, err := ac.TokenManager.Consume(hctx.Ctx, core.TokenKindMagicLink, in.token)
 	if err != nil {
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad link
 		}
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{Code: "invalid_magic_link", Cause: err}); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, core.FailureReason{Code: "invalid_magic_link", Cause: err}); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidLink()
 	}
 
 	userID := fmt.Sprint(token.Subject)
-	rejected := func(code string, cause error) types.FailureReason {
-		return types.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: userID}
+	rejected := func(code string, cause error) core.FailureReason {
+		return core.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: userID}
 	}
 
 	user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
@@ -588,33 +588,33 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*types.Sig
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
-		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
-			types.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
+		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
+			core.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
 	}
 	state := models.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
 		state = models.SessionPending
 	}
 
-	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{State: state})
+	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state})
 	if err != nil {
 		return nil, err
 	}
-	return &types.SignInResult{User: user, Session: session, RawToken: rawToken, Method: PluginName}, nil
+	return &core.SignInResult{User: user, Session: session, RawToken: rawToken, Method: PluginName}, nil
 }
 
 // operation builds the HookContext one flow call runs with. Its Values start
 // as a copy of the operation ctx already belongs to, if any, and Request is
 // the request ctx carries, or nil.
-func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, error) {
+func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
-	return &types.HookContext{
+	return &core.HookContext{
 		Ctx:     ctx,
 		Auth:    p.authContext,
-		Values:  types.NestedHookValues(ctx),
-		Request: types.RequestFrom(ctx),
+		Values:  core.NestedHookValues(ctx),
+		Request: core.RequestFrom(ctx),
 	}, nil
 }
 
@@ -622,7 +622,7 @@ func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, 
 // Values, under hooks.HookValueEmail, where a rate-limit rule on the flow's
 // before point keys on it. A call without an email leaves no entry and
 // removes an inherited one, so a rule per email does not apply to it.
-func publishEmail(hctx *types.HookContext, email string) {
+func publishEmail(hctx *core.HookContext, email string) {
 	if email = store.NormalizeEmail(email); email == "" {
 		delete(hctx.Values, hooks.HookValueEmail)
 		return
@@ -635,7 +635,7 @@ func publishEmail(hctx *types.HookContext, email string) {
 // issued and a failed send are all a 200. A validation error and a rate
 // limit are reported, since they do not depend on the account. Anything else
 // is a failure of the system and a 500 from the router.
-func (p *Plugin) handleRequest(rctx *types.RequestContext) error {
+func (p *Plugin) handleRequest(rctx *core.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("magiclink.RequestLink", "request", err)
@@ -660,7 +660,7 @@ func (p *Plugin) handleRequest(rctx *types.RequestContext) error {
 // handleVerify returns Verify's error unchanged, and the router maps it: a
 // refused link is a typed unauthorized error (401), and a hook handler's
 // typed rejection keeps its own status.
-func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
+func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("magiclink.Verify", "request", err)
@@ -677,7 +677,7 @@ func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
 
 	// The body every sign-in route answers with, plus the redirect, and
 	// the session token by whichever transport SessionConfig.Transport names.
-	return types.WriteSignIn(rctx, result.SignInResult, behemoth.M{keyRedirectURL: result.RedirectURL})
+	return core.WriteSignIn(rctx, result.SignInResult, behemoth.M{keyRedirectURL: result.RedirectURL})
 }
 
-var _ types.Plugin = (*Plugin)(nil)
+var _ core.Plugin = (*Plugin)(nil)

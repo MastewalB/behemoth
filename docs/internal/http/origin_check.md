@@ -4,10 +4,10 @@ This document explains how behemoth protects cookie-authenticated routes from cr
 
 The code lives in:
 
-- `types/origin_check.go`: `OriginCheck`, `NewOriginCheck`, the refusal reasons, `RefuseFormContentTypes`
-- `types/origins.go`: `TrustedOrigins`, `parseOrigin`, `originOf`
-- `types/router.go`: `RouterConfig.BaseURL`, `RouterConfig.TrustedOrigins`
-- `types/session.go`: `TokenTransport.ReadsCookie`
+- `core/origin_check.go`: `OriginCheck`, `NewOriginCheck`, the refusal reasons, `RefuseFormContentTypes`
+- `core/origins.go`: `TrustedOrigins`, `parseOrigin`, `originOf`
+- `core/router.go`: `RouterConfig.BaseURL`, `RouterConfig.TrustedOrigins`
+- `core/session.go`: `TokenTransport.ReadsCookie`
 - `engine/init.go`: `Boot`, which builds the check and decides whether it runs
 - `engine/init.go`: `checkCookieAgainstBaseURL`, which ties the cookie's attributes to the base URL
 - `errs/origin.go`: `CodeUntrustedOrigin`, `CodeUnsupportedContentType`
@@ -189,10 +189,10 @@ These parts are deferred:
 
 | Test | File | Covers |
 | --- | --- | --- |
-| `TestOriginCheck` | `types/origin_check_test.go` | every row of the table above, with and without a base URL |
-| `TestNewOriginCheckRefusesABadBaseURL` | `types/origin_check_test.go` | the values `NewOriginCheck` refuses |
-| `TestOriginCheckMiddlewareInThePipeline` | `types/origin_check_test.go` | the `403` body, and that a refused request reaches no later stage |
-| `TestRefuseFormContentTypes` | `types/origin_check_test.go` | the three refused types, the types that pass, and a `GET` |
+| `TestOriginCheck` | `core/origin_check_test.go` | every row of the table above, with and without a base URL |
+| `TestNewOriginCheckRefusesABadBaseURL` | `core/origin_check_test.go` | the values `NewOriginCheck` refuses |
+| `TestOriginCheckMiddlewareInThePipeline` | `core/origin_check_test.go` | the `403` body, and that a refused request reaches no later stage |
+| `TestRefuseFormContentTypes` | `core/origin_check_test.go` | the three refused types, the types that pass, and a `GET` |
 | `TestBootInstallsTheOriginCheckForCookieTransports` | `tests/plugins/origin_check_test.go` | both middlewares per transport, on the sign-in route |
 | `TestBootChecksTheSessionCookieAgainstTheBaseURL` | `tests/plugins/origin_check_test.go` | `SameSiteNone` without a base URL, and a domain that does not cover the host |
 | `TestBootRefusesAMalformedBaseURL` | `tests/plugins/origin_check_test.go` | the configuration error |

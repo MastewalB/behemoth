@@ -6,25 +6,25 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/utils"
 )
 
 type DefaultHookRegistry struct {
 	mu      sync.Mutex
-	catalog types.HookCatalog
-	pending map[types.HookPoint][]registeredHandler // unordered until FreezeChains resolves it
+	catalog core.HookCatalog
+	pending map[core.HookPoint][]registeredHandler // unordered until FreezeChains resolves it
 	frozen  bool
 }
 
 // NewHookRegistry returns an empty registry for the handlers of catalog's
 // points. A handler is registered through For.
-func NewHookRegistry(catalog types.HookCatalog) *DefaultHookRegistry {
-	return &DefaultHookRegistry{catalog: catalog, pending: map[types.HookPoint][]registeredHandler{}}
+func NewHookRegistry(catalog core.HookCatalog) *DefaultHookRegistry {
+	return &DefaultHookRegistry{catalog: catalog, pending: map[core.HookPoint][]registeredHandler{}}
 }
 
-func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPhase, plugin string, fn any, opts *types.HookOptions) error {
+func (r *DefaultHookRegistry) register(point core.HookPoint, phase core.HookPhase, plugin string, fn any, opts *core.HookOptions) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.frozen {
@@ -50,7 +50,7 @@ func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPh
 		}
 	}
 
-	rh := registeredHandler{plugin: plugin, handler: fn, priority: types.PriorityNormal}
+	rh := registeredHandler{plugin: plugin, handler: fn, priority: core.PriorityNormal}
 	if opts != nil {
 		rh.priority, rh.before, rh.after = opts.Priority, opts.Before, opts.After
 	}
@@ -58,7 +58,7 @@ func (r *DefaultHookRegistry) register(point types.HookPoint, phase types.HookPh
 	return nil
 }
 
-// scopedHookRegistry is the types.HookRegistry an owner registers through. It
+// scopedHookRegistry is the core.HookRegistry an owner registers through. It
 // injects the owner's name: a plugin's Register(reg HookRegistry) call
 // receives one of these, typed as the interface, and can't override `owner`.
 // DefaultHookRegistry has no registering methods of its own, so a handler
@@ -68,37 +68,37 @@ type scopedHookRegistry struct {
 	owner string
 }
 
-func (s *scopedHookRegistry) OnBefore(point types.HookPoint, fn types.BeforeHookFunc, opts *types.HookOptions) error {
-	return s.inner.register(point, types.BeforeHookPhase, s.owner, fn, opts)
+func (s *scopedHookRegistry) OnBefore(point core.HookPoint, fn core.BeforeHookFunc, opts *core.HookOptions) error {
+	return s.inner.register(point, core.BeforeHookPhase, s.owner, fn, opts)
 }
 
-func (s *scopedHookRegistry) OnAfter(point types.HookPoint, fn types.AfterHookFunc, opts *types.HookOptions) error {
-	return s.inner.register(point, types.AfterHookPhase, s.owner, fn, opts)
+func (s *scopedHookRegistry) OnAfter(point core.HookPoint, fn core.AfterHookFunc, opts *core.HookOptions) error {
+	return s.inner.register(point, core.AfterHookPhase, s.owner, fn, opts)
 }
 
-func (s *scopedHookRegistry) OnFailed(point types.HookPoint, fn types.FailedHookFunc, opts *types.HookOptions) error {
-	return s.inner.register(point, types.FailedHookPhase, s.owner, fn, opts)
+func (s *scopedHookRegistry) OnFailed(point core.HookPoint, fn core.FailedHookFunc, opts *core.HookOptions) error {
+	return s.inner.register(point, core.FailedHookPhase, s.owner, fn, opts)
 }
 
 // For returns the registry through which owner registers its handlers. It
 // records owner as the plugin of each handler it takes, and it is the only way
 // to register one. Boot gives one to each plugin and one to the application.
-func (r *DefaultHookRegistry) For(owner string) types.HookRegistry {
+func (r *DefaultHookRegistry) For(owner string) core.HookRegistry {
 	return &scopedHookRegistry{inner: r, owner: owner}
 }
 
 // Chains holds the frozen chain of handlers of every hook point: what
 // FreezeChains builds and a dispatcher runs.
-type Chains map[types.HookPoint][]registeredHandler
+type Chains map[core.HookPoint][]registeredHandler
 
 // FreezeChains orders the handlers of every point of catalog, by their
 // priorities, their Before and After lists, and pluginOrder, and freezes
 // registry: it takes no handler afterwards.
-func FreezeChains(catalog types.HookCatalog, registry *DefaultHookRegistry, pluginOrder []string) (Chains, error) {
+func FreezeChains(catalog core.HookCatalog, registry *DefaultHookRegistry, pluginOrder []string) (Chains, error) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 
-	frozen := make(map[types.HookPoint][]registeredHandler)
+	frozen := make(map[core.HookPoint][]registeredHandler)
 	for _, def := range catalog.All() {
 		resolved, err := resolvePointOrder(def.Point, registry.pending[def.Point], pluginOrder)
 		if err != nil {
@@ -111,20 +111,20 @@ func FreezeChains(catalog types.HookCatalog, registry *DefaultHookRegistry, plug
 	return frozen, nil
 }
 
-func resolvePointOrder(point types.HookPoint, handlers []registeredHandler, pluginOrder []string) ([]registeredHandler, error) {
+func resolvePointOrder(point core.HookPoint, handlers []registeredHandler, pluginOrder []string) ([]registeredHandler, error) {
 	if len(handlers) <= 1 {
 		return handlers, nil
 	}
 
-	buckets := map[types.HookPriority][]registeredHandler{}
-	priorityOf := map[string]types.HookPriority{}
+	buckets := map[core.HookPriority][]registeredHandler{}
+	priorityOf := map[string]core.HookPriority{}
 
 	for _, h := range handlers {
 		buckets[h.priority] = append(buckets[h.priority], h)
 		priorityOf[h.plugin] = h.priority
 	}
 
-	priorities := make([]types.HookPriority, 0, len(buckets))
+	priorities := make([]core.HookPriority, 0, len(buckets))
 	for p := range buckets {
 		priorities = append(priorities, p)
 	}
@@ -171,7 +171,7 @@ func resolvePointOrder(point types.HookPoint, handlers []registeredHandler, plug
 // in plugin boot order (pluginOrder, the application last), so a plugin's
 // handler runs after those of the plugins it depends on. A cycle is a
 // configuration error.
-func topoSortBucket(point types.HookPoint, bucket []registeredHandler, pluginOrder []string) ([]registeredHandler, error) {
+func topoSortBucket(point core.HookPoint, bucket []registeredHandler, pluginOrder []string) ([]registeredHandler, error) {
 	byPlugin := make(map[string]registeredHandler, len(bucket))
 	for _, h := range bucket {
 		byPlugin[h.plugin] = h
@@ -217,7 +217,7 @@ func topoSortBucket(point types.HookPoint, bucket []registeredHandler, pluginOrd
 
 type registeredHandler struct {
 	plugin   string
-	priority types.HookPriority
+	priority core.HookPriority
 	before   []string
 	after    []string
 	handler  any // BeforeHookFunc | AfterHookFunc | FailedHookFunc, resolved by the point's declared Phase

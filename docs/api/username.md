@@ -15,7 +15,7 @@ import (
 passwords := emailpassword.New(emailpassword.Options{})
 names := username.New(passwords, username.Options{})
 
-app, err := engine.Prepare([]types.Plugin{passwords, names}, engine.PrepareConfig{})
+app, err := engine.Prepare([]core.Plugin{passwords, names}, engine.PrepareConfig{})
 // ...
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{ /* ... */ })
 ```
@@ -135,7 +135,7 @@ shown, ok, err := username.DisplayColumn.Get(user) // "Ada.L"
 
 The flows behave as follows:
 
-- `SignIn` is the flow behind the route. It returns the raw session token and delivers nothing. From a route of your own, hand the result to `types.WriteSignIn`.
+- `SignIn` is the flow behind the route. It returns the raw session token and delivers nothing. From a route of your own, hand the result to `core.WriteSignIn`.
 - `SetUsername` applies the rules and returns the same typed errors as sign-up (`username.ErrorCodeInvalidUsername`, `username.ErrorCodeUsernameTaken`). It does not check who is asking, so call it from a route that has checked the session. The old username is free for another user at once.
 - To give usernames to users you had before adding the plugin, call `SetUsername` for each of them from a job, and handle the two errors for names that break the rules or collide.
 - `Available` returns false for a taken or reserved username, and a validation error for one that breaks a rule of length or characters.
@@ -150,7 +150,7 @@ The plugin declares no points. A sign-in by username fires the `auth.signIn.*` p
 | --- | --- |
 | `auth.signIn.before` | `username` in its stored form, the plaintext `password`, and the other fields of the request. The returned payload becomes the sign-in's input. |
 | `auth.signIn.credentialsVerified` | the user's id, as for an email sign-in. A second-factor plugin and `emailverification`'s `RequireVerified` apply here. |
-| `auth.signIn.after` | a `*types.SignInResult` with `Method` `"username"` |
+| `auth.signIn.after` | a `*core.SignInResult` with `Method` `"username"` |
 | `auth.signIn.failed` | codes `user_not_found` (with the username in the audit event's metadata), `no_credential_account`, `invalid_credentials`, `rejected_by_hook` |
 
 It registers three handlers: on `auth.signUp.before`, `data.user.beforeCreate`, and `data.user.beforeUpdate`. A refused username at sign-up fires `auth.signUp.failed` with `rejected_by_hook`.
@@ -167,10 +167,10 @@ Core's rule for `POST /sign-in/email` does not cover this route, so the two coun
 A sign-in by username publishes the username under `username.HookValueUsername` and publishes no email. A rule of yours on `auth.signIn.before` that counts per email does not count these sign-ins. To limit attempts per account, add a rule per username next to it:
 
 ```go
-ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 	Name: "app.signin.username", Point: hooks.HookSignInBefore,
-	KeyFunc: types.KeyByValues(username.HookValueUsername),
-	Limit:   types.Limit{Max: 20, Window: 15 * time.Minute},
+	KeyFunc: core.KeyByValues(username.HookValueUsername),
+	Limit:   core.Limit{Max: 20, Window: 15 * time.Minute},
 })
 ```
 

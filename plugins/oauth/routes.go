@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -51,7 +51,7 @@ const BindingCookiePrefix = "behemoth_oauth_"
 //
 //	{"authorization_url": "https://..."}
 //	{"authorization_url": "https://...", "binding": "..."}
-func (p *Plugin) handleBegin(rctx *types.RequestContext) error {
+func (p *Plugin) handleBegin(rctx *core.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("oauth.Begin", "request", err)
@@ -71,7 +71,7 @@ func (p *Plugin) handleBegin(rctx *types.RequestContext) error {
 	if cfg.Transport.ReadsCookie() {
 		rctx.Response.Cookie(bindingCookie(cfg, result.State, result.Binding, time.Until(result.ExpiresAt)))
 	}
-	if cfg.Transport != types.TransportCookie {
+	if cfg.Transport != core.TransportCookie {
 		answer[keyBinding] = result.Binding
 	}
 	// The URL holds the state, and the body may hold the binding value.
@@ -81,10 +81,10 @@ func (p *Plugin) handleBegin(rctx *types.RequestContext) error {
 
 // handleComplete takes the binding value from the body, and under the
 // cookie transports from the sign-in's cookie when the body has none. It
-// answers like every sign-in route (types.WriteSignIn), with the redirect
+// answers like every sign-in route (core.WriteSignIn), with the redirect
 // target next to the user, and removes the cookie once the sign-in is done.
 // A refused callback is the flow's typed error, which the router maps.
-func (p *Plugin) handleComplete(rctx *types.RequestContext) error {
+func (p *Plugin) handleComplete(rctx *core.RequestContext) error {
 	const op = "oauth.Complete"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
@@ -122,13 +122,13 @@ func (p *Plugin) handleComplete(rctx *types.RequestContext) error {
 		// The state is used up, and its binding value with it.
 		rctx.Response.Cookie(bindingCookie(cfg, req.State, "", -1))
 	}
-	return types.WriteSignIn(rctx, result.SignInResult, behemoth.M{keyRedirectURL: result.RedirectURL})
+	return core.WriteSignIn(rctx, result.SignInResult, behemoth.M{keyRedirectURL: result.RedirectURL})
 }
 
 // bindingCookieName returns the name of the cookie for the sign-in with
 // state. It carries 16 hex characters of the state's SHA-256 and not the
 // state, which is a URL's to carry.
-func bindingCookieName(cfg types.SessionConfig, state string) string {
+func bindingCookieName(cfg core.SessionConfig, state string) string {
 	name := BindingCookiePrefix + utils.LookupHashOf(state)[:16]
 	if !cfg.CookieInsecure {
 		// Secure, Path "/" and no Domain, which the prefix requires: a
@@ -143,12 +143,12 @@ func bindingCookieName(cfg types.SessionConfig, state string) string {
 // state, for maxAge. A maxAge of zero or less removes the cookie. SameSite
 // and Secure follow the session cookie: the cookie has to reach the
 // complete route on the same requests the session cookie reaches.
-func bindingCookie(cfg types.SessionConfig, state, value string, maxAge time.Duration) *http.Cookie {
+func bindingCookie(cfg core.SessionConfig, state, value string, maxAge time.Duration) *http.Cookie {
 	sameSite := http.SameSiteLaxMode
 	switch cfg.CookieSameSite {
-	case types.SameSiteStrict:
+	case core.SameSiteStrict:
 		sameSite = http.SameSiteStrictMode
-	case types.SameSiteNone:
+	case core.SameSiteNone:
 		sameSite = http.SameSiteNoneMode
 	}
 	seconds := int(maxAge / time.Second)

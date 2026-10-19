@@ -8,9 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,10 +30,10 @@ func (s staticKeySet) PublicKey(_ context.Context, kid string) (crypto.Published
 func (s staticKeySet) PublicKeys(context.Context) ([]crypto.PublishedKey, error) { return s, nil }
 
 // serve runs the one route of routes and returns what it answered.
-func serve(t *testing.T, routes []types.Route) (*httptest.ResponseRecorder, error) {
+func serve(t *testing.T, routes []core.Route) (*httptest.ResponseRecorder, error) {
 	t.Helper()
 	require.Len(t, routes, 1)
-	rctx := &types.RequestContext{Ctx: context.Background(), Response: types.NewResponseRecorder()}
+	rctx := &core.RequestContext{Ctx: context.Background(), Response: core.NewResponseRecorder()}
 	err := routes[0].Handler(rctx)
 	w := httptest.NewRecorder()
 	rctx.Response.Flush(w)

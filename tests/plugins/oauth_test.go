@@ -14,14 +14,14 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -89,7 +89,7 @@ func (f *fakeProvider) last(t *testing.T) oauth.AuthorizationRequest {
 
 type oauthApp struct {
 	plugin  *oauth.Plugin
-	ac      *types.AuthContext
+	ac      *core.AuthContext
 	db      *sql.DB
 	google  *fakeProvider
 	mounted mountedRoutes
@@ -100,7 +100,7 @@ type oauthApp struct {
 // empty get a provider "google" and a callback URL. configure may change
 // the BootConfig before Boot. It returns Boot's error, for the tests of the
 // options.
-func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg types.HookRegistry) error, configure ...func(*engine.BootConfig)) (*oauthApp, error) {
+func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg core.HookRegistry) error, configure ...func(*engine.BootConfig)) (*oauthApp, error) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "oauth.db"))
@@ -118,14 +118,14 @@ func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg types.HookRegis
 	}
 	app.plugin = oauth.New(opts)
 
-	prepared, err := engine.Prepare([]types.Plugin{app.plugin}, engine.PrepareConfig{})
+	prepared, err := engine.Prepare([]core.Plugin{app.plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	cfg := engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
-		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
-		Router:  types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Router:  core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
 		Hooks:   hookFn,
 		HTTP:    app.mounted,
 	}
@@ -165,9 +165,9 @@ func s256(verifier string) string {
 func TestOAuthBeginStartsASignIn(t *testing.T) {
 	ctx := context.Background()
 	var issued []behemoth.M
-	app, err := bootOAuth(t, oauth.Options{}, func(reg types.HookRegistry) error {
+	app, err := bootOAuth(t, oauth.Options{}, func(reg core.HookRegistry) error {
 		// What a handler on the token points gets to see of the sign-in.
-		return reg.OnAfter(hooks.HookTokenAfterIssue, func(_ *types.HookContext, result any) error {
+		return reg.OnAfter(hooks.HookTokenAfterIssue, func(_ *core.HookContext, result any) error {
 			issued = append(issued, result.(*models.Token).MetadataJSON)
 			return nil
 		}, nil)
@@ -192,7 +192,7 @@ func TestOAuthBeginStartsASignIn(t *testing.T) {
 	assert.NotContains(t, result.AuthorizationURL, result.Binding, "the binding value is in no URL")
 
 	// The state is the raw token of the sign-in.
-	token, err := app.ac.TokenManager.Verify(ctx, types.TokenKindOAuthState, sent.State)
+	token, err := app.ac.TokenManager.Verify(ctx, core.TokenKindOAuthState, sent.State)
 	require.NoError(t, err)
 	assert.Equal(t, result.TransactionID, token.ID)
 	assert.Empty(t, token.Subject, "nobody is signed in yet")
@@ -226,7 +226,7 @@ func TestOAuthBeginStartsASignIn(t *testing.T) {
 	assert.NotEqual(t, sent.Nonce, again.Nonce)
 	assert.NotEqual(t, sent.CodeChallenge, again.CodeChallenge)
 	assert.NotEqual(t, result.Binding, second.Binding)
-	secondToken, err := app.ac.TokenManager.Verify(ctx, types.TokenKindOAuthState, again.State)
+	secondToken, err := app.ac.TokenManager.Verify(ctx, core.TokenKindOAuthState, again.State)
 	require.NoError(t, err)
 	assert.NotContains(t, secondToken.MetadataJSON, "redirect_url", "no redirect URL was asked for")
 	assert.Equal(t, 2, app.tokens(t, "kind = 'oauth_state'"))
@@ -268,9 +268,9 @@ func TestOAuthBeginHooks(t *testing.T) {
 	ctx := context.Background()
 	var payloads []behemoth.M
 	var started []*oauth.BeginResult
-	var failures []types.FailureReason
-	app, err := bootOAuth(t, oauth.Options{}, func(reg types.HookRegistry) error {
-		if err := reg.OnBefore(oauth.HookBeginBefore, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	var failures []core.FailureReason
+	app, err := bootOAuth(t, oauth.Options{}, func(reg core.HookRegistry) error {
+		if err := reg.OnBefore(oauth.HookBeginBefore, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			payloads = append(payloads, payload)
 			switch payload["captcha"] {
 			case "wrong":
@@ -282,13 +282,13 @@ func TestOAuthBeginHooks(t *testing.T) {
 		}, nil); err != nil {
 			return err
 		}
-		if err := reg.OnAfter(oauth.HookBeginAfter, func(_ *types.HookContext, result any) error {
+		if err := reg.OnAfter(oauth.HookBeginAfter, func(_ *core.HookContext, result any) error {
 			started = append(started, result.(*oauth.BeginResult))
 			return nil
 		}, nil); err != nil {
 			return err
 		}
-		return reg.OnFailed(oauth.HookBeginFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+		return reg.OnFailed(oauth.HookBeginFailed, func(_ *core.HookContext, reason core.FailureReason) error {
 			failures = append(failures, reason)
 			return nil
 		}, nil)
@@ -320,7 +320,7 @@ func TestOAuthBeginHooks(t *testing.T) {
 	_, err = app.plugin.Begin(ctx, oauth.BeginRequest{Provider: "google", Extra: behemoth.M{"captcha": "wrong"}})
 	assert.True(t, hasCode(err, errs.CategoryUnauthorized, "captcha_failed"), "the handler's error is returned: %v", err)
 	require.Len(t, failures, 1)
-	assert.Equal(t, types.FailureRejectedByHook, failures[0].Code)
+	assert.Equal(t, core.FailureRejectedByHook, failures[0].Code)
 	assert.Equal(t, before, app.tokens(t, "1 = 1"))
 	assert.Len(t, started, 2, "the after point did not fire for the refused sign-in")
 }
@@ -345,7 +345,7 @@ func TestOAuthBeginEndsASignInTheProviderFailed(t *testing.T) {
 			assert.NotContains(t, err.Error(), state, "the error does not quote the state")
 
 			assert.Equal(t, 1, app.tokens(t, "revoked_at IS NOT NULL"), "the stored sign-in is ended")
-			_, err = app.ac.TokenManager.Verify(ctx, types.TokenKindOAuthState, state)
+			_, err = app.ac.TokenManager.Verify(ctx, core.TokenKindOAuthState, state)
 			assert.Error(t, err, "its state no longer works")
 		})
 	}

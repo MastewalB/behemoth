@@ -21,13 +21,13 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 )
 
 // PluginName is the name the plugin registers under (PluginMeta.Name). It
@@ -78,7 +78,7 @@ const (
 // HookValueUsername is the key a sign-in's username is published under in
 // HookContext.Values, in its stored form. A rate-limit rule on
 // auth.signIn.before counts sign-ins per username with
-// types.KeyByValues(username.HookValueUsername). It is also the key of the
+// core.KeyByValues(username.HookValueUsername). It is also the key of the
 // username in the auth.signIn.before and auth.signUp.before payloads and in
 // the request bodies.
 const HookValueUsername = "username"
@@ -146,7 +146,7 @@ type Plugin struct {
 	opts        Options
 	passwords   *emailpassword.Plugin
 	reserved    map[string]bool
-	authContext *types.AuthContext
+	authContext *core.AuthContext
 }
 
 // New returns the plugin configured with opts. passwords is the
@@ -168,22 +168,22 @@ func New(passwords *emailpassword.Plugin, opts Options) *Plugin {
 	return &Plugin{opts: opts, passwords: passwords, reserved: reserved}
 }
 
-// Meta implements [types.Plugin]. The plugin depends on the email/password
+// Meta implements [core.Plugin]. The plugin depends on the email/password
 // plugin, so that plugin is initialized first. It has no mount path: its
 // route sits next to /sign-in/email.
-func (p *Plugin) Meta() types.PluginMeta {
-	return types.PluginMeta{
+func (p *Plugin) Meta() core.PluginMeta {
+	return core.PluginMeta{
 		Name:         PluginName,
-		Dependencies: []types.PluginDependency{{Name: emailpassword.PluginName}},
+		Dependencies: []core.PluginDependency{{Name: emailpassword.PluginName}},
 	}
 }
 
-// Version implements [types.Plugin].
+// Version implements [core.Plugin].
 func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
-// Declare implements [types.Plugin]. The plugin declares:
+// Declare implements [core.Plugin]. The plugin declares:
 //   - the username column on users (Column). It is nullable, so a user
 //     without a username holds no value and the unique constraint allows any
 //     number of them, and so that a version of the application without the
@@ -197,7 +197,7 @@ func (p *Plugin) Version() string {
 // limit per username would let anyone keep a user out by failing on purpose;
 // an application that wants one declares it on auth.signIn.before with
 // HookValueUsername.
-func (p *Plugin) Declare(ic *types.PluginInitContext) error {
+func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 	if err := ic.Schemas.ExtendColumn(Column.Contribution(schema.Column{
 		Type: schema.ColTypeString, Length: MaxColumnLength, Nullable: true, Unique: true, Public: true,
 	})); err != nil {
@@ -209,9 +209,9 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 		return err
 	}
 	byAddress := func(_ *http.Request, ip string) string { return ip }
-	if err := ic.RateLimits.DeclareRouteRateLimitRule(types.RouteRateLimitRule{
+	if err := ic.RateLimits.DeclareRouteRateLimitRule(core.RouteRateLimitRule{
 		Name: RuleSignInRoute, Method: http.MethodPost, Path: PathSignIn,
-		KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute},
+		KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute},
 	}); err != nil {
 		return err
 	}
@@ -219,13 +219,13 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 		return nil
 	}
 	// More generous than sign-in: a form checks as the user types.
-	return ic.RateLimits.DeclareRouteRateLimitRule(types.RouteRateLimitRule{
+	return ic.RateLimits.DeclareRouteRateLimitRule(core.RouteRateLimitRule{
 		Name: RuleAvailableRoute, Method: http.MethodPost, Path: PathAvailable,
-		KeyFunc: byAddress, Limit: types.Limit{Max: 30, Window: time.Minute},
+		KeyFunc: byAddress, Limit: core.Limit{Max: 30, Window: time.Minute},
 	})
 }
 
-// Register implements [types.Plugin]. The rules are applied where a user row
+// Register implements [core.Plugin]. The rules are applied where a user row
 // is written, so they hold for every way of writing one: a sign-up, a
 // Store.UpdateUser from the application, another plugin.
 //   - auth.signUp.before: the sign-up's "username" and "display_username"
@@ -236,7 +236,7 @@ func (p *Plugin) Declare(ic *types.PluginInitContext) error {
 //   - data.user.beforeUpdate: the same for an update that sets the username.
 //     An empty one removes both. An update of the display form alone has to
 //     spell the username the user has.
-func (p *Plugin) Register(reg types.HookRegistry) error {
+func (p *Plugin) Register(reg core.HookRegistry) error {
 	if err := reg.OnBefore(hooks.HookSignUpBefore, p.onSignUp, nil); err != nil {
 		return err
 	}
@@ -246,14 +246,14 @@ func (p *Plugin) Register(reg types.HookRegistry) error {
 	return reg.OnBefore(hooks.HookUserBeforeUpdate, p.onUserUpdate, nil)
 }
 
-// Middlewares implements [types.Plugin]. The plugin has no middleware.
-func (p *Plugin) Middlewares() []types.Middleware {
+// Middlewares implements [core.Plugin]. The plugin has no middleware.
+func (p *Plugin) Middlewares() []core.Middleware {
 	return nil
 }
 
-// Init implements [types.Plugin]. It checks the options and keeps the
+// Init implements [core.Plugin]. It checks the options and keeps the
 // AuthContext.
-func (p *Plugin) Init(ac *types.AuthContext) error {
+func (p *Plugin) Init(ac *core.AuthContext) error {
 	const op = "username.Init"
 	if p.passwords == nil {
 		return errs.NewConfigurationError(op, "no email/password plugin was given to New; sign-in by username runs through it", nil)
@@ -266,14 +266,14 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	return nil
 }
 
-// Routes implements [types.Plugin]. The availability route is added only
+// Routes implements [core.Plugin]. The availability route is added only
 // with Options.AvailabilityRoute.
-func (p *Plugin) Routes() []types.Route {
-	routes := []types.Route{
+func (p *Plugin) Routes() []core.Route {
+	routes := []core.Route{
 		{Method: http.MethodPost, Path: PathSignIn, Handler: p.handleSignIn},
 	}
 	if p.opts.AvailabilityRoute {
-		routes = append(routes, types.Route{Method: http.MethodPost, Path: PathAvailable, Handler: p.handleAvailable})
+		routes = append(routes, core.Route{Method: http.MethodPost, Path: PathAvailable, Handler: p.handleAvailable})
 	}
 	return routes
 }
@@ -343,7 +343,7 @@ func errUsernameTaken() error {
 // onSignUp handles auth.signUp.before. The email/password plugin stores
 // only its own profile fields, so the username and its display form travel
 // from here to the user's create in the operation's Values.
-func (p *Plugin) onSignUp(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+func (p *Plugin) onSignUp(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 	delete(hctx.Values, valueSignUpUsername) // an enclosing sign-up's, if any
 	delete(hctx.Values, valueSignUpDisplay)
 	name, display, err := p.resolve(payload[Column.Name], payload[DisplayColumn.Name])
@@ -364,7 +364,7 @@ func (p *Plugin) onSignUp(hctx *types.HookContext, payload behemoth.M) (behemoth
 // row (set by the code that creates the user) is used, and otherwise the one
 // a sign-up left in Values. A row without one is stored without a value in
 // either column.
-func (p *Plugin) onUserCreate(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
+func (p *Plugin) onUserCreate(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
 	rawName, rawDisplay := row[Column.Name], row[DisplayColumn.Name]
 	if rawName == nil || rawName == "" {
 		if noted, ok := hctx.Values[valueSignUpUsername]; ok {
@@ -393,7 +393,7 @@ func (p *Plugin) onUserCreate(hctx *types.HookContext, row behemoth.M) (behemoth
 // with it, and an empty or nil username removes both. One that sets the
 // display form alone changes how the user's username is spelled, and an
 // empty one puts the stored form back.
-func (p *Plugin) onUserUpdate(hctx *types.HookContext, changes behemoth.M) (behemoth.M, error) {
+func (p *Plugin) onUserUpdate(hctx *core.HookContext, changes behemoth.M) (behemoth.M, error) {
 	rawName, naming := changes[Column.Name]
 	rawDisplay, displaying := changes[DisplayColumn.Name]
 	if !naming && !displaying {
@@ -421,7 +421,7 @@ func (p *Plugin) onUserUpdate(hctx *types.HookContext, changes behemoth.M) (behe
 // respell handles an update that sets the display form and not the
 // username. The username the user holds is not checked against the rules
 // again: one accepted under older limits can still be respelled.
-func (p *Plugin) respell(hctx *types.HookContext, id string, rawDisplay any, changes behemoth.M) (behemoth.M, error) {
+func (p *Plugin) respell(hctx *core.HookContext, id string, rawDisplay any, changes behemoth.M) (behemoth.M, error) {
 	var display string
 	switch v := rawDisplay.(type) {
 	case nil:
@@ -499,7 +499,7 @@ func (p *Plugin) resolve(rawName, rawDisplay any) (name, display string, err err
 // user row, when a user other than ownerID holds it. The lookup runs in the
 // write's transaction. Two writes racing for one username can both pass it;
 // the column's unique constraint then refuses the second.
-func (p *Plugin) free(hctx *types.HookContext, name, ownerID string) error {
+func (p *Plugin) free(hctx *core.HookContext, name, ownerID string) error {
 	holder, err := hctx.Tx.FindUserBy(hctx.Ctx, Column.Name, name)
 	switch {
 	case err == nil:
@@ -575,7 +575,7 @@ func (c *Credentials) FromMap(data map[string]any) error {
 // It is the flow behind POST /sign-in/username, for callers that are not
 // that route. The raw session token is in the result and is the caller's to
 // deliver. The plugin must have been initialized by Boot.
-func (p *Plugin) SignIn(ctx context.Context, creds Credentials) (*types.SignInResult, error) {
+func (p *Plugin) SignIn(ctx context.Context, creds Credentials) (*core.SignInResult, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError("username.SignIn", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
@@ -640,9 +640,9 @@ func (p *Plugin) SetUsername(ctx context.Context, userID, username string) (*mod
 }
 
 // handleSignIn decodes the body, calls SignIn and answers the way every
-// sign-in route does (types.WriteSignIn). It returns the flow's error
+// sign-in route does (core.WriteSignIn). It returns the flow's error
 // unchanged, and the router maps it.
-func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
+func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 	// The body is decoded as a map so that fields other than the username
 	// and password reach the before handlers, in creds.Extra.
 	var body behemoth.M
@@ -657,13 +657,13 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return types.WriteSignIn(rctx, result, nil)
+	return core.WriteSignIn(rctx, result, nil)
 }
 
 // handleAvailable decodes the body, calls Available and answers
 // {"available": true} or {"available": false}. A username that is not a
 // string or breaks the rules is the flow's validation error.
-func (p *Plugin) handleAvailable(rctx *types.RequestContext) error {
+func (p *Plugin) handleAvailable(rctx *core.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("username.Available", "request", err)
@@ -679,4 +679,4 @@ func (p *Plugin) handleAvailable(rctx *types.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{keyAvailable: available})
 }
 
-var _ types.Plugin = (*Plugin)(nil)
+var _ core.Plugin = (*Plugin)(nil)

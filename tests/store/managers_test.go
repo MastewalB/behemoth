@@ -14,6 +14,8 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -23,8 +25,6 @@ import (
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/MastewalB/behemoth/tests/testutils"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,27 +65,27 @@ func testCrypto(t *testing.T) crypto.Services {
 // passDispatcher passes every payload through and records the contexts.
 type passDispatcher struct {
 	mu   sync.Mutex
-	seen []*types.HookContext
+	seen []*core.HookContext
 }
 
-func (d *passDispatcher) record(h *types.HookContext) {
+func (d *passDispatcher) record(h *core.HookContext) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.seen = append(d.seen, h)
 }
-func (d *passDispatcher) RunBefore(h *types.HookContext, _ types.HookPoint, p behemoth.M) (behemoth.M, error) {
+func (d *passDispatcher) RunBefore(h *core.HookContext, _ core.HookPoint, p behemoth.M) (behemoth.M, error) {
 	d.record(h)
 	return p, nil
 }
-func (d *passDispatcher) RunAfter(h *types.HookContext, _ types.HookPoint, _ any) error {
+func (d *passDispatcher) RunAfter(h *core.HookContext, _ core.HookPoint, _ any) error {
 	d.record(h)
 	return nil
 }
-func (d *passDispatcher) RunAfterTx(h *types.HookContext, _ types.HookPoint, _ any) error {
+func (d *passDispatcher) RunAfterTx(h *core.HookContext, _ core.HookPoint, _ any) error {
 	d.record(h)
 	return nil
 }
-func (d *passDispatcher) Fail(h *types.HookContext, _ types.HookPoint, _ types.FailureReason) error {
+func (d *passDispatcher) Fail(h *core.HookContext, _ core.HookPoint, _ core.FailureReason) error {
 	d.record(h)
 	return nil
 }
@@ -166,7 +166,7 @@ func TestConsumeAndRevokeUnknownToken(t *testing.T) {
 
 // ---- session manager ----
 
-func newSessionManager(t *testing.T, cfg types.SessionConfig) (types.SessionManager, *passDispatcher) {
+func newSessionManager(t *testing.T, cfg core.SessionConfig) (core.SessionManager, *passDispatcher) {
 	t.Helper()
 	d := &passDispatcher{}
 	if cfg.ExpiresIn == 0 {
@@ -180,13 +180,13 @@ func newSessionManager(t *testing.T, cfg types.SessionConfig) (types.SessionMana
 
 // managersAuth is the AuthContext the managers under test are built with. It
 // only has to be the pointer handlers get back as HookContext.Auth.
-var managersAuth = &types.AuthContext{}
+var managersAuth = &core.AuthContext{}
 
 func TestSessionLifecycle(t *testing.T) {
 	ctx := context.Background()
-	sm, _ := newSessionManager(t, types.SessionConfig{})
+	sm, _ := newSessionManager(t, core.SessionConfig{})
 
-	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionPending})
+	sess, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
 	assert.NotEmpty(t, sess.ID, "the store assigned the id")
 	assert.False(t, sess.CreatedAt.IsZero(), "the store stamped created_at")
@@ -216,8 +216,8 @@ func TestSessionLifecycle(t *testing.T) {
 
 func TestSessionTouchExtendsExpiry(t *testing.T) {
 	ctx := context.Background()
-	sm, _ := newSessionManager(t, types.SessionConfig{UpdateAge: 2 * time.Hour}) // always due
-	sess, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	sm, _ := newSessionManager(t, core.SessionConfig{UpdateAge: 2 * time.Hour}) // always due
+	sess, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(10 * time.Millisecond)
 	extended, err := sm.Touch(ctx, sess)
@@ -230,8 +230,8 @@ func TestSessionTouchExtendsExpiry(t *testing.T) {
 
 	// Not due: with UpdateAge at zero a session is never extended, and
 	// Touch says so by returning no session.
-	fixed, _ := newSessionManager(t, types.SessionConfig{})
-	sess, _, err = fixed.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	fixed, _ := newSessionManager(t, core.SessionConfig{})
+	sess, _, err = fixed.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	extended, err = fixed.Touch(ctx, sess)
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestSessionTouchExtendsExpiry(t *testing.T) {
 // then has the last word, because the copy may be older than the row.
 func TestSessionTouchDecidesFromTheSessionItIsGiven(t *testing.T) {
 	ctx := context.Background()
-	sm, _ := newSessionManager(t, types.SessionConfig{UpdateAge: 30 * time.Minute}) // due in the second half of the hour a session lasts
+	sm, _ := newSessionManager(t, core.SessionConfig{UpdateAge: 30 * time.Minute}) // due in the second half of the hour a session lasts
 
 	// Not due: the row is not looked for. A session that was never stored
 	// shows it, since reading it would fail.
@@ -257,7 +257,7 @@ func TestSessionTouchDecidesFromTheSessionItIsGiven(t *testing.T) {
 
 	// Due by the copy, not by the row: another request has extended the
 	// session already. Nothing is written.
-	fresh, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	fresh, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	stale := *fresh
 	stale.ExpiresAt = time.Now().Add(time.Minute)
@@ -290,34 +290,34 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 	_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
 	require.NoError(t, err)
 	sm := auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t),
-		types.SessionConfig{Transport: types.TransportHeader, ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		core.SessionConfig{Transport: core.TransportHeader, ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
 		&passDispatcher{}, nil, managersAuth, nil)
 
 	reached := 0
-	handler := types.RequireSession(sm)(func(*types.RequestContext) error {
+	handler := core.RequireSession(sm)(func(*core.RequestContext) error {
 		reached++
 		return nil
 	})
 	// request returns what the router would answer with: the status and
 	// body its error mapper gives the middleware's error.
-	request := func(token string) (rctx *types.RequestContext, status int, body behemoth.M, err error) {
+	request := func(token string) (rctx *core.RequestContext, status int, body behemoth.M, err error) {
 		req := httptest.NewRequest(http.MethodGet, "/me", nil)
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		rctx = &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx = &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		if err = handler(rctx); err != nil {
 			status, body = (&errs.DefaultErrorMapper{}).Map(err)
 		}
 		return rctx, status, body, err
 	}
 
-	_, liveToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	_, liveToken, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	revoked, revokedToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	revoked, revokedToken, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	require.NoError(t, sm.Revoke(ctx, revoked.ID, "test"))
-	_, pendingToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionPending})
+	_, pendingToken, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
 
 	for name, tc := range map[string]struct{ token, code, message string }{
@@ -365,7 +365,7 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 	require.NoError(t, err)
 	// Every manager shares the database, so one can create what another
 	// is asked about.
-	manager := func(cfg types.SessionConfig) types.SessionManager {
+	manager := func(cfg core.SessionConfig) core.SessionManager {
 		if cfg.ExpiresIn == 0 {
 			cfg.ExpiresIn = time.Hour
 		}
@@ -374,7 +374,7 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 	}
 	// request sends cookie and bearer through the middleware mw builds, and
 	// returns the response and the middleware's error.
-	request := func(sm types.SessionManager, mw func(types.SessionManager) types.Middleware, cookie, bearer string) (*types.RequestContext, error) {
+	request := func(sm core.SessionManager, mw func(core.SessionManager) core.Middleware, cookie, bearer string) (*core.RequestContext, error) {
 		req := httptest.NewRequest(http.MethodGet, "/me", nil)
 		if cookie != "" {
 			req.AddCookie(&http.Cookie{Name: "session_token", Value: cookie})
@@ -382,25 +382,25 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 		if bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
-		rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
-		return rctx, mw(sm)(func(*types.RequestContext) error { return nil })(rctx)
+		rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+		return rctx, mw(sm)(func(*core.RequestContext) error { return nil })(rctx)
 	}
 	// removed reports whether the response removes the session cookie.
-	removed := func(rctx *types.RequestContext) bool {
+	removed := func(rctx *core.RequestContext) bool {
 		set := (&http.Response{Header: rctx.Response.Headers}).Cookies()
 		return len(set) == 1 && set[0].Name == "session_token" && set[0].Value == "" && set[0].MaxAge < 0
 	}
 
-	sm := manager(types.SessionConfig{})
-	revoked, revokedToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	sm := manager(core.SessionConfig{})
+	revoked, revokedToken, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	require.NoError(t, sm.Revoke(ctx, revoked.ID, "revoked_elsewhere"))
-	_, expiredToken, err := manager(types.SessionConfig{ExpiresIn: 20 * time.Millisecond}).Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	_, expiredToken, err := manager(core.SessionConfig{ExpiresIn: 20 * time.Millisecond}).Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(40 * time.Millisecond)
-	_, pendingToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionPending})
+	_, pendingToken, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
-	_, liveToken, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	_, liveToken, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 
 	// Gone for good: the cookie goes with the refusal.
@@ -409,39 +409,39 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 		"expired":      {expiredToken, errs.CodeSessionExpired},
 		"never issued": {"never-issued", errs.CodeSessionInvalid},
 	} {
-		rctx, err := request(sm, types.RequireSession, tc.token, "")
+		rctx, err := request(sm, core.RequireSession, tc.token, "")
 		assert.True(t, errs.IsCode(err, tc.code), "%s: %v", name, err)
 		assert.True(t, removed(rctx), "%s: the cookie is removed: %q", name, rctx.Response.Headers.Values("Set-Cookie"))
 	}
 
 	// Not gone: the client still needs its cookie, or has none.
-	rctx, err := request(sm, types.RequireSession, pendingToken, "")
+	rctx, err := request(sm, core.RequireSession, pendingToken, "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a session that waits for its second factor keeps its cookie")
 
-	rctx, err = request(sm, types.RequireSession, "", "")
+	rctx, err = request(sm, core.RequireSession, "", "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "no cookie came, none is removed")
 
-	neverFresh := manager(types.SessionConfig{FreshAge: time.Nanosecond})
-	rctx, err = request(neverFresh, types.RequireFreshSession, liveToken, "")
+	neverFresh := manager(core.SessionConfig{FreshAge: time.Nanosecond})
+	rctx, err = request(neverFresh, core.RequireFreshSession, liveToken, "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionNotFresh), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a session that is only too old for this route is still live")
 
 	// Both transports: the bearer token is read first. A dead one says
 	// nothing about the cookie next to it, which is another session's.
-	both := manager(types.SessionConfig{Transport: types.TransportBoth})
-	rctx, err = request(both, types.RequireSession, liveToken, revokedToken)
+	both := manager(core.SessionConfig{Transport: core.TransportBoth})
+	rctx, err = request(both, core.RequireSession, liveToken, revokedToken)
 	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "the live session's cookie stays")
-	rctx, err = request(both, types.RequireSession, revokedToken, "")
+	rctx, err = request(both, core.RequireSession, revokedToken, "")
 	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	assert.True(t, removed(rctx), "the dead session's own cookie goes")
 
 	// The database fails: nothing is known about the session, so nothing
 	// is taken from the client.
 	require.NoError(t, sqlDB.Close())
-	rctx, err = request(sm, types.RequireSession, liveToken, "")
+	rctx, err = request(sm, core.RequireSession, liveToken, "")
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryDatabase), "%v", err)
 	assert.Empty(t, rctx.Response.Headers, "a failed lookup removes no cookie")
@@ -454,14 +454,14 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
-		cfg    types.SessionConfig
+		cfg    core.SessionConfig
 		cached bool
 		want   int // statements one request runs
 	}{
-		"cache, rolling off":         {types.SessionConfig{}, true, 0},
-		"cache, rolling on, not due": {types.SessionConfig{UpdateAge: 30 * time.Minute}, true, 0},
-		"no cache, rolling off":      {types.SessionConfig{}, false, 1},
-		"no cache, not due":          {types.SessionConfig{UpdateAge: 30 * time.Minute}, false, 1},
+		"cache, rolling off":         {core.SessionConfig{}, true, 0},
+		"cache, rolling on, not due": {core.SessionConfig{UpdateAge: 30 * time.Minute}, true, 0},
+		"no cache, rolling off":      {core.SessionConfig{}, false, 1},
+		"no cache, not due":          {core.SessionConfig{UpdateAge: 30 * time.Minute}, false, 1},
 	} {
 		// The adapter logs each statement at debug, which is how they are
 		// counted.
@@ -478,18 +478,18 @@ func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
 		tc.cfg.ExpiresIn = time.Hour
 		sm := auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil).WithLogger(rec.Logger)),
 			kv, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
-		_, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+		_, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 		require.NoError(t, err, name)
 		require.NotEmpty(t, rec.Logger.At(slog.LevelDebug), "%s: creating the session ran statements, so they are being counted", name)
 
 		reached := false
-		handler := types.RequireSession(sm)(func(*types.RequestContext) error {
+		handler := core.RequireSession(sm)(func(*core.RequestContext) error {
 			reached = true
 			return nil
 		})
 		req := httptest.NewRequest(http.MethodGet, "/me", nil)
 		req.AddCookie(&http.Cookie{Name: "session_token", Value: raw})
-		rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		rec.Logger.Reset()
 		require.NoError(t, handler(rctx), name)
 		require.True(t, reached, name)
@@ -499,14 +499,14 @@ func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
 
 func TestSessionRevokeAllAndEviction(t *testing.T) {
 	ctx := context.Background()
-	sm, _ := newSessionManager(t, types.SessionConfig{MaxConcurrent: 2, EvictOldestOnLimit: true})
-	first, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	sm, _ := newSessionManager(t, core.SessionConfig{MaxConcurrent: 2, EvictOldestOnLimit: true})
+	first, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(5 * time.Millisecond)
-	second, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	second, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(5 * time.Millisecond)
-	third, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	third, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 
 	states := func() map[string]models.SessionState {
@@ -533,17 +533,17 @@ func TestSessionRevokeAllAndEviction(t *testing.T) {
 // that last for one operation: a create's two points share a map, a revoke's
 // two share another, and both start as a copy of the caller's operation.
 func TestSessionHooksGetACompleteContext(t *testing.T) {
-	sm, d := newSessionManager(t, types.SessionConfig{})
-	rc := &types.RequestContext{Request: httptest.NewRequest("POST", "/sign-in", nil)}
+	sm, d := newSessionManager(t, core.SessionConfig{})
+	rc := &core.RequestContext{Request: httptest.NewRequest("POST", "/sign-in", nil)}
 	flow := behemoth.M{"flow": "sign-in"}
-	ctx := types.ContextWithHookValues(types.ContextWithRequest(context.Background(), rc), flow)
-	sess, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	ctx := core.ContextWithHookValues(core.ContextWithRequest(context.Background(), rc), flow)
+	sess, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	require.NoError(t, sm.Revoke(ctx, sess.ID, "user_logout"))
 
 	type dispatch struct {
-		point types.HookPoint
-		phase types.HookPhase
+		point core.HookPoint
+		phase core.HookPhase
 	}
 	var got []dispatch
 	for _, h := range d.seen {
@@ -555,8 +555,8 @@ func TestSessionHooksGetACompleteContext(t *testing.T) {
 		assert.Equal(t, "sign-in", h.Values["flow"], "%s: the caller's operation is visible", h.Point)
 	}
 	assert.Equal(t, []dispatch{
-		{hooks.HookSessionBeforeCreate, types.BeforeHookPhase}, {hooks.HookSessionAfterCreate, types.AfterHookPhase},
-		{hooks.HookSessionBeforeRevoke, types.BeforeHookPhase}, {hooks.HookSessionAfterRevoke, types.AfterHookPhase},
+		{hooks.HookSessionBeforeCreate, core.BeforeHookPhase}, {hooks.HookSessionAfterCreate, core.AfterHookPhase},
+		{hooks.HookSessionBeforeRevoke, core.BeforeHookPhase}, {hooks.HookSessionAfterRevoke, core.AfterHookPhase},
 	}, got)
 	beforeCreate, afterCreate, beforeRevoke, afterRevoke := d.seen[0], d.seen[1], d.seen[2], d.seen[3]
 	beforeCreate.Values["note"] = "from beforeCreate"
@@ -575,9 +575,9 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 	req.RemoteAddr = "203.0.113.7:51234"
 	req.Header.Set("User-Agent", "test-agent/1.0")
 	req.Header.Set("X-Forwarded-For", "198.51.100.9")
-	inRequest := types.ContextWithRequest(context.Background(), &types.RequestContext{Request: req})
-	capture := types.SessionConfig{CaptureIPAndAgent: true}
-	active := types.SessionMeta{State: models.SessionActive}
+	inRequest := core.ContextWithRequest(context.Background(), &core.RequestContext{Request: req})
+	capture := core.SessionConfig{CaptureIPAndAgent: true}
+	active := core.SessionMeta{State: models.SessionActive}
 
 	t.Run("from the request", func(t *testing.T) {
 		sm, _ := newSessionManager(t, capture)
@@ -588,7 +588,7 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 	})
 	t.Run("the caller's values win", func(t *testing.T) {
 		sm, _ := newSessionManager(t, capture)
-		sess, _, err := sm.Create(inRequest, "u1", types.SessionMeta{State: models.SessionActive, IPAddress: "192.0.2.1", UserAgent: "job"})
+		sess, _, err := sm.Create(inRequest, "u1", core.SessionMeta{State: models.SessionActive, IPAddress: "192.0.2.1", UserAgent: "job"})
 		require.NoError(t, err)
 		assert.Equal(t, "192.0.2.1", sess.IPAddress)
 		assert.Equal(t, "job", sess.UserAgent)
@@ -601,7 +601,7 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 		assert.Empty(t, sess.UserAgent)
 	})
 	t.Run("capture off", func(t *testing.T) {
-		sm, _ := newSessionManager(t, types.SessionConfig{})
+		sm, _ := newSessionManager(t, core.SessionConfig{})
 		sess, _, err := sm.Create(inRequest, "u1", active)
 		require.NoError(t, err)
 		assert.Empty(t, sess.IPAddress)
@@ -616,16 +616,16 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 		assert.Equal(t, models.SessionActive, sess.State, "the state is not read back")
 	})
 	t.Run("capture off ignores a before handler's rewrite", func(t *testing.T) {
-		sess, err := createWithRewrite(t, types.SessionConfig{}, inRequest)
+		sess, err := createWithRewrite(t, core.SessionConfig{}, inRequest)
 		require.NoError(t, err)
 		assert.Empty(t, sess.IPAddress)
 		assert.Empty(t, sess.UserAgent)
 	})
 	t.Run("behind a trusted proxy", func(t *testing.T) {
-		ipCfg, err := types.NewClientConfig([]string{"203.0.113.0/24"}, "")
+		ipCfg, err := core.NewClientConfig([]string{"203.0.113.0/24"}, "")
 		require.NoError(t, err)
 		sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t),
-			types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, CaptureIPAndAgent: true},
+			core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, CaptureIPAndAgent: true},
 			&passDispatcher{}, nil, managersAuth, ipCfg)
 		sess, _, err := sm.Create(inRequest, "u1", active)
 		require.NoError(t, err)
@@ -637,7 +637,7 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 // of the auth.session.beforeCreate payload.
 type rewriteDispatcher struct{ passDispatcher }
 
-func (d *rewriteDispatcher) RunBefore(h *types.HookContext, point types.HookPoint, p behemoth.M) (behemoth.M, error) {
+func (d *rewriteDispatcher) RunBefore(h *core.HookContext, point core.HookPoint, p behemoth.M) (behemoth.M, error) {
 	if point == hooks.HookSessionBeforeCreate {
 		p[hooks.HookValueIPAddress], p[hooks.HookValueUserAgent] = "203.0.113.0", "masked"
 		p[hooks.HookValueUserID], p[hooks.HookValueState] = "someone-else", string(models.SessionPending)
@@ -646,12 +646,12 @@ func (d *rewriteDispatcher) RunBefore(h *types.HookContext, point types.HookPoin
 }
 
 // createWithRewrite creates an active session for u1 under a rewriteDispatcher.
-func createWithRewrite(t *testing.T, cfg types.SessionConfig, ctx context.Context) (*models.Session, error) {
+func createWithRewrite(t *testing.T, cfg core.SessionConfig, ctx context.Context) (*models.Session, error) {
 	t.Helper()
 	cfg.ExpiresIn, cfg.PendingExpiresIn = time.Hour, time.Minute
 	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg,
 		&rewriteDispatcher{}, nil, managersAuth, nil)
-	sess, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	sess, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	return sess, err
 }
 
@@ -659,9 +659,9 @@ func createWithRewrite(t *testing.T, cfg types.SessionConfig, ctx context.Contex
 // second consume each dispatch with their own point and phase.
 func TestTokenHooksGetACompleteContext(t *testing.T) {
 	catalog := auth.NewDefaultTokenCatalog()
-	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
+	require.NoError(t, catalog.Declare(core.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: core.TokenBackendDB, Owner: "core"}))
 	d := &passDispatcher{}
-	tm := auth.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), d, types.TokenConfig{}, managersAuth)
+	tm := auth.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), d, core.TokenConfig{}, managersAuth)
 
 	ctx := context.Background()
 	_, raw, err := tm.Issue(ctx, kindReset, "u1", nil)
@@ -672,8 +672,8 @@ func TestTokenHooksGetACompleteContext(t *testing.T) {
 	require.Error(t, err)
 
 	type dispatch struct {
-		point types.HookPoint
-		phase types.HookPhase
+		point core.HookPoint
+		phase core.HookPhase
 	}
 	var got []dispatch
 	for _, h := range d.seen {
@@ -683,9 +683,9 @@ func TestTokenHooksGetACompleteContext(t *testing.T) {
 		assert.Nil(t, h.Request, "%s: no request outside one", h.Point)
 	}
 	assert.Equal(t, []dispatch{
-		{hooks.HookTokenBeforeIssue, types.BeforeHookPhase}, {hooks.HookTokenAfterIssue, types.AfterHookPhase},
-		{hooks.HookTokenConsumed, types.AfterHookPhase},
-		{hooks.HookTokenFailed, types.FailedHookPhase},
+		{hooks.HookTokenBeforeIssue, core.BeforeHookPhase}, {hooks.HookTokenAfterIssue, core.AfterHookPhase},
+		{hooks.HookTokenConsumed, core.AfterHookPhase},
+		{hooks.HookTokenFailed, core.FailedHookPhase},
 	}, got)
 }
 
@@ -694,13 +694,13 @@ func TestTokenHooksGetACompleteContext(t *testing.T) {
 const kindReset models.TokenKind = "password_reset"
 const kindAPI models.TokenKind = "api_key"
 
-func newTokenManager(t *testing.T) (types.TokenManager, *store.Store) {
+func newTokenManager(t *testing.T) (core.TokenManager, *store.Store) {
 	t.Helper()
 	catalog := auth.NewDefaultTokenCatalog()
-	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"}))
-	require.NoError(t, catalog.Declare(types.TokenKindDef{Kind: kindAPI, Backend: types.TokenBackendDB, Owner: "core"}))
+	require.NoError(t, catalog.Declare(core.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: core.TokenBackendDB, Owner: "core"}))
+	require.NoError(t, catalog.Declare(core.TokenKindDef{Kind: kindAPI, Backend: core.TokenBackendDB, Owner: "core"}))
 	st := store.New(sessionsTokensDB(t))
-	return auth.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, managersAuth), st
+	return auth.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, core.TokenConfig{}, managersAuth), st
 }
 
 func TestTokenIssueVerifyConsume(t *testing.T) {
@@ -783,14 +783,14 @@ func TestTokenListForSubject(t *testing.T) {
 	ctx := context.Background()
 	catalog := auth.NewDefaultTokenCatalog()
 	const kindShort models.TokenKind = "short_lived"
-	for _, def := range []types.TokenKindDef{
-		{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendDB, Owner: "core"},
-		{Kind: kindShort, SingleUse: true, DefaultTTL: time.Millisecond, Backend: types.TokenBackendDB, Owner: "core"},
-		{Kind: "in_kv", SingleUse: true, DefaultTTL: time.Hour, Backend: types.TokenBackendKV, Owner: "core"},
+	for _, def := range []core.TokenKindDef{
+		{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: core.TokenBackendDB, Owner: "core"},
+		{Kind: kindShort, SingleUse: true, DefaultTTL: time.Millisecond, Backend: core.TokenBackendDB, Owner: "core"},
+		{Kind: "in_kv", SingleUse: true, DefaultTTL: time.Hour, Backend: core.TokenBackendKV, Owner: "core"},
 	} {
 		require.NoError(t, catalog.Declare(def))
 	}
-	tm := auth.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), &passDispatcher{}, types.TokenConfig{}, managersAuth)
+	tm := auth.NewDefaultTokenManager(store.New(sessionsTokensDB(t)), nil, catalog, testCrypto(t), &passDispatcher{}, core.TokenConfig{}, managersAuth)
 
 	issue := func(kind models.TokenKind, subject string) (*models.Token, string) {
 		tok, raw, err := tm.Issue(ctx, kind, subject, behemoth.M{"n": subject})
@@ -832,27 +832,27 @@ func TestTokenListForSubject(t *testing.T) {
 // still valid but older.
 func TestSessionFreshness(t *testing.T) {
 	ctx := context.Background()
-	sm, _ := newSessionManager(t, types.SessionConfig{FreshAge: 150 * time.Millisecond, Transport: types.TransportHeader})
-	active, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	sm, _ := newSessionManager(t, core.SessionConfig{FreshAge: 150 * time.Millisecond, Transport: core.TransportHeader})
+	active, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	pending, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionPending})
+	pending, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
 	assert.True(t, sm.IsFresh(active), "just created")
 	assert.False(t, sm.IsFresh(pending), "a pending session has not finished signing in")
 	assert.False(t, sm.IsFresh(nil))
 
 	reached := 0
-	handler := types.RequireFreshSession(sm)(func(rctx *types.RequestContext) error {
+	handler := core.RequireFreshSession(sm)(func(rctx *core.RequestContext) error {
 		reached++
 		assert.NotNil(t, rctx.Values["session"], "it does what RequireSession does first")
 		return nil
 	})
-	request := func(header string) (*types.RequestContext, error) {
+	request := func(header string) (*core.RequestContext, error) {
 		req := httptest.NewRequest(http.MethodPost, "/x", nil)
 		if header != "" {
 			req.Header.Set("Authorization", header)
 		}
-		rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		return rctx, handler(rctx)
 	}
 	_, err = request("Bearer " + raw)
@@ -875,11 +875,11 @@ func TestSessionFreshness(t *testing.T) {
 	assert.True(t, sm.IsFresh(promoted), "passing the second factor is a credential check")
 
 	// Left at zero, FreshAge is 15 minutes.
-	byDefault, _ := newSessionManager(t, types.SessionConfig{})
-	session, _, err := byDefault.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	byDefault, _ := newSessionManager(t, core.SessionConfig{})
+	session, _, err := byDefault.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	assert.True(t, byDefault.IsFresh(session))
-	session.FreshAt = time.Now().Add(-types.DefaultFreshAge - time.Second)
+	session.FreshAt = time.Now().Add(-core.DefaultFreshAge - time.Second)
 	assert.False(t, byDefault.IsFresh(session))
 }
 
@@ -887,18 +887,18 @@ func TestSessionFreshness(t *testing.T) {
 // the documented default, and the token travels in the default cookie.
 func TestSessionManagerWithAZeroConfig(t *testing.T) {
 	ctx := context.Background()
-	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), types.SessionConfig{}, &passDispatcher{}, nil, managersAuth, nil)
+	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), core.SessionConfig{}, &passDispatcher{}, nil, managersAuth, nil)
 
-	active, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	active, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	assert.WithinDuration(t, time.Now().Add(types.DefaultSessionExpiresIn), active.ExpiresAt, time.Minute)
-	pending, _, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionPending})
+	assert.WithinDuration(t, time.Now().Add(core.DefaultSessionExpiresIn), active.ExpiresAt, time.Minute)
+	pending, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
-	assert.WithinDuration(t, time.Now().Add(types.DefaultSessionPendingExpiresIn), pending.ExpiresAt, time.Minute)
+	assert.WithinDuration(t, time.Now().Add(core.DefaultSessionPendingExpiresIn), pending.ExpiresAt, time.Minute)
 	_, err = sm.Validate(ctx, raw)
 	require.NoError(t, err, "the session did not expire the moment it was created")
 
-	rctx := &types.RequestContext{Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+	rctx := &core.RequestContext{Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 	assert.False(t, sm.WriteToken(rctx, raw, active))
 	assert.Contains(t, rctx.Response.Headers.Get("Set-Cookie"), "session_token="+raw, "the default transport is the cookie")
 }
@@ -909,28 +909,28 @@ func TestSessionManagerWithAZeroConfig(t *testing.T) {
 func TestSessionCookieAttributes(t *testing.T) {
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
-		cfg      types.SessionConfig
+		cfg      core.SessionConfig
 		domain   string
 		sameSite http.SameSite
 		secure   bool
 	}{
-		"the defaults":      {types.SessionConfig{}, "", http.SameSiteLaxMode, true},
-		"a domain":          {types.SessionConfig{CookieDomain: "example.com"}, "example.com", http.SameSiteLaxMode, true},
-		"a domain as .host": {types.SessionConfig{CookieDomain: ".example.com"}, "example.com", http.SameSiteLaxMode, true},
-		"strict":            {types.SessionConfig{CookieSameSite: types.SameSiteStrict}, "", http.SameSiteStrictMode, true},
-		"none":              {types.SessionConfig{CookieSameSite: types.SameSiteNone}, "", http.SameSiteNoneMode, true},
-		"without Secure":    {types.SessionConfig{CookieInsecure: true}, "", http.SameSiteLaxMode, false},
+		"the defaults":      {core.SessionConfig{}, "", http.SameSiteLaxMode, true},
+		"a domain":          {core.SessionConfig{CookieDomain: "example.com"}, "example.com", http.SameSiteLaxMode, true},
+		"a domain as .host": {core.SessionConfig{CookieDomain: ".example.com"}, "example.com", http.SameSiteLaxMode, true},
+		"strict":            {core.SessionConfig{CookieSameSite: core.SameSiteStrict}, "", http.SameSiteStrictMode, true},
+		"none":              {core.SessionConfig{CookieSameSite: core.SameSiteNone}, "", http.SameSiteNoneMode, true},
+		"without Secure":    {core.SessionConfig{CookieInsecure: true}, "", http.SameSiteLaxMode, false},
 	} {
 		require.NoError(t, tc.cfg.Validate(), name)
 		sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
-		session, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+		session, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 		require.NoError(t, err, name)
 
-		rctx := &types.RequestContext{Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		sm.WriteToken(rctx, raw, session)
 		req := httptest.NewRequest(http.MethodPost, "/x", nil)
 		req.AddCookie(&http.Cookie{Name: "session_token", Value: raw})
-		cleared := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		cleared := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		sm.ClearToken(cleared)
 
 		for step, headers := range map[string]http.Header{"written": rctx.Response.Headers, "removed": cleared.Response.Headers} {
@@ -951,24 +951,24 @@ func TestSessionCookieAttributes(t *testing.T) {
 func TestSessionTokenTransports(t *testing.T) {
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
-		cfg        types.SessionConfig
+		cfg        core.SessionConfig
 		cookie     string // the cookie's name when one is set, "" when none is
 		header     bool   // the token is in Set-Auth-Token
 		inBody     bool   // the route is told to put it in the body
 		readCookie bool   // a request's cookie is accepted
 		readBearer bool   // a request's Authorization header is accepted
 	}{
-		"cookie":        {types.SessionConfig{Transport: types.TransportCookie}, "session_token", false, false, true, false},
-		"cookie, named": {types.SessionConfig{Transport: types.TransportCookie, CookieName: "sid"}, "sid", false, false, true, false},
-		"header":        {types.SessionConfig{Transport: types.TransportHeader}, "", true, false, false, true},
-		"body":          {types.SessionConfig{Transport: types.TransportBody}, "", false, true, false, true},
-		"both":          {types.SessionConfig{Transport: types.TransportBoth, CookieName: "sid"}, "sid", true, false, true, true},
+		"cookie":        {core.SessionConfig{Transport: core.TransportCookie}, "session_token", false, false, true, false},
+		"cookie, named": {core.SessionConfig{Transport: core.TransportCookie, CookieName: "sid"}, "sid", false, false, true, false},
+		"header":        {core.SessionConfig{Transport: core.TransportHeader}, "", true, false, false, true},
+		"body":          {core.SessionConfig{Transport: core.TransportBody}, "", false, true, false, true},
+		"both":          {core.SessionConfig{Transport: core.TransportBoth, CookieName: "sid"}, "sid", true, false, true, true},
 	} {
 		sm, _ := newSessionManager(t, tc.cfg)
-		session, raw, err := sm.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+		session, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 		require.NoError(t, err, name)
 
-		rctx := &types.RequestContext{Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		assert.Equal(t, tc.inBody, sm.WriteToken(rctx, raw, session), "%s: in the body", name)
 		setCookie := rctx.Response.Headers.Get("Set-Cookie")
 		if tc.cookie == "" {
@@ -981,7 +981,7 @@ func TestSessionTokenTransports(t *testing.T) {
 		if tc.header {
 			wantHeader = raw
 		}
-		assert.Equal(t, wantHeader, rctx.Response.Headers.Get(types.SessionTokenHeader), "%s: %s", name, types.SessionTokenHeader)
+		assert.Equal(t, wantHeader, rctx.Response.Headers.Get(core.SessionTokenHeader), "%s: %s", name, core.SessionTokenHeader)
 		assert.Empty(t, rctx.Values, "%s: nothing is parked in the request's values", name)
 
 		cookieName := tc.cfg.CookieName
@@ -1010,8 +1010,8 @@ func TestSessionTokenTransports(t *testing.T) {
 		// one of the same name and path, so the cookie it sets is the one
 		// above, emptied and expired. A transport without a cookie has
 		// nothing to take back.
-		clear := func(req *http.Request) *types.RequestContext {
-			cleared := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		clear := func(req *http.Request) *core.RequestContext {
+			cleared := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 			sm.ClearToken(cleared)
 			return cleared
 		}
@@ -1030,7 +1030,7 @@ func TestSessionTokenTransports(t *testing.T) {
 			assert.True(t, gone[0].Expires.Before(time.Now()), "%s: and an Expires in the past", name)
 			assert.True(t, gone[0].HttpOnly && gone[0].Secure, "%s: with the attributes of the cookie it replaces", name)
 			assert.Equal(t, written[0].SameSite, gone[0].SameSite, name)
-			assert.Empty(t, cleared.Response.Headers.Get(types.SessionTokenHeader), "%s: no token header", name)
+			assert.Empty(t, cleared.Response.Headers.Get(core.SessionTokenHeader), "%s: no token header", name)
 		}
 		// A request that did not present its token in the cookie keeps
 		// whatever cookie it has: under TransportBoth the token may come as
@@ -1054,7 +1054,7 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 	// request sends one request through RequireSession to a handler that
 	// sets a Cache-Control of its own. It returns the response and the
 	// session the handler saw.
-	request := func(sm types.SessionManager, cookie, bearer string) (*types.RequestContext, *models.Session) {
+	request := func(sm core.SessionManager, cookie, bearer string) (*core.RequestContext, *models.Session) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, "/me", nil)
 		if cookie != "" {
@@ -1064,24 +1064,24 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 		var seen *models.Session
-		handler := types.RequireSession(sm)(func(rctx *types.RequestContext) error {
+		handler := core.RequireSession(sm)(func(rctx *core.RequestContext) error {
 			seen, _ = rctx.Values["session"].(*models.Session)
 			rctx.Response.SetHeader("Cache-Control", ownCacheControl)
 			return rctx.Response.JSON(http.StatusOK, behemoth.M{})
 		})
-		rctx := &types.RequestContext{Ctx: req.Context(), Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, handler(rctx))
 		require.NotNil(t, seen, "the request reached the handler")
 		return rctx, seen
 	}
-	cookies := func(rctx *types.RequestContext) []*http.Cookie {
+	cookies := func(rctx *core.RequestContext) []*http.Cookie {
 		return (&http.Response{Header: rctx.Response.Headers}).Cookies()
 	}
 	alwaysDue := 2 * time.Hour // above the hour a session of newSessionManager lasts
 
 	// A session that is due: the cookie comes back with the new date.
-	rolling, _ := newSessionManager(t, types.SessionConfig{UpdateAge: alwaysDue})
-	created, raw, err := rolling.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	rolling, _ := newSessionManager(t, core.SessionConfig{UpdateAge: alwaysDue})
+	created, raw, err := rolling.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(10 * time.Millisecond)
 	rctx, seen := request(rolling, raw, "")
@@ -1097,8 +1097,8 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 
 	// A session that is not due: nothing is written, and the handler's
 	// Cache-Control stands.
-	fixed, _ := newSessionManager(t, types.SessionConfig{})
-	created, raw, err = fixed.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	fixed, _ := newSessionManager(t, core.SessionConfig{})
+	created, raw, err = fixed.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	rctx, seen = request(fixed, raw, "")
 	assert.True(t, seen.ExpiresAt.Equal(created.ExpiresAt))
@@ -1107,23 +1107,23 @@ func TestRequireSessionExtendsTheCookieOfARollingSession(t *testing.T) {
 
 	// The header transport: the session is extended, and its client keeps
 	// the token without a date, so the response hands out nothing.
-	byHeader, _ := newSessionManager(t, types.SessionConfig{Transport: types.TransportHeader, UpdateAge: alwaysDue})
-	created, raw, err = byHeader.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	byHeader, _ := newSessionManager(t, core.SessionConfig{Transport: core.TransportHeader, UpdateAge: alwaysDue})
+	created, raw, err = byHeader.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	time.Sleep(10 * time.Millisecond)
 	rctx, seen = request(byHeader, "", raw)
 	assert.True(t, seen.ExpiresAt.After(created.ExpiresAt))
 	assert.Empty(t, cookies(rctx))
-	assert.Empty(t, rctx.Response.Headers.Get(types.SessionTokenHeader))
+	assert.Empty(t, rctx.Response.Headers.Get(core.SessionTokenHeader))
 	assert.Equal(t, ownCacheControl, rctx.Response.Headers.Get("Cache-Control"))
 
 	// Both transports: the cookie is extended for the client that sent the
 	// token in it. A bearer token is read first, and the cookie next to it
 	// may be another session's, which must not be overwritten.
-	both, _ := newSessionManager(t, types.SessionConfig{Transport: types.TransportBoth, UpdateAge: alwaysDue})
-	_, asBearer, err := both.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	both, _ := newSessionManager(t, core.SessionConfig{Transport: core.TransportBoth, UpdateAge: alwaysDue})
+	_, asBearer, err := both.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
-	_, inCookie, err := both.Create(ctx, "u2", types.SessionMeta{State: models.SessionActive})
+	_, inCookie, err := both.Create(ctx, "u2", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	rctx, seen = request(both, inCookie, asBearer)
 	assert.Equal(t, "u1", seen.UserID, "the bearer token's session")
@@ -1144,13 +1144,13 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
 
-	var fired []types.HookPoint
-	var auths []*types.AuthContext
-	before := func(hctx *types.HookContext, p behemoth.M) (behemoth.M, error) {
+	var fired []core.HookPoint
+	var auths []*core.AuthContext
+	before := func(hctx *core.HookContext, p behemoth.M) (behemoth.M, error) {
 		fired, auths = append(fired, hctx.Point), append(auths, hctx.Auth)
 		return p, nil
 	}
-	after := func(hctx *types.HookContext, _ any) error {
+	after := func(hctx *core.HookContext, _ any) error {
 		fired, auths = append(fired, hctx.Point), append(auths, hctx.Auth)
 		return nil
 	}
@@ -1158,8 +1158,8 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("cd", 32)}, Current: 1},
 		},
-		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: 5 * time.Minute},
-		Hooks: func(reg types.HookRegistry) error {
+		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: 5 * time.Minute},
+		Hooks: func(reg core.HookRegistry) error {
 			if err := reg.OnBefore(hooks.HookSessionBeforeCreate, before, nil); err != nil {
 				return err
 			}
@@ -1174,10 +1174,10 @@ func TestSessionPointsAreDeclaredUnderBoot(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sess, _, err := ac.SessionManager.Create(ctx, "u1", types.SessionMeta{State: models.SessionActive})
+	sess, _, err := ac.SessionManager.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)
 	require.NoError(t, ac.SessionManager.Revoke(ctx, sess.ID, "user_logout"))
-	assert.Equal(t, []types.HookPoint{
+	assert.Equal(t, []core.HookPoint{
 		hooks.HookSessionBeforeCreate, hooks.HookSessionAfterCreate,
 		hooks.HookSessionBeforeRevoke, hooks.HookSessionAfterRevoke,
 	}, fired)

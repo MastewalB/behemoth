@@ -44,7 +44,7 @@ Every route that returns a user answers with the user's **public columns** and n
 var Plan = schema.Field[string]{Table: models.UserTable, Name: "plan"}
 var RiskNote = schema.Field[string]{Table: models.UserTable, Name: "risk_note"}
 
-func (p *Plugin) Declare(ic *types.PluginInitContext) error {
+func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 	// Clients may see the plan.
 	if err := ic.Schemas.ExtendColumn(Plan.Contribution(schema.Column{Type: schema.ColTypeString, Length: 32, Public: true})); err != nil {
 		return err

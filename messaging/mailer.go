@@ -6,9 +6,9 @@ package messaging
 import (
 	"errors"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
 )
 
 // ErrMailQueueFull is returned by Mailer.SendAsync when MailConfig.QueueSize
@@ -18,21 +18,21 @@ var ErrMailQueueFull = errors.New("mailer: the background queue is full")
 // ErrMailerClosed is returned by Mailer.SendAsync after Close.
 var ErrMailerClosed = errors.New("mailer: closed")
 
-// DefaultMailer is the types.Mailer Boot puts on the AuthContext: the
+// DefaultMailer is the core.Mailer Boot puts on the AuthContext: the
 // application's MailSender, called directly by Send and from a bounded
 // worker pool by SendAsync. It is to messages what the dispatcher is to
 // hooks: plugins call it and never see the sender behind it.
 //
 // Its methods are sendQueue's, which DefaultSMS shares.
 type DefaultMailer struct {
-	*sendQueue[types.MailMessage]
+	*sendQueue[core.MailMessage]
 }
 
 // NewMailer returns the mailer for cfg. tel may be nil.
-func NewMailer(cfg types.MailConfig, tel *telemetry.Telemetry) *DefaultMailer {
-	q := &sendQueue[types.MailMessage]{
+func NewMailer(cfg core.MailConfig, tel *telemetry.Telemetry) *DefaultMailer {
+	q := &sendQueue[core.MailMessage]{
 		channel: "mail",
-		kind:    func(msg types.MailMessage) string { return string(msg.Kind) },
+		kind:    func(msg core.MailMessage) string { return string(msg.Kind) },
 		metric:  telemetry.MetricMailSent,
 		errNoSender: func(op string) error {
 			return errs.NewConfigurationError("Mailer."+op, "no mail sender is configured; set BootConfig.Mail.Sender", nil)
@@ -48,4 +48,4 @@ func NewMailer(cfg types.MailConfig, tel *telemetry.Telemetry) *DefaultMailer {
 	return &DefaultMailer{q}
 }
 
-var _ types.Mailer = (*DefaultMailer)(nil)
+var _ core.Mailer = (*DefaultMailer)(nil)

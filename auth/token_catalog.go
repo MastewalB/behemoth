@@ -4,22 +4,22 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/types"
 )
 
 type DefaultTokenCatalog struct {
 	mu     sync.RWMutex
-	kinds  map[models.TokenKind]types.TokenKindDef
+	kinds  map[models.TokenKind]core.TokenKindDef
 	frozen bool
 }
 
 func NewDefaultTokenCatalog() *DefaultTokenCatalog {
-	return &DefaultTokenCatalog{kinds: map[models.TokenKind]types.TokenKindDef{}}
+	return &DefaultTokenCatalog{kinds: map[models.TokenKind]core.TokenKindDef{}}
 }
 
-func (c *DefaultTokenCatalog) Declare(def types.TokenKindDef) error {
+func (c *DefaultTokenCatalog) Declare(def core.TokenKindDef) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.frozen {
@@ -31,7 +31,7 @@ func (c *DefaultTokenCatalog) Declare(def types.TokenKindDef) error {
 	if def.Owner == "" {
 		return errs.NewConfigurationError("TokenCatalog.Declare", fmt.Sprintf("kind %q missing Owner", def.Kind), nil)
 	}
-	if def.Backend != types.TokenBackendDB && def.Backend != types.TokenBackendKV {
+	if def.Backend != core.TokenBackendDB && def.Backend != core.TokenBackendKV {
 		return errs.NewConfigurationError("TokenCatalog.Declare", fmt.Sprintf("kind %q declared with invalid Backend %q", def.Kind, def.Backend), nil)
 	}
 	if existing, dup := c.kinds[def.Kind]; dup {
@@ -41,7 +41,7 @@ func (c *DefaultTokenCatalog) Declare(def types.TokenKindDef) error {
 	return nil
 }
 
-func (c *DefaultTokenCatalog) Lookup(kind models.TokenKind) (types.TokenKindDef, bool) {
+func (c *DefaultTokenCatalog) Lookup(kind models.TokenKind) (core.TokenKindDef, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	def, ok := c.kinds[kind]

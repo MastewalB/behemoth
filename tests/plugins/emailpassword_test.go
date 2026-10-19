@@ -18,6 +18,8 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -28,8 +30,6 @@ import (
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -58,18 +58,18 @@ CREATE TABLE audit_log (
 
 type passDispatcher struct{}
 
-func (passDispatcher) RunBefore(_ *types.HookContext, _ types.HookPoint, p behemoth.M) (behemoth.M, error) {
+func (passDispatcher) RunBefore(_ *core.HookContext, _ core.HookPoint, p behemoth.M) (behemoth.M, error) {
 	return p, nil
 }
-func (passDispatcher) RunAfter(*types.HookContext, types.HookPoint, any) error   { return nil }
-func (passDispatcher) RunAfterTx(*types.HookContext, types.HookPoint, any) error { return nil }
-func (passDispatcher) Fail(*types.HookContext, types.HookPoint, types.FailureReason) error {
+func (passDispatcher) RunAfter(*core.HookContext, core.HookPoint, any) error   { return nil }
+func (passDispatcher) RunAfterTx(*core.HookContext, core.HookPoint, any) error { return nil }
+func (passDispatcher) Fail(*core.HookContext, core.HookPoint, core.FailureReason) error {
 	return nil
 }
 
 // authContext wires what Boot would, by hand, with a pass-through
 // dispatcher. TestEmailPasswordThroughPrepareAndBoot covers the booted path.
-func authContext(t *testing.T) *types.AuthContext {
+func authContext(t *testing.T) *core.AuthContext {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep.db"))
 	require.NoError(t, err)
@@ -83,13 +83,13 @@ func authContext(t *testing.T) *types.AuthContext {
 	require.NoError(t, err)
 
 	st := store.New(sqliteAdapter.NewSQLiteAdapter(db, nil))
-	return &types.AuthContext{
+	return &core.AuthContext{
 		Store:      st,
 		Crypto:     c,
 		Dispatcher: passDispatcher{},
 		Public:     dbschema.NewPublicView([]dbschema.Table{models.UserTableSchema()}),
 		SessionManager: auth.NewSessionManager(st, nil, c,
-			types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+			core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
 			passDispatcher{}, nil, nil, nil),
 	}
 }
@@ -97,9 +97,9 @@ func authContext(t *testing.T) *types.AuthContext {
 // mountedRoutes is a FrameworkDriver that keeps the routes Boot mounts, by
 // path. They arrive wrapped by the router, so calling one runs the router's
 // error mapping and logging, which a plugin's own route does not.
-type mountedRoutes map[string]types.Route
+type mountedRoutes map[string]core.Route
 
-func (m mountedRoutes) Mount(routes ...types.Route) error {
+func (m mountedRoutes) Mount(routes ...core.Route) error {
 	for _, r := range routes {
 		m[r.Path] = r
 	}
@@ -107,11 +107,11 @@ func (m mountedRoutes) Mount(routes ...types.Route) error {
 }
 
 // call invokes a plugin route the way the router does.
-func call(t *testing.T, ac *types.AuthContext, route types.Route, body string) *httptest.ResponseRecorder {
+func call(t *testing.T, ac *core.AuthContext, route core.Route, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(body))
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
@@ -130,7 +130,7 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 	ac := authContext(t)
 	p := emailpassword.New(emailpassword.Options{})
 	require.NoError(t, p.Init(ac))
-	routes := map[string]types.Route{}
+	routes := map[string]core.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -201,7 +201,7 @@ func TestEmailPasswordSignInAndSignOutErrors(t *testing.T) {
 	ac := authContext(t)
 	p := emailpassword.New(emailpassword.Options{})
 	require.NoError(t, p.Init(ac))
-	routes := map[string]types.Route{}
+	routes := map[string]core.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -265,17 +265,17 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{emailpassword.PluginName}, app.Order)
 
 	// The application observes the flows through hooks. The sign-in result
 	// carries the raw session token, which the test needs to sign out.
-	var fired []types.HookPoint
+	var fired []core.HookPoint
 	var failures []string
 	var rawToken string
-	observe := func(point types.HookPoint) types.AfterHookFunc {
-		return func(_ *types.HookContext, result any) error {
+	observe := func(point core.HookPoint) core.AfterHookFunc {
+		return func(_ *core.HookContext, result any) error {
 			fired = append(fired, point)
 			if r, ok := result.(*emailpassword.SignInResult); ok {
 				rawToken = r.RawToken
@@ -287,14 +287,14 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
-		Hooks: func(reg types.HookRegistry) error {
-			for _, point := range []types.HookPoint{hooks.HookSignUpAfter, hooks.HookSignInAfter, hooks.HookSignOutAfter} {
+		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Hooks: func(reg core.HookRegistry) error {
+			for _, point := range []core.HookPoint{hooks.HookSignUpAfter, hooks.HookSignInAfter, hooks.HookSignOutAfter} {
 				if err := reg.OnAfter(point, observe(point), nil); err != nil {
 					return err
 				}
 			}
-			return reg.OnFailed(hooks.HookSignInFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+			return reg.OnFailed(hooks.HookSignInFailed, func(_ *core.HookContext, reason core.FailureReason) error {
 				failures = append(failures, reason.Code)
 				return nil
 			}, nil)
@@ -302,7 +302,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	routes := map[string]types.Route{}
+	routes := map[string]core.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -327,8 +327,8 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-		rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+		rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 		rec := httptest.NewRecorder()
 		if err := signOut(rctx); err != nil {
 			// The session check returns its refusal for the router to
@@ -345,7 +345,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	assert.Equal(t, http.StatusOK, signOutWith(rawToken).Code)
 	assert.Equal(t, http.StatusUnauthorized, signOutWith(rawToken).Code, "the session is revoked")
 
-	assert.Equal(t, []types.HookPoint{hooks.HookSignUpAfter, hooks.HookSignInAfter, hooks.HookSignOutAfter}, fired)
+	assert.Equal(t, []core.HookPoint{hooks.HookSignUpAfter, hooks.HookSignInAfter, hooks.HookSignOutAfter}, fired)
 	assert.Equal(t, []string{"invalid_credentials"}, failures)
 }
 
@@ -360,17 +360,17 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	veto := errs.NewInvalidInputError("test", "user", "this email domain is not allowed", nil)
-	var failures []types.FailureReason
+	var failures []core.FailureReason
 	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Hooks: func(reg types.HookRegistry) error {
-			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *types.HookContext, row behemoth.M) (behemoth.M, error) {
+		Hooks: func(reg core.HookRegistry) error {
+			if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(_ *core.HookContext, row behemoth.M) (behemoth.M, error) {
 				email, _ := row[models.UserEmail].(string)
 				if strings.HasSuffix(email, "@blocked.example") {
 					return nil, veto
@@ -382,7 +382,7 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 			}, nil); err != nil {
 				return err
 			}
-			return reg.OnFailed(hooks.HookSignUpFailed, func(_ *types.HookContext, reason types.FailureReason) error {
+			return reg.OnFailed(hooks.HookSignUpFailed, func(_ *core.HookContext, reason core.FailureReason) error {
 				failures = append(failures, reason)
 				return nil
 			}, nil)
@@ -390,15 +390,15 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var signUp types.Route
+	var signUp core.Route
 	for _, r := range p.Routes() {
 		if r.Path == "/sign-up/email" {
 			signUp = r
 		}
 	}
 	req := httptest.NewRequest(http.MethodPost, signUp.Path, strings.NewReader(`{"email":"eve@blocked.example","password":"correct horse"}`))
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 
 	err = signUp.Handler(rctx)
 	assert.ErrorIs(t, err, veto, "the handler's own error, for the router to map")
@@ -440,25 +440,25 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	_, err = p.SignUp(ctx, behemoth.M{"email": "early@example.com", "password": "correct horse"})
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "a flow called before Boot is a configuration error: %v", err)
 
-	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
 
 	type seen struct {
-		point  types.HookPoint
-		phase  types.HookPhase
+		point  core.HookPoint
+		phase  core.HookPhase
 		values behemoth.M
 		hasReq bool
 	}
 	var log []seen
-	record := func(hctx *types.HookContext) {
+	record := func(hctx *core.HookContext) {
 		values := behemoth.M{}
 		for k, v := range hctx.Values {
 			values[k] = v
 		}
 		log = append(log, seen{hctx.Point, hctx.Phase, values, hctx.Request != nil})
 	}
-	before := func(note string) types.BeforeHookFunc {
-		return func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	before := func(note string) core.BeforeHookFunc {
+		return func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			record(hctx)
 			if note != "" {
 				hctx.Values[note] = true
@@ -466,17 +466,17 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 			return payload, nil
 		}
 	}
-	after := func(hctx *types.HookContext, _ any) error { record(hctx); return nil }
+	after := func(hctx *core.HookContext, _ any) error { record(hctx); return nil }
 
 	_, err = engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session: types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, CaptureIPAndAgent: true},
-		Hooks: func(reg types.HookRegistry) error {
+		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, CaptureIPAndAgent: true},
+		Hooks: func(reg core.HookRegistry) error {
 			// An invite plugin in miniature: the code is input, the id it
 			// resolves to is a note for later points.
-			if err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+			if err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 				record(hctx)
 				if payload["inviteCode"] == "ABC123" {
 					hctx.Values["invite.id"] = "inv-1"
@@ -485,7 +485,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 			}, nil); err != nil {
 				return err
 			}
-			for point, note := range map[types.HookPoint]string{
+			for point, note := range map[core.HookPoint]string{
 				hooks.HookUserBeforeCreate:    "write.note",
 				hooks.HookSignInBefore:        "signin.note",
 				hooks.HookSessionBeforeCreate: "session.note",
@@ -494,7 +494,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 					return err
 				}
 			}
-			for _, point := range []types.HookPoint{
+			for _, point := range []core.HookPoint{
 				hooks.HookUserAfterCreate, hooks.HookUserCreated, hooks.HookSignUpAfter,
 				hooks.HookSessionAfterCreate, hooks.HookSignInAfter,
 			} {
@@ -521,11 +521,11 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	invite := with(email, behemoth.M{"invite.id": "inv-1"})
 	write := with(invite, behemoth.M{"write.note": true})
 	assert.Equal(t, []seen{
-		{hooks.HookSignUpBefore, types.BeforeHookPhase, email, false},
-		{hooks.HookUserBeforeCreate, types.BeforeHookPhase, invite, false},
-		{hooks.HookUserAfterCreate, types.AfterHookPhase, write, false},
-		{hooks.HookUserCreated, types.AfterHookPhase, write, false},
-		{hooks.HookSignUpAfter, types.AfterHookPhase, invite, false},
+		{hooks.HookSignUpBefore, core.BeforeHookPhase, email, false},
+		{hooks.HookUserBeforeCreate, core.BeforeHookPhase, invite, false},
+		{hooks.HookUserAfterCreate, core.AfterHookPhase, write, false},
+		{hooks.HookUserCreated, core.AfterHookPhase, write, false},
+		{hooks.HookSignUpAfter, core.AfterHookPhase, invite, false},
 	}, log, "the write sees the flow's note; the flow does not see the write's")
 
 	log = nil
@@ -539,17 +539,17 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	sessionBefore := with(signIn, behemoth.M{hooks.HookValueUserID: user.ID})
 	session := with(sessionBefore, behemoth.M{"session.note": true})
 	assert.Equal(t, []seen{
-		{hooks.HookSignInBefore, types.BeforeHookPhase, email, false},
-		{hooks.HookSessionBeforeCreate, types.BeforeHookPhase, sessionBefore, false},
-		{hooks.HookSessionAfterCreate, types.AfterHookPhase, session, false},
-		{hooks.HookSignInAfter, types.AfterHookPhase, signIn, false},
+		{hooks.HookSignInBefore, core.BeforeHookPhase, email, false},
+		{hooks.HookSessionBeforeCreate, core.BeforeHookPhase, sessionBefore, false},
+		{hooks.HookSessionAfterCreate, core.AfterHookPhase, session, false},
+		{hooks.HookSignInAfter, core.AfterHookPhase, signIn, false},
 	}, log)
 
 	// Called with a request's context, the same flow gives handlers the request.
 	log = nil
 	req := httptest.NewRequest(http.MethodPost, "/sign-in/email", nil)
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
-	_, err = p.SignIn(types.ContextWithRequest(req.Context(), rctx),
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+	_, err = p.SignIn(core.ContextWithRequest(req.Context(), rctx),
 		emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "correct horse"})
 	require.NoError(t, err)
 	for _, s := range log {
@@ -563,8 +563,8 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 // credentials.
 func TestEmailPasswordSignInPassesExtraInputToBeforeHandlers(t *testing.T) {
 	var payloads []behemoth.M
-	ac, p, routes := bootedPlugin(t, nil, func(reg types.HookRegistry) error {
-		return reg.OnBefore(hooks.HookSignInBefore, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	ac, p, routes := bootedPlugin(t, nil, func(reg core.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignInBefore, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			seen := behemoth.M{}
 			maps.Copy(seen, payload)
 			payloads = append(payloads, seen)
@@ -652,13 +652,13 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 
 	tel, rec := telemetrytest.New()
 	mounted := mountedRoutes{}
-	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
 		Telemetry: tel,
 		HTTP:      mounted,
 	})
@@ -669,7 +669,7 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 	attempt := func(remoteAddr string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, signIn.Path, strings.NewReader(`{"email":"nobody@example.com","password":"a wrong password"}`))
 		req.RemoteAddr = remoteAddr
-		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, signIn.Handler(rctx))
 		w := httptest.NewRecorder()
 		rctx.Response.Flush(w)
@@ -695,7 +695,7 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 		body := fmt.Sprintf(`{"email":"user%d@example.com","password":"correct horse"}`, i)
 		req := httptest.NewRequest(http.MethodPost, signUp.Path, strings.NewReader(body))
 		req.RemoteAddr = "203.0.113.7:50002"
-		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, signUp.Handler(rctx))
 		w := httptest.NewRecorder()
 		rctx.Response.Flush(w)
@@ -724,22 +724,22 @@ type limitsPlugin struct{}
 
 const kindInvite models.TokenKind = "limits.invite"
 
-func (limitsPlugin) Meta() types.PluginMeta            { return types.PluginMeta{Name: "limits"} }
-func (limitsPlugin) Version() string                   { return "0.0.0" }
-func (limitsPlugin) Init(*types.AuthContext) error     { return nil }
-func (limitsPlugin) Routes() []types.Route             { return nil }
-func (limitsPlugin) Middlewares() []types.Middleware   { return nil }
-func (limitsPlugin) Register(types.HookRegistry) error { return nil }
-func (limitsPlugin) Declare(ic *types.PluginInitContext) error {
-	if err := ic.Tokens.Declare(types.TokenKindDef{Kind: kindInvite, DefaultTTL: time.Hour, Backend: types.TokenBackendDB}); err != nil {
+func (limitsPlugin) Meta() core.PluginMeta            { return core.PluginMeta{Name: "limits"} }
+func (limitsPlugin) Version() string                  { return "0.0.0" }
+func (limitsPlugin) Init(*core.AuthContext) error     { return nil }
+func (limitsPlugin) Routes() []core.Route             { return nil }
+func (limitsPlugin) Middlewares() []core.Middleware   { return nil }
+func (limitsPlugin) Register(core.HookRegistry) error { return nil }
+func (limitsPlugin) Declare(ic *core.PluginInitContext) error {
+	if err := ic.Tokens.Declare(core.TokenKindDef{Kind: kindInvite, DefaultTTL: time.Hour, Backend: core.TokenBackendDB}); err != nil {
 		return err
 	}
-	value := types.KeyByValues
-	for _, rule := range []types.HookRateLimitRule{
-		{Name: "limits.signup.email", Point: hooks.HookSignUpBefore, KeyFunc: value(hooks.HookValueEmail), Limit: types.Limit{Max: 1, Window: time.Minute}},
-		{Name: "limits.signin.email", Point: hooks.HookSignInBefore, KeyFunc: value(hooks.HookValueEmail), Limit: types.Limit{Max: 2, Window: time.Minute}},
-		{Name: "limits.session.user", Point: hooks.HookSessionBeforeCreate, KeyFunc: value(hooks.HookValueUserID), Limit: types.Limit{Max: 3, Window: time.Minute}},
-		{Name: "limits.token.subject", Point: hooks.HookTokenBeforeIssue, KeyFunc: value(hooks.HookValueTokenKind, hooks.HookValueTokenSubject), Limit: types.Limit{Max: 2, Window: time.Minute}},
+	value := core.KeyByValues
+	for _, rule := range []core.HookRateLimitRule{
+		{Name: "limits.signup.email", Point: hooks.HookSignUpBefore, KeyFunc: value(hooks.HookValueEmail), Limit: core.Limit{Max: 1, Window: time.Minute}},
+		{Name: "limits.signin.email", Point: hooks.HookSignInBefore, KeyFunc: value(hooks.HookValueEmail), Limit: core.Limit{Max: 2, Window: time.Minute}},
+		{Name: "limits.session.user", Point: hooks.HookSessionBeforeCreate, KeyFunc: value(hooks.HookValueUserID), Limit: core.Limit{Max: 3, Window: time.Minute}},
+		{Name: "limits.token.subject", Point: hooks.HookTokenBeforeIssue, KeyFunc: value(hooks.HookValueTokenKind, hooks.HookValueTokenSubject), Limit: core.Limit{Max: 2, Window: time.Minute}},
 	} {
 		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
 			return err
@@ -767,18 +767,18 @@ CREATE TABLE tokens (
 
 	tel, rec := telemetrytest.New()
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := engine.Prepare([]types.Plugin{p, limitsPlugin{}}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{p, limitsPlugin{}}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
 		Telemetry: tel,
-		Hooks: func(reg types.HookRegistry) error {
+		Hooks: func(reg core.HookRegistry) error {
 			// A handler's rewrite of the payload does not move the attempt
 			// to another count: the rule keys on the email the caller sent.
-			return reg.OnBefore(hooks.HookSignInBefore, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+			return reg.OnBefore(hooks.HookSignInBefore, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 				if payload["email"] == "alias@example.com" {
 					payload["email"] = "ada@example.com"
 				}
@@ -815,7 +815,7 @@ CREATE TABLE tokens (
 
 	// Session create: three per user. Ada's two sign-ins above made two.
 	create := func(userID string) error {
-		_, _, err := ac.SessionManager.Create(ctx, userID, types.SessionMeta{State: models.SessionActive})
+		_, _, err := ac.SessionManager.Create(ctx, userID, core.SessionMeta{State: models.SessionActive})
 		return err
 	}
 	require.NoError(t, create(user.ID))
@@ -913,15 +913,15 @@ func TestEmailPasswordLogging(t *testing.T) {
 	tel, rec := telemetrytest.New()
 	mounted := mountedRoutes{}
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil).WithLogger(tel.Logger), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
 		Telemetry: tel,
-		Router:    types.RouterConfig{ClientIPHeader: "X-Real-IP"}, // no TrustedProxies: the header is ignored
+		Router:    core.RouterConfig{ClientIPHeader: "X-Real-IP"}, // no TrustedProxies: the header is ignored
 		HTTP:      mounted,
 	})
 	require.NoError(t, err)
@@ -944,7 +944,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 	assert.Equal(t, true, boot[0].Fields["routes_mounted"])
 	require.Len(t, find(slog.LevelWarn, "boot"), 1, "ClientIPHeader without TrustedProxies is warned about")
 
-	routes := map[string]types.Route{}
+	routes := map[string]core.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -969,7 +969,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 	require.NotNil(t, signIn.Handler)
 	viaRouter := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, signIn.Path, strings.NewReader(body))
-		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, signIn.Handler(rctx))
 		w := httptest.NewRecorder()
 		rctx.Response.Flush(w)
@@ -1010,13 +1010,13 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 
 	tel, rec := telemetrytest.New()
 	mounted := mountedRoutes{}
-	app, err := engine.Prepare([]types.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{emailpassword.New(emailpassword.Options{})}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	ac, err := engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
 		Telemetry: tel,
 		HTTP:      mounted,
 	})
@@ -1026,7 +1026,7 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 		call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`).Code)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	token := w.Header().Get(types.SessionTokenHeader)
+	token := w.Header().Get(core.SessionTokenHeader)
 	require.NotEmpty(t, token)
 
 	signOut := mounted["/api/auth/sign-out"]
@@ -1035,7 +1035,7 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, signOut.Handler(rctx), "the router maps the middleware's error to a response")
 		w := httptest.NewRecorder()
 		rctx.Response.Flush(w)
@@ -1067,7 +1067,7 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 
 // auditApp boots the email/password plugin over a fresh database and returns
 // what an audit test needs. tel == nil boots with the default telemetry.
-func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg types.HookRegistry) error) (*types.AuthContext, map[string]types.Route) {
+func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.HookRegistry) error) (*core.AuthContext, map[string]core.Route) {
 	t.Helper()
 	ac, _, routes := bootedPlugin(t, tel, appHooks)
 	return ac, routes
@@ -1075,7 +1075,7 @@ func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg types.Ho
 
 // bootedPlugin is auditApp that also returns the plugin, for tests that call
 // its flows from code.
-func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg types.HookRegistry) error) (*types.AuthContext, *emailpassword.Plugin, map[string]types.Route) {
+func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.HookRegistry) error) (*core.AuthContext, *emailpassword.Plugin, map[string]core.Route) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-audit.db"))
 	require.NoError(t, err)
@@ -1084,18 +1084,18 @@ func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg type
 	require.NoError(t, err)
 
 	p := emailpassword.New(emailpassword.Options{})
-	app, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
+	app, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	ac, err := engine.Boot(context.Background(), app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
 		Telemetry: tel,
 		Hooks:     appHooks,
 	})
 	require.NoError(t, err)
-	routes := map[string]types.Route{}
+	routes := map[string]core.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -1107,8 +1107,8 @@ func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg type
 func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 	ctx := context.Background()
 	var rawToken string
-	ac, routes := auditApp(t, nil, func(reg types.HookRegistry) error {
-		return reg.OnAfter(hooks.HookSignInAfter, func(_ *types.HookContext, result any) error {
+	ac, routes := auditApp(t, nil, func(reg core.HookRegistry) error {
+		return reg.OnAfter(hooks.HookSignInAfter, func(_ *core.HookContext, result any) error {
 			rawToken = result.(*emailpassword.SignInResult).RawToken
 			return nil
 		}, nil)
@@ -1180,8 +1180,8 @@ func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
 	req.Header.Set("Authorization", "Bearer "+rawToken)
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	require.NoError(t, signOut(rctx))
 	require.Equal(t, http.StatusOK, rctx.Response.Code)
 	signedOut := one(string(hooks.HookSignOutAfter))
@@ -1195,9 +1195,9 @@ func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 	ctx := context.Background()
 	veto := errs.NewInvalidInputError("test", "user", "not allowed", nil)
-	ac, routes := auditApp(t, nil, func(reg types.HookRegistry) error {
+	ac, routes := auditApp(t, nil, func(reg core.HookRegistry) error {
 		// Runs after the user row is inserted, inside its transaction.
-		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, _ any) error {
+		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, _ any) error {
 			if hctx.Request != nil && hctx.Request.Request.Header.Get("X-Veto") != "" {
 				return veto
 			}
@@ -1208,8 +1208,8 @@ func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 	route := routes["/sign-up/email"]
 	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(`{"email":"ada@example.com","password":"correct horse"}`))
 	req.Header.Set("X-Veto", "1")
-	rctx := &types.RequestContext{Request: req, Response: types.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	require.ErrorIs(t, route.Handler(rctx), veto)
 
 	_, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
@@ -1236,12 +1236,12 @@ func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 // auditing off, and a MultiRecorder feeds both the table and another sink.
 func TestAuditRecorderChoices(t *testing.T) {
 	ctx := context.Background()
-	signUp := func(ac *types.AuthContext, routes map[string]types.Route) {
+	signUp := func(ac *core.AuthContext, routes map[string]core.Route) {
 		t.Helper()
 		w := call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	}
-	stored := func(ac *types.AuthContext) int {
+	stored := func(ac *core.AuthContext) int {
 		t.Helper()
 		page, err := ac.Store.QueryAuditEvents(ctx, telemetry.AuditFilter{})
 		require.NoError(t, err)
@@ -1266,8 +1266,8 @@ func TestAuditRecorderChoices(t *testing.T) {
 
 	t.Run("table and another sink", func(t *testing.T) {
 		sink := &telemetrytest.AuditRecorder{}
-		var ac *types.AuthContext
-		var routes map[string]types.Route
+		var ac *core.AuthContext
+		var routes map[string]core.Route
 		// The database recorder needs the database, which auditApp opens;
 		// lateRecorder forwards to it once it exists.
 		late := &lateRecorder{}
@@ -1333,10 +1333,10 @@ func TestEmailPasswordMetrics(t *testing.T) {
 // span ended once.
 func TestEmailPasswordTracing(t *testing.T) {
 	tel, rec := telemetrytest.New()
-	ac, routes := auditApp(t, tel, func(reg types.HookRegistry) error {
+	ac, routes := auditApp(t, tel, func(reg core.HookRegistry) error {
 		// A handler that reads through its context: the read is traced
 		// under the handler's span.
-		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, _ any) error {
+		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, _ any) error {
 			_, err := hctx.Tx.FindUserByEmail(hctx.Ctx, "ada@example.com")
 			return err
 		}, nil)

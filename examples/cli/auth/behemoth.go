@@ -15,11 +15,11 @@ import (
 	"database/sql"
 	"os"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
-	"github.com/MastewalB/behemoth/types"
 	_ "github.com/lib/pq"
 )
 
@@ -27,7 +27,7 @@ import (
 // own tables and the application's schema (schema.go). It opens no
 // connection, so the command line can call it before it has a database.
 func Prepare() (*engine.PreparedApp, error) {
-	plugins := []types.Plugin{emailpassword.New(emailpassword.Options{})}
+	plugins := []core.Plugin{emailpassword.New(emailpassword.Options{})}
 	return engine.Prepare(plugins, engine.PrepareConfig{
 		Migration: migration.MigrationConfig{
 			FolderPath: "migrations",

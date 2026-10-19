@@ -11,7 +11,7 @@ import (
 	"net/http"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -25,13 +25,13 @@ func New(router chi.Router) *ChiDriver {
 	return &ChiDriver{router: router}
 }
 
-// Mount implements [types.FrameworkDriver].
+// Mount implements [core.FrameworkDriver].
 //
 // Unlike gin and echo, chi silently replaces a route registered twice, so
 // conflicts with the application's existing routes are checked here, by
 // exact method and pattern. Panics chi raises for an invalid route are
 // returned as errors.
-func (cd *ChiDriver) Mount(routes ...types.Route) error {
+func (cd *ChiDriver) Mount(routes ...core.Route) error {
 	existing, err := cd.existingRoutes()
 	if err != nil {
 		return err
@@ -62,7 +62,7 @@ func (cd *ChiDriver) existingRoutes() (map[routeKey]bool, error) {
 	return existing, nil
 }
 
-func (cd *ChiDriver) handle(rt types.Route) (err error) {
+func (cd *ChiDriver) handle(rt core.Route) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("chi: cannot mount %s %s: %v", rt.Method, rt.Path, r)
@@ -83,7 +83,7 @@ func (cd *ChiDriver) handle(rt types.Route) (err error) {
 	return nil
 }
 
-func buildRequestContext(r *http.Request) *types.RequestContext {
+func buildRequestContext(r *http.Request) *core.RequestContext {
 	params := map[string]string{}
 	if rc := chi.RouteContext(r.Context()); rc != nil {
 		for i, key := range rc.URLParams.Keys {
@@ -91,13 +91,13 @@ func buildRequestContext(r *http.Request) *types.RequestContext {
 		}
 	}
 
-	return &types.RequestContext{
+	return &core.RequestContext{
 		Ctx:      r.Context(),
 		Request:  r,
-		Response: types.NewResponseRecorder(),
+		Response: core.NewResponseRecorder(),
 		Values:   make(behemoth.M),
 		Params:   params,
 	}
 }
 
-var _ types.FrameworkDriver = (*ChiDriver)(nil)
+var _ core.FrameworkDriver = (*ChiDriver)(nil)

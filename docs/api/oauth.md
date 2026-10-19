@@ -41,10 +41,10 @@ plugin := oauth.New(oauth.Options{
 	CallbackURL: "https://app.example.com/auth/callback",
 })
 
-app, err := engine.Prepare([]types.Plugin{plugin}, engine.PrepareConfig{})
+app, err := engine.Prepare([]core.Plugin{plugin}, engine.PrepareConfig{})
 // ...
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Router: types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+	Router: core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
 	// ...
 })
 ```
@@ -67,7 +67,7 @@ Serve your callback page at that URI. See [Build the callback page](#build-the-c
 | `Providers` | none | The built-in providers a user can sign in with, as data. See [Configure a provider](#configure-a-provider). |
 | `CustomProviders` | none | Providers you implement. See [Write a provider](#write-a-provider). |
 | `CallbackURL` | required | The page of your application the providers send the browser back to. Absolute, `http` or `https`, without a query or a fragment. Each provider's redirect URI is below it. |
-| `StateTTL` | 10 minutes | How long a started sign-in can be completed: the time a user has at the provider. `TokenConfig.TTLOverrides[types.TokenKindOAuthState]` takes precedence. |
+| `StateTTL` | 10 minutes | How long a started sign-in can be completed: the time a user has at the provider. `TokenConfig.TTLOverrides[core.TokenKindOAuthState]` takes precedence. |
 | `HTTPClient` | `ac.HTTPClient`, the client of `BootConfig.Outbound` | The client the built-in providers call the provider with. Set it to give the plugin a client of its own, such as one for a test server. Build it with `outbound.NewClient`, or make sure it follows no redirect: the code exchange sends the client secret. See [Outbound calls](outbound.md). |
 
 `Boot` returns a configuration error for no provider at all, a `ProviderConfig` that is incomplete or whose secret can't be read, a nil provider, an id that is used twice, an id that is not 1 to 64 characters of `a-z`, `0-9`, `-`, and `_`, the id `credential`, and a `CallbackURL` that is not usable. `Boot` calls no provider. A provider that is down fails its sign-ins, not the boot.
@@ -284,7 +284,7 @@ signIn, err := plugin.Complete(ctx, oauth.CompleteRequest{
 The flows behave as follows:
 
 - **You keep the binding value.** `Begin` returns it, and `Complete` needs it. Keep it with the client that started the sign-in, and never in a URL. A caller that stores it on its own server, looked up by the state, removes the protection it gives.
-- **`Complete` delivers nothing.** It returns the raw session token. From a route of your own, hand `signIn.SignInResult` to `types.WriteSignIn`, which is what the plugin's route does.
+- **`Complete` delivers nothing.** It returns the raw session token. From a route of your own, hand `signIn.SignInResult` to `core.WriteSignIn`, which is what the plugin's route does.
 - **Pass the context of the request being handled** when there is one, so the session records the client's address and handlers get the request.
 - **Called before `Boot`,** both return a configuration error.
 
@@ -296,7 +296,7 @@ The flows behave as follows:
 | --- | --- |
 | `auth.signIn.before` | payload `method` (`"oauth"`) and `provider`. Veto only. The code, the state, and the binding value are not in the payload. |
 | `auth.signIn.credentialsVerified` | `HookValueUserID`. Set `requireStepUp` to make the session pending. |
-| `auth.signIn.after` | a `*types.SignInResult` with `Method` set to `"oauth"` |
+| `auth.signIn.after` | a `*core.SignInResult` with `Method` set to `"oauth"` |
 | `auth.signIn.failed` | codes `invalid_oauth_state`, `oauth_provider_mismatch`, `oauth_binding_mismatch`, `oauth_exchange_refused`, `user_not_found`, `email_not_provided`, `account_not_linked`, `rejected_by_hook`. The metadata has the provider. |
 | `auth.signUp.before` | payload `method`, `provider`, `email`, `email_verified`, `firstname`, `lastname`, and `image_url`. Veto only. |
 | `auth.signUp.after` | the created `*models.User` |

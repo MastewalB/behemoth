@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
@@ -23,8 +25,6 @@ import (
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,11 +44,11 @@ CREATE TABLE verification_codes (
 // when told to. The lock is for background sends.
 type outbox struct {
 	mu    sync.Mutex
-	links []types.MailMessage
+	links []core.MailMessage
 	err   error
 }
 
-func (o *outbox) Send(_ context.Context, msg types.MailMessage) error {
+func (o *outbox) Send(_ context.Context, msg core.MailMessage) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.links = append(o.links, msg)
@@ -61,7 +61,7 @@ func (o *outbox) count() int {
 	return len(o.links)
 }
 
-func (o *outbox) last(t *testing.T) types.MailMessage {
+func (o *outbox) last(t *testing.T) core.MailMessage {
 	t.Helper()
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -71,7 +71,7 @@ func (o *outbox) last(t *testing.T) types.MailMessage {
 
 type magicLinkApp struct {
 	plugin  *magiclink.Plugin
-	ac      *types.AuthContext
+	ac      *core.AuthContext
 	outbox  *outbox
 	rec     *telemetrytest.Recorder
 	mounted mountedRoutes
@@ -79,7 +79,7 @@ type magicLinkApp struct {
 
 // bootMagicLink boots the plugin alone over a fresh database, with one
 // trusted origin and a user "ada@example.com" whose email is not verified.
-func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg types.HookRegistry) error) (*magicLinkApp, *models.User) {
+func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg core.HookRegistry) error) (*magicLinkApp, *models.User) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "magiclink.db"))
@@ -96,15 +96,15 @@ func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg types.H
 	tel, rec := telemetrytest.New()
 	app.rec = rec
 
-	prepared, err := engine.Prepare([]types.Plugin{app.plugin}, engine.PrepareConfig{})
+	prepared, err := engine.Prepare([]core.Plugin{app.plugin}, engine.PrepareConfig{})
 	require.NoError(t, err)
 	app.ac, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Session:   types.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: types.TransportHeader},
-		Router:    types.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
-		Mail:      types.MailConfig{Sender: app.outbox},
+		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, Transport: core.TransportHeader},
+		Router:    core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+		Mail:      core.MailConfig{Sender: app.outbox},
 		Telemetry: tel,
 		HTTP:      app.mounted,
 		Hooks:     hookFn,
@@ -130,14 +130,14 @@ func TestMagicLinkRequestAndVerify(t *testing.T) {
 	type signInBefore struct{ payload, values behemoth.M }
 	var befores []signInBefore
 	var afters []any
-	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true}, func(reg types.HookRegistry) error {
-		if err := reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true}, func(reg core.HookRegistry) error {
+		if err := reg.OnBefore(hooks.HookSignInBefore, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			befores = append(befores, signInBefore{payload, behemoth.M{hooks.HookValueEmail: hctx.Values[hooks.HookValueEmail]}})
 			return nil, nil
 		}, nil); err != nil {
 			return err
 		}
-		return reg.OnAfter(hooks.HookSignInAfter, func(_ *types.HookContext, result any) error {
+		return reg.OnAfter(hooks.HookSignInAfter, func(_ *core.HookContext, result any) error {
 			afters = append(afters, result)
 			return nil
 		}, nil)
@@ -159,7 +159,7 @@ func TestMagicLinkRequestAndVerify(t *testing.T) {
 	})
 	require.NoError(t, err)
 	first := app.outbox.last(t)
-	assert.Equal(t, types.MailMagicLink, first.Kind)
+	assert.Equal(t, core.MailMagicLink, first.Kind)
 	assert.Equal(t, "ada@example.com", first.To, "normalized")
 	assert.Equal(t, behemoth.M{"locale": "fr"}, first.Metadata, "passed to the sender as given")
 	assert.Equal(t, user.ID, first.User.ID)
@@ -202,7 +202,7 @@ func TestMagicLinkRequestAndVerify(t *testing.T) {
 	unknown := signInBefore{behemoth.M{"method": "magiclink"}, behemoth.M{hooks.HookValueEmail: nil}}
 	assert.Equal(t, []signInBefore{unknown, known, unknown, unknown}, befores)
 	require.Len(t, afters, 1)
-	assert.Same(t, result.SignInResult, afters[0], "auth.signIn.after gets the shared *types.SignInResult")
+	assert.Same(t, result.SignInResult, afters[0], "auth.signIn.after gets the shared *core.SignInResult")
 
 	// The request points are audited under the plugin's point names.
 	requested := app.rec.Audit.OfType(string(magiclink.HookRequestAfter))
@@ -272,8 +272,8 @@ func TestMagicLinkRoutes(t *testing.T) {
 	assert.Equal(t, "/dashboard", body.RedirectURL)
 	// The route answers like every sign-in: the session token travels by
 	// the configured transport, here the response header.
-	session, err := app.ac.SessionManager.Validate(context.Background(), w.Header().Get(types.SessionTokenHeader))
-	require.NoError(t, err, "the %s header carries the session token", types.SessionTokenHeader)
+	session, err := app.ac.SessionManager.Validate(context.Background(), w.Header().Get(core.SessionTokenHeader))
+	require.NoError(t, err, "the %s header carries the session token", core.SessionTokenHeader)
 	assert.Equal(t, user.ID, session.UserID)
 	assert.NotContains(t, w.Body.String(), `"token"`, "and the body does not")
 
@@ -286,7 +286,7 @@ func TestMagicLinkRoutes(t *testing.T) {
 // answers the same for an email without an account.
 func TestMagicLinkRequestsAreLimitedPerEmail(t *testing.T) {
 	ctx := context.Background()
-	app, _ := bootMagicLink(t, magiclink.Options{WaitForSend: true, RequestLimit: types.Limit{Max: 2, Window: time.Minute}}, nil)
+	app, _ := bootMagicLink(t, magiclink.Options{WaitForSend: true, RequestLimit: core.Limit{Max: 2, Window: time.Minute}}, nil)
 	limited := func(email string) bool {
 		_, err := app.plugin.RequestLink(ctx, magiclink.LinkRequest{Email: email})
 		return errs.IsCategory(err, errs.CategoryRateLimited)
@@ -309,14 +309,14 @@ func TestMagicLinkRequestsAreLimitedPerEmail(t *testing.T) {
 func TestMagicLinkVerifyRefusalsAndSecondFactor(t *testing.T) {
 	ctx := context.Background()
 	stepUp := false
-	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true}, func(reg types.HookRegistry) error {
-		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true}, func(reg core.HookRegistry) error {
+		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 			payload["requireStepUp"] = stepUp
 			return payload, nil
 		}, nil)
 	})
 	p := app.plugin
-	link := func() types.MailMessage {
+	link := func() core.MailMessage {
 		_, err := p.RequestLink(ctx, magiclink.LinkRequest{Email: "ada@example.com"})
 		require.NoError(t, err)
 		return app.outbox.last(t)
@@ -350,10 +350,10 @@ func TestMagicLinkVerifyRefusalsAndSecondFactor(t *testing.T) {
 
 // LinkURL and a mail sender are required, and a missing one stops Boot.
 func TestMagicLinkOptions(t *testing.T) {
-	sender := types.MailSenderFunc(func(context.Context, types.MailMessage) error { return nil })
+	sender := core.MailSenderFunc(func(context.Context, core.MailMessage) error { return nil })
 	for name, tc := range map[string]struct {
 		opts   magiclink.Options
-		sender types.MailSender
+		sender core.MailSender
 	}{
 		"no sender":           {magiclink.Options{LinkURL: "https://app.example.com/auth/magic"}, nil},
 		"no link URL":         {magiclink.Options{}, sender},
@@ -370,13 +370,13 @@ func TestMagicLinkOptions(t *testing.T) {
 		_, err = p.RequestLink(context.Background(), magiclink.LinkRequest{Email: "ada@example.com"})
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
 
-		prepared, err := engine.Prepare([]types.Plugin{p}, engine.PrepareConfig{})
+		prepared, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
 		require.NoError(t, err, name)
 		_, err = engine.Boot(context.Background(), prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
 			Crypto: crypto.Config{
 				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 			},
-			Mail: types.MailConfig{Sender: tc.sender},
+			Mail: core.MailConfig{Sender: tc.sender},
 		})
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "magiclink", name)

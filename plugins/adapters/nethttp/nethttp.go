@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 )
 
 // ServeMuxDriver mounts behemoth's routes onto a *http.ServeMux.
@@ -55,7 +55,7 @@ func toMuxPattern(method, path string) string {
 	return method + " " + path
 }
 
-// Mount implements [types.FrameworkDriver]. A route is refused, with an
+// Mount implements [core.FrameworkDriver]. A route is refused, with an
 // error, in two cases.
 //
 // The mux refuses it: it panics on a pattern it cannot parse and on one that
@@ -84,7 +84,7 @@ func toMuxPattern(method, path string) string {
 //   - It also refuses a pattern without a method that reaches the route
 //     through a wildcard, such as "/api/auth/{action}". Naming the pattern's
 //     methods ("GET /api/auth/{action}") takes it out of the check.
-func (sd *ServeMuxDriver) Mount(routes ...types.Route) error {
+func (sd *ServeMuxDriver) Mount(routes ...core.Route) error {
 	for _, rt := range routes {
 		if err := sd.handle(rt); err != nil {
 			return err
@@ -93,7 +93,7 @@ func (sd *ServeMuxDriver) Mount(routes ...types.Route) error {
 	return nil
 }
 
-func (sd *ServeMuxDriver) handle(rt types.Route) (err error) {
+func (sd *ServeMuxDriver) handle(rt core.Route) (err error) {
 	// A mux pattern without a method matches every method, so a route that
 	// names none would answer all of them.
 	if rt.Method == "" {
@@ -131,7 +131,7 @@ func (sd *ServeMuxDriver) handle(rt types.Route) (err error) {
 // give a request to. So this asks about a request rt would match, with a
 // made-up value for each parameter, before rt is registered. Only the best
 // match comes back, which is the one rt would take the method from.
-func (sd *ServeMuxDriver) methodlessPattern(rt types.Route) string {
+func (sd *ServeMuxDriver) methodlessPattern(rt core.Route) string {
 	path := pathParam.ReplaceAllString(rt.Path, "x")
 	_, pattern := sd.mux.Handler(&http.Request{Method: rt.Method, URL: &url.URL{Path: path}})
 	switch {
@@ -164,19 +164,19 @@ func paramNames(path string) []string {
 	return names
 }
 
-func buildRequestContext(r *http.Request, names []string) *types.RequestContext {
+func buildRequestContext(r *http.Request, names []string) *core.RequestContext {
 	params := make(map[string]string, len(names))
 	for _, name := range names {
 		params[name] = r.PathValue(name)
 	}
 
-	return &types.RequestContext{
+	return &core.RequestContext{
 		Ctx:      r.Context(),
 		Request:  r,
-		Response: types.NewResponseRecorder(),
+		Response: core.NewResponseRecorder(),
 		Values:   make(behemoth.M),
 		Params:   params,
 	}
 }
 
-var _ types.FrameworkDriver = (*ServeMuxDriver)(nil)
+var _ core.FrameworkDriver = (*ServeMuxDriver)(nil)

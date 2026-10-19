@@ -8,7 +8,7 @@ The code it refers to lives in:
 
 - `engine/init.go`: `Prepare`, `Boot`, `BootConfig`, `PrepareConfig`
 - `plugins/*`: each plugin's `Options`, `New`, and `Init`
-- `types/mail.go`: `MailSender`, `MailMessage`
+- `core/mail.go`: `MailSender`, `MailMessage`
 - `crypto/`: `SecretSource`, `WatchableSecretSource`, `PollingWatcher`
 - `messaging/mailer.go`: `DefaultMailer`, the one component with background workers
 - `store/rate_limits.go`, `store/audit.go`: the purges
@@ -40,7 +40,7 @@ type Options struct {
 	WaitForSend          bool
 	LinkURL              string
 	TTL                  time.Duration
-	RequestLimit         types.Limit
+	RequestLimit         core.Limit
 	LeaveEmailUnverified bool
 }
 ```

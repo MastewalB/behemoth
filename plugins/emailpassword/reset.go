@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -38,24 +38,24 @@ const DefaultResetTTL = time.Hour
 const (
 	// HookResetRequestBefore runs on a reset request's input: "email" and
 	// "metadata". A handler may rewrite them or stop the request.
-	HookResetRequestBefore types.HookPoint = "auth.passwordReset.beforeRequest"
+	HookResetRequestBefore core.HookPoint = "auth.passwordReset.beforeRequest"
 	// HookResetRequestAfter runs once the link has been handed to the mail
 	// sender, with a *ResetRequestResult.
-	HookResetRequestAfter types.HookPoint = "auth.passwordReset.afterRequest"
+	HookResetRequestAfter core.HookPoint = "auth.passwordReset.afterRequest"
 	// HookResetRequestFailed fires for a request that sent no link: codes
 	// "user_not_found", "issue_failed", "send_failed" and "rejected_by_hook".
-	HookResetRequestFailed types.HookPoint = "auth.passwordReset.requestFailed"
+	HookResetRequestFailed core.HookPoint = "auth.passwordReset.requestFailed"
 
 	// HookResetBefore runs before a token is consumed, with "password" and,
 	// when the token names one, "email". A handler can stop the reset. What
 	// it writes to the payload is not read back.
-	HookResetBefore types.HookPoint = "auth.passwordReset.before"
+	HookResetBefore core.HookPoint = "auth.passwordReset.before"
 	// HookResetAfter runs once the password is set and the user's sessions
 	// have ended, with the *models.User.
-	HookResetAfter types.HookPoint = "auth.passwordReset.after"
+	HookResetAfter core.HookPoint = "auth.passwordReset.after"
 	// HookResetFailed fires for a reset that set no password: codes
 	// "invalid_token", "user_not_found", "email_changed" and "rejected_by_hook".
-	HookResetFailed types.HookPoint = "auth.passwordReset.failed"
+	HookResetFailed core.HookPoint = "auth.passwordReset.failed"
 )
 
 // Names of the rate-limit rules the plugin declares when reset is enabled.
@@ -102,14 +102,14 @@ type ResetOptions struct {
 	LinkURL string
 
 	// TTL is how long a link works. Zero means DefaultResetTTL.
-	// TokenConfig.TTLOverrides for types.TokenKindPasswordReset takes
+	// TokenConfig.TTLOverrides for core.TokenKindPasswordReset takes
 	// precedence.
 	TTL time.Duration
 
 	// RequestLimit bounds reset requests per email, from any caller. It
 	// keeps one address from being sent link after link. Zero means 5 per
 	// 15 minutes.
-	RequestLimit types.Limit
+	RequestLimit core.Limit
 
 	// WaitForSend chooses how the link is handed to the mail sender.
 	//
@@ -191,7 +191,7 @@ type ResetRequestResult struct {
 	ExpiresAt time.Time
 }
 
-// AuditSubject implements [types.AuditSubject]: a reset request is about the
+// AuditSubject implements [core.AuditSubject]: a reset request is about the
 // user whose password the link resets.
 func (r *ResetRequestResult) AuditSubject() (subjectType, subjectID string) {
 	if r == nil {
@@ -230,22 +230,22 @@ func (in *resetInput) FromMap(map[string]any) error { return nil }
 // declareReset declares what password reset adds: the token kind, the
 // auth.passwordReset.* points and three rate-limit rules. Declare calls it
 // when reset is enabled.
-func (p *Plugin) declareReset(ic *types.PluginInitContext) error {
+func (p *Plugin) declareReset(ic *core.PluginInitContext) error {
 	// Kept in the database, so that a new link can revoke the user's
 	// earlier ones and a deleted user's links go with the user.
-	if err := ic.Tokens.Declare(types.TokenKindDef{
-		Kind: types.TokenKindPasswordReset, SingleUse: true, DefaultTTL: p.opts.Reset.TTL, Backend: types.TokenBackendDB,
+	if err := ic.Tokens.Declare(core.TokenKindDef{
+		Kind: core.TokenKindPasswordReset, SingleUse: true, DefaultTTL: p.opts.Reset.TTL, Backend: core.TokenBackendDB,
 	}); err != nil {
 		return err
 	}
 
-	for _, def := range []types.HookPointDef{
-		{Point: HookResetRequestBefore, Phase: types.BeforeHookPhase},
-		{Point: HookResetRequestAfter, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookResetRequestFailed, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookResetBefore, Phase: types.BeforeHookPhase},
-		{Point: HookResetAfter, Phase: types.AfterHookPhase, Audit: &types.AuditSpec{}},
-		{Point: HookResetFailed, Phase: types.FailedHookPhase, Audit: &types.AuditSpec{}},
+	for _, def := range []core.HookPointDef{
+		{Point: HookResetRequestBefore, Phase: core.BeforeHookPhase},
+		{Point: HookResetRequestAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookResetRequestFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookResetBefore, Phase: core.BeforeHookPhase},
+		{Point: HookResetAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookResetFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 	} {
 		if err := ic.Hooks.Declare(def); err != nil {
 			return err
@@ -255,9 +255,9 @@ func (p *Plugin) declareReset(ic *types.PluginInitContext) error {
 	// Per address on the routes, like core's sign-in rule: it slows one
 	// client down and can't be used to keep another one out.
 	byAddress := func(_ *http.Request, ip string) string { return ip }
-	for _, rule := range []types.RouteRateLimitRule{
-		{Name: RuleResetRequestRoute, Method: http.MethodPost, Path: PathResetRequest, KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute}},
-		{Name: RuleResetConfirmRoute, Method: http.MethodPost, Path: PathResetConfirm, KeyFunc: byAddress, Limit: types.Limit{Max: 10, Window: time.Minute}},
+	for _, rule := range []core.RouteRateLimitRule{
+		{Name: RuleResetRequestRoute, Method: http.MethodPost, Path: PathResetRequest, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
+		{Name: RuleResetConfirmRoute, Method: http.MethodPost, Path: PathResetConfirm, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
 	} {
 		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
 			return err
@@ -266,15 +266,15 @@ func (p *Plugin) declareReset(ic *types.PluginInitContext) error {
 	// Per email on the request itself, so it also holds for
 	// RequestPasswordReset called from code. It counts requests for unknown
 	// emails too, and so answers the same for both.
-	return ic.RateLimits.DeclareHookRateLimitRule(types.HookRateLimitRule{
+	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 		Name: RuleResetRequestEmail, Point: HookResetRequestBefore,
-		KeyFunc: types.KeyByValues(hooks.HookValueEmail), Limit: p.opts.Reset.RequestLimit,
+		KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.Reset.RequestLimit,
 	})
 }
 
 // initReset checks the reset options and wraps the two flows with their
 // points. Init calls it when reset is enabled.
-func (p *Plugin) initReset(ac *types.AuthContext) error {
+func (p *Plugin) initReset(ac *core.AuthContext) error {
 	const op = "emailpassword.Init"
 	if ac.Mailer == nil || !ac.Mailer.Configured() {
 		return errs.NewConfigurationError(op, "password reset is enabled and no mail sender is configured; set BootConfig.Mail.Sender: the plugin does not send email itself", nil)
@@ -291,14 +291,14 @@ func (p *Plugin) initReset(ac *types.AuthContext) error {
 			fmt.Sprintf("Options.Reset.LinkURL %q is not an absolute http or https URL", p.opts.Reset.LinkURL), err)
 	}
 	p.resetURL = linkURL
-	p.resetRequest = types.WithLifecycle(ac.Dispatcher, HookResetRequestBefore, HookResetRequestAfter, HookResetRequestFailed, p.resetRequestBody)
-	p.reset = types.WithLifecycle(ac.Dispatcher, HookResetBefore, HookResetAfter, HookResetFailed, p.resetBody)
+	p.resetRequest = core.WithLifecycle(ac.Dispatcher, HookResetRequestBefore, HookResetRequestAfter, HookResetRequestFailed, p.resetRequestBody)
+	p.reset = core.WithLifecycle(ac.Dispatcher, HookResetBefore, HookResetAfter, HookResetFailed, p.resetBody)
 	return nil
 }
 
 // resetOperation is operation for the reset flows: it also refuses when the
 // application did not turn reset on.
-func (p *Plugin) resetOperation(ctx context.Context, op string) (*types.HookContext, error) {
+func (p *Plugin) resetOperation(ctx context.Context, op string) (*core.HookContext, error) {
 	hctx, err := p.operation(ctx, op)
 	if err != nil {
 		return nil, err
@@ -343,7 +343,7 @@ func (p *Plugin) RequestPasswordReset(ctx context.Context, req ResetRequest) (*R
 	return p.resetRequest(hctx, req)
 }
 
-func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*ResetRequestResult, error) {
+func (p *Plugin) resetRequestBody(hctx *core.HookContext, req ResetRequest) (*ResetRequestResult, error) {
 	const op = "emailpassword.RequestPasswordReset"
 	ac := hctx.Auth
 
@@ -361,7 +361,7 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 		if !errs.IsNotFound(err) {
 			return nil, err // infra error (DB down): not "no such user"
 		}
-		if failErr := ac.Dispatcher.Fail(hctx, HookResetRequestFailed, types.FailureReason{
+		if failErr := ac.Dispatcher.Fail(hctx, HookResetRequestFailed, core.FailureReason{
 			Code: "user_not_found", Metadata: behemoth.M{hooks.HookValueEmail: email},
 		}); failErr != nil {
 			return nil, failErr
@@ -372,7 +372,7 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 	// From here on a failure is one of a known account, and its audit event
 	// says which.
 	failed := func(code string, cause error) error {
-		if failErr := ac.Dispatcher.Fail(hctx, HookResetRequestFailed, types.FailureReason{
+		if failErr := ac.Dispatcher.Fail(hctx, HookResetRequestFailed, core.FailureReason{
 			Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: user.ID,
 		}); failErr != nil {
 			return failErr
@@ -383,10 +383,10 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 	// One live link per user. The subject is the user's id and not the
 	// email, so Store.DeleteUser removes the links with the user. The email
 	// the link was sent to is kept next to it and checked at the reset.
-	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, types.TokenKindPasswordReset, user.ID); err != nil {
+	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, core.TokenKindPasswordReset, user.ID); err != nil {
 		return nil, failed("issue_failed", err)
 	}
-	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, types.TokenKindPasswordReset, user.ID, behemoth.M{credentialEmailKey: email})
+	token, rawToken, err := ac.TokenManager.Issue(hctx.Ctx, core.TokenKindPasswordReset, user.ID, behemoth.M{credentialEmailKey: email})
 	if err != nil {
 		return nil, failed("issue_failed", err)
 	}
@@ -396,8 +396,8 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 	query.Set(resetTokenKey, rawToken)
 	link.RawQuery = query.Encode()
 
-	msg := types.MailMessage{
-		Kind: types.MailPasswordReset, To: email, URL: link.String(), Token: rawToken,
+	msg := core.MailMessage{
+		Kind: core.MailPasswordReset, To: email, URL: link.String(), Token: rawToken,
 		ExpiresAt: token.ExpiresAt, User: user, Metadata: req.Metadata,
 	}
 	if p.opts.Reset.WaitForSend {
@@ -446,7 +446,7 @@ func isTokenRejection(err error) bool {
 //     keeps a second factor in the path;
 //   - the email is marked verified if it was not, unless
 //     ResetOptions.LeaveEmailUnverified is set;
-//   - the user is sent a types.MailPasswordChanged notice, in the
+//   - the user is sent a core.MailPasswordChanged notice, in the
 //     background.
 //
 // A link that is unknown, expired, used or replaced by a newer one gets one
@@ -467,7 +467,7 @@ func (p *Plugin) ResetPassword(ctx context.Context, rawToken, newPassword string
 	// still goes through the flow, which refuses it and fires
 	// auth.passwordReset.failed.
 	in := resetInput{token: rawToken, password: newPassword}
-	token, err := p.authContext.TokenManager.Verify(ctx, types.TokenKindPasswordReset, rawToken)
+	token, err := p.authContext.TokenManager.Verify(ctx, core.TokenKindPasswordReset, rawToken)
 	switch {
 	case err == nil:
 		in.verified = token
@@ -481,7 +481,7 @@ func (p *Plugin) ResetPassword(ctx context.Context, rawToken, newPassword string
 	return p.reset(hctx, in)
 }
 
-func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User, error) {
+func (p *Plugin) resetBody(hctx *core.HookContext, in resetInput) (*models.User, error) {
 	const op = "emailpassword.ResetPassword"
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
@@ -498,15 +498,15 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 	// after the consume, so little can still fail with the link spent.
 	token := in.verified
 	if token == nil {
-		if failErr := dispatcher.Fail(hctx, HookResetFailed, types.FailureReason{Code: "invalid_token", Cause: in.verifyErr}); failErr != nil {
+		if failErr := dispatcher.Fail(hctx, HookResetFailed, core.FailureReason{Code: "invalid_token", Cause: in.verifyErr}); failErr != nil {
 			return nil, failErr
 		}
 		return nil, errInvalidResetToken()
 	}
 
 	userID := fmt.Sprint(token.Subject)
-	rejected := func(code string, cause error) types.FailureReason {
-		return types.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: userID}
+	rejected := func(code string, cause error) core.FailureReason {
+		return core.FailureReason{Code: code, Cause: cause, SubjectType: models.UserTable, SubjectID: userID}
 	}
 
 	user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
@@ -540,7 +540,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 
 	// The at-most-once step. Of two resets racing with one link, both
 	// passed the checks above and one loses here.
-	if _, err := ac.TokenManager.Consume(hctx.Ctx, types.TokenKindPasswordReset, in.token); err != nil {
+	if _, err := ac.TokenManager.Consume(hctx.Ctx, core.TokenKindPasswordReset, in.token); err != nil {
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad link
 		}
@@ -570,8 +570,8 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 	if err != nil {
 		// A data hook's typed veto is a refusal of the reset. Anything else
 		// is a failure of the system.
-		return nil, types.FailIfRejected(dispatcher, hctx, HookResetFailed, err,
-			types.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
+		return nil, core.FailIfRejected(dispatcher, hctx, HookResetFailed, err,
+			core.FailureReason{SubjectType: models.UserTable, SubjectID: userID})
 	}
 
 	if err := p.afterPasswordChange(hctx.Ctx, user); err != nil {
@@ -618,7 +618,7 @@ func (p *Plugin) afterPasswordChange(ctx context.Context, user *models.User) err
 	if ac.Mailer == nil || !ac.Mailer.Configured() || user.Email == "" {
 		return nil
 	}
-	notice := types.MailMessage{Kind: types.MailPasswordChanged, To: store.NormalizeEmail(user.Email), User: user}
+	notice := core.MailMessage{Kind: core.MailPasswordChanged, To: store.NormalizeEmail(user.Email), User: user}
 	if err := ac.Mailer.SendAsync(ctx, notice); err != nil {
 		p.log.Warn(ctx, "the password changed notice was not queued", telemetry.ErrorFields(err))
 	}
@@ -646,7 +646,7 @@ func (p *Plugin) ValidatePassword(password string) error {
 // It is the second half of ResetPassword without the link: the password
 // goes through the plugin's rules, a user without a credential account gets
 // one, every session of the user ends (SessionRevokedPasswordReset) and none
-// is created, and the user is sent a types.MailPasswordChanged notice when a
+// is created, and the user is sent a core.MailPasswordChanged notice when a
 // mail sender is configured. It does not touch EmailVerified, and it fires
 // no points: the calling flow has its own.
 //
@@ -686,7 +686,7 @@ func (p *Plugin) SetPassword(ctx context.Context, userID, password string) (*mod
 // issued and a failed send are all a 200. A validation error and a rate
 // limit are reported, since they do not depend on the account. Anything else
 // is a failure of the system and a 500 from the router.
-func (p *Plugin) handleResetRequest(rctx *types.RequestContext) error {
+func (p *Plugin) handleResetRequest(rctx *core.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("emailpassword.RequestPasswordReset", "request", err)
@@ -712,7 +712,7 @@ func (p *Plugin) handleResetRequest(rctx *types.RequestContext) error {
 // maps it: a refused link is a typed unauthorized error (401), a refused
 // password a validation error (400). It delivers no session token: a reset
 // does not sign the user in.
-func (p *Plugin) handleResetConfirm(rctx *types.RequestContext) error {
+func (p *Plugin) handleResetConfirm(rctx *core.RequestContext) error {
 	const op = "emailpassword.ResetPassword"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {

@@ -16,7 +16,7 @@ import (
 // RedisAdapter implements behemoth.KeyValueStorage on a Redis client.
 //
 // It also counts for the rate limiter (Increment, the
-// types.AtomicIncrementer capability), so with Redis configured rate-limit
+// core.AtomicIncrementer capability), so with Redis configured rate-limit
 // counters are kept there and not in the database.
 type RedisAdapter struct {
 	redisClient *redis.Client
@@ -85,7 +85,7 @@ end
 return {count, ttl}
 `)
 
-// Increment implements the rate limiter's counter (types.AtomicIncrementer):
+// Increment implements the rate limiter's counter (core.AtomicIncrementer):
 // it counts one attempt against key and returns the count in the current
 // window and when the window ends. The first attempt opens a window of ttl,
 // and Redis removes the key when it has passed.

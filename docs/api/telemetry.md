@@ -153,7 +153,7 @@ Every request to a Behemoth route has an ID. Behemoth takes it from, in order:
 The ID is returned in the same header of the response, including error responses, so a client can quote it in a bug report. Change the header with `RouterConfig.RequestIDHeader`:
 
 ```go
-Router: types.RouterConfig{RequestIDHeader: "X-Correlation-ID"},
+Router: core.RouterConfig{RequestIDHeader: "X-Correlation-ID"},
 ```
 
 Read the ID in a route handler or a hook handler:
@@ -168,12 +168,12 @@ id := telemetry.RequestIDFrom(hctx.Ctx) // in a hook handler; "" outside a reque
 A plugin takes the logger from the `AuthContext` and names itself, so its lines can be told apart:
 
 ```go
-func (p *Plugin) Init(ac *types.AuthContext) error {
+func (p *Plugin) Init(ac *core.AuthContext) error {
 	p.log = telemetry.Named(ac.Telemetry.Logger, "invites")
 	return nil
 }
 
-func (p *Plugin) accept(rctx *types.RequestContext) error {
+func (p *Plugin) accept(rctx *core.RequestContext) error {
 	if err := p.redeem(rctx.Ctx, code); err != nil {
 		p.log.Warn(rctx.Ctx, "invite could not be redeemed", telemetry.ErrorFields(err))
 		return err
@@ -475,7 +475,7 @@ Things worth knowing:
 Start spans from the context Behemoth gives you, and they appear in the right place:
 
 ```go
-func (p *Plugin) onUserCreated(hctx *types.HookContext, result any) error {
+func (p *Plugin) onUserCreated(hctx *core.HookContext, result any) error {
 	ctx, span := hctx.Auth.Telemetry.StartSpan(hctx.Ctx, "invites.attach", nil)
 	err := p.attach(ctx, result.(*models.User))
 	telemetry.FinishSpan(span, err)

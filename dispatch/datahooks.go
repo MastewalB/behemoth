@@ -5,12 +5,12 @@ import (
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 )
 
 // tableHookPoints are the data hook points fired around writes to one table.
@@ -21,10 +21,10 @@ import (
 // the transaction the write ran in has committed, not for a write that was
 // rolled back.
 type tableHookPoints struct {
-	beforeCreate, afterCreate types.HookPoint
-	beforeUpdate, afterUpdate types.HookPoint
-	beforeDelete, afterDelete types.HookPoint
-	created, updated, deleted types.HookPoint
+	beforeCreate, afterCreate core.HookPoint
+	beforeUpdate, afterUpdate core.HookPoint
+	beforeDelete, afterDelete core.HookPoint
+	created, updated, deleted core.HookPoint
 	idValue                   string
 }
 
@@ -53,16 +53,16 @@ var coreDataHookPoints = map[string]tableHookPoints{
 // checkDataHookPoints reports a configuration error when a point in points
 // was never declared, or was declared with a phase other than the one the
 // store fires it in.
-func checkDataHookPoints(catalog types.HookCatalog, points map[string]tableHookPoints) error {
+func checkDataHookPoints(catalog core.HookCatalog, points map[string]tableHookPoints) error {
 	for table, p := range points {
 		for _, want := range []struct {
-			point types.HookPoint
-			phase types.HookPhase
+			point core.HookPoint
+			phase core.HookPhase
 		}{
-			{p.beforeCreate, types.BeforeHookPhase}, {p.afterCreate, types.AfterHookPhase},
-			{p.beforeUpdate, types.BeforeHookPhase}, {p.afterUpdate, types.AfterHookPhase},
-			{p.beforeDelete, types.BeforeHookPhase}, {p.afterDelete, types.AfterHookPhase},
-			{p.created, types.AfterHookPhase}, {p.updated, types.AfterHookPhase}, {p.deleted, types.AfterHookPhase},
+			{p.beforeCreate, core.BeforeHookPhase}, {p.afterCreate, core.AfterHookPhase},
+			{p.beforeUpdate, core.BeforeHookPhase}, {p.afterUpdate, core.AfterHookPhase},
+			{p.beforeDelete, core.BeforeHookPhase}, {p.afterDelete, core.AfterHookPhase},
+			{p.created, core.AfterHookPhase}, {p.updated, core.AfterHookPhase}, {p.deleted, core.AfterHookPhase},
 		} {
 			def, ok := catalog.Lookup(want.point)
 			if !ok {
@@ -80,7 +80,7 @@ func checkDataHookPoints(catalog types.HookCatalog, points map[string]tableHookP
 
 // dataHooks implements store.Hooks on top of the hook Dispatcher: the store
 // reports table writes, this turns them into hook points and HookContexts.
-// It lives here, not in store, because store must not import types.
+// It lives here, not in store, because store must not import core.
 //
 // Data hooks run inside the write's transaction. After hooks are dispatched
 // with RunAfterTx, so a handler's error reaches the store and rolls the write
@@ -97,7 +97,7 @@ func checkDataHookPoints(catalog types.HookCatalog, points map[string]tableHookP
 // One write is one operation: its before, after and after-commit points
 // share one HookContext.Values (Begin).
 type dataHooks struct {
-	ac     *types.AuthContext
+	ac     *core.AuthContext
 	points map[string]tableHookPoints
 }
 
@@ -106,7 +106,7 @@ var _ store.Hooks = dataHooks{}
 // NewDataHooks returns the data hooks of the core tables over ac.Dispatcher:
 // what Boot passes to store.WithHooks, so that a write to users fires the
 // data.user points.
-func NewDataHooks(ac *types.AuthContext) store.Hooks {
+func NewDataHooks(ac *core.AuthContext) store.Hooks {
 	return dataHooks{ac: ac, points: coreDataHookPoints}
 }
 
@@ -114,7 +114,7 @@ func NewDataHooks(ac *types.AuthContext) store.Hooks {
 // core table was never declared in catalog, or was declared with a phase
 // other than the one the store fires it in. Boot calls it, so that a missing
 // point fails Boot instead of the first write to the table.
-func CheckDataHookPoints(catalog types.HookCatalog) error {
+func CheckDataHookPoints(catalog core.HookCatalog) error {
 	return checkDataHookPoints(catalog, coreDataHookPoints)
 }
 
@@ -131,7 +131,7 @@ func (h dataHooks) Begin(ctx context.Context, table string) context.Context {
 	if _, ok := h.points[table]; !ok {
 		return ctx
 	}
-	return types.BeginOperation(ctx)
+	return core.BeginOperation(ctx)
 }
 
 func (h dataHooks) BeforeCreate(ctx context.Context, tx *store.Store, table string, row behemoth.M) (behemoth.M, error) {
@@ -139,7 +139,7 @@ func (h dataHooks) BeforeCreate(ctx context.Context, tx *store.Store, table stri
 	if !ok {
 		return row, nil
 	}
-	return h.ac.Dispatcher.RunBefore(h.hookContext(ctx, tx, p.beforeCreate, types.BeforeHookPhase), p.beforeCreate, row)
+	return h.ac.Dispatcher.RunBefore(h.hookContext(ctx, tx, p.beforeCreate, core.BeforeHookPhase), p.beforeCreate, row)
 }
 
 func (h dataHooks) AfterCreate(ctx context.Context, tx *store.Store, table string, created behemoth.Model) error {
@@ -147,7 +147,7 @@ func (h dataHooks) AfterCreate(ctx context.Context, tx *store.Store, table strin
 	if !ok {
 		return nil
 	}
-	hctx := h.hookContext(ctx, tx, p.afterCreate, types.AfterHookPhase)
+	hctx := h.hookContext(ctx, tx, p.afterCreate, core.AfterHookPhase)
 	if err := h.ac.Dispatcher.RunAfterTx(hctx, p.afterCreate, created); err != nil {
 		return err
 	}
@@ -160,7 +160,7 @@ func (h dataHooks) BeforeUpdate(ctx context.Context, tx *store.Store, table stri
 	if !ok {
 		return changes, nil
 	}
-	hctx := h.hookContext(ctx, tx, p.beforeUpdate, types.BeforeHookPhase)
+	hctx := h.hookContext(ctx, tx, p.beforeUpdate, core.BeforeHookPhase)
 	hctx.Values[p.idValue] = id
 	return h.ac.Dispatcher.RunBefore(hctx, p.beforeUpdate, changes)
 }
@@ -170,7 +170,7 @@ func (h dataHooks) AfterUpdate(ctx context.Context, tx *store.Store, table strin
 	if !ok {
 		return nil
 	}
-	hctx := h.hookContext(ctx, tx, p.afterUpdate, types.AfterHookPhase)
+	hctx := h.hookContext(ctx, tx, p.afterUpdate, core.AfterHookPhase)
 	hctx.Values[p.idValue] = updated.PrimaryKeyField()
 	if err := h.ac.Dispatcher.RunAfterTx(hctx, p.afterUpdate, updated); err != nil {
 		return err
@@ -195,7 +195,7 @@ func (h dataHooks) BeforeDelete(ctx context.Context, tx *store.Store, table stri
 		}
 		payload = m
 	}
-	hctx := h.hookContext(ctx, tx, p.beforeDelete, types.BeforeHookPhase)
+	hctx := h.hookContext(ctx, tx, p.beforeDelete, core.BeforeHookPhase)
 	hctx.Values[p.idValue] = row.PrimaryKeyField()
 	_, err := h.ac.Dispatcher.RunBefore(hctx, p.beforeDelete, payload)
 	return err
@@ -218,7 +218,7 @@ func (h dataHooks) AfterDelete(ctx context.Context, tx *store.Store, table strin
 	if !ok {
 		return nil
 	}
-	hctx := h.hookContext(ctx, tx, p.afterDelete, types.AfterHookPhase)
+	hctx := h.hookContext(ctx, tx, p.afterDelete, core.AfterHookPhase)
 	hctx.Values[p.idValue] = deleted.PrimaryKeyField()
 	if err := h.ac.Dispatcher.RunAfterTx(hctx, p.afterDelete, deleted); err != nil {
 		return err
@@ -228,8 +228,8 @@ func (h dataHooks) AfterDelete(ctx context.Context, tx *store.Store, table strin
 	if sm != nil && len(sessions) > 0 {
 		sm.Evict(ctx, sessions)
 		tx.AfterCommit(ctx, func(ctx context.Context) {
-			ctx = types.ContextWithHookValues(ctx, values)
-			if err := sm.Discard(ctx, sessions, types.SessionRevokedUserDeleted); err != nil && h.ac.Telemetry != nil {
+			ctx = core.ContextWithHookValues(ctx, values)
+			if err := sm.Discard(ctx, sessions, core.SessionRevokedUserDeleted); err != nil && h.ac.Telemetry != nil {
 				telemetry.Named(h.ac.Telemetry.Logger, "hooks").Error(ctx, "sessions deleted with their user could not be reported",
 					telemetry.ErrorFields(err, behemoth.M{telemetry.FieldPoint: string(hooks.HookSessionAfterRevoke)}))
 			}
@@ -247,9 +247,9 @@ func (h dataHooks) AfterDelete(ctx context.Context, tx *store.Store, table strin
 // The dispatch keeps values, the write's Values as its after hook left them,
 // but runs with the callback's context: ctx is the transaction's, which has
 // ended by then (on MongoDB it carries the closed session).
-func (h dataHooks) onCommit(ctx context.Context, tx *store.Store, values behemoth.M, point types.HookPoint, row behemoth.Model) {
+func (h dataHooks) onCommit(ctx context.Context, tx *store.Store, values behemoth.M, point core.HookPoint, row behemoth.Model) {
 	tx.AfterCommit(ctx, func(ctx context.Context) {
-		hctx := h.hookContext(types.ContextWithHookValues(ctx, values), nil, point, types.AfterHookPhase)
+		hctx := h.hookContext(core.ContextWithHookValues(ctx, values), nil, point, core.AfterHookPhase)
 		if err := h.ac.Dispatcher.RunAfter(hctx, point, row); err != nil && h.ac.Telemetry != nil {
 			telemetry.Named(h.ac.Telemetry.Logger, "hooks").Error(hctx.Ctx, "after-commit data hook could not be dispatched",
 				telemetry.ErrorFields(err, behemoth.M{telemetry.FieldPoint: string(point)}))
@@ -263,17 +263,17 @@ func (h dataHooks) onCommit(ctx context.Context, tx *store.Store, values behemot
 // (the router put it on ctx) carries that request; one made outside any
 // request (a CLI, a job) has none. Values are the write's (Begin), shared by
 // all of its points.
-func (h dataHooks) hookContext(ctx context.Context, tx *store.Store, point types.HookPoint, phase types.HookPhase) *types.HookContext {
-	values := types.HookValuesFrom(ctx)
+func (h dataHooks) hookContext(ctx context.Context, tx *store.Store, point core.HookPoint, phase core.HookPhase) *core.HookContext {
+	values := core.HookValuesFrom(ctx)
 	if values == nil {
 		// Begin was not called: a caller other than the store.
 		values = behemoth.M{}
 	}
-	return &types.HookContext{
+	return &core.HookContext{
 		Ctx: ctx, Point: point, Phase: phase,
 		Auth:    h.ac,
 		Tx:      tx,
 		Values:  values,
-		Request: types.RequestFrom(ctx),
+		Request: core.RequestFrom(ctx),
 	}
 }

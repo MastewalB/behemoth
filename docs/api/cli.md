@@ -31,13 +31,13 @@ import (
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
-	"github.com/MastewalB/behemoth/types"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/engine"
 )
 
 // Prepare returns what the application declares. It opens no connection.
 func Prepare() (*engine.PreparedApp, error) {
-	plugins := []types.Plugin{emailpassword.New(emailpassword.Options{})}
+	plugins := []core.Plugin{emailpassword.New(emailpassword.Options{})}
 	return engine.Prepare(plugins, engine.PrepareConfig{
 		Migration: migration.MigrationConfig{FolderPath: "migrations"},
 		Schema:    declareSchema, // your own tables, if you have any

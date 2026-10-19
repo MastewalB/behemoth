@@ -4,18 +4,18 @@ This document explains how `plugins/emailpassword` fits into `Prepare` and `Boot
 
 ## What the plugin contributes
 
-| `types.Plugin` method | Result | Why |
+| `core.Plugin` method | Result | Why |
 | --- | --- | --- |
 | `Meta` | name `emailpassword`, no dependencies, no mount path | routes sit directly under the base path (`/sign-in/email`) |
 | `Declare` | nothing, or with reset on: the `password_reset` token kind, six `auth.passwordReset.*` points and three rate-limit rules | core declares the sign-up, sign-in and sign-out points (`CoreDeclareHookPoints`) and owns `users`, `accounts` and `sessions` |
 | `Register` | nothing | the plugin fires points; it does not handle any |
-| `Middlewares` | nothing | the session check is on the sign-out route only (`types.RequireSession`) |
-| `Init` | checks `Options`, wraps the flows with `types.WithLifecycle`; with reset on, also requires a mail sender | runs in `Boot`, after the dispatcher exists |
+| `Middlewares` | nothing | the session check is on the sign-out route only (`core.RequireSession`) |
+| `Init` | checks `Options`, wraps the flows with `core.WithLifecycle`; with reset on, also requires a mail sender | runs in `Boot`, after the dispatcher exists |
 | `Routes` | sign-up, sign-in, sign-out, and the two reset routes when reset is on | reads the session manager, so it must run after `Init`; `Boot` guarantees that order |
 
-The sign-in route answers through `types.WriteSignIn`, which writes the body every sign-in route shares and delivers the session token by the configured transport; see [`../sessions/token_transport.md`](../sessions/token_transport.md). The sign-up route answers `{"user": ...}` itself: it has no session.
+The sign-in route answers through `core.WriteSignIn`, which writes the body every sign-in route shares and delivers the session token by the configured transport; see [`../sessions/token_transport.md`](../sessions/token_transport.md). The sign-up route answers `{"user": ...}` itself: it has no session.
 
-`SignIn` returns a `*types.SignInResult`, the type every sign-in plugin hands to `auth.signIn.after`. `emailpassword.SignInResult` is an alias kept for callers. `Method` is `"emailpassword"`.
+`SignIn` returns a `*core.SignInResult`, the type every sign-in plugin hands to `auth.signIn.after`. `emailpassword.SignInResult` is an alias kept for callers. `Method` is `"emailpassword"`.
 
 The plugin knows nothing about email verification. A user it signs up is created with `EmailVerified` false, and the email verification plugin, if installed, sends the link from its handler on `data.user.created`; see [`emailverification.md`](emailverification.md).
 
@@ -75,7 +75,7 @@ Rules that follow from the two methods:
 
 The username plugin is the one caller; see [`username.md`](username.md) for the decision.
 
-`SignOut` is an exported function that takes a `HookContext` and only uses the `AuthContext` on it, so other plugins can call it. It turns the context into one operation with `types.AsOperation`.
+`SignOut` is an exported function that takes a `HookContext` and only uses the `AuthContext` on it, so other plugins can call it. It turns the context into one operation with `core.AsOperation`.
 
 ## Password reset
 
@@ -158,7 +158,7 @@ These limits apply:
 - `[Not built]` Password change for a signed-in user. It needs a way to re-check the current password; see *Nothing refreshes a session in place* in `docs/ongoing.md`.
 - `[Limit]` A reset consumes its token just before it writes the password, outside the write's transaction. If that write fails, the link is spent and the user asks for another. `docs/ongoing.md` has what consuming inside the transaction would need.
 - `[Not built]` Rehash on sign-in. `PasswordHasher.NeedsRehash` exists but sign-in does not call it.
-- Sign-up, sign-in, and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`errs.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `types.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
+- Sign-up, sign-in, and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`errs.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `core.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_transport.md`](../sessions/token_transport.md).
 - `Options.ValidateEmail` and `ValidatePassword` errors are replaced by `invalid email` and `invalid password` in the response, so a custom message does not reach the client. The function's error is the typed error's cause, for logs.
 
 ### The email and password rules belong to the plugin
@@ -170,7 +170,7 @@ These limits apply:
 - *Wire both through `BootConfig`, with a default validator in core.* Every plugin can read one shared policy. An application without passwords (OAuth or magic links only) still carries a password policy, and core gains a `Validator` interface with one consumer.
 - *Make them options of the plugin: `emailpassword.New(Options)`.* The dependency is visible where it is used, the zero value has defaults, and `AuthContext` loses two fields. A second plugin that sets passwords can't read the policy from the `AuthContext`.
 
-**Decision:** The second option. `types.Validator`, `types.PasswordOptions`, and the two `AuthContext` fields are removed. The hasher was never a policy choice of the plugin: it comes from `AuthContext.Crypto.Passwords`, which `Boot` builds from `BootConfig.Crypto`. The default email check is `utils.IsValidEmail`, a plain function other plugins can call. Plugins that set passwords are expected to depend on this one and go through it.
+**Decision:** The second option. `core.Validator`, `core.PasswordOptions`, and the two `AuthContext` fields are removed. The hasher was never a policy choice of the plugin: it comes from `AuthContext.Crypto.Passwords`, which `Boot` builds from `BootConfig.Crypto`. The default email check is `utils.IsValidEmail`, a plain function other plugins can call. Plugins that set passwords are expected to depend on this one and go through it.
 
 **Revisit if:** plugins that don't depend on `emailpassword` need to set passwords. A shared policy on `AuthContext` would then be justified.
 
@@ -186,7 +186,7 @@ These limits apply:
 
 **Decision:** The third. A fixed shape checked by the compiler is preferred over a map, and sign-in's shape is fixed: two required values and an open tail. Sign-up keeps its map because its profile fields are open-ended. Other plugins with a flow of fixed input are expected to follow the same shape: a struct for what the flow reads, an `Extra` map for what only handlers read, and `ToMap`/`FromMap` that keep the payload flat.
 
-**Revisit if:** several plugins repeat the same two methods. A helper in `types` that flattens a struct with an `Extra` field would then be worth having.
+**Revisit if:** several plugins repeat the same two methods. A helper in `core` that flattens a struct with an `Extra` field would then be worth having.
 
 ### Sign-in's refusals are typed
 

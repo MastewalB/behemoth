@@ -10,11 +10,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -72,7 +72,7 @@ type CompleteRequest struct {
 // CompleteResult is what Complete returns: the sign-in, and where Begin was
 // asked to go afterwards.
 type CompleteResult struct {
-	*types.SignInResult
+	*core.SignInResult
 	// RedirectURL is BeginRequest.RedirectURL, checked against the trusted
 	// origins when the sign-in was started. Empty when none was given.
 	RedirectURL string
@@ -193,7 +193,7 @@ func (p *Plugin) Complete(ctx context.Context, req CompleteRequest) (*CompleteRe
 	// through the flow, which refuses it and fires auth.signIn.failed.
 	in := completeInput{req: req}
 	var redirect string
-	token, err := p.authContext.TokenManager.Verify(ctx, types.TokenKindOAuthState, req.State)
+	token, err := p.authContext.TokenManager.Verify(ctx, core.TokenKindOAuthState, req.State)
 	switch {
 	case err == nil:
 		in.transaction = token
@@ -210,13 +210,13 @@ func (p *Plugin) Complete(ctx context.Context, req CompleteRequest) (*CompleteRe
 	return &CompleteResult{SignInResult: result, RedirectURL: redirect}, nil
 }
 
-func (p *Plugin) completeBody(hctx *types.HookContext, in completeInput) (*types.SignInResult, error) {
+func (p *Plugin) completeBody(hctx *core.HookContext, in completeInput) (*core.SignInResult, error) {
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
 	// refuse fires the failed point with what was wrong, and returns the one
 	// error a client gets for all of it.
 	refuse := func(code string, cause error) error {
-		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, types.FailureReason{
+		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, core.FailureReason{
 			Code: code, Cause: cause, Metadata: behemoth.M{keyProvider: in.req.Provider},
 		}); failErr != nil {
 			return failErr
@@ -249,7 +249,7 @@ func (p *Plugin) completeBody(hctx *types.HookContext, in completeInput) (*types
 
 	// The at-most-once step: of two requests with the same state, one loses
 	// here, before either reaches the provider.
-	if _, err := ac.TokenManager.Consume(hctx.Ctx, types.TokenKindOAuthState, in.req.State); err != nil {
+	if _, err := ac.TokenManager.Consume(hctx.Ctx, core.TokenKindOAuthState, in.req.State); err != nil {
 		if !isTokenRejection(err) {
 			return nil, err // infra error: not a bad state
 		}
@@ -290,19 +290,19 @@ func (p *Plugin) completeBody(hctx *types.HookContext, in completeInput) (*types
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
 		behemoth.M{hooks.HookValueUserID: user.ID})
 	if err != nil {
-		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
-			types.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
+		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
+			core.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
 	state := models.SessionActive
 	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
 		state = models.SessionPending
 	}
 
-	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, types.SessionMeta{State: state})
+	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state})
 	if err != nil {
 		return nil, err
 	}
-	return &types.SignInResult{User: user, Session: session, RawToken: rawToken, Method: PluginName}, nil
+	return &core.SignInResult{User: user, Session: session, RawToken: rawToken, Method: PluginName}, nil
 }
 
 // resolveUser returns the user an identity signs in: the user of the account
@@ -311,10 +311,10 @@ func (p *Plugin) completeBody(hctx *types.HookContext, in completeInput) (*types
 //
 // Not built: linking. A new subject whose email belongs to a user is always
 // refused, and no option links the two.
-func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identity Identity) (*models.User, error) {
+func (p *Plugin) resolveUser(hctx *core.HookContext, providerID string, identity Identity) (*models.User, error) {
 	ac := hctx.Auth
 	dispatcher := ac.Dispatcher
-	refuse := func(reason types.FailureReason, err error) error {
+	refuse := func(reason core.FailureReason, err error) error {
 		reason.Metadata = behemoth.M{keyProvider: providerID}
 		if failErr := dispatcher.Fail(hctx, hooks.HookSignInFailed, reason); failErr != nil {
 			return failErr
@@ -336,7 +336,7 @@ func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identit
 				return nil, err
 			}
 			// The account outlived its user, where no foreign key removed it.
-			return nil, refuse(types.FailureReason{
+			return nil, refuse(core.FailureReason{
 				Code: "user_not_found", SubjectType: models.UserTable, SubjectID: account.UserID,
 			}, errInvalidCallback())
 		case !errs.IsNotFound(err):
@@ -346,7 +346,7 @@ func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identit
 		// A subject that is new. From here on the email matters.
 		email := store.NormalizeEmail(identity.Email)
 		if len(email) > maxUserColumnLength || !utils.IsValidEmail(email) {
-			return nil, refuse(types.FailureReason{Code: "email_not_provided"}, errEmailNotProvided())
+			return nil, refuse(core.FailureReason{Code: "email_not_provided"}, errEmailNotProvided())
 		}
 		hctx.Values[hooks.HookValueEmail] = email
 
@@ -354,7 +354,7 @@ func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identit
 		switch {
 		case err == nil:
 			// The email alone does not show that this is the same person.
-			return nil, refuse(types.FailureReason{
+			return nil, refuse(core.FailureReason{
 				Code: "account_not_linked", SubjectType: models.UserTable, SubjectID: existing.ID,
 			}, errAccountNotLinked())
 		case !errs.IsNotFound(err):
@@ -363,7 +363,7 @@ func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identit
 
 		// The sign-up is an operation of its own, nested under the sign-in:
 		// its points get a copy of the sign-in's Values.
-		user, err := p.signUp(&types.HookContext{Ctx: hctx.Ctx, Auth: ac, Request: hctx.Request}, signUpInput{
+		user, err := p.signUp(&core.HookContext{Ctx: hctx.Ctx, Auth: ac, Request: hctx.Request}, signUpInput{
 			provider: providerID,
 			subject:  identity.Subject,
 			user:     newUser(identity, email),
@@ -374,15 +374,15 @@ func (p *Plugin) resolveUser(hctx *types.HookContext, providerID string, identit
 		case attempt == 0 && errs.IsCategory(err, errs.CategoryDuplicateKey):
 			continue
 		}
-		return nil, types.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
-			types.FailureReason{Metadata: behemoth.M{keyProvider: providerID, hooks.HookValueEmail: email}})
+		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
+			core.FailureReason{Metadata: behemoth.M{keyProvider: providerID, hooks.HookValueEmail: email}})
 	}
 }
 
 // signUpBody creates the user of a new subject and the user's account at the
 // provider, in one transaction. auth.signUp.after fires once it has
 // committed.
-func (p *Plugin) signUpBody(hctx *types.HookContext, in signUpInput) (*models.User, error) {
+func (p *Plugin) signUpBody(hctx *core.HookContext, in signUpInput) (*models.User, error) {
 	ac := hctx.Auth
 	user := in.user
 	err := ac.Store.Transaction(hctx.Ctx, func(ctx context.Context, tx *store.Store) error {
@@ -399,8 +399,8 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, in signUpInput) (*models.Us
 	if err != nil {
 		// A data hook's veto is a refused sign-up. Any other error, a lost
 		// race for the email among them, is returned as it is.
-		return nil, types.FailIfRejected(ac.Dispatcher, hctx, hooks.HookSignUpFailed, err,
-			types.FailureReason{Metadata: behemoth.M{keyProvider: in.provider, hooks.HookValueEmail: user.Email}})
+		return nil, core.FailIfRejected(ac.Dispatcher, hctx, hooks.HookSignUpFailed, err,
+			core.FailureReason{Metadata: behemoth.M{keyProvider: in.provider, hooks.HookValueEmail: user.Email}})
 	}
 	return &user, nil
 }

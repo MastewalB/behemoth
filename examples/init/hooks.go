@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/types"
-	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
 )
 
@@ -43,8 +43,8 @@ const (
 // The caller of the flow never sets Values. It passes inviteCode as input,
 // the same way from POST /api/auth/sign-up/email and from the signup
 // command.
-func appHooks(reg types.HookRegistry) error {
-	if err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+func appHooks(reg core.HookRegistry) error {
+	if err := reg.OnBefore(hooks.HookSignUpBefore, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 		code, _ := payload["inviteCode"].(string)
 		if code == "" {
 			trace("app", hctx, "no invite code")
@@ -64,7 +64,7 @@ func appHooks(reg types.HookRegistry) error {
 		return err
 	}
 
-	if err := reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *types.HookContext, result any) error {
+	if err := reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, result any) error {
 		inviter, invited := hctx.Values[valueInviter].(string)
 		if !invited {
 			trace("app", hctx, "not an invited user")
@@ -84,14 +84,14 @@ func appHooks(reg types.HookRegistry) error {
 		return err
 	}
 
-	if err := reg.OnAfter(hooks.HookUserCreated, func(hctx *types.HookContext, _ any) error {
+	if err := reg.OnAfter(hooks.HookUserCreated, func(hctx *core.HookContext, _ any) error {
 		trace("app", hctx, "user committed; the write's own note is still here")
 		return nil
 	}, nil); err != nil {
 		return err
 	}
 
-	if err := reg.OnAfter(hooks.HookSignUpAfter, func(hctx *types.HookContext, _ any) error {
+	if err := reg.OnAfter(hooks.HookSignUpAfter, func(hctx *core.HookContext, _ any) error {
 		_, leaked := hctx.Values[valueTodo]
 		trace("app", hctx, fmt.Sprintf("sign-up done; sees the write's note: %v", leaked))
 		return nil
@@ -101,14 +101,14 @@ func appHooks(reg types.HookRegistry) error {
 
 	// Sign-in creates a session, which is another nested operation: the
 	// session manager's points start with a copy of the sign-in's Values.
-	if err := reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	if err := reg.OnBefore(hooks.HookSignInBefore, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 		hctx.Values[valueSignIn] = true
 		trace("app", hctx, "sign-in started")
 		return payload, nil
 	}, nil); err != nil {
 		return err
 	}
-	return reg.OnBefore(hooks.HookSessionBeforeCreate, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
+	return reg.OnBefore(hooks.HookSessionBeforeCreate, func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
 		// The session manager took the address from the request on the
 		// context. From the signup command there is none, and it is empty.
 		trace("app", hctx, fmt.Sprintf("session for ip=%q", payload[hooks.HookValueIPAddress]))
