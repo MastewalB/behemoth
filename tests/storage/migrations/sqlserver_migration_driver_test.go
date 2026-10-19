@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlserver"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -814,7 +814,7 @@ func runSQLServerDriverTests(t *testing.T, db *sql.DB, tm *SQLServerTestManager)
 		back.PrevColumn = &serial
 		err = apply(t, driver, "0002_test", back)
 		require.Error(t, err)
-		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationRebuildFailed), err)
+		assert.True(t, errs.IsCode(err, errs.CodeMigrationRebuildFailed), err)
 		cols, _ = introspect(t, "things")
 		assert.True(t, cols["id"].AutoInc)
 	})

@@ -5,11 +5,11 @@ import (
 	"errors"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 // SentinelKind is an adapter-level failure kind; Classify turns it into the
-// matching behemotherr category. Exported for adapters in their own modules.
+// matching errs category. Exported for adapters in their own modules.
 type SentinelKind int
 
 const (
@@ -23,22 +23,22 @@ const (
 )
 
 // Classify is the one place "what kind of failure is this" gets decided.
-// All adapters should use this function to return classified errors, rather than returning behemotherr directly.
+// All adapters should use this function to return classified errors, rather than returning errs directly.
 // The main reason for this is to maintain consistency across different adapters
 func Classify(op, entity string, sentinel SentinelKind, cause error) error {
 	switch sentinel {
 	case SentinelNotFound:
-		return behemotherr.NewNotFound(op, entity, cause)
+		return errs.NewNotFound(op, entity, cause)
 	case SentinelDuplicateKey:
-		return behemotherr.NewDuplicateKey(op, entity, cause)
+		return errs.NewDuplicateKey(op, entity, cause)
 	case SentinelForeignKey:
-		return behemotherr.NewForeignKeyViolation(op, entity, cause)
+		return errs.NewForeignKeyViolation(op, entity, cause)
 	case SentinelTxDone:
-		return behemotherr.NewTransactionError(op, cause)
+		return errs.NewTransactionError(op, cause)
 	case SentinelUndefinedTable:
-		return behemotherr.NewUndefinedTable(op, entity, cause)
+		return errs.NewUndefinedTable(op, entity, cause)
 	default:
-		return behemotherr.NewDatabaseError(op, cause)
+		return errs.NewDatabaseError(op, cause)
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 )
 
@@ -125,7 +125,7 @@ func (q *sendQueue[M]) sendQueued(queued queuedMessage[M]) {
 	var err error
 	defer func() {
 		if r := recover(); r != nil {
-			err = behemotherr.NewInternalError("SendAsync", errors.New("the "+q.channel+" sender panicked"))
+			err = errs.NewInternalError("SendAsync", errors.New("the "+q.channel+" sender panicked"))
 		}
 		q.count(ctx, queued.msg, err)
 		if err != nil {

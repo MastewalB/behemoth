@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 func TestNewOriginCheckRefusesABadBaseURL(t *testing.T) {
@@ -95,8 +95,8 @@ func TestOriginCheck(t *testing.T) {
 				}
 				return
 			}
-			if !behemotherr.IsCode(err, behemotherr.ErrorCodeUntrustedOrigin) || !behemotherr.Is(err, behemotherr.CategoryForbidden) {
-				t.Fatalf("Check = %v, want a forbidden error with the code %q", err, behemotherr.ErrorCodeUntrustedOrigin)
+			if !errs.IsCode(err, errs.CodeUntrustedOrigin) || !errs.IsCategory(err, errs.CategoryForbidden) {
+				t.Fatalf("Check = %v, want a forbidden error with the code %q", err, errs.CodeUntrustedOrigin)
 			}
 			if got := tc.check.refusal(r); got != tc.reason {
 				t.Errorf("reason = %q, want %q", got, tc.reason)

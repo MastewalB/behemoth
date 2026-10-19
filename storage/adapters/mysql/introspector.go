@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -130,7 +130,7 @@ func (d *MySQLDriver) objectKind(ctx context.Context, physical string) (kind cor
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, behemotherr.NewMigrationError("MySQLIntrospector.objectKind", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return "", false, errs.NewMigrationError("MySQLIntrospector.objectKind", errs.CodeMigrationQueryFailed, err)
 	}
 	switch tableType {
 	case "BASE TABLE":
@@ -191,7 +191,7 @@ func (d *MySQLDriver) introspectColumns(ctx context.Context, physical string, pk
 		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
 		ORDER BY ORDINAL_POSITION`, physical)
 	if err != nil {
-		return nil, nil, behemotherr.NewMigrationError("MySQLIntrospector.columns", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, nil, errs.NewMigrationError("MySQLIntrospector.columns", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -203,7 +203,7 @@ func (d *MySQLDriver) introspectColumns(ctx context.Context, physical string, pk
 		var length sql.NullInt64
 		var defaultText sql.NullString
 		if err := rows.Scan(&name, &dataType, &columnType, &length, &isNullable, &defaultText, &extra); err != nil {
-			return nil, nil, behemotherr.NewMigrationError("MySQLIntrospector.columns", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, nil, errs.NewMigrationError("MySQLIntrospector.columns", errs.CodeMigrationScanFailed, err)
 		}
 
 		ct, ambig := mapMySQLType(dataType, columnType)
@@ -491,7 +491,7 @@ func (d *MySQLDriver) introspectKeys(ctx context.Context, physical string) ([]li
 		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
 		ORDER BY INDEX_NAME, SEQ_IN_INDEX`, physical)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("MySQLIntrospector.keys", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("MySQLIntrospector.keys", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -501,7 +501,7 @@ func (d *MySQLDriver) introspectKeys(ctx context.Context, physical string) ([]li
 		var nonUnique int
 		var column sql.NullString // NULL for an expression key part
 		if err := rows.Scan(&name, &nonUnique, &column); err != nil {
-			return nil, behemotherr.NewMigrationError("MySQLIntrospector.keys", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("MySQLIntrospector.keys", errs.CodeMigrationScanFailed, err)
 		}
 		if n := len(keys); n == 0 || keys[n-1].name != name {
 			keys = append(keys, liveKey{name: name, unique: nonUnique == 0})
@@ -557,7 +557,7 @@ func (d *MySQLDriver) introspectForeignKeys(ctx context.Context, physical string
 		WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL
 		ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION`, physical)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("MySQLIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("MySQLIntrospector.foreignKeys", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -565,7 +565,7 @@ func (d *MySQLDriver) introspectForeignKeys(ctx context.Context, physical string
 	for rows.Next() {
 		var name, rule, refTable, col, refCol string
 		if err := rows.Scan(&name, &rule, &refTable, &col, &refCol); err != nil {
-			return nil, behemotherr.NewMigrationError("MySQLIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("MySQLIntrospector.foreignKeys", errs.CodeMigrationScanFailed, err)
 		}
 		if n := len(fks); n > 0 && fks[n-1].Name == name {
 			fks[n-1].Columns = append(fks[n-1].Columns, col)

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 	"github.com/MastewalB/behemoth/utils"
 )
@@ -20,7 +20,7 @@ type DefaultMigrationGenerator struct{}
 
 func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, previousMigrationID string) (*Migration, error) {
 	if len(resolvedPlan.Operations) == 0 && len(resolvedPlan.Custom) == 0 {
-		return nil, behemotherr.NewMigrationError("MigrationGenerator.Generate", behemotherr.ErrorCodeMigrationNothingToGenerate,
+		return nil, errs.NewMigrationError("MigrationGenerator.Generate", errs.CodeMigrationNothingToGenerate,
 			fmt.Errorf("resolved operation set is empty"))
 	}
 
@@ -43,7 +43,7 @@ func (*DefaultMigrationGenerator) Generate(resolvedPlan *ResolvedOperationSet, p
 	alphabetical := func(a, b string) bool { return a < b } // deterministic default
 	sortedIDs, cyclePath, ok := utils.KahnSort(graphMap, alphabetical)
 	if !ok {
-		return nil, behemotherr.NewConfigurationError("MigrationGenerator.Generate",
+		return nil, errs.NewConfigurationError("MigrationGenerator.Generate",
 			fmt.Sprintf("circular schema operation dependency: %s", strings.Join(cyclePath, " -> ")), nil)
 	}
 
@@ -97,10 +97,10 @@ func buildDependencyGraph(plan *ResolvedOperationSet) (map[string][]string, map[
 	for i := range plan.Operations {
 		op := &plan.Operations[i]
 		if op.ID == "" {
-			return nil, nil, behemotherr.NewConfigurationError("MigrationGenerator.buildGraph", "operation missing ID", nil)
+			return nil, nil, errs.NewConfigurationError("MigrationGenerator.buildGraph", "operation missing ID", nil)
 		}
 		if _, dup := nodeByID[op.ID]; dup {
-			return nil, nil, behemotherr.NewConfigurationError("MigrationGenerator.buildGraph", fmt.Sprintf("duplicate operation ID %q", op.ID), nil)
+			return nil, nil, errs.NewConfigurationError("MigrationGenerator.buildGraph", fmt.Sprintf("duplicate operation ID %q", op.ID), nil)
 		}
 		nodeByID[op.ID] = planNode{id: op.ID, kind: internalOp, operation: op}
 		switch op.Kind {
@@ -114,10 +114,10 @@ func buildDependencyGraph(plan *ResolvedOperationSet) (map[string][]string, map[
 	for i := range plan.Custom {
 		c := &plan.Custom[i]
 		if c.Name == "" {
-			return nil, nil, behemotherr.NewConfigurationError("MigrationGenerator.buildGraph", "custom migration missing Name", nil)
+			return nil, nil, errs.NewConfigurationError("MigrationGenerator.buildGraph", "custom migration missing Name", nil)
 		}
 		if _, dup := nodeByID[c.Name]; dup {
-			return nil, nil, behemotherr.NewConfigurationError("MigrationGenerator.buildGraph", fmt.Sprintf("duplicate node name %q", c.Name), nil)
+			return nil, nil, errs.NewConfigurationError("MigrationGenerator.buildGraph", fmt.Sprintf("duplicate node name %q", c.Name), nil)
 		}
 		nodeByID[c.Name] = planNode{id: c.Name, kind: customOp, custom: c}
 	}
@@ -304,7 +304,7 @@ func checkNoInlineForeignKeys(resolved *ResolvedOperationSet) error {
 
 			// A new table with foreign-key declaration
 			if op.Kind == OpCreateTable && op.NewTable != nil && len(op.NewTable.ForeignKeys) > 0 {
-				return behemotherr.NewInternalError("MigrationGenerator.checkNoInlineForeignKeys",
+				return errs.NewInternalError("MigrationGenerator.checkNoInlineForeignKeys",
 					fmt.Errorf("%s: operation %q (CreateTable %q) carries inline ForeignKeys. Planning must emit these as separate AddForeignKey operations",
 						source, op.ID, op.Table))
 			}
@@ -333,7 +333,7 @@ func checkNoInlineIndexes(resolved *ResolvedOperationSet) error {
 	check := func(ops []SchemaOperation, source string) error {
 		for _, op := range ops {
 			if op.Kind == OpCreateTable && op.NewTable != nil && len(op.NewTable.Indexes) > 0 {
-				return behemotherr.NewInternalError("MigrationGenerator.checkNoInlineIndexes",
+				return errs.NewInternalError("MigrationGenerator.checkNoInlineIndexes",
 					fmt.Errorf("%s: operation %q (CreateTable %q) carries inline Indexes. Planning must emit these as separate AddIndex operations",
 						source, op.ID, op.Table))
 			}
@@ -375,7 +375,7 @@ func dependsOnList(previous string) []string {
 // every generate invocation, identically for both Paths.
 func EnsureMigrationFolder(cfg MigrationConfig) error {
 	if err := os.MkdirAll(cfg.FolderPath, 0755); err != nil {
-		return behemotherr.NewMigrationError("Migration.EnsureFolder", behemotherr.ErrorCodeMigrationMkdirFailed, err)
+		return errs.NewMigrationError("Migration.EnsureFolder", errs.CodeMigrationMkdirFailed, err)
 	}
 	return nil
 }
@@ -390,7 +390,7 @@ var migrationFilePattern = regexp.MustCompile(`^(\d{4})_.*\.json$`)
 func LatestMigrationID(cfg MigrationConfig) (string, error) {
 	entries, err := os.ReadDir(cfg.FolderPath)
 	if err != nil {
-		return "", behemotherr.NewMigrationError("Migration.LatestID", behemotherr.ErrorCodeMigrationReadDirFailed, err)
+		return "", errs.NewMigrationError("Migration.LatestID", errs.CodeMigrationReadDirFailed, err)
 	}
 
 	latest := ""
@@ -438,18 +438,18 @@ func buildReport(ctx context.Context, cfg MigrationConfig, current schema.Regist
 		return report, nil
 
 	default:
-		return nil, behemotherr.NewConfigurationError("Migration.buildReport", fmt.Sprintf("unknown MigrationPath %q", cfg.Path), nil)
+		return nil, errs.NewConfigurationError("Migration.buildReport", fmt.Sprintf("unknown MigrationPath %q", cfg.Path), nil)
 	}
 }
 
 func writeMigrationFile(cfg MigrationConfig, m Migration) error {
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return behemotherr.NewMigrationError("Migration.Write", behemotherr.ErrorCodeMigrationMarshalFailed, err)
+		return errs.NewMigrationError("Migration.Write", errs.CodeMigrationMarshalFailed, err)
 	}
 	path := filepath.Join(cfg.FolderPath, m.ID+"_"+m.Name+".json")
 	if err := os.WriteFile(path, b, 0644); err != nil {
-		return behemotherr.NewMigrationError("Migration.Write", behemotherr.ErrorCodeMigrationWriteFailed, err)
+		return errs.NewMigrationError("Migration.Write", errs.CodeMigrationWriteFailed, err)
 	}
 	return nil
 }
@@ -469,11 +469,11 @@ func renderMigrationDDL(ctx context.Context, m Migration, renderer MigrationRend
 	}
 	body, err := renderer.RenderMigration(ctx, m)
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("Migration.RenderDDL", behemotherr.ErrorCodeMigrationRenderFailed, err)
+		return nil, errs.NewMigrationError("Migration.RenderDDL", errs.CodeMigrationRenderFailed, err)
 	}
 	ext := renderer.FileExtension()
 	if ext == "" {
-		return nil, behemotherr.NewMigrationError("Migration.RenderDDL", behemotherr.ErrorCodeMigrationMissingFileExtension, fmt.Errorf("renderer %T returned an empty file extension", renderer))
+		return nil, errs.NewMigrationError("Migration.RenderDDL", errs.CodeMigrationMissingFileExtension, fmt.Errorf("renderer %T returned an empty file extension", renderer))
 	}
 	if !strings.HasPrefix(ext, ".") {
 		ext = "." + ext
@@ -488,7 +488,7 @@ func (r *renderedDDL) write(cfg MigrationConfig, m Migration) error {
 		return nil
 	}
 	if err := os.WriteFile(migrationDDLPath(cfg, m, r.ext), []byte(r.body), 0644); err != nil {
-		return behemotherr.NewMigrationError("Migration.WriteDDL", behemotherr.ErrorCodeMigrationWriteFailed, err)
+		return errs.NewMigrationError("Migration.WriteDDL", errs.CodeMigrationWriteFailed, err)
 	}
 	return nil
 }
@@ -522,7 +522,7 @@ func checkNoUnappliedMigrations(cfg MigrationConfig, snapshot SchemaSnapshot) er
 		return nil // no files at disk
 	}
 	if snapshot.Version != latestOnDisk {
-		return behemotherr.NewMigrationError("Migration.checkNoUnappliedMigrations", behemotherr.ErrorCodeMigrationUnappliedPending,
+		return errs.NewMigrationError("Migration.checkNoUnappliedMigrations", errs.CodeMigrationUnappliedPending,
 			fmt.Errorf("migration %q exists on disk but the snapshot is at %q — run Apply before generating a new migration", latestOnDisk, snapshot.Version))
 	}
 	return nil
@@ -546,7 +546,7 @@ func RejectAmbiguousTypes(report *IntrospectionReport) error {
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems) // report.Tables is a map; keep the message stable
-		return behemotherr.NewMigrationError("Migration.RejectAmbiguousTypes", behemotherr.ErrorCodeMigrationUnmappableColumnType,
+		return errs.NewMigrationError("Migration.RejectAmbiguousTypes", errs.CodeMigrationUnmappableColumnType,
 			fmt.Errorf(`cannot generate a migration - unmappable column type(s) found:\n%s\n\nThe core model cannot represent these columns. 
 			Supply a custom Model implementation for the affected table, or extend the driver's type mapping if this should be a recognized type.`, strings.Join(problems, "\n")))
 	}

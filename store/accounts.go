@@ -6,7 +6,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 )
 
@@ -77,7 +77,7 @@ func (s *Store) UpdateAccount(ctx context.Context, id string, changes behemoth.M
 		}
 		plaintext, isString := v.(string)
 		if v != nil && !isString {
-			return nil, behemotherr.NewValidationError(op, models.AccountTable, fmt.Errorf("%s must be a string, got %T", col, v))
+			return nil, errs.NewValidationError(op, models.AccountTable, fmt.Errorf("%s must be a string, got %T", col, v))
 		}
 		if plaintext == "" {
 			changes[col] = nil

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -25,10 +25,10 @@ func ValidateCustomMigrations(custom []CustomMigration) error {
 	names := map[string]bool{}
 	for _, c := range custom {
 		if c.Name == "" {
-			return behemotherr.NewConfigurationError(op, "custom migration missing Name", nil)
+			return errs.NewConfigurationError(op, "custom migration missing Name", nil)
 		}
 		if names[c.Name] {
-			return behemotherr.NewConfigurationError(op, fmt.Sprintf("custom migration %q declared more than once", c.Name), nil)
+			return errs.NewConfigurationError(op, fmt.Sprintf("custom migration %q declared more than once", c.Name), nil)
 		}
 		names[c.Name] = true
 	}
@@ -38,13 +38,13 @@ func ValidateCustomMigrations(custom []CustomMigration) error {
 		for _, ops := range [][]SchemaOperation{c.Up, c.Down} {
 			for _, o := range ops {
 				if o.ID == "" {
-					return behemotherr.NewConfigurationError(op, fmt.Sprintf("custom migration %q has an operation without an ID", c.Name), nil)
+					return errs.NewConfigurationError(op, fmt.Sprintf("custom migration %q has an operation without an ID", c.Name), nil)
 				}
 				if names[o.ID] {
-					return behemotherr.NewConfigurationError(op, fmt.Sprintf("custom migration %q: operation ID %q is also a custom migration name", c.Name, o.ID), nil)
+					return errs.NewConfigurationError(op, fmt.Sprintf("custom migration %q: operation ID %q is also a custom migration name", c.Name, o.ID), nil)
 				}
 				if owner, dup := opOwner[o.ID]; dup && owner != c.Name {
-					return behemotherr.NewConfigurationError(op, fmt.Sprintf("operation ID %q is used by both %q and %q", o.ID, owner, c.Name), nil)
+					return errs.NewConfigurationError(op, fmt.Sprintf("operation ID %q is used by both %q and %q", o.ID, owner, c.Name), nil)
 				}
 				opOwner[o.ID] = c.Name
 			}
@@ -90,13 +90,13 @@ func checkCustomCollisions(resolved *ResolvedOperationSet) error {
 	}
 	for _, c := range resolved.Custom {
 		if generated[c.Name] {
-			return behemotherr.NewConfigurationError("MigrationGenerator.Generate",
+			return errs.NewConfigurationError("MigrationGenerator.Generate",
 				fmt.Sprintf("custom migration name %q collides with a generated operation ID", c.Name), nil)
 		}
 		for _, ops := range [][]SchemaOperation{c.Up, c.Down} {
 			for _, o := range ops {
 				if generated[o.ID] {
-					return behemotherr.NewConfigurationError("MigrationGenerator.Generate",
+					return errs.NewConfigurationError("MigrationGenerator.Generate",
 						fmt.Sprintf("custom migration %q: operation ID %q collides with a generated operation", c.Name, o.ID), nil)
 				}
 			}

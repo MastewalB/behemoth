@@ -35,7 +35,7 @@ import (
 	"strings"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -215,17 +215,17 @@ func (p *Plugin) Middlewares() []types.Middleware {
 func (p *Plugin) Init(ac *types.AuthContext) error {
 	const op = "oauth.Init"
 	if p.opts.StateTTL < 0 {
-		return behemotherr.NewConfigurationError(op, fmt.Sprintf("Options.StateTTL is negative: %s", p.opts.StateTTL), nil)
+		return errs.NewConfigurationError(op, fmt.Sprintf("Options.StateTTL is negative: %s", p.opts.StateTTL), nil)
 	}
 	callbackURL, err := url.Parse(p.opts.CallbackURL)
 	if err != nil || (callbackURL.Scheme != "http" && callbackURL.Scheme != "https") || callbackURL.Host == "" ||
 		callbackURL.User != nil || callbackURL.RawQuery != "" || callbackURL.ForceQuery || callbackURL.Fragment != "" {
-		return behemotherr.NewConfigurationError(op,
+		return errs.NewConfigurationError(op,
 			fmt.Sprintf("Options.CallbackURL %q is not an absolute http or https URL without a query or a fragment", p.opts.CallbackURL), err)
 	}
 
 	if len(p.opts.Providers)+len(p.opts.CustomProviders) == 0 {
-		return behemotherr.NewConfigurationError(op, "Options.Providers and Options.CustomProviders are empty; the plugin needs at least one provider", nil)
+		return errs.NewConfigurationError(op, "Options.Providers and Options.CustomProviders are empty; the plugin needs at least one provider", nil)
 	}
 	client := providerHTTP{client: p.opts.HTTPClient}
 	if client.client == nil {
@@ -243,7 +243,7 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 		at := fmt.Sprintf("Options.Providers[%d]", i)
 		provider, err := newBuiltinProvider(at, cfg, client, time.Now)
 		if err != nil {
-			return behemotherr.NewConfigurationError(op, err.Error(), nil)
+			return errs.NewConfigurationError(op, err.Error(), nil)
 		}
 		all = append(all, placed{at, provider})
 	}
@@ -253,18 +253,18 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 	providers := make(map[string]Provider, len(all))
 	for _, entry := range all {
 		if entry.provider == nil {
-			return behemotherr.NewConfigurationError(op, entry.at+" is nil", nil)
+			return errs.NewConfigurationError(op, entry.at+" is nil", nil)
 		}
 		id := entry.provider.ID()
 		switch {
 		case !providerID.MatchString(id):
-			return behemotherr.NewConfigurationError(op, fmt.Sprintf(
+			return errs.NewConfigurationError(op, fmt.Sprintf(
 				"%s has the id %q; an id is 1 to 64 lowercase letters, digits, \"-\" and \"_\", and starts with a letter or a digit", entry.at, id), nil)
 		case id == models.ProviderCredential:
 			// The provider_id of the account that holds a user's password.
-			return behemotherr.NewConfigurationError(op, fmt.Sprintf("%s has the reserved id %q", entry.at, id), nil)
+			return errs.NewConfigurationError(op, fmt.Sprintf("%s has the reserved id %q", entry.at, id), nil)
 		case providers[id] != nil:
-			return behemotherr.NewConfigurationError(op, fmt.Sprintf("two providers have the id %q", id), nil)
+			return errs.NewConfigurationError(op, fmt.Sprintf("two providers have the id %q", id), nil)
 		}
 		providers[id] = entry.provider
 	}
@@ -285,7 +285,7 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 // the request ctx carries, or nil.
 func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, error) {
 	if p.authContext == nil {
-		return nil, behemotherr.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	return &types.HookContext{
 		Ctx:     ctx,

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -91,7 +91,7 @@ func (d *MySQLDriver) ApplyMigration(ctx context.Context, req core.MigrationRequ
 		}
 		for i, st := range steps {
 			if err := d.runStep(ctx, conn, st); err != nil {
-				err = behemotherr.WrapOp(op, fmt.Sprintf("operation %q (%s on %s)", st.op.ID, st.op.Kind, st.op.Table), err)
+				err = errs.WrapOp(op, fmt.Sprintf("operation %q (%s on %s)", st.op.ID, st.op.Kind, st.op.Table), err)
 				if i == 0 {
 					return err
 				}
@@ -132,21 +132,21 @@ func (d *MySQLDriver) RecordBaseline(ctx context.Context, req core.MigrationRequ
 // if the session dies.
 func (d *MySQLDriver) withMigrationLock(ctx context.Context, op string, req core.MigrationRequest, fn func(conn *sql.Conn) error) error {
 	if req.LedgerTable == "" || req.SnapshotTable == "" {
-		return behemotherr.NewInternalError(op, fmt.Errorf("ledger table %q / snapshot table %q must both be set", req.LedgerTable, req.SnapshotTable))
+		return errs.NewInternalError(op, fmt.Errorf("ledger table %q / snapshot table %q must both be set", req.LedgerTable, req.SnapshotTable))
 	}
 	conn, err := d.db.Conn(ctx)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationConnFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationConnFailed, err)
 	}
 	defer conn.Close()
 
 	lock := migrationLockName(req.LedgerTable)
 	var got sql.NullInt64
 	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, -1)", lock).Scan(&got); err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationLockFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationLockFailed, err)
 	}
 	if got.Int64 != 1 {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationLockFailed, fmt.Errorf("GET_LOCK(%q) was not granted", lock))
+		return errs.NewMigrationError(op, errs.CodeMigrationLockFailed, fmt.Errorf("GET_LOCK(%q) was not granted", lock))
 	}
 	// Released even when ctx is already cancelled, so the pooled connection
 	// doesn't keep the lock.
@@ -179,7 +179,7 @@ func (d *MySQLDriver) runStep(ctx context.Context, conn *sql.Conn, st step) erro
 	}
 	for _, stmt := range st.stmts {
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
-			return behemotherr.NewMigrationError("MySQLDriver.runStep", behemotherr.ErrorCodeMigrationExecFailed, fmt.Errorf("%w (sql: %s)", err, stmt))
+			return errs.NewMigrationError("MySQLDriver.runStep", errs.CodeMigrationExecFailed, fmt.Errorf("%w (sql: %s)", err, stmt))
 		}
 	}
 	return nil
@@ -198,7 +198,7 @@ func (d *MySQLDriver) prepareLedger(ctx context.Context, conn *sql.Conn, op stri
 	}
 	for _, stmt := range stmts {
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
-			return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationExecFailed, err)
+			return errs.NewMigrationError(op, errs.CodeMigrationExecFailed, err)
 		}
 	}
 
@@ -208,9 +208,9 @@ func (d *MySQLDriver) prepareLedger(ctx context.Context, conn *sql.Conn, op stri
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationQueryFailed, err)
 	default:
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationApplyFailed, fmt.Errorf("migration %q is already recorded in %s", req.LedgerEntry.ID, req.LedgerTable))
+		return errs.NewMigrationError(op, errs.CodeMigrationApplyFailed, fmt.Errorf("migration %q is already recorded in %s", req.LedgerEntry.ID, req.LedgerTable))
 	}
 }
 
@@ -218,11 +218,11 @@ func (d *MySQLDriver) prepareLedger(ctx context.Context, conn *sql.Conn, op stri
 func (d *MySQLDriver) record(ctx context.Context, conn *sql.Conn, op string, req core.MigrationRequest) error {
 	data, err := json.Marshal(req.SnapshotUpdate.Tables)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationMarshalFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationMarshalFailed, err)
 	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationBeginTxFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationBeginTxFailed, err)
 	}
 	insert := fmt.Sprintf("INSERT INTO %s (id, applied_at) VALUES (?, ?)", quoteIdent(req.LedgerTable))
 	// VALUES() rather than a row alias: the alias form needs MySQL 8.0.19.
@@ -230,15 +230,15 @@ func (d *MySQLDriver) record(ctx context.Context, conn *sql.Conn, op string, req
 
 	if _, err := tx.ExecContext(ctx, insert, req.LedgerEntry.ID, req.LedgerEntry.AppliedAt); err != nil {
 		tx.Rollback()
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationExecFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationExecFailed, err)
 	}
 	// Passed as text: a []byte parameter is sent as binary, which MySQL rejects for a JSON column.
 	if _, err := tx.ExecContext(ctx, upsert, req.SnapshotUpdate.Version, string(data)); err != nil {
 		tx.Rollback()
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationExecFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationExecFailed, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationCommitFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationCommitFailed, err)
 	}
 	return nil
 }
@@ -305,7 +305,7 @@ func (d *MySQLDriver) plan(ctx context.Context, q adapters.Querier, ops []core.S
 
 func (d *MySQLDriver) planOperation(op core.SchemaOperation, prefixes *keyPrefixes) (step, error) {
 	missing := func(field string) (step, error) {
-		return step{}, behemotherr.NewInternalError("MySQLDriver.planOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
+		return step{}, errs.NewInternalError("MySQLDriver.planOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
 	}
 	one := func(stmt string, err error) (step, error) {
 		if err != nil {
@@ -364,7 +364,7 @@ func (d *MySQLDriver) planOperation(op core.SchemaOperation, prefixes *keyPrefix
 	case core.OpDropForeignKey:
 		return one(d.buildDropForeignKey(op.Table, op.ForeignKeyName), nil)
 	default:
-		return step{}, behemotherr.NewInternalError("MySQLDriver.planOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
+		return step{}, errs.NewInternalError("MySQLDriver.planOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
 	}
 }
 
@@ -417,7 +417,7 @@ func (k *keyPrefixes) needs(table, column string) (bool, error) {
 		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
 		k.resolver.Resolve(table), k.resolver.ResolveColumn(table, column)).Scan(&dataType)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, behemotherr.NewMigrationError("MySQLDriver.keyPrefixes", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return false, errs.NewMigrationError("MySQLDriver.keyPrefixes", errs.CodeMigrationQueryFailed, err)
 	}
 	ct, _ := mapMySQLType(dataType, dataType)
 	needs := err == nil && needsKeyPrefix(ct)
@@ -516,9 +516,9 @@ func (d *MySQLDriver) emptyTableGuard(table, column string) func(context.Context
 			return nil
 		}
 		if err != nil {
-			return behemotherr.NewMigrationError("MySQLDriver.emptyTableGuard", behemotherr.ErrorCodeMigrationQueryFailed, err)
+			return errs.NewMigrationError("MySQLDriver.emptyTableGuard", errs.CodeMigrationQueryFailed, err)
 		}
-		return behemotherr.NewMigrationError("MySQLDriver.emptyTableGuard", behemotherr.ErrorCodeMigrationExecFailed,
+		return errs.NewMigrationError("MySQLDriver.emptyTableGuard", errs.CodeMigrationExecFailed,
 			fmt.Errorf("column %q is NOT NULL and has no default, and table %q has rows: give it a default or make it nullable", column, table))
 	}
 }
@@ -568,7 +568,7 @@ func (d *MySQLDriver) buildAlterColumn(table string, raw schema.Column, prevRaw 
 
 func (d *MySQLDriver) buildAddIndex(table string, idx schema.Index, prefixes *keyPrefixes) (string, error) {
 	if len(idx.Columns) == 0 {
-		return "", behemotherr.NewMigrationError("MySQLDriver.AddIndex", behemotherr.ErrorCodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
+		return "", errs.NewMigrationError("MySQLDriver.AddIndex", errs.CodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
 	}
 	cols := make([]string, len(idx.Columns))
 	for i, c := range idx.Columns {
@@ -595,7 +595,7 @@ func (d *MySQLDriver) buildDropIndex(table, indexName string) string {
 // creates one named after the constraint. Introspect leaves that index out.
 func (d *MySQLDriver) buildAddForeignKey(table string, fk schema.ForeignKey) (string, error) {
 	if len(fk.Columns) == 0 || len(fk.Columns) != len(fk.RefColumns) {
-		return "", behemotherr.NewMigrationError("MySQLDriver.AddForeignKey", behemotherr.ErrorCodeMigrationInvalidForeignKey,
+		return "", errs.NewMigrationError("MySQLDriver.AddForeignKey", errs.CodeMigrationInvalidForeignKey,
 			fmt.Errorf("foreign key %q: %d column(s) vs %d referenced column(s)", fk.Name, len(fk.Columns), len(fk.RefColumns)))
 	}
 	cols := make([]string, len(fk.Columns))
@@ -656,7 +656,7 @@ func (d *MySQLDriver) renderColumnDefinition(table string, raw schema.Column) (s
 	}
 	if col.AutoInc {
 		if col.Type != schema.ColTypeInteger && col.Type != schema.ColTypeBigInt {
-			return "", behemotherr.NewMigrationError("MySQLDriver.renderColumnDefinition", behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
+			return "", errs.NewMigrationError("MySQLDriver.renderColumnDefinition", errs.CodeMigrationUnsupportedAutoIncrement,
 				fmt.Errorf("column %q: AutoInc requires an integer column, got %q", col.Name, col.Type))
 		}
 		// An AUTO_INCREMENT column can't have a default. MySQL also requires
@@ -759,7 +759,7 @@ func literalText(v any) (string, error) {
 	case float64:
 		return strconv.FormatFloat(val, 'f', -1, 64), nil
 	default:
-		return "", behemotherr.NewMigrationError("MySQLDriver.literalText", behemotherr.ErrorCodeMigrationUnsupportedDefaultType, fmt.Errorf("cannot render default value of type %T", v))
+		return "", errs.NewMigrationError("MySQLDriver.literalText", errs.CodeMigrationUnsupportedDefaultType, fmt.Errorf("cannot render default value of type %T", v))
 	}
 }
 
@@ -796,7 +796,7 @@ func renderMySQLType(ct schema.ColumnType, length int) (string, error) {
 	case schema.ColTypeBytes, schema.ColTypeBlob:
 		return "LONGBLOB", nil
 	default:
-		return "", behemotherr.NewMigrationError("MySQLDriver.renderMySQLType", behemotherr.ErrorCodeMigrationUnsupportedCanonicalType, fmt.Errorf("no MySQL rendering for canonical type %q", ct))
+		return "", errs.NewMigrationError("MySQLDriver.renderMySQLType", errs.CodeMigrationUnsupportedCanonicalType, fmt.Errorf("no MySQL rendering for canonical type %q", ct))
 	}
 }
 

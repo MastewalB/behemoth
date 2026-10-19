@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -77,7 +77,7 @@ func BuildPlan(report *IntrospectionReport, current schema.Registry) (*Migration
 		if ti.IncompatibleObject {
 			// This is a blocking issue and no candidate option is generated
 			// Must be resolved manually.
-			return nil, nil, behemotherr.NewMigrationError("Planning.BuildPlan", behemotherr.ErrorCodeMigrationIncompatibleObject,
+			return nil, nil, errs.NewMigrationError("Planning.BuildPlan", errs.CodeMigrationIncompatibleObject,
 				fmt.Errorf("table %q exists live as a non-table object; resolve manually before continuing", table))
 		}
 

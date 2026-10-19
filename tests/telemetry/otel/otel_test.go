@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	behemothotel "github.com/MastewalB/behemoth/telemetry/adapters/otel"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
@@ -30,9 +30,9 @@ func TestTracer(t *testing.T) {
 		telemetry.AttrMethod: "POST", telemetry.AttrRoute: "/api/auth/sign-in/email",
 	})
 	_, lookup := tel.StartSpan(ctx, telemetry.SpanStorePrefix+"find_one", behemoth.M{telemetry.AttrEntity: "users"})
-	telemetry.FinishSpan(lookup, behemotherr.NewNotFound("Store.FindUser", "user", nil))
+	telemetry.FinishSpan(lookup, errs.NewNotFound("Store.FindUser", "user", nil))
 	_, insert := tel.StartSpan(ctx, telemetry.SpanStorePrefix+"create", nil)
-	telemetry.FinishSpan(insert, behemotherr.NewDatabaseError("Store.Create", errors.New("connection refused")))
+	telemetry.FinishSpan(insert, errs.NewDatabaseError("Store.Create", errors.New("connection refused")))
 	request.SetAttributes(behemoth.M{telemetry.AttrStatus: 500, "ok": false, "ratio": 0.5})
 	request.End()
 	appSpan.End()

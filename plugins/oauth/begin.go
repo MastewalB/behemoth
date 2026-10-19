@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/utils"
@@ -73,7 +73,7 @@ func (r *BeginRequest) FromMap(data map[string]any) error {
 		case string:
 			return v, nil
 		default:
-			return "", behemotherr.NewInvalidInputError(op, key, key+" must be a string", nil)
+			return "", errs.NewInvalidInputError(op, key, key+" must be a string", nil)
 		}
 	}
 	provider, err := field(keyProvider)
@@ -172,10 +172,10 @@ func (p *Plugin) beginBody(hctx *types.HookContext, req BeginRequest) (*BeginRes
 
 	provider, ok := p.providers[req.Provider]
 	if !ok {
-		return nil, behemotherr.NewInvalidInputError(op, keyProvider, "unknown provider", nil)
+		return nil, errs.NewInvalidInputError(op, keyProvider, "unknown provider", nil)
 	}
 	if req.RedirectURL != "" && !types.TrustedRedirect(ac.Origins, req.RedirectURL) {
-		return nil, behemotherr.NewInvalidInputError(op, keyRedirectURL, "redirect URL is not allowed", nil)
+		return nil, errs.NewInvalidInputError(op, keyRedirectURL, "redirect URL is not allowed", nil)
 	}
 
 	// 32 random bytes each. As base64url that is 43 characters, which is
@@ -184,7 +184,7 @@ func (p *Plugin) beginBody(hctx *types.HookContext, req BeginRequest) (*BeginRes
 	for _, secret := range []*string{&verifier, &nonce, &binding} {
 		value, err := ac.Crypto.Random.SecureRandomString(32)
 		if err != nil {
-			return nil, behemotherr.NewSecurityError(op, "random_generation_failed", err)
+			return nil, errs.NewSecurityError(op, "random_generation_failed", err)
 		}
 		*secret = value
 	}

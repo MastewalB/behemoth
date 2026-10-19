@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
@@ -72,7 +72,7 @@ func TestBootInstallsTheOriginCheckForCookieTransports(t *testing.T) {
 			w := callHeaders(t, ac, signIn, body, map[string]string{"Origin": "https://evil.example"})
 			if checked {
 				assert.Equal(t, http.StatusForbidden, w.Code)
-				assert.Contains(t, w.Body.String(), behemotherr.ErrorCodeUntrustedOrigin)
+				assert.Contains(t, w.Body.String(), errs.CodeUntrustedOrigin)
 			} else {
 				assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 			}
@@ -82,7 +82,7 @@ func TestBootInstallsTheOriginCheckForCookieTransports(t *testing.T) {
 			w = callHeaders(t, ac, signIn, body, map[string]string{"Origin": "https://auth.example.com", "Content-Type": "text/plain"})
 			if checked {
 				assert.Equal(t, http.StatusUnsupportedMediaType, w.Code)
-				assert.Contains(t, w.Body.String(), behemotherr.ErrorCodeUnsupportedContentType)
+				assert.Contains(t, w.Body.String(), errs.CodeUnsupportedContentType)
 			} else {
 				assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 			}
@@ -106,7 +106,7 @@ func TestBootRefusesAMalformedBaseURL(t *testing.T) {
 	for _, transport := range []types.TokenTransport{types.TransportCookie, types.TransportHeader} {
 		_, _, err := bootWithRouter(t, transport, types.RouterConfig{BaseURL: "auth.example.com/api"})
 		require.Error(t, err)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "got %v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestBootChecksTheSessionCookieAgainstTheBaseURL(t *testing.T) {
 			continue
 		}
 		require.Error(t, err, name)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%s: %v", name, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: %v", name, err)
 		assert.Contains(t, err.Error(), tc.refused, name)
 	}
 }

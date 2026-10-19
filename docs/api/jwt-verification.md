@@ -94,7 +94,7 @@ What this means for your service:
 | a `CategoryToken` error | the token is refused. Its code is one of the table below. | `401` |
 | any other error | the keys could not be fetched, or the options can't work | `500`, or `503` while the issuer is down |
 
-Check with `behemotherr.Is(err, behemotherr.CategoryToken)`. The codes of a refused token:
+Check with `errs.IsCategory(err, errs.CategoryToken)`. The codes of a refused token:
 
 | Code | The token |
 | --- | --- |

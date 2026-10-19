@@ -53,7 +53,7 @@ case *sql.Tx:
 	_, err := fn(ctx, pg) // bound adapter: join
 	return err
 default:
-	return behemotherr.NewTransactionError(...) // some other Querier
+	return errs.NewTransactionError(...) // some other Querier
 }
 ```
 

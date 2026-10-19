@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/types/schema"
 )
@@ -128,7 +128,7 @@ func (d *SQLiteDriver) TableExists(ctx context.Context, name string) (bool, erro
 		`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = ? AND type IN ('table', 'view', 'index'))`,
 		d.resolver.Resolve(name)).Scan(&exists)
 	if err != nil {
-		return false, behemotherr.NewMigrationError("SQLiteIntrospector.TableExists", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return false, errs.NewMigrationError("SQLiteIntrospector.TableExists", errs.CodeMigrationQueryFailed, err)
 	}
 	return exists, nil
 }
@@ -154,7 +154,7 @@ func (d *SQLiteDriver) Introspect(ctx context.Context, name string) (core.Intros
 		return core.IntrospectedTable{}, nil
 	}
 	if err != nil {
-		return core.IntrospectedTable{}, behemotherr.NewMigrationError("SQLiteIntrospector.Introspect", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return core.IntrospectedTable{}, errs.NewMigrationError("SQLiteIntrospector.Introspect", errs.CodeMigrationQueryFailed, err)
 	}
 	switch {
 	case objType == "view":
@@ -165,7 +165,7 @@ func (d *SQLiteDriver) Introspect(ctx context.Context, name string) (core.Intros
 
 	parsed, err := parseCreateTable(createSQL.String)
 	if err != nil {
-		return core.IntrospectedTable{}, behemotherr.NewMigrationError("SQLiteIntrospector.Introspect", behemotherr.ErrorCodeMigrationIntrospectionFailed,
+		return core.IntrospectedTable{}, errs.NewMigrationError("SQLiteIntrospector.Introspect", errs.CodeMigrationIntrospectionFailed,
 			fmt.Errorf("table %q: %w", physical, err))
 	}
 
@@ -198,7 +198,7 @@ func isVirtualTable(createSQL string) bool {
 func (d *SQLiteDriver) introspectColumns(ctx context.Context, physical string, parsed *tableSQL, uniqueCols map[string]bool) ([]schema.Column, []core.ColumnAmbiguity, error) {
 	rows, err := d.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", quoteIdent(physical)))
 	if err != nil {
-		return nil, nil, behemotherr.NewMigrationError("SQLiteIntrospector.columns", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, nil, errs.NewMigrationError("SQLiteIntrospector.columns", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -214,7 +214,7 @@ func (d *SQLiteDriver) introspectColumns(ctx context.Context, physical string, p
 		var c liveColumn
 		var cid int
 		if err := rows.Scan(&cid, &c.name, &c.declType, &c.notNull, &c.dflt, &c.pk); err != nil {
-			return nil, nil, behemotherr.NewMigrationError("SQLiteIntrospector.columns", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, nil, errs.NewMigrationError("SQLiteIntrospector.columns", errs.CodeMigrationScanFailed, err)
 		}
 		if c.pk > 0 {
 			pkCount++
@@ -222,7 +222,7 @@ func (d *SQLiteDriver) introspectColumns(ctx context.Context, physical string, p
 		live = append(live, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, behemotherr.NewMigrationError("SQLiteIntrospector.columns", behemotherr.ErrorCodeMigrationScanFailed, err)
+		return nil, nil, errs.NewMigrationError("SQLiteIntrospector.columns", errs.CodeMigrationScanFailed, err)
 	}
 
 	cols := make([]schema.Column, 0, len(live))
@@ -342,7 +342,7 @@ func columnHasKeyword(parsed *tableSQL, column, keyword string) bool {
 func (d *SQLiteDriver) introspectIndexes(ctx context.Context, physical string, parsed *tableSQL) (uniqueSingle map[string]bool, indexes []schema.Index, err error) {
 	rows, err := d.db.QueryContext(ctx, fmt.Sprintf("PRAGMA index_list(%s)", quoteIdent(physical)))
 	if err != nil {
-		return nil, nil, behemotherr.NewMigrationError("SQLiteIntrospector.indexes", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, nil, errs.NewMigrationError("SQLiteIntrospector.indexes", errs.CodeMigrationQueryFailed, err)
 	}
 	type listed struct {
 		name, origin string
@@ -355,7 +355,7 @@ func (d *SQLiteDriver) introspectIndexes(ctx context.Context, physical string, p
 		var partial bool
 		if err := rows.Scan(&seq, &l.name, &l.unique, &l.origin, &partial); err != nil {
 			rows.Close()
-			return nil, nil, behemotherr.NewMigrationError("SQLiteIntrospector.indexes", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, nil, errs.NewMigrationError("SQLiteIntrospector.indexes", errs.CodeMigrationScanFailed, err)
 		}
 		if l.origin != "pk" && !partial {
 			list = append(list, l)
@@ -363,7 +363,7 @@ func (d *SQLiteDriver) introspectIndexes(ctx context.Context, physical string, p
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, nil, behemotherr.NewMigrationError("SQLiteIntrospector.indexes", behemotherr.ErrorCodeMigrationScanFailed, err)
+		return nil, nil, errs.NewMigrationError("SQLiteIntrospector.indexes", errs.CodeMigrationScanFailed, err)
 	}
 
 	uniqueSingle = map[string]bool{}
@@ -397,7 +397,7 @@ func (d *SQLiteDriver) introspectIndexes(ctx context.Context, physical string, p
 func (d *SQLiteDriver) indexColumns(ctx context.Context, index string) ([]string, error) {
 	rows, err := d.db.QueryContext(ctx, fmt.Sprintf("PRAGMA index_info(%s)", quoteIdent(index)))
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SQLiteIntrospector.indexColumns", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("SQLiteIntrospector.indexColumns", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 	var cols []string
@@ -406,7 +406,7 @@ func (d *SQLiteDriver) indexColumns(ctx context.Context, index string) ([]string
 		var seqno, cid int
 		var name sql.NullString
 		if err := rows.Scan(&seqno, &cid, &name); err != nil {
-			return nil, behemotherr.NewMigrationError("SQLiteIntrospector.indexColumns", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("SQLiteIntrospector.indexColumns", errs.CodeMigrationScanFailed, err)
 		}
 		if !name.Valid {
 			expression = true
@@ -415,7 +415,7 @@ func (d *SQLiteDriver) indexColumns(ctx context.Context, index string) ([]string
 		cols = append(cols, name.String)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, behemotherr.NewMigrationError("SQLiteIntrospector.indexColumns", behemotherr.ErrorCodeMigrationScanFailed, err)
+		return nil, errs.NewMigrationError("SQLiteIntrospector.indexColumns", errs.CodeMigrationScanFailed, err)
 	}
 	if expression {
 		return nil, nil
@@ -431,7 +431,7 @@ func (d *SQLiteDriver) indexColumns(ctx context.Context, index string) ([]string
 func (d *SQLiteDriver) introspectForeignKeys(ctx context.Context, physical string, parsed *tableSQL) ([]schema.ForeignKey, error) {
 	rows, err := d.db.QueryContext(ctx, fmt.Sprintf("PRAGMA foreign_key_list(%s)", quoteIdent(physical)))
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SQLiteIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("SQLiteIntrospector.foreignKeys", errs.CodeMigrationQueryFailed, err)
 	}
 
 	type fkRow struct {
@@ -447,13 +447,13 @@ func (d *SQLiteDriver) introspectForeignKeys(ctx context.Context, physical strin
 		var onUpdate, match string
 		if err := rows.Scan(&r.id, &r.seq, &r.refTable, &r.from, &r.to, &onUpdate, &r.onDelete, &match); err != nil {
 			rows.Close()
-			return nil, behemotherr.NewMigrationError("SQLiteIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("SQLiteIntrospector.foreignKeys", errs.CodeMigrationScanFailed, err)
 		}
 		fkRows = append(fkRows, r)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, behemotherr.NewMigrationError("SQLiteIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationScanFailed, err)
+		return nil, errs.NewMigrationError("SQLiteIntrospector.foreignKeys", errs.CodeMigrationScanFailed, err)
 	}
 	sort.Slice(fkRows, func(i, j int) bool {
 		if fkRows[i].id != fkRows[j].id {
@@ -495,7 +495,7 @@ func (d *SQLiteDriver) introspectForeignKeys(ctx context.Context, physical strin
 func (d *SQLiteDriver) primaryKeyColumns(ctx context.Context, physical string) ([]string, error) {
 	rows, err := d.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", quoteIdent(physical)))
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SQLiteIntrospector.primaryKey", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("SQLiteIntrospector.primaryKey", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 	type keyCol struct {
@@ -509,7 +509,7 @@ func (d *SQLiteDriver) primaryKeyColumns(ctx context.Context, physical string) (
 		var notNull bool
 		var dflt sql.NullString
 		if err := rows.Scan(&cid, &name, &declType, &notNull, &dflt, &pk); err != nil {
-			return nil, behemotherr.NewMigrationError("SQLiteIntrospector.primaryKey", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("SQLiteIntrospector.primaryKey", errs.CodeMigrationScanFailed, err)
 		}
 		if pk > 0 {
 			keys = append(keys, keyCol{name, pk})

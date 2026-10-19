@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -43,7 +43,7 @@ type wireClaims struct {
 // unless a package-wide setting says otherwise.
 func payload(op string, kind types.JWTKind, cfg types.JWTConfig, req types.JWTRequest) (jwt.MapClaims, error) {
 	if req.Subject == "" {
-		return nil, behemotherr.NewInvalidInputError(op, "subject", "a token needs a subject", nil)
+		return nil, errs.NewInvalidInputError(op, "subject", "a token needs a subject", nil)
 	}
 	audience := req.Audience
 	allowed := cfg.Audiences[kind]
@@ -51,7 +51,7 @@ func payload(op string, kind types.JWTKind, cfg types.JWTConfig, req types.JWTRe
 	case audience == "" && len(allowed) > 0:
 		audience = allowed[0]
 	case audience != "" && !slices.Contains(allowed, audience):
-		return nil, behemotherr.NewInvalidInputError(op, "audience", "audience is not allowed", nil)
+		return nil, errs.NewInvalidInputError(op, "audience", "audience is not allowed", nil)
 	}
 	now := time.Now()
 	claims := jwt.MapClaims{
@@ -90,20 +90,20 @@ func parse(op, token string, claims jwt.Claims) (*parsed, error) {
 	tok, parts, err := p.ParseUnverified(token, claims)
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenUnverifiable) {
-			return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTAlgorithmMismatch, err) // an algorithm golang-jwt does not know
+			return nil, errs.NewJWTError(op, errs.CodeJWTAlgorithmMismatch, err) // an algorithm golang-jwt does not know
 		}
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
+		return nil, errs.NewJWTError(op, errs.CodeJWTMalformed, err)
 	}
 	if _, ok := tok.Header["crit"]; ok {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, errors.New("the header names critical extensions"))
+		return nil, errs.NewJWTError(op, errs.CodeJWTMalformed, errors.New("the header names critical extensions"))
 	}
 	signature, err := p.DecodeSegment(parts[2])
 	if err != nil {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
+		return nil, errs.NewJWTError(op, errs.CodeJWTMalformed, err)
 	}
 	payload, err := p.DecodeSegment(parts[1])
 	if err != nil {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
+		return nil, errs.NewJWTError(op, errs.CodeJWTMalformed, err)
 	}
 	alg, _ := tok.Header["alg"].(string)
 	kid, _ := tok.Header["kid"].(string)
@@ -115,17 +115,17 @@ func parse(op, token string, claims jwt.Claims) (*parsed, error) {
 func signWith(op, alg, kid string, claims jwt.MapClaims, sign func([]byte) ([]byte, error)) (string, error) {
 	method := jwt.GetSigningMethod(alg)
 	if method == nil {
-		return "", behemotherr.NewSecurityError(op, behemotherr.ErrorCodeJWTSigningFailed, fmt.Errorf("unknown algorithm %q", alg))
+		return "", errs.NewSecurityError(op, errs.CodeJWTSigningFailed, fmt.Errorf("unknown algorithm %q", alg))
 	}
 	token := jwt.NewWithClaims(method, claims)
 	token.Header["kid"] = kid
 	signingString, err := token.SigningString()
 	if err != nil {
-		return "", behemotherr.NewSecurityError(op, behemotherr.ErrorCodeJWTEncodingFailed, err)
+		return "", errs.NewSecurityError(op, errs.CodeJWTEncodingFailed, err)
 	}
 	signature, err := sign([]byte(signingString))
 	if err != nil {
-		return "", behemotherr.NewSecurityError(op, behemotherr.ErrorCodeJWTSigningFailed, err)
+		return "", errs.NewSecurityError(op, errs.CodeJWTSigningFailed, err)
 	}
 	return signingString + "." + b64(signature), nil
 }
@@ -153,20 +153,20 @@ func checkClaims(op string, v *jwt.Validator, claims jwt.Claims) error {
 	if err == nil {
 		return nil
 	}
-	code := behemotherr.ErrorCodeJWTInvalidClaims
+	code := errs.CodeJWTInvalidClaims
 	switch {
 	case errors.Is(err, jwt.ErrTokenExpired):
-		code = behemotherr.ErrorCodeTokenExpired
+		code = errs.CodeTokenExpired
 	case errors.Is(err, jwt.ErrTokenNotValidYet):
-		code = behemotherr.ErrorCodeJWTNotYetValid
+		code = errs.CodeJWTNotYetValid
 	case errors.Is(err, jwt.ErrTokenInvalidIssuer):
-		code = behemotherr.ErrorCodeJWTIssuerMismatch
+		code = errs.CodeJWTIssuerMismatch
 	case errors.Is(err, jwt.ErrTokenInvalidAudience):
-		code = behemotherr.ErrorCodeJWTAudienceMismatch
+		code = errs.CodeJWTAudienceMismatch
 	case errors.Is(err, jwt.ErrTokenRequiredClaimMissing):
-		code = behemotherr.ErrorCodeJWTMissingClaim
+		code = errs.CodeJWTMissingClaim
 	}
-	return behemotherr.NewJWTError(op, code, err)
+	return errs.NewJWTError(op, code, err)
 }
 
 // claimsOf returns the claims of a checked token as types.Claims.
@@ -226,11 +226,11 @@ func (j *internalJWT) verify(token string) (*types.Claims, error) {
 		return nil, err
 	}
 	if p.alg != jwt.SigningMethodHS256.Alg() {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTAlgorithmMismatch, nil)
+		return nil, errs.NewJWTError(op, errs.CodeJWTAlgorithmMismatch, nil)
 	}
 	version, err := strconv.Atoi(p.kid)
 	if err != nil {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
+		return nil, errs.NewJWTError(op, errs.CodeJWTMalformed, err)
 	}
 	// The signer checks the HMAC in constant time, with the key of the
 	// token's version.
@@ -239,7 +239,7 @@ func (j *internalJWT) verify(token string) (*types.Claims, error) {
 		return nil, err
 	}
 	if !ok {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTInvalidSignature, nil)
+		return nil, errs.NewJWTError(op, errs.CodeJWTInvalidSignature, nil)
 	}
 	return validate(op, &c, j.cfg.Issuer, j.cfg.Audiences[types.JWTInternal])
 }
@@ -279,7 +279,7 @@ func (j *externalJWT) verify(ctx context.Context, token string) (*types.Claims, 
 	}
 	var c wireClaims
 	if err := verified.Claims(&c); err != nil {
-		return nil, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTMalformed, err)
+		return nil, errs.NewJWTError(op, errs.CodeJWTMalformed, err)
 	}
 	return claimsOf(&c, audiences), nil
 }
@@ -313,11 +313,11 @@ func (p *JWTProviderImpl) Sign(ctx context.Context, kind types.JWTKind, req type
 		return p.internal.sign(req)
 	case types.JWTExternal:
 		if p.external == nil {
-			return "", behemotherr.NewConfigurationErrorCode("JWT.Sign", behemotherr.ErrorCodeJWTExternalNotConfigured, "external JWTs need a key set")
+			return "", errs.NewConfigurationErrorCode("JWT.Sign", errs.CodeJWTExternalNotConfigured, "external JWTs need a key set")
 		}
 		return p.external.sign(ctx, req)
 	default:
-		return "", behemotherr.NewConfigurationErrorCode("JWT.Sign", behemotherr.ErrorCodeJWTUnknownKind, "unknown JWT kind")
+		return "", errs.NewConfigurationErrorCode("JWT.Sign", errs.CodeJWTUnknownKind, "unknown JWT kind")
 	}
 }
 
@@ -329,11 +329,11 @@ func (p *JWTProviderImpl) Verify(ctx context.Context, kind types.JWTKind, token 
 		return p.internal.verify(token)
 	case types.JWTExternal:
 		if p.external == nil {
-			return nil, behemotherr.NewConfigurationErrorCode("JWT.Verify", behemotherr.ErrorCodeJWTExternalNotConfigured, "external JWTs need a key set")
+			return nil, errs.NewConfigurationErrorCode("JWT.Verify", errs.CodeJWTExternalNotConfigured, "external JWTs need a key set")
 		}
 		return p.external.verify(ctx, token)
 	default:
-		return nil, behemotherr.NewConfigurationErrorCode("JWT.Verify", behemotherr.ErrorCodeJWTUnknownKind, "unknown JWT kind")
+		return nil, errs.NewConfigurationErrorCode("JWT.Verify", errs.CodeJWTUnknownKind, "unknown JWT kind")
 	}
 }
 
@@ -351,7 +351,7 @@ func (p *JWTProviderImpl) HandleJWKS(rctx *types.RequestContext) error {
 	}
 	set, err := MarshalJWKSet(published)
 	if err != nil {
-		return behemotherr.NewSecurityError("JWT.HandleJWKS", behemotherr.ErrorCodeJWKSReadFailed, err)
+		return errs.NewSecurityError("JWT.HandleJWKS", errs.CodeJWKSReadFailed, err)
 	}
 	rctx.Response.SetHeader("Cache-Control", fmt.Sprintf("public, max-age=%d", int(jwksMaxAge/time.Second)))
 	return rctx.Response.JSON(http.StatusOK, json.RawMessage(set))

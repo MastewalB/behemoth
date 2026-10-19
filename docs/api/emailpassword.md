@@ -86,7 +86,7 @@ Sign-in gives the same answer for an unknown email and a wrong password, so the 
 
 The codes are exported: `emailpassword.ErrorCodeInvalidEmail`, `ErrorCodeInvalidPassword`, `ErrorCodeEmailTaken`, and `ErrorCodeInvalidCredentials`. Branch on the code and not on the message.
 
-A handler on one of the plugin's hook points that rejects a request should return one of the `errors` package's types. An untyped error (`errors.New`) is treated as a failure of the system: the client gets a `500` and the error is logged.
+A handler on one of the plugin's hook points that rejects a request should return one of the `errs` package's types. An untyped error (`errors.New`) is treated as a failure of the system: the client gets a `500` and the error is logged.
 
 ## Hook points
 
@@ -124,7 +124,7 @@ A handler on `auth.signIn.before` reads it as `payload["captchaToken"]`, next to
 reg.OnBefore(hooks.HookSignInBefore, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
 	token, _ := payload["captchaToken"].(string)
 	if !captchaPasses(hctx.Ctx, token) {
-		return nil, behemotherr.NewInvalidInputError("signin", "captcha", "captcha check failed", nil)
+		return nil, errs.NewInvalidInputError("signin", "captcha", "captcha check failed", nil)
 	}
 	return nil, nil
 }, nil)
@@ -139,7 +139,7 @@ Both flows follow these rules:
 - `SignIn` returns a `*emailpassword.SignInResult`, which is `types.SignInResult`: the user, the session, the raw token, and `Method` (`"emailpassword"`). Handlers on `auth.signIn.after` receive the same value.
 - `SignIn` returns the raw session token and delivers nothing. From a route of your own, hand the result to `types.WriteSignIn`, which is what the plugin's route does. See [Write a sign-in route](sessions.md#write-a-sign-in-route).
 - Called before `Boot`, both return a configuration error.
-- `SignUp` returns typed errors for its own rejections too: check `behemotherr.IsCode(err, emailpassword.ErrorCodeEmailTaken)`, `ErrorCodeInvalidEmail`, or `ErrorCodeInvalidPassword`.
+- `SignUp` returns typed errors for its own rejections too: check `errs.IsCode(err, emailpassword.ErrorCodeEmailTaken)`, `ErrorCodeInvalidEmail`, or `ErrorCodeInvalidPassword`.
 - `SignIn` returns a typed error for a refused credential, so you can tell it from a failure:
 
 ```go
@@ -147,7 +147,7 @@ result, err := plugin.SignIn(ctx, creds)
 switch {
 case err == nil:
 	// signed in
-case behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials):
+case errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials):
 	// unknown email, wrong password, or no password: ask again
 default:
 	// a hook's rejection, a rate limit, or a failure such as a database outage
@@ -202,13 +202,13 @@ A hook handler can reject a sign-up with its own status and message. Return a ty
 ```go
 reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *types.HookContext, row behemoth.M) (behemoth.M, error) {
 	if blocked(row[models.UserEmail]) {
-		return nil, behemotherr.NewInvalidInputError("signup", "user", "this email domain is not allowed", nil)
+		return nil, errs.NewInvalidInputError("signup", "user", "this email domain is not allowed", nil)
 	}
 	return row, nil
 }, nil)
 ```
 
-The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejected_by_hook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but it counts as a failure of the system. The client gets a `500`, the error is logged, and no failed point fires. `behemotherr.IsRejection(err)` reports which of the two an error is. It is true for a typed error of category validation, conflict, unauthorized, forbidden, or rate limited.
+The client gets the status of the error's category (`400` here) and its public message, and `auth.signUp.failed` fires with code `rejected_by_hook`. An untyped error (`errors.New`) from a data hook also stops the sign-up, but it counts as a failure of the system. The client gets a `500`, the error is logged, and no failed point fires. `errs.IsRejection(err)` reports which of the two an error is. It is true for a typed error of category validation, conflict, unauthorized, forbidden, or rate limited.
 
 ## Password reset
 

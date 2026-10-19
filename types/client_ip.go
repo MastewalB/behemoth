@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 type ClientIPConfig struct {
@@ -26,7 +26,7 @@ func NewClientConfig(trustedProxies []string, header string) (*ClientIPConfig, e
 	for _, cidr := range trustedProxies {
 		_, n, err := net.ParseCIDR(cidr)
 		if err != nil {
-			return nil, behemotherr.NewConfigurationError("ClientIP.Config", fmt.Sprintf("invalid trusted proxy CIDR %q", cidr), err)
+			return nil, errs.NewConfigurationError("ClientIP.Config", fmt.Sprintf("invalid trusted proxy CIDR %q", cidr), err)
 		}
 		nets = append(nets, n)
 	}

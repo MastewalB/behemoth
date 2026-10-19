@@ -7,7 +7,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 )
 
@@ -74,7 +74,7 @@ func (d *instrumentedDB) run(ctx context.Context, op, entity string, fn func(ctx
 	d.tel.ObserveSince(ctx, telemetry.MetricStoreDuration, start, behemoth.M{telemetry.AttrOp: op, telemetry.AttrEntity: entity})
 	if err != nil {
 		category := "unknown"
-		if de, ok := errors.AsType[*behemotherr.DomainError](err); ok {
+		if de, ok := errors.AsType[*errs.DomainError](err); ok {
 			category = string(de.Category)
 		}
 		d.tel.Count(ctx, telemetry.MetricStoreErrors, behemoth.M{

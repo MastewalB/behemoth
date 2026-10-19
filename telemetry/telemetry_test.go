@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 )
@@ -148,7 +148,7 @@ func TestErrorFields(t *testing.T) {
 	}
 
 	plain := telemetry.ErrorFields(errors.New("boom"))
-	if plain[telemetry.FieldError] != "boom" || plain[telemetry.FieldErrorCode] != behemotherr.ErrorCodeUnknown {
+	if plain[telemetry.FieldError] != "boom" || plain[telemetry.FieldErrorCode] != errs.CodeUnknown {
 		t.Errorf("plain error fields = %v", plain)
 	}
 	if _, set := plain[telemetry.FieldErrorCategory]; set {
@@ -156,12 +156,12 @@ func TestErrorFields(t *testing.T) {
 	}
 
 	// A DomainError is found through wrapping.
-	wrapped := fmt.Errorf("sign-in: %w", behemotherr.NewNotFound("Store.FindUser", "user", nil))
+	wrapped := fmt.Errorf("sign-in: %w", errs.NewNotFound("Store.FindUser", "user", nil))
 	got := telemetry.ErrorFields(wrapped)
 	want := behemoth.M{
 		telemetry.FieldError:         wrapped.Error(),
 		telemetry.FieldErrorCode:     "user_not_found",
-		telemetry.FieldErrorCategory: string(behemotherr.CategoryNotFound),
+		telemetry.FieldErrorCategory: string(errs.CategoryNotFound),
 		telemetry.FieldOp:            "Store.FindUser",
 	}
 	for k, v := range want {
@@ -206,7 +206,7 @@ func TestSlogLogger(t *testing.T) {
 		t.Fatalf("a debug line was written at level info: %s", buf.String())
 	}
 
-	fields := telemetry.ErrorFields(behemotherr.NewInternalError("Boot", errors.New("boom")))
+	fields := telemetry.ErrorFields(errs.NewInternalError("Boot", errors.New("boom")))
 	fields["token"] = "abc"
 	telemetry.Named(tel.Logger, "router").Error(ctx, "request failed", fields)
 
@@ -400,8 +400,8 @@ func TestSpans(t *testing.T) {
 
 	// A rejection describes itself on the span without failing it. A
 	// system failure fails it.
-	telemetry.FinishSpan(child, behemotherr.NewNotFound("Store.FindUser", "user", nil))
-	telemetry.FinishSpan(parent, behemotherr.NewDatabaseError("Store.FindUser", errors.New("connection refused")))
+	telemetry.FinishSpan(child, errs.NewNotFound("Store.FindUser", "user", nil))
+	telemetry.FinishSpan(parent, errs.NewDatabaseError("Store.FindUser", errors.New("connection refused")))
 
 	spans := rec.Tracer.Spans()
 	if len(spans) != 2 || spans[1].Parent != spans[0] || spans[0].Parent != nil {
@@ -429,11 +429,11 @@ func TestIsSystemFailure(t *testing.T) {
 	}{
 		{nil, false},
 		{errors.New("plain"), true},
-		{behemotherr.NewDatabaseError("op", errors.New("x")), true},
-		{behemotherr.NewInternalError("op", errors.New("x")), true},
-		{behemotherr.NewNotFound("op", "user", nil), false},
-		{behemotherr.NewRateLimited("op", "rule", 0), false},
-		{fmt.Errorf("wrapped: %w", behemotherr.NewDuplicateKey("op", "user", nil)), false},
+		{errs.NewDatabaseError("op", errors.New("x")), true},
+		{errs.NewInternalError("op", errors.New("x")), true},
+		{errs.NewNotFound("op", "user", nil), false},
+		{errs.NewRateLimited("op", "rule", 0), false},
+		{fmt.Errorf("wrapped: %w", errs.NewDuplicateKey("op", "user", nil)), false},
 	} {
 		if got := telemetry.IsSystemFailure(tc.err); got != tc.want {
 			t.Errorf("IsSystemFailure(%v) = %v, want %v", tc.err, got, tc.want)

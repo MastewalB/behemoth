@@ -6,7 +6,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/uptrace/bun"
@@ -133,7 +133,7 @@ func oneRow[Q where[Q]](ba *BunAdapter, q Q, m behemoth.Model, expr *clause.Expr
 func (ba *BunAdapter) row(m behemoth.Model) (map[string]any, error) {
 	ser, ok := m.(behemoth.Serializable)
 	if !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 	data, err := ser.ToMap()
 	if err != nil {
@@ -228,7 +228,7 @@ func (ba *BunAdapter) FindOne(
 	expr clause.Expression,
 ) (behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 	// columns stay canonical: they key the map handed to FromMap.
 	columns := adapters.ReadColumns(ba.resolver, m, nil)
@@ -254,7 +254,7 @@ func (ba *BunAdapter) FindMany(
 	options *behemoth.QueryOptions,
 ) ([]behemoth.Model, error) {
 	if _, ok := m.(behemoth.Serializable); !ok {
-		return nil, behemotherr.SerializableNotImplemented()
+		return nil, errs.SerializableNotImplemented()
 	}
 	var selected []string
 	if options != nil {
@@ -365,7 +365,7 @@ func (ba *BunAdapter) DeleteOne(
 	expr clause.Expression,
 ) error {
 	if query, _ := ba.whereClause(m, &expr); query == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteOne, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteOne, "clause", nil)
 	}
 	res, err := oneRow(ba, ba.db.NewDelete().TableExpr("?", ba.table(m)), m, &expr).Exec(ctx)
 	if err != nil {
@@ -384,7 +384,7 @@ func (ba *BunAdapter) DeleteMany(
 	expr clause.Expression,
 ) error {
 	if query, _ := ba.whereClause(m, &expr); query == "" {
-		return behemotherr.NewValidationError(adapters.OpDeleteMany, "clause", nil)
+		return errs.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 	_, err := applyWhere(ba, ba.db.NewDelete().TableExpr("?", ba.table(m)), m, &expr).Exec(ctx)
 	return ba.err(m, err)
@@ -448,5 +448,5 @@ func mapBunError(op, entity string, err error) error {
 	if kind := adapters.ConstraintKind(err); kind != adapters.SentinelUnknown {
 		return adapters.Classify(op, entity, kind, err)
 	}
-	return behemotherr.NewDatabaseError(op, err)
+	return errs.NewDatabaseError(op, err)
 }

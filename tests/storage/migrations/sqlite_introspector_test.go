@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -340,7 +340,7 @@ func TestSQLiteIntrospector(t *testing.T) {
 		require.NoError(t, err)
 		err = core.RejectAmbiguousTypes(report)
 		require.Error(t, err)
-		assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationUnmappableColumnType))
+		assert.True(t, errs.IsCode(err, errs.CodeMigrationUnmappableColumnType))
 	})
 
 	t.Run("ViewsIndexesAndMissingTables", func(t *testing.T) {

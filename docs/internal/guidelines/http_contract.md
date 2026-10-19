@@ -9,7 +9,7 @@ The code it refers to lives in:
 - `types/plugins.go`: `Route`, `RequestContext`, `ResponseRecorder`
 - `types/signin.go`: `WriteSignIn`, the body every sign-in answers with
 - `types/public_view.go`: the user a response carries
-- `errors/errors.go`, `errors/session.go`: `DomainError`, `DefaultErrorMapper`
+- `errs/errors.go`, `errs/session.go`: `DomainError`, `DefaultErrorMapper`
 - `plugins/*`: each plugin's routes, body keys and error codes
 
 The other guideline documents are [`transport_neutral_flows.md`](transport_neutral_flows.md), about what belongs in a handler and what belongs in the flow behind it, and [`service_ready_components.md`](service_ready_components.md), about options, state, and background work in a component that may run in a standalone service.

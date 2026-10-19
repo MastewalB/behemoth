@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 )
 
@@ -79,7 +79,7 @@ func NewRouter(cfg RouterConfig, auth *AuthContext) *Router {
 		cfg.BasePath = "/api/auth"
 	}
 	if cfg.ErrorMapper == nil {
-		cfg.ErrorMapper = &behemotherr.DefaultErrorMapper{}
+		cfg.ErrorMapper = &errs.DefaultErrorMapper{}
 	}
 	if cfg.RequestIDHeader == "" {
 		cfg.RequestIDHeader = telemetry.DefaultRequestIDHeader
@@ -123,7 +123,7 @@ func (r *Router) Mount(owner, pluginMountPath string, endpoints []Route) error {
 	}
 
 	if len(duplicateErr) > 0 {
-		return behemotherr.NewConfigurationError("Router.Mount",
+		return errs.NewConfigurationError("Router.Mount",
 			fmt.Sprintf("route conflicts detected: \n  %s", strings.Join(duplicateErr, "\n  ")),
 			nil,
 		)
@@ -147,7 +147,7 @@ func (r *Router) MountAbsolute(owner string, routes ...Route) error {
 		})
 	}
 	if len(duplicateErr) > 0 {
-		return behemotherr.NewConfigurationError("Router.MountAbsolute",
+		return errs.NewConfigurationError("Router.MountAbsolute",
 			fmt.Sprintf("route conflicts detected: \n  %s", strings.Join(duplicateErr, "\n  ")),
 			nil,
 		)
@@ -195,7 +195,7 @@ func (r *Router) wrapWithErrorMapping(route Route, next HandlerFunc) HandlerFunc
 			} else {
 				r.log.Debug(rctx.Ctx, "request rejected", fields)
 			}
-			if de, ok := errors.AsType[*behemotherr.DomainError](err); ok && de.RetryAfter > 0 {
+			if de, ok := errors.AsType[*errs.DomainError](err); ok && de.RetryAfter > 0 {
 				// Rounded up: a client that waits the truncated number of
 				// seconds would come back before the window has ended.
 				rctx.Response.Headers.Set("Retry-After", strconv.Itoa(int(math.Ceil(de.RetryAfter.Seconds()))))

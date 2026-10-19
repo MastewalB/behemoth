@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	"github.com/MastewalB/behemoth/types"
@@ -94,7 +94,7 @@ func (app *oauthApp) begin(t *testing.T, provider *fakeProvider, redirect string
 }
 
 func invalidCallback(err error) bool {
-	return hasCode(err, behemotherr.CategoryUnauthorized, oauth.ErrorCodeInvalidCallback)
+	return hasCode(err, errs.CategoryUnauthorized, oauth.ErrorCodeInvalidCallback)
 }
 
 var ada = oauth.Identity{
@@ -302,7 +302,7 @@ func TestOAuthCompleteWhenTheExchangeFails(t *testing.T) {
 				assert.True(t, invalidCallback(err), "got %v", err)
 				assert.Equal(t, tc.failCode, trace.lastFailure(t))
 			} else {
-				assert.False(t, behemotherr.IsRejection(err), "it is not the caller's mistake: %v", err)
+				assert.False(t, errs.IsRejection(err), "it is not the caller's mistake: %v", err)
 				assert.Empty(t, trace.signInFailed, "an outage is not a refused sign-in")
 			}
 			assert.Zero(t, app.count(t, "users", "1 = 1"))
@@ -333,7 +333,7 @@ func TestOAuthCompleteNeedsItsInput(t *testing.T) {
 		"state":    {Provider: "google", Code: good.Code, Binding: good.Binding},
 	} {
 		_, err := app.plugin.Complete(ctx, req)
-		assert.True(t, hasCode(err, behemotherr.CategoryValidation, key+"_invalid_input"), "%s: got %v", key, err)
+		assert.True(t, hasCode(err, errs.CategoryValidation, key+"_invalid_input"), "%s: got %v", key, err)
 	}
 	assert.Empty(t, trace.signInBefore)
 	assert.Empty(t, trace.signInFailed)
@@ -343,7 +343,7 @@ func TestOAuthCompleteNeedsItsInput(t *testing.T) {
 
 	unbooted := oauth.New(oauth.Options{CustomProviders: []oauth.Provider{&fakeProvider{id: "google"}}, CallbackURL: "https://app.example.com/cb"})
 	_, err = unbooted.Complete(ctx, good)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "got %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 }
 
 // An email is not an identity. A new subject whose email belongs to a user
@@ -362,7 +362,7 @@ func TestOAuthCompleteDoesNotLinkByEmail(t *testing.T) {
 		app.google.identity = identity
 
 		_, err = app.plugin.Complete(ctx, app.begin(t, app.google, ""))
-		assert.True(t, hasCode(err, behemotherr.CategoryConflict, oauth.ErrorCodeAccountNotLinked), "got %v", err)
+		assert.True(t, hasCode(err, errs.CategoryConflict, oauth.ErrorCodeAccountNotLinked), "got %v", err)
 		reason := trace.signInFailed[len(trace.signInFailed)-1]
 		assert.Equal(t, "account_not_linked", reason.Code)
 		assert.Equal(t, models.UserTable, reason.SubjectType)
@@ -386,7 +386,7 @@ func TestOAuthCompleteNeedsAnEmailForANewUser(t *testing.T) {
 	for _, email := range []string{"", "   ", "not-an-address", strings.Repeat("a", 250) + "@example.com"} {
 		app.google.identity = oauth.Identity{Subject: "g-2", Email: email, GivenName: "Grace"}
 		_, err = app.plugin.Complete(ctx, app.begin(t, app.google, ""))
-		assert.True(t, hasCode(err, behemotherr.CategoryForbidden, oauth.ErrorCodeEmailNotProvided), "%q: got %v", email, err)
+		assert.True(t, hasCode(err, errs.CategoryForbidden, oauth.ErrorCodeEmailNotProvided), "%q: got %v", email, err)
 		assert.Equal(t, "email_not_provided", trace.lastFailure(t))
 	}
 	assert.Zero(t, app.count(t, "users", "1 = 1"))
@@ -427,7 +427,7 @@ func TestOAuthCompletePassesTheSecondFactorPoint(t *testing.T) {
 	app, err := bootOAuth(t, oauth.Options{}, trace.register(func(reg types.HookRegistry) error {
 		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
 			if answer == "refuse" {
-				return nil, behemotherr.NewUnauthorized("test", "account_suspended", "account suspended")
+				return nil, errs.NewUnauthorized("test", "account_suspended", "account suspended")
 			}
 			payload["requireStepUp"] = true
 			return payload, nil
@@ -444,7 +444,7 @@ func TestOAuthCompletePassesTheSecondFactorPoint(t *testing.T) {
 
 	answer = "refuse"
 	_, err = app.plugin.Complete(ctx, app.begin(t, app.google, ""))
-	assert.True(t, hasCode(err, behemotherr.CategoryUnauthorized, "account_suspended"), "the handler's error is returned: %v", err)
+	assert.True(t, hasCode(err, errs.CategoryUnauthorized, "account_suspended"), "the handler's error is returned: %v", err)
 	reason := trace.signInFailed[len(trace.signInFailed)-1]
 	assert.Equal(t, types.FailureRejectedByHook, reason.Code)
 	assert.Equal(t, result.User.ID, reason.SubjectID)
@@ -457,7 +457,7 @@ func TestOAuthCompleteSignUpCanBeRefused(t *testing.T) {
 	ctx := context.Background()
 	trace := signInTrace{signUpGate: func(_ *types.HookContext, payload behemoth.M) (behemoth.M, error) {
 		if email, _ := payload["email"].(string); !strings.HasSuffix(email, "@example.com") {
-			return nil, behemotherr.NewUnauthorized("test", "domain_not_allowed", "sign-up is by invitation")
+			return nil, errs.NewUnauthorized("test", "domain_not_allowed", "sign-up is by invitation")
 		}
 		return nil, nil
 	}}
@@ -466,7 +466,7 @@ func TestOAuthCompleteSignUpCanBeRefused(t *testing.T) {
 
 	app.google.identity = oauth.Identity{Subject: "g-9", Email: "mallory@elsewhere.test", EmailVerified: true}
 	_, err = app.plugin.Complete(ctx, app.begin(t, app.google, ""))
-	assert.True(t, hasCode(err, behemotherr.CategoryUnauthorized, "domain_not_allowed"), "the handler's error is returned: %v", err)
+	assert.True(t, hasCode(err, errs.CategoryUnauthorized, "domain_not_allowed"), "the handler's error is returned: %v", err)
 	require.Len(t, trace.signUpFailed, 1)
 	assert.Equal(t, types.FailureRejectedByHook, trace.signUpFailed[0].Code)
 	assert.Equal(t, types.FailureRejectedByHook, trace.lastFailure(t))
@@ -516,7 +516,7 @@ func TestOAuthCompleteLosesARaceForANewUser(t *testing.T) {
 				assert.Equal(t, winner.ID, result.User.ID)
 				assert.Equal(t, 1, app.count(t, "sessions", "1 = 1"))
 			} else {
-				assert.True(t, hasCode(err, behemotherr.CategoryConflict, oauth.ErrorCodeAccountNotLinked), "got %v", err)
+				assert.True(t, hasCode(err, errs.CategoryConflict, oauth.ErrorCodeAccountNotLinked), "got %v", err)
 				assert.Zero(t, app.count(t, "sessions", "1 = 1"))
 			}
 			assert.Equal(t, 1, app.count(t, "users", "1 = 1"))

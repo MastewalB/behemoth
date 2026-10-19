@@ -6,7 +6,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 )
 
@@ -35,7 +35,7 @@ func (s *Store) ReplaceVerificationCode(ctx context.Context, c *models.Verificat
 		}
 		c.ID, c.CreatedAt = s.newID(), s.now()
 		err := s.db.Create(ctx, c)
-		if behemotherr.IsDuplicateKey(err) {
+		if errs.IsDuplicateKey(err) {
 			continue // another call stored one in between
 		}
 		return err
@@ -68,14 +68,14 @@ func (s *Store) SpendVerificationCodeAttempt(ctx context.Context, kind models.Co
 			return nil, err
 		}
 		if c.AttemptsLeft <= 0 {
-			return nil, behemotherr.NewNotFound("Store.SpendVerificationCodeAttempt", models.VerificationCodeTable, nil)
+			return nil, errs.NewNotFound("Store.SpendVerificationCodeAttempt", models.VerificationCodeTable, nil)
 		}
 		guard := clause.Expression{Logic: clause.OpAnd, Conditions: []clause.Condition{
 			{Field: models.VerificationCodeID, Operator: clause.OpEqual, Value: c.ID},
 			{Field: models.VerificationCodeAttemptsLeft, Operator: clause.OpEqual, Value: c.AttemptsLeft},
 		}}
 		err = s.db.UpdateOne(ctx, &models.VerificationCode{}, guard, behemoth.M{models.VerificationCodeAttemptsLeft: c.AttemptsLeft - 1})
-		if behemotherr.IsNotFound(err) {
+		if errs.IsNotFound(err) {
 			continue // another call took this attempt, or the code was replaced
 		}
 		if err != nil {

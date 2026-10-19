@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 )
@@ -93,7 +93,7 @@ func TestRouterBuildPipeline(t *testing.T) {
 			return rctx.Response.JSON(http.StatusOK, map[string]string{"status": "ok"})
 		}},
 		{Method: http.MethodGet, Path: "/limited", Handler: func(rctx *RequestContext) error {
-			return behemotherr.NewRateLimited("test", "rule", 30*time.Second)
+			return errs.NewRateLimited("test", "rule", 30*time.Second)
 		}},
 		{Method: http.MethodGet, Path: "/broken", Handler: func(rctx *RequestContext) error {
 			return errors.New("raw internal detail")
@@ -136,7 +136,7 @@ func TestRouterGlobalMiddlewareErrorIsMapped(t *testing.T) {
 		t.Fatal(err)
 	}
 	reject := func(HandlerFunc) HandlerFunc {
-		return func(*RequestContext) error { return behemotherr.NewRateLimited("mw", "rule", 0) }
+		return func(*RequestContext) error { return errs.NewRateLimited("mw", "rule", 0) }
 	}
 
 	d := &recordingDriver{}
@@ -160,7 +160,7 @@ type rejectingLimiter struct{}
 
 func (rejectingLimiter) CheckHookLimit(context.Context, HookPoint, *HookContext) error { return nil }
 func (rejectingLimiter) CheckRouteLimit(_ context.Context, rule RouteRateLimitRule, _ *http.Request, _ *ClientIPConfig) error {
-	return behemotherr.NewRateLimited("test", rule.Name, time.Second)
+	return errs.NewRateLimited("test", rule.Name, time.Second)
 }
 
 func TestApplyRateLimitingMatchesRelativeAndAbsolutePaths(t *testing.T) {
@@ -215,7 +215,7 @@ func TestRouterRequestID(t *testing.T) {
 	var seen string
 	handler := func(rctx *RequestContext) error {
 		seen = telemetry.RequestIDFrom(rctx.Ctx)
-		return behemotherr.NewInternalError("test", errors.New("boom")) // the header is set on error responses too
+		return errs.NewInternalError("test", errors.New("boom")) // the header is set on error responses too
 	}
 	build := func(cfg RouterConfig) Route {
 		r := NewRouter(cfg, nil)
@@ -280,10 +280,10 @@ func TestRouterLogsFailures(t *testing.T) {
 	r := NewRouter(RouterConfig{}, &AuthContext{Telemetry: tel})
 	err := r.Mount("test", "", []Route{
 		{Method: http.MethodGet, Path: "/users/{id}", Handler: func(*RequestContext) error {
-			return behemotherr.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
+			return errs.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
 		}},
 		{Method: http.MethodGet, Path: "/missing", Handler: func(*RequestContext) error {
-			return behemotherr.NewNotFound("Store.FindUser", "user", nil)
+			return errs.NewNotFound("Store.FindUser", "user", nil)
 		}},
 		{Method: http.MethodGet, Path: "/ok", Handler: func(rctx *RequestContext) error {
 			return rctx.Response.JSON(http.StatusOK, map[string]string{})
@@ -345,7 +345,7 @@ func TestRouterMetrics(t *testing.T) {
 			return rctx.Response.JSON(http.StatusOK, map[string]string{})
 		}},
 		{Method: http.MethodPost, Path: "/broken", Handler: func(*RequestContext) error {
-			return behemotherr.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
+			return errs.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
 		}},
 	})
 	if err != nil {
@@ -395,10 +395,10 @@ func TestRouterTracing(t *testing.T) {
 			return rctx.Response.JSON(http.StatusOK, map[string]string{})
 		}},
 		{Method: http.MethodGet, Path: "/missing", Handler: func(*RequestContext) error {
-			return behemotherr.NewNotFound("Store.FindUser", "user", nil)
+			return errs.NewNotFound("Store.FindUser", "user", nil)
 		}},
 		{Method: http.MethodGet, Path: "/broken", Handler: func(*RequestContext) error {
-			return behemotherr.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
+			return errs.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
 		}},
 	})
 	if err != nil {

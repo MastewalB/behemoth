@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strconv"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 )
 
@@ -48,7 +48,7 @@ func (s *derivedKeySet) PublicKey(_ context.Context, kid string) (types.Publishe
 	const op = "ExternalKeySet.PublicKey"
 	version, err := strconv.Atoi(kid)
 	if err != nil || strconv.Itoa(version) != kid || !slices.Contains(s.km.Versions(), version) {
-		return types.PublishedKey{}, behemotherr.NewJWTError(op, behemotherr.ErrorCodeJWTUnknownKey, err)
+		return types.PublishedKey{}, errs.NewJWTError(op, errs.CodeJWTUnknownKey, err)
 	}
 	return s.publicKey(version)
 }

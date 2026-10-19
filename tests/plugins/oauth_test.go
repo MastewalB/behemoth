@@ -15,7 +15,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
 	"github.com/MastewalB/behemoth/types"
@@ -251,7 +251,7 @@ func TestOAuthBeginRefusesBadInput(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := app.plugin.Begin(ctx, tc.req)
-			assert.True(t, hasCode(err, behemotherr.CategoryValidation, tc.code), "got %v", err)
+			assert.True(t, hasCode(err, errs.CategoryValidation, tc.code), "got %v", err)
 		})
 	}
 	assert.Zero(t, app.tokens(t, "1 = 1"), "a refused sign-in leaves no token")
@@ -273,7 +273,7 @@ func TestOAuthBeginHooks(t *testing.T) {
 			payloads = append(payloads, payload)
 			switch payload["captcha"] {
 			case "wrong":
-				return nil, behemotherr.NewUnauthorized("test", "captcha_failed", "captcha failed")
+				return nil, errs.NewUnauthorized("test", "captcha_failed", "captcha failed")
 			case "rewrite":
 				payload["provider"] = "google"
 			}
@@ -317,7 +317,7 @@ func TestOAuthBeginHooks(t *testing.T) {
 	// A refusal fires the failed point and starts nothing.
 	before := app.tokens(t, "1 = 1")
 	_, err = app.plugin.Begin(ctx, oauth.BeginRequest{Provider: "google", Extra: behemoth.M{"captcha": "wrong"}})
-	assert.True(t, hasCode(err, behemotherr.CategoryUnauthorized, "captcha_failed"), "the handler's error is returned: %v", err)
+	assert.True(t, hasCode(err, errs.CategoryUnauthorized, "captcha_failed"), "the handler's error is returned: %v", err)
 	require.Len(t, failures, 1)
 	assert.Equal(t, types.FailureRejectedByHook, failures[0].Code)
 	assert.Equal(t, before, app.tokens(t, "1 = 1"))
@@ -339,7 +339,7 @@ func TestOAuthBeginEndsASignInTheProviderFailed(t *testing.T) {
 
 			_, err = app.plugin.Begin(ctx, oauth.BeginRequest{Provider: "google"})
 			require.Error(t, err)
-			assert.False(t, behemotherr.IsRejection(err), "it is not the caller's mistake: %v", err)
+			assert.False(t, errs.IsRejection(err), "it is not the caller's mistake: %v", err)
 			state := broken.last(t).State
 			assert.NotContains(t, err.Error(), state, "the error does not quote the state")
 
@@ -372,7 +372,7 @@ func TestOAuthInitChecksTheOptions(t *testing.T) {
 	for name, opts := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := bootOAuth(t, opts, nil)
-			assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "got %v", err)
+			assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 		})
 	}
 
@@ -394,7 +394,7 @@ func TestOAuthInitChecksTheOptions(t *testing.T) {
 func TestOAuthBeginBeforeBoot(t *testing.T) {
 	plugin := oauth.New(oauth.Options{CustomProviders: []oauth.Provider{&fakeProvider{id: "google"}}, CallbackURL: "https://app.example.com/cb"})
 	_, err := plugin.Begin(context.Background(), oauth.BeginRequest{Provider: "google"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "got %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 }
 
 // A request keeps the fields the flow does not read, for the handlers on the
@@ -414,8 +414,8 @@ func TestOAuthBeginRequestMaps(t *testing.T) {
 	require.NoError(t, req.FromMap(map[string]any{}))
 	assert.Equal(t, oauth.BeginRequest{}, req, "a missing key leaves its field empty, and Extra is replaced")
 
-	assert.True(t, hasCode(req.FromMap(map[string]any{"provider": 7}), behemotherr.CategoryValidation, "provider_invalid_input"))
-	assert.True(t, hasCode(req.FromMap(map[string]any{"provider": "google", "redirect_url": []string{"/"}}), behemotherr.CategoryValidation, "redirect_url_invalid_input"))
+	assert.True(t, hasCode(req.FromMap(map[string]any{"provider": 7}), errs.CategoryValidation, "provider_invalid_input"))
+	assert.True(t, hasCode(req.FromMap(map[string]any{"provider": "google", "redirect_url": []string{"/"}}), errs.CategoryValidation, "redirect_url_invalid_input"))
 }
 
 func TestOAuthRedirectURI(t *testing.T) {

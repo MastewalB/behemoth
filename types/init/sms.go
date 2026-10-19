@@ -3,7 +3,7 @@ package types
 import (
 	"errors"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 )
@@ -30,7 +30,7 @@ func NewSMS(cfg types.SMSConfig, tel *telemetry.Telemetry) *DefaultSMS {
 		kind:    func(msg types.SMSMessage) string { return string(msg.Kind) },
 		metric:  telemetry.MetricSMSSent,
 		errNoSender: func(op string) error {
-			return behemotherr.NewConfigurationError("SMS."+op, "no SMS sender is configured; set BootConfig.SMS.Sender", nil)
+			return errs.NewConfigurationError("SMS."+op, "no SMS sender is configured; set BootConfig.SMS.Sender", nil)
 		},
 		errFull:   ErrSMSQueueFull,
 		errClosed: ErrSMSClosed,

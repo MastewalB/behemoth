@@ -14,7 +14,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/phonenumber"
@@ -145,7 +145,7 @@ func (app *phoneApp) numberOf(t *testing.T, userID string) (string, bool) {
 }
 
 func invalidPhoneCode(err error) bool {
-	return hasCode(err, behemotherr.CategoryUnauthorized, phonenumber.ErrorCodeInvalidCode)
+	return hasCode(err, errs.CategoryUnauthorized, phonenumber.ErrorCodeInvalidCode)
 }
 
 // wrongCode returns a code of the same length that is not code.
@@ -238,7 +238,7 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 
 	for _, bad := range []string{"", "4155550101", "+1 415 555 0101", "+0155550101", "+1415", "+14155550101234567", "+1415555010a"} {
 		_, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: bad, UserID: ada.ID})
-		assert.True(t, hasCode(err, behemotherr.CategoryValidation, phonenumber.ErrorCodeInvalidPhoneNumber), "%q: %v", bad, err)
+		assert.True(t, hasCode(err, errs.CategoryValidation, phonenumber.ErrorCodeInvalidPhoneNumber), "%q: %v", bad, err)
 	}
 }
 
@@ -286,20 +286,20 @@ func TestCodeManager(t *testing.T) {
 	assert.Len(t, code, 8)
 	assert.Equal(t, 5, issued.AttemptsLeft)
 	_, err = codes.Consume(ctx, "test.other", "subject", code)
-	assert.True(t, behemotherr.IsCodeRejection(err), "another kind: %v", err)
+	assert.True(t, errs.IsCodeRejection(err), "another kind: %v", err)
 	_, err = codes.Consume(ctx, kind, "someone else", code)
-	assert.True(t, behemotherr.IsCodeRejection(err), "another subject: %v", err)
+	assert.True(t, errs.IsCodeRejection(err), "another subject: %v", err)
 	consumed, err := codes.Consume(ctx, kind, "subject", code)
 	require.NoError(t, err)
 	assert.Equal(t, "x", consumed.Metadata["note"])
 	_, err = codes.Consume(ctx, kind, "subject", code)
-	assert.True(t, behemotherr.IsCodeRejection(err), "used: %v", err)
+	assert.True(t, errs.IsCodeRejection(err), "used: %v", err)
 
 	code, _, err = codes.Issue(ctx, kind, "subject", types.CodeOptions{TTL: time.Millisecond})
 	require.NoError(t, err)
 	time.Sleep(20 * time.Millisecond)
 	_, err = codes.Consume(ctx, kind, "subject", code)
-	assert.True(t, behemotherr.IsCodeRejection(err), "expired: %v", err)
+	assert.True(t, errs.IsCodeRejection(err), "expired: %v", err)
 	require.NoError(t, app.ac.Store.PurgeExpiredVerificationCodes(ctx))
 	var rows int
 	require.NoError(t, app.db.QueryRow(`SELECT COUNT(*) FROM verification_codes`).Scan(&rows))
@@ -324,14 +324,14 @@ func TestCodeManager(t *testing.T) {
 		if err == nil {
 			won++
 		} else {
-			assert.True(t, behemotherr.IsCodeRejection(err), "%v", err)
+			assert.True(t, errs.IsCodeRejection(err), "%v", err)
 		}
 	}
 	assert.Equal(t, 1, won, "the code is used once")
 
 	for _, opts := range []types.CodeOptions{{Length: 3}, {Length: 13}, {MaxAttempts: -1}, {TTL: -time.Second}} {
 		_, _, err := codes.Issue(ctx, kind, "subject", opts)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%+v: %v", opts, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%+v: %v", opts, err)
 	}
 
 	// A user's codes go with the user.
@@ -413,7 +413,7 @@ func TestPhoneNumberSignIn(t *testing.T) {
 		"no number":          {Password: password},
 	} {
 		_, err := app.phones.SignIn(ctx, creds)
-		assert.True(t, hasCode(err, behemotherr.CategoryUnauthorized, emailpassword.ErrorCodeInvalidCredentials), "%s: %v", name, err)
+		assert.True(t, hasCode(err, errs.CategoryUnauthorized, emailpassword.ErrorCodeInvalidCredentials), "%s: %v", name, err)
 	}
 }
 
@@ -443,7 +443,7 @@ func TestPhoneNumberDirectWritesAreRefused(t *testing.T) {
 	ada := app.withNumber(t, "ada@example.com", adaNumber)
 	grace := app.signUp(t, "grace@example.com")
 	unconfirmed := func(err error) bool {
-		return hasCode(err, behemotherr.CategoryForbidden, phonenumber.ErrorCodeUnconfirmedChange)
+		return hasCode(err, errs.CategoryForbidden, phonenumber.ErrorCodeUnconfirmedChange)
 	}
 
 	_, err := app.ac.Store.UpdateUser(ctx, grace.ID, behemoth.M{phonenumber.Column.Name: graceNumber})
@@ -474,9 +474,9 @@ func TestPhoneNumberDirectWritesAreRefused(t *testing.T) {
 	number, _, _ = phonenumber.Column.Get(updated)
 	assert.Equal(t, graceNumber, number)
 	_, err = app.phones.SetPhoneNumber(ctx, grace.ID, adaNumber)
-	assert.True(t, hasCode(err, behemotherr.CategoryConflict, phonenumber.ErrorCodePhoneNumberTaken), "%v", err)
+	assert.True(t, hasCode(err, errs.CategoryConflict, phonenumber.ErrorCodePhoneNumberTaken), "%v", err)
 	_, err = app.phones.SetPhoneNumber(ctx, grace.ID, "0911234567")
-	assert.True(t, behemotherr.IsCode(err, phonenumber.ErrorCodeInvalidPhoneNumber), "%v", err)
+	assert.True(t, errs.IsCode(err, phonenumber.ErrorCodeInvalidPhoneNumber), "%v", err)
 
 	// Removing a number passes, directly and through the plugin.
 	_, err = app.ac.Store.UpdateUser(ctx, ada.ID, behemoth.M{phonenumber.Column.Name: nil})
@@ -488,7 +488,7 @@ func TestPhoneNumberDirectWritesAreRefused(t *testing.T) {
 	_, has = app.numberOf(t, grace.ID)
 	assert.False(t, has)
 	_, err = app.phones.SignIn(ctx, phonenumber.Credentials{PhoneNumber: adaNumber, Password: password})
-	assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "a removed number no longer signs in: %v", err)
+	assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "a removed number no longer signs in: %v", err)
 }
 
 // A number another user takes between the code and its confirmation is a
@@ -504,7 +504,7 @@ func TestPhoneNumberTakenBeforeConfirmation(t *testing.T) {
 	_, err = app.phones.SetPhoneNumber(ctx, grace.ID, adaNumber)
 	require.NoError(t, err)
 	_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, app.sms.last(t, 1).Code)
-	assert.True(t, hasCode(err, behemotherr.CategoryConflict, phonenumber.ErrorCodePhoneNumberTaken), "%v", err)
+	assert.True(t, hasCode(err, errs.CategoryConflict, phonenumber.ErrorCodePhoneNumberTaken), "%v", err)
 }
 
 // Codes are limited per number, whatever they are for and whoever the
@@ -521,7 +521,7 @@ func TestPhoneCodesAreLimitedPerNumber(t *testing.T) {
 	_, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber})
 	require.NoError(t, err, "the third, for another purpose")
 	_, err = app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: ada.ID})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryRateLimited), "the fourth: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryRateLimited), "the fourth: %v", err)
 	assert.Equal(t, 2, app.sms.count())
 
 	// A number nobody holds is counted the same, so the limit does not show
@@ -531,7 +531,7 @@ func TestPhoneCodesAreLimitedPerNumber(t *testing.T) {
 		require.NoError(t, err)
 	}
 	_, err = app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: graceNumber})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryRateLimited), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryRateLimited), "%v", err)
 }
 
 // A send the sender refuses leaves no usable code, and one sent in the
@@ -589,7 +589,7 @@ func TestPhonePasswordReset(t *testing.T) {
 	// A refused password costs the code nothing.
 	for range 6 {
 		_, err = app.phones.ResetPassword(ctx, adaNumber, msg.Code, "short")
-		assert.True(t, hasCode(err, behemotherr.CategoryValidation, emailpassword.ErrorCodeInvalidPassword), "%v", err)
+		assert.True(t, hasCode(err, errs.CategoryValidation, emailpassword.ErrorCodeInvalidPassword), "%v", err)
 	}
 	_, err = app.phones.ResetPassword(ctx, graceNumber, msg.Code, "a new password")
 	assert.True(t, invalidPhoneCode(err), "a number nobody holds: %v", err)
@@ -604,7 +604,7 @@ func TestPhonePasswordReset(t *testing.T) {
 	assert.True(t, invalidPhoneCode(err), "a code works once: %v", err)
 
 	_, err = app.phones.SignIn(ctx, phonenumber.Credentials{PhoneNumber: adaNumber, Password: password})
-	assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "the old password: %v", err)
+	assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "the old password: %v", err)
 	_, err = app.phones.SignIn(ctx, phonenumber.Credentials{PhoneNumber: adaNumber, Password: "a new password"})
 	require.NoError(t, err)
 	_, err = app.ac.SessionManager.Validate(ctx, session.RawToken)
@@ -617,9 +617,9 @@ func TestPhonePasswordReset(t *testing.T) {
 	_, mounted = off.routes["/api/auth"+phonenumber.PathResetRequest]
 	assert.False(t, mounted)
 	_, err = off.phones.RequestPasswordReset(ctx, phonenumber.ResetRequest{PhoneNumber: adaNumber})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	_, err = off.phones.ResetPassword(ctx, adaNumber, "123456", "a new password")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 }
 
 // The routes: send and verify act for the caller's session when there is
@@ -756,7 +756,7 @@ func TestPhoneNumberOptionsAndWiring(t *testing.T) {
 		},
 	})
 	require.Error(t, err)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	assert.Contains(t, err.Error(), "SMS")
 
 	app := bootPhones(t, waited(phonenumber.Options{}), nil)
@@ -768,14 +768,14 @@ func TestPhoneNumberOptionsAndWiring(t *testing.T) {
 	} {
 		err := p.Init(app.ac)
 		require.Error(t, err, name)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%s: %v", name, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: %v", name, err)
 	}
 
 	unbooted := phonenumber.New(passwords, phonenumber.Options{})
 	_, err = unbooted.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	_, err = unbooted.SetPhoneNumber(ctx, "id", adaNumber)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 
 	// The options reach the code.
 	custom := bootPhones(t, waited(phonenumber.Options{CodeLength: 8, CodeTTL: time.Hour}), nil)

@@ -7,7 +7,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 )
 
@@ -31,9 +31,9 @@ func (s *Store) IncrementRateLimit(ctx context.Context, key string, ttl time.Dur
 	for range rateLimitAttempts {
 		now := s.now()
 		found, err := s.db.FindOne(ctx, &models.RateLimit{}, clause.Expression{Conditions: []clause.Condition{byKey}})
-		if behemotherr.IsNotFound(err) {
+		if errs.IsNotFound(err) {
 			err = s.db.Create(ctx, &models.RateLimit{Key: key, Count: 1, ExpiresAt: now.Add(ttl)})
-			if behemotherr.IsDuplicateKey(err) {
+			if errs.IsDuplicateKey(err) {
 				continue // another call created it first
 			}
 			if err != nil {
@@ -62,7 +62,7 @@ func (s *Store) IncrementRateLimit(ctx context.Context, key string, ttl time.Dur
 		updates[models.RateLimitCount] = next
 
 		err = s.db.UpdateOne(ctx, &models.RateLimit{}, clause.Expression{Conditions: guard, Logic: clause.OpAnd}, updates)
-		if behemotherr.IsNotFound(err) {
+		if errs.IsNotFound(err) {
 			continue // another call wrote first
 		}
 		if err != nil {

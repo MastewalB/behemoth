@@ -1,4 +1,7 @@
-package behemotherr
+// Package errs is Behemoth's error taxonomy: DomainError, its categories
+// and codes, the constructors of each kind of error, and the checks a caller
+// branches on, such as IsNotFound and IsRejection.
+package errs
 
 import (
 	"errors"
@@ -54,7 +57,7 @@ func (c Category) IsRejection() bool {
 }
 
 const (
-	ErrorCodeUnknown = "unknown_error"
+	CodeUnknown = "unknown_error"
 )
 
 type DomainError struct {
@@ -80,7 +83,8 @@ func (e *DomainError) Error() string {
 
 func (e *DomainError) Unwrap() error { return e.Original } // preserves errors.Is/As chains through Original
 
-func Is(err error, category Category) bool {
+// IsCategory reports whether err is a [DomainError] of category.
+func IsCategory(err error, category Category) bool {
 	if de, ok := errors.AsType[*DomainError](err); ok {
 		return de.Category == category
 	}
@@ -109,7 +113,7 @@ func ClassifyCode(err error) string {
 	if de, ok := errors.AsType[*DomainError](err); ok {
 		return de.Code
 	}
-	return ErrorCodeUnknown
+	return CodeUnknown
 }
 
 func NewRateLimited(op, ruleName string, retryAfter time.Duration) *DomainError {

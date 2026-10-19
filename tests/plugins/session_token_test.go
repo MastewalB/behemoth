@@ -16,7 +16,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/keysource"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
@@ -110,7 +110,7 @@ func (app *tokenApp) call(t *testing.T, method, path, body, raw string) answer {
 	rctx.Ctx = types.ContextWithRequest(req.Context(), rctx)
 	w := httptest.NewRecorder()
 	if err := route.Handler(rctx); err != nil {
-		status, errBody := (&behemotherr.DefaultErrorMapper{}).Map(err)
+		status, errBody := (&errs.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(errBody))
 	} else {
@@ -191,11 +191,11 @@ func TestSessionTokenIsVerifiedWithVerifyJWT(t *testing.T) {
 	elsewhere := opts
 	elsewhere.Audiences = []string{apiAudience}
 	_, err = crypto.VerifyJWT(ctx, issued.Token, keys, elsewhere)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryToken), "a token for another service: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryToken), "a token for another service: %v", err)
 	forged := opts
 	forged.Issuers = []string{"https://evil.example.com"}
 	_, err = crypto.VerifyJWT(ctx, issued.Token, keys, forged)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryToken), "another issuer: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryToken), "another issuer: %v", err)
 }
 
 // A signed-in client exchanges its session for a token, and another service
@@ -230,7 +230,7 @@ func TestSessionTokenIsVerifiedElsewhere(t *testing.T) {
 	// The token is for other services: it is not a session of behemoth.
 	asSession := app.call(t, http.MethodPost, "/api/auth"+types.PathSessionToken, "", token)
 	assert.Equal(t, http.StatusUnauthorized, asSession.status)
-	assert.Equal(t, behemotherr.ErrorCodeSessionInvalid, asSession.body["code"])
+	assert.Equal(t, errs.CodeSessionInvalid, asSession.body["code"])
 }
 
 // A request may name another configured audience, and nothing else.
@@ -266,13 +266,13 @@ func TestSessionTokenNeedsASignedInSession(t *testing.T) {
 
 	none := app.call(t, http.MethodPost, path, "", "")
 	assert.Equal(t, http.StatusUnauthorized, none.status)
-	assert.Equal(t, behemotherr.ErrorCodeSessionMissing, none.body["code"])
+	assert.Equal(t, errs.CodeSessionMissing, none.body["code"])
 
 	_, pendingRaw, err := app.ac.SessionManager.Create(ctx, app.user.ID, types.SessionMeta{State: types.SessionPending})
 	require.NoError(t, err)
 	pending := app.call(t, http.MethodPost, path, "", pendingRaw)
 	assert.Equal(t, http.StatusUnauthorized, pending.status)
-	assert.Equal(t, behemotherr.ErrorCodeSessionPending, pending.body["code"])
+	assert.Equal(t, errs.CodeSessionPending, pending.body["code"])
 
 	require.NoError(t, app.ac.SessionManager.Revoke(ctx, app.session.ID, "signed_out"))
 	revoked := app.issue(t, "")
@@ -282,11 +282,11 @@ func TestSessionTokenNeedsASignedInSession(t *testing.T) {
 	expired := *app.session
 	expired.RevokedAt, expired.State, expired.ExpiresAt = nil, models.SessionActive, time.Now().Add(-time.Minute)
 	_, err = app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: &expired})
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionExpired), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionExpired), "%v", err)
 	stillPending := *app.session
 	stillPending.State = models.SessionPending
 	_, err = app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: &stillPending})
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeSessionPending), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
 }
 
 // A handler on the before point adds claims, which travel under "custom",
@@ -301,7 +301,7 @@ func TestSessionTokenHooks(t *testing.T) {
 		if err := reg.OnBefore(hooks.HookSessionTokenBeforeIssue, func(hctx *types.HookContext, payload behemoth.M) (behemoth.M, error) {
 			values = append(values, behemoth.M{"userID": hctx.Values[hooks.HookValueUserID], "sessionID": hctx.Values[hooks.HookValueSessionID]})
 			if refuse {
-				return nil, behemotherr.NewUnauthorized("test", "plan_required", "a paid plan is required")
+				return nil, errs.NewUnauthorized("test", "plan_required", "a paid plan is required")
 			}
 			payload["claims"] = behemoth.M{"role": "admin", "tenant": "acme"}
 			payload["audience"] = reportsAudience
@@ -356,7 +356,7 @@ func TestSessionTokensOff(t *testing.T) {
 	assert.NotContains(t, app.mounted, "/.well-known/jwks.json")
 
 	_, err = app.ac.SessionTokens.Issue(ctx, types.SessionTokenRequest{Session: app.session})
-	assert.True(t, behemotherr.IsCode(err, behemotherr.ErrorCodeJWTExternalNotConfigured), "%v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeJWTExternalNotConfigured), "%v", err)
 
 	token, err := app.ac.JWT.Sign(ctx, types.JWTInternal, types.JWTRequest{Subject: app.user.ID})
 	require.NoError(t, err)
@@ -386,7 +386,7 @@ func TestSessionTokenConfiguration(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := bootSessionTokens(t, cfg, nil)
-			assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "got %v", err)
+			assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "got %v", err)
 		})
 	}
 }

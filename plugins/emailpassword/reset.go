@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -166,7 +166,7 @@ func (r *ResetRequest) FromMap(data map[string]any) error {
 	case string:
 		email = v
 	default:
-		return behemotherr.NewInvalidInputError(op, credentialEmailKey, "email must be a string", nil)
+		return errs.NewInvalidInputError(op, credentialEmailKey, "email must be a string", nil)
 	}
 	var metadata behemoth.M
 	switch v := data[resetMetadataKey].(type) {
@@ -176,7 +176,7 @@ func (r *ResetRequest) FromMap(data map[string]any) error {
 	case map[string]any: // a decoded request body
 		metadata = v
 	default:
-		return behemotherr.NewInvalidInputError(op, resetMetadataKey, "metadata must be an object", nil)
+		return errs.NewInvalidInputError(op, resetMetadataKey, "metadata must be an object", nil)
 	}
 	r.Email, r.Metadata = email, metadata
 	return nil
@@ -277,17 +277,17 @@ func (p *Plugin) declareReset(ic *types.PluginInitContext) error {
 func (p *Plugin) initReset(ac *types.AuthContext) error {
 	const op = "emailpassword.Init"
 	if ac.Mailer == nil || !ac.Mailer.Configured() {
-		return behemotherr.NewConfigurationError(op, "password reset is enabled and no mail sender is configured; set BootConfig.Mail.Sender: the plugin does not send email itself", nil)
+		return errs.NewConfigurationError(op, "password reset is enabled and no mail sender is configured; set BootConfig.Mail.Sender: the plugin does not send email itself", nil)
 	}
 	if ac.TokenManager == nil {
-		return behemotherr.NewConfigurationError(op, "password reset is enabled and AuthContext has no token manager", nil)
+		return errs.NewConfigurationError(op, "password reset is enabled and AuthContext has no token manager", nil)
 	}
 	if p.opts.Reset.TTL < 0 {
-		return behemotherr.NewConfigurationError(op, fmt.Sprintf("Options.Reset.TTL is negative: %s", p.opts.Reset.TTL), nil)
+		return errs.NewConfigurationError(op, fmt.Sprintf("Options.Reset.TTL is negative: %s", p.opts.Reset.TTL), nil)
 	}
 	linkURL, err := url.Parse(p.opts.Reset.LinkURL)
 	if err != nil || (linkURL.Scheme != "http" && linkURL.Scheme != "https") || linkURL.Host == "" {
-		return behemotherr.NewConfigurationError(op,
+		return errs.NewConfigurationError(op,
 			fmt.Sprintf("Options.Reset.LinkURL %q is not an absolute http or https URL", p.opts.Reset.LinkURL), err)
 	}
 	p.resetURL = linkURL
@@ -304,7 +304,7 @@ func (p *Plugin) resetOperation(ctx context.Context, op string) (*types.HookCont
 		return nil, err
 	}
 	if !p.opts.Reset.enabled() {
-		return nil, behemotherr.NewConfigurationError(op, "password reset is not enabled; set Options.Reset.LinkURL", nil)
+		return nil, errs.NewConfigurationError(op, "password reset is not enabled; set Options.Reset.LinkURL", nil)
 	}
 	return hctx, nil
 }
@@ -353,12 +353,12 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 	// created under an older policy can still reset its password.
 	email := store.NormalizeEmail(req.Email)
 	if !utils.IsValidEmail(email) {
-		return nil, behemotherr.NewInvalidInputError(op, credentialEmailKey, "invalid email", nil)
+		return nil, errs.NewInvalidInputError(op, credentialEmailKey, "invalid email", nil)
 	}
 
 	user, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 	if err != nil {
-		if !behemotherr.IsNotFound(err) {
+		if !errs.IsNotFound(err) {
 			return nil, err // infra error (DB down): not "no such user"
 		}
 		if failErr := ac.Dispatcher.Fail(hctx, HookResetRequestFailed, types.FailureReason{
@@ -420,13 +420,13 @@ func (p *Plugin) resetRequestBody(hctx *types.HookContext, req ResetRequest) (*R
 // refuses, so the response does not tell an expired link from one that never
 // existed. It is typed (unauthorized, 401).
 func errInvalidResetToken() error {
-	return behemotherr.NewUnauthorized("emailpassword.ResetPassword", ErrorCodeInvalidResetToken, "invalid or expired link")
+	return errs.NewUnauthorized("emailpassword.ResetPassword", ErrorCodeInvalidResetToken, "invalid or expired link")
 }
 
 // isTokenRejection reports whether err says the token is not usable (not
 // found, expired, consumed, revoked), as opposed to a failure of the system.
 func isTokenRejection(err error) bool {
-	return behemotherr.Is(err, behemotherr.CategoryToken) || behemotherr.IsNotFound(err)
+	return errs.IsCategory(err, errs.CategoryToken) || errs.IsNotFound(err)
 }
 
 // ResetPassword sets newPassword on the account a reset link was sent for.
@@ -511,7 +511,7 @@ func (p *Plugin) resetBody(hctx *types.HookContext, in resetInput) (*models.User
 
 	user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
 	if err != nil {
-		if !behemotherr.IsNotFound(err) {
+		if !errs.IsNotFound(err) {
 			return nil, err
 		}
 		if failErr := dispatcher.Fail(hctx, HookResetFailed, rejected("user_not_found", nil)); failErr != nil {
@@ -588,7 +588,7 @@ func storePasswordHash(ctx context.Context, tx *store.Store, userID, hash string
 	switch {
 	case err == nil:
 		_, err = tx.UpdateAccount(ctx, credential.ID, behemoth.M{models.AccountPasswordHash: hash})
-	case behemotherr.IsNotFound(err):
+	case errs.IsNotFound(err):
 		err = tx.CreateAccount(ctx, &models.Account{
 			UserID:       userID,
 			ProviderID:   models.ProviderCredential,
@@ -689,7 +689,7 @@ func (p *Plugin) SetPassword(ctx context.Context, userID, password string) (*mod
 func (p *Plugin) handleResetRequest(rctx *types.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("emailpassword.RequestPasswordReset", "request", err)
+		return errs.NewValidationError("emailpassword.RequestPasswordReset", "request", err)
 	}
 	var req ResetRequest
 	if err := req.FromMap(body); err != nil {
@@ -716,15 +716,15 @@ func (p *Plugin) handleResetConfirm(rctx *types.RequestContext) error {
 	const op = "emailpassword.ResetPassword"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError(op, "request", err)
+		return errs.NewValidationError(op, "request", err)
 	}
 	rawToken, _ := body[resetTokenKey].(string)
 	if rawToken == "" {
-		return behemotherr.NewInvalidInputError(op, resetTokenKey, "token is required", nil)
+		return errs.NewInvalidInputError(op, resetTokenKey, "token is required", nil)
 	}
 	password, ok := body[credentialPasswordKey].(string)
 	if !ok {
-		return behemotherr.NewInvalidInputError(op, credentialPasswordKey, "password is required", nil)
+		return errs.NewInvalidInputError(op, credentialPasswordKey, "password is required", nil)
 	}
 
 	if _, err := p.ResetPassword(rctx.Ctx, rawToken, password); err != nil {

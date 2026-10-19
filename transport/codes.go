@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/types"
@@ -38,7 +38,7 @@ func hashed(kind types.CodeKind, subject, code string) string {
 func (m *DefaultCodeManager) Issue(ctx context.Context, kind types.CodeKind, subject string, opts types.CodeOptions) (string, *models.VerificationCode, error) {
 	const op = "CodeManager.Issue"
 	if kind == "" || subject == "" {
-		return "", nil, behemotherr.NewConfigurationError(op, "a code needs a kind and a subject", nil)
+		return "", nil, errs.NewConfigurationError(op, "a code needs a kind and a subject", nil)
 	}
 	if opts.Length == 0 {
 		opts.Length = types.DefaultCodeLength
@@ -50,13 +50,13 @@ func (m *DefaultCodeManager) Issue(ctx context.Context, kind types.CodeKind, sub
 		opts.MaxAttempts = types.DefaultCodeMaxAttempts
 	}
 	if opts.Length < 4 || opts.Length > maxCodeLength || opts.TTL < 0 || opts.MaxAttempts < 1 {
-		return "", nil, behemotherr.NewConfigurationError(op,
+		return "", nil, errs.NewConfigurationError(op,
 			fmt.Sprintf("code options are invalid: length %d (4 to %d), TTL %s, attempts %d", opts.Length, maxCodeLength, opts.TTL, opts.MaxAttempts), nil)
 	}
 
 	code, err := m.digits(opts.Length)
 	if err != nil {
-		return "", nil, behemotherr.NewSecurityError(op, "random_generation_failed", err)
+		return "", nil, errs.NewSecurityError(op, "random_generation_failed", err)
 	}
 	hash, keyVersion, err := m.crypto.Secrets.Hash(hashed(kind, subject, code))
 	if err != nil {
@@ -96,27 +96,27 @@ func (m *DefaultCodeManager) digits(n int) (string, error) {
 func (m *DefaultCodeManager) Consume(ctx context.Context, kind types.CodeKind, subject, code string) (*models.VerificationCode, error) {
 	const op = "CodeManager.Consume"
 	found, err := m.st.SpendVerificationCodeAttempt(ctx, kind, subject)
-	if behemotherr.IsNotFound(err) {
-		return nil, behemotherr.NewCodeError(op, "no code, or no attempts left")
+	if errs.IsNotFound(err) {
+		return nil, errs.NewCodeError(op, "no code, or no attempts left")
 	}
 	if err != nil {
 		return nil, err
 	}
 	if !found.ExpiresAt.After(m.st.Now()) {
-		return nil, behemotherr.NewCodeError(op, "the code expired")
+		return nil, errs.NewCodeError(op, "the code expired")
 	}
 	match, err := m.crypto.Secrets.Verify(hashed(kind, subject, code), found.CodeHash, found.KeyVersion)
 	if err != nil {
 		return nil, err
 	}
 	if !match {
-		return nil, behemotherr.NewCodeError(op, "wrong code")
+		return nil, errs.NewCodeError(op, "wrong code")
 	}
 	// The at-most-once step: of two calls with the right code, one deletes
 	// the row and the other finds it gone.
 	if err := m.st.DeleteVerificationCode(ctx, found.ID); err != nil {
-		if behemotherr.IsNotFound(err) {
-			return nil, behemotherr.NewCodeError(op, "the code was used")
+		if errs.IsNotFound(err) {
+			return nil, errs.NewCodeError(op, "the code was used")
 		}
 		return nil, err
 	}

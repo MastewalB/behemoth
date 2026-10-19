@@ -14,7 +14,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -94,8 +94,8 @@ func (app *resetApp) link(t *testing.T) types.MailMessage {
 }
 
 func invalidResetToken(err error) bool {
-	de, ok := errors.AsType[*behemotherr.DomainError](err)
-	return ok && de.Category == behemotherr.CategoryUnauthorized && de.Code == emailpassword.ErrorCodeInvalidResetToken
+	de, ok := errors.AsType[*errs.DomainError](err)
+	return ok && de.Category == errs.CategoryUnauthorized && de.Code == emailpassword.ErrorCodeInvalidResetToken
 }
 
 // The two flows called from code: a link is sent to a known email only, a
@@ -122,7 +122,7 @@ func TestPasswordResetRequestAndConfirm(t *testing.T) {
 	_, err := p.RequestPasswordReset(ctx, emailpassword.ResetRequest{Email: "nobody@example.com"})
 	assert.ErrorIs(t, err, emailpassword.ErrNoAccount)
 	_, err = p.RequestPasswordReset(ctx, emailpassword.ResetRequest{Email: "not an email"})
-	assert.True(t, behemotherr.IsValidationError(err), "%v", err)
+	assert.True(t, errs.IsValidationError(err), "%v", err)
 	require.Zero(t, app.outbox.count(), "neither sent a link")
 
 	before, err := app.signIn(resetOldPassword)
@@ -154,7 +154,7 @@ func TestPasswordResetRequestAndConfirm(t *testing.T) {
 
 	// A password the rules refuse does not use the link up.
 	_, err = p.ResetPassword(ctx, second.Token, "short")
-	assert.True(t, behemotherr.IsValidationError(err), "%v", err)
+	assert.True(t, errs.IsValidationError(err), "%v", err)
 
 	reset, err := p.ResetPassword(ctx, second.Token, resetNewPassword)
 	require.NoError(t, err)
@@ -165,9 +165,9 @@ func TestPasswordResetRequestAndConfirm(t *testing.T) {
 	assert.True(t, stored.EmailVerified)
 
 	_, err = app.signIn(resetOldPassword)
-	assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "the old password: %v", err)
+	assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "the old password: %v", err)
 	_, err = app.signIn("swapped by a handler")
-	assert.True(t, behemotherr.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "a before handler can't swap the password: %v", err)
+	assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "a before handler can't swap the password: %v", err)
 	_, err = app.signIn(resetNewPassword)
 	require.NoError(t, err, "the new password signs in")
 	_, err = app.ac.SessionManager.Validate(ctx, before.RawToken)
@@ -280,7 +280,7 @@ func TestPasswordResetRequestsAreLimitedPerEmail(t *testing.T) {
 	app, _ := bootReset(t, emailpassword.ResetOptions{WaitForSend: true, RequestLimit: types.Limit{Max: 2, Window: time.Minute}}, nil)
 	limited := func(email string) bool {
 		_, err := app.plugin.RequestPasswordReset(ctx, emailpassword.ResetRequest{Email: email})
-		return behemotherr.Is(err, behemotherr.CategoryRateLimited)
+		return errs.IsCategory(err, errs.CategoryRateLimited)
 	}
 	for _, email := range []string{resetEmail, "nobody@example.com"} {
 		assert.False(t, limited(email), email)
@@ -375,9 +375,9 @@ func TestPasswordResetOptions(t *testing.T) {
 		assert.NotContains(t, mounted, "/api/auth"+emailpassword.PathResetRequest)
 		assert.NotContains(t, mounted, "/api/auth"+emailpassword.PathResetConfirm)
 		_, err = p.RequestPasswordReset(context.Background(), emailpassword.ResetRequest{Email: resetEmail})
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 		_, err = p.ResetPassword(context.Background(), "token", resetNewPassword)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	})
 	for name, tc := range map[string]struct {
 		opts   emailpassword.ResetOptions

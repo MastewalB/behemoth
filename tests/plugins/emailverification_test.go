@@ -13,7 +13,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
@@ -98,8 +98,8 @@ func (app *verificationApp) mail(t *testing.T, n int) types.MailMessage {
 }
 
 func invalidVerificationLink(err error) bool {
-	de, ok := errors.AsType[*behemotherr.DomainError](err)
-	return ok && de.Category == behemotherr.CategoryUnauthorized && de.Code == emailverification.ErrorCodeInvalidLink
+	de, ok := errors.AsType[*errs.DomainError](err)
+	return ok && de.Category == errs.CategoryUnauthorized && de.Code == emailverification.ErrorCodeInvalidLink
 }
 
 // A user created by another plugin is sent a link without that plugin
@@ -265,13 +265,13 @@ func TestEmailVerificationRequiredToSignIn(t *testing.T) {
 	creds := emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "correct horse"}
 
 	_, err := app.passwords.SignIn(ctx, creds)
-	de, ok := errors.AsType[*behemotherr.DomainError](err)
+	de, ok := errors.AsType[*errs.DomainError](err)
 	require.True(t, ok, "%v", err)
-	assert.Equal(t, behemotherr.CategoryForbidden, de.Category)
+	assert.Equal(t, errs.CategoryForbidden, de.Category)
 	assert.Equal(t, emailverification.ErrorCodeEmailNotVerified, de.Code)
 
 	_, err = app.passwords.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "a wrong password"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryUnauthorized), "a wrong password is not told the address is unverified: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryUnauthorized), "a wrong password is not told the address is unverified: %v", err)
 
 	_, err = app.plugin.Verify(ctx, mail.Token)
 	require.NoError(t, err)
@@ -291,14 +291,14 @@ func TestEmailVerificationSendsAreLimitedPerEmail(t *testing.T) {
 	require.NoError(t, err)
 	app.mail(t, 2)
 	_, err = app.plugin.SendVerification(ctx, emailverification.SendRequest{Email: "ADA@example.com"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryRateLimited), "the third link for the address: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryRateLimited), "the third link for the address: %v", err)
 
 	for i := 1; i <= 2; i++ {
 		_, err = app.plugin.SendVerification(ctx, emailverification.SendRequest{Email: "nobody@example.com"})
 		assert.ErrorIs(t, err, emailverification.ErrNoAccount, "request %d", i)
 	}
 	_, err = app.plugin.SendVerification(ctx, emailverification.SendRequest{Email: "nobody@example.com"})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryRateLimited), "an unknown email is counted too: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryRateLimited), "an unknown email is counted too: %v", err)
 
 	events := app.rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
 	require.Len(t, events, 2)
@@ -325,7 +325,7 @@ func TestEmailVerificationOptions(t *testing.T) {
 
 		p := emailverification.New(tc.opts)
 		_, err = p.Verify(context.Background(), "token")
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: a flow called before Boot: %v", name, err)
 
 		prepared, err := bmth.Prepare([]types.Plugin{p}, bmth.PrepareConfig{})
 		require.NoError(t, err, name)

@@ -1,4 +1,4 @@
-package behemotherr
+package errs
 
 import (
 	"errors"

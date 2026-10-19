@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 )
 
 const StatusGenerated RunStatus = "generated" // Path II's terminal state - file written
@@ -27,7 +27,7 @@ func RunGenerateCLI(ctx context.Context, cfg MigrationConfig, declared Declared,
 	}
 	m, err := buildMigrationPlan(ctx, cfg, declared, deps, true)
 	if err != nil {
-		if behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationNothingToGenerate) {
+		if errs.IsCode(err, errs.CodeMigrationNothingToGenerate) {
 			return &RunResult{Status: StatusNoChanges, Message: "No schema changes detected."}, nil
 		}
 		return nil, err

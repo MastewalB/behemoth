@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -329,7 +329,7 @@ func (mdb *MongoAdapter) indexStates(ctx context.Context, tables []schema.Table)
 func (mdb *MongoAdapter) EnsureIndexes(ctx context.Context, tables []schema.Table) error {
 	const op = "MongoAdapter.EnsureIndexes"
 	if mongo.SessionFromContext(ctx) != nil {
-		return behemotherr.NewConfigurationError(op, "indexes can't be created inside a transaction; call EnsureIndexes with a context that carries none", nil)
+		return errs.NewConfigurationError(op, "indexes can't be created inside a transaction; call EnsureIndexes with a context that carries none", nil)
 	}
 	states, err := mdb.indexStates(ctx, tables)
 	if err != nil {
@@ -358,7 +358,7 @@ func (mdb *MongoAdapter) EnsureIndexes(ctx context.Context, tables []schema.Tabl
 		}
 	}
 	if len(failed) > 0 {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationApplyFailed, errors.Join(failed...))
+		return errs.NewMigrationError(op, errs.CodeMigrationApplyFailed, errors.Join(failed...))
 	}
 	return nil
 }
@@ -411,7 +411,7 @@ func (mdb *MongoAdapter) CheckIndexes(ctx context.Context, tables []schema.Table
 		}
 	}
 	if len(missing) > 0 {
-		return warnings, behemotherr.NewConfigurationError(op, fmt.Sprintf(
+		return warnings, errs.NewConfigurationError(op, fmt.Sprintf(
 			"%d unique index(es) the schema declares are missing, so MongoDB would store duplicates: %s. "+
 				"Create them with MongoAdapter.EnsureIndexes(ctx, app.Schemas.All()) before Boot",
 			len(missing), strings.Join(missing, "; ")), nil)

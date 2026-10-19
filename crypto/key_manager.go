@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/types"
 	"golang.org/x/crypto/hkdf"
@@ -49,7 +49,7 @@ func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source type
 	tel = telemetry.OrDefault(tel).Named("crypto")
 	raw, current, err := source.Load(ctx)
 	if err != nil {
-		return nil, behemotherr.NewConfigurationError("KeyManager.Load", "initial secret load failed", err)
+		return nil, errs.NewConfigurationError("KeyManager.Load", "initial secret load failed", err)
 	}
 
 	decoded, err := decodeAndValidate(raw, current, cfg)
@@ -104,27 +104,27 @@ func decodeAndValidate(raw map[int]string, current int, cfg KeyManagerConfig) (m
 	cfg = cfg.withDefaults()
 
 	if len(raw) == 0 {
-		return nil, behemotherr.NewConfigurationError("KeyManager.Load", "source returned no secrets", nil)
+		return nil, errs.NewConfigurationError("KeyManager.Load", "source returned no secrets", nil)
 	}
 
 	if _, ok := raw[current]; !ok {
-		return nil, behemotherr.NewConfigurationError("KeyManager.Load",
+		return nil, errs.NewConfigurationError("KeyManager.Load",
 			fmt.Sprintf("current version %d not present among provided secrets", current), nil)
 	}
 
 	decoded := make(map[int][]byte, len(raw))
 	for version, value := range raw {
 		if cfg.Environment == behemoth.EnvProduction && (value == "" || value == devDefaultSecret) {
-			return nil, behemotherr.NewConfigurationError("KeyManager.Load",
+			return nil, errs.NewConfigurationError("KeyManager.Load",
 				fmt.Sprintf("refusing empty/default secret for version %d in production", version), nil)
 		}
 		b, err := hex.DecodeString(value)
 		if err != nil {
-			return nil, behemotherr.NewConfigurationError("KeyManager.Load",
+			return nil, errs.NewConfigurationError("KeyManager.Load",
 				fmt.Sprintf("version %d is not valid hex", version), err)
 		}
 		if len(b) < cfg.MinSecretBytes {
-			return nil, behemotherr.NewConfigurationError("KeyManager.Load",
+			return nil, errs.NewConfigurationError("KeyManager.Load",
 				fmt.Sprintf("version %d is %d bytes, need >= %d", version, len(b), cfg.MinSecretBytes), nil)
 		}
 		decoded[version] = b
@@ -153,14 +153,14 @@ func (km *DefaultKeyManager) deriveKey(purpose types.KeyPurpose, version int) ([
 
 	masterSecret, ok := km.secrets[version]
 	if !ok {
-		return nil, behemotherr.NewSecurityError("KeyManager.Derive", "unknown_key_version",
+		return nil, errs.NewSecurityError("KeyManager.Derive", "unknown_key_version",
 			fmt.Errorf("no key material for version %d, purpose %q", version, purpose))
 	}
 
 	hk := hkdf.New(sha256.New, masterSecret, nil, []byte(purpose))
 	derived := make([]byte, 32)
 	if _, err := hk.Read(derived); err != nil {
-		return nil, behemotherr.NewSecurityError("KeyManager.Derive", "hkdf_failure", err)
+		return nil, errs.NewSecurityError("KeyManager.Derive", "hkdf_failure", err)
 	}
 
 	km.cache[ck] = derived
@@ -200,12 +200,12 @@ func (km *DefaultKeyManager) RemoveVersion(version int) error {
 	defer km.mu.Unlock()
 
 	if version == km.current {
-		return behemotherr.NewValidationError("KeyManager.RemoveVersion", "version",
+		return errs.NewValidationError("KeyManager.RemoveVersion", "version",
 			fmt.Errorf("cannot remove the current key version (%d)", version))
 	}
 
 	if _, ok := km.secrets[version]; !ok {
-		return behemotherr.NewNotFound("KeyManager.RemoveVersion", "key_version", nil)
+		return errs.NewNotFound("KeyManager.RemoveVersion", "key_version", nil)
 	}
 
 	// remove it from the secret map
@@ -223,7 +223,7 @@ func (km *DefaultKeyManager) RemoveVersion(version int) error {
 
 func buildKeyManager(secrets map[int][]byte, current int, cfg KeyManagerConfig, tel *telemetry.Telemetry) (*DefaultKeyManager, error) {
 	if _, ok := secrets[current]; !ok {
-		return nil, behemotherr.NewConfigurationError("KeyManager.Build",
+		return nil, errs.NewConfigurationError("KeyManager.Build",
 			fmt.Sprintf("current version %d missing after decode", current), nil) // defensive; decodeAndValidate already guarantees this
 	}
 

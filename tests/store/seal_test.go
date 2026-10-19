@@ -3,7 +3,7 @@ package store_test
 import (
 	"testing"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,11 +31,11 @@ func TestStoreSealAndOpen(t *testing.T) {
 	assert.NotEqual(t, sealed, again, "sealing the same value twice gives two ciphertexts")
 
 	_, err = st.Open("s3cret-value")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategorySecurity), "a value that is not sealed is refused: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategorySecurity), "a value that is not sealed is refused: %v", err)
 
 	bare := store.New(nil)
 	_, err = bare.Seal("s3cret-value")
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "no encryptor: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "no encryptor: %v", err)
 	_, err = bare.Open(sealed)
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "no encryptor: %v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "no encryptor: %v", err)
 }

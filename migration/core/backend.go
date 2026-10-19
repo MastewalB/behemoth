@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 )
 
@@ -102,7 +102,7 @@ func Generate(ctx context.Context, cfg MigrationConfig, declared Declared, backe
 		}
 		return RunManagedGenerate(ctx, cfg, declared, deps, opts.Confirm)
 	default:
-		return nil, behemotherr.NewConfigurationError(op, fmt.Sprintf("unknown MigrationPath %q", cfg.Path), nil)
+		return nil, errs.NewConfigurationError(op, fmt.Sprintf("unknown MigrationPath %q", cfg.Path), nil)
 	}
 }
 
@@ -133,10 +133,10 @@ func Migrate(ctx context.Context, cfg MigrationConfig, declared Declared, backen
 // share.
 func generateDeps(op string, cfg MigrationConfig, declared Declared, backend Backend) (GenerateDeps, error) {
 	if declared.Schemas == nil {
-		return GenerateDeps{}, behemotherr.NewConfigurationError(op, "Declared.Schemas is nil: pass PreparedApp.Declared()", nil)
+		return GenerateDeps{}, errs.NewConfigurationError(op, "Declared.Schemas is nil: pass PreparedApp.Declared()", nil)
 	}
 	if backend.Introspector == nil {
-		return GenerateDeps{}, behemotherr.NewConfigurationError(op, "Backend.Introspector is required", nil)
+		return GenerateDeps{}, errs.NewConfigurationError(op, "Backend.Introspector is required", nil)
 	}
 	return GenerateDeps{
 		Introspector: backend.Introspector,
@@ -151,7 +151,7 @@ func generateDeps(op string, cfg MigrationConfig, declared Declared, backend Bac
 // the generation after it.
 func managedDeps(op string, cfg MigrationConfig, backend Backend, generate GenerateDeps, opts RunOptions) (MigrationDeps, error) {
 	if backend.Driver == nil || backend.DB == nil {
-		return MigrationDeps{}, behemotherr.NewConfigurationError(op,
+		return MigrationDeps{}, errs.NewConfigurationError(op,
 			fmt.Sprintf("the %s path keeps a ledger, so it needs Backend.Driver and Backend.DB", PathManaged), nil)
 	}
 	runner := NewMigrationRunner(backend.DB, backend.Driver, cfg, opts.Telemetry)
@@ -173,6 +173,6 @@ func checkPath(op string, cfg MigrationConfig, want MigrationPath) error {
 	if cfg.Path == want {
 		return nil
 	}
-	return behemotherr.NewConfigurationError(op,
+	return errs.NewConfigurationError(op,
 		fmt.Sprintf("MigrationConfig.Path is %q and this entry point serves %q: use Generate or Migrate, which pick the entry point by path", cfg.Path, want), nil)
 }

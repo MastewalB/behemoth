@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -77,7 +77,7 @@ func (d *SQLServerDriver) ApplyMigration(ctx context.Context, req core.Migration
 		r := &run{ctx: ctx, tx: tx}
 		for _, o := range req.Migration.Up {
 			if err := d.applyOperation(r, o); err != nil {
-				return behemotherr.WrapOp(op, fmt.Sprintf("operation %q (%s on %s)", o.ID, o.Kind, o.Table), err)
+				return errs.WrapOp(op, fmt.Sprintf("operation %q (%s on %s)", o.ID, o.Kind, o.Table), err)
 			}
 		}
 		return nil
@@ -99,11 +99,11 @@ func (d *SQLServerDriver) RecordBaseline(ctx context.Context, req core.Migration
 // and rolls its DDL back.
 func (d *SQLServerDriver) inMigrationTx(ctx context.Context, op string, req core.MigrationRequest, fn func(tx *sql.Tx) error) error {
 	if req.LedgerTable == "" || req.SnapshotTable == "" {
-		return behemotherr.NewInternalError(op, fmt.Errorf("ledger table %q / snapshot table %q must both be set", req.LedgerTable, req.SnapshotTable))
+		return errs.NewInternalError(op, fmt.Errorf("ledger table %q / snapshot table %q must both be set", req.LedgerTable, req.SnapshotTable))
 	}
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationBeginTxFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationBeginTxFailed, err)
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -118,7 +118,7 @@ func (d *SQLServerDriver) inMigrationTx(ctx context.Context, op string, req core
 			EXEC @r = sp_getapplock @Resource = @p1, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = -1;
 			IF @r < 0 THROW 50000, 'behemoth: could not take the migration lock', 1;`
 		if _, err := tx.ExecContext(ctx, lock, "behemoth.migration:"+req.LedgerTable); err != nil {
-			return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationLockFailed, err)
+			return errs.NewMigrationError(op, errs.CodeMigrationLockFailed, err)
 		}
 		if err := fn(tx); err != nil {
 			return err
@@ -130,7 +130,7 @@ func (d *SQLServerDriver) inMigrationTx(ctx context.Context, op string, req core
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationCommitFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationCommitFailed, err)
 	}
 	return nil
 }
@@ -140,7 +140,7 @@ func (d *SQLServerDriver) inMigrationTx(ctx context.Context, op string, req core
 func (d *SQLServerDriver) recordTx(ctx context.Context, tx *sql.Tx, op string, req core.MigrationRequest) error {
 	data, err := json.Marshal(req.SnapshotUpdate.Tables)
 	if err != nil {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationMarshalFailed, err)
+		return errs.NewMigrationError(op, errs.CodeMigrationMarshalFailed, err)
 	}
 	ledger, snapshot := quoteIdent(req.LedgerTable), quoteIdent(req.SnapshotTable)
 	steps := []struct {
@@ -156,7 +156,7 @@ func (d *SQLServerDriver) recordTx(ctx context.Context, tx *sql.Tx, op string, r
 	}
 	for _, s := range steps {
 		if _, err := tx.ExecContext(ctx, s.query, s.args...); err != nil {
-			return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationExecFailed, err)
+			return errs.NewMigrationError(op, errs.CodeMigrationExecFailed, err)
 		}
 	}
 	return nil
@@ -176,14 +176,14 @@ func (d *SQLServerDriver) RenderMigration(ctx context.Context, m core.Migration)
 	const op = "SQLServerDriver.RenderMigration"
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationBeginTxFailed, err)
+		return "", errs.NewMigrationError(op, errs.CodeMigrationBeginTxFailed, err)
 	}
 	defer tx.Rollback()
 
 	r := &run{ctx: ctx, tx: tx, dry: m.IsBaseline}
 	for _, o := range m.Up {
 		if err := d.applyOperation(r, o); err != nil {
-			return "", behemotherr.WrapOp(op, fmt.Sprintf("operation %q (%s on %s)", o.ID, o.Kind, o.Table), err)
+			return "", errs.WrapOp(op, fmt.Sprintf("operation %q (%s on %s)", o.ID, o.Kind, o.Table), err)
 		}
 	}
 
@@ -221,7 +221,7 @@ func (r *run) exec(stmts ...string) error {
 			continue
 		}
 		if _, err := r.tx.ExecContext(r.ctx, stmt); err != nil {
-			return behemotherr.NewMigrationError("SQLServerDriver.exec", behemotherr.ErrorCodeMigrationExecFailed, fmt.Errorf("%w (sql: %s)", err, stmt))
+			return errs.NewMigrationError("SQLServerDriver.exec", errs.CodeMigrationExecFailed, fmt.Errorf("%w (sql: %s)", err, stmt))
 		}
 	}
 	return nil
@@ -231,7 +231,7 @@ func (r *run) exec(stmts ...string) error {
 // required payload is an Internal error, never a silent no-op.
 func (d *SQLServerDriver) applyOperation(r *run, op core.SchemaOperation) error {
 	missing := func(field string) error {
-		return behemotherr.NewInternalError("SQLServerDriver.applyOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
+		return errs.NewInternalError("SQLServerDriver.applyOperation", fmt.Errorf("operation %q: %s missing %s", op.ID, op.Kind, field))
 	}
 	table := d.resolver.Resolve(op.Table)
 
@@ -284,7 +284,7 @@ func (d *SQLServerDriver) applyOperation(r *run, op core.SchemaOperation) error 
 	case core.OpDropForeignKey:
 		return r.exec(fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT %s", quoteIdent(table), quoteIdent(op.ForeignKeyName)))
 	default:
-		return behemotherr.NewInternalError("SQLServerDriver.applyOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
+		return errs.NewInternalError("SQLServerDriver.applyOperation", fmt.Errorf("operation %q: unknown Kind %q", op.ID, op.Kind))
 	}
 }
 
@@ -378,7 +378,7 @@ func (d *SQLServerDriver) renameColumn(r *run, table, from, to string) error {
 		switch {
 		case idx.filter != "":
 			if !idx.representable {
-				return behemotherr.NewMigrationError("SQLServerDriver.renameColumn", behemotherr.ErrorCodeMigrationExecFailed,
+				return errs.NewMigrationError("SQLServerDriver.renameColumn", errs.CodeMigrationExecFailed,
 					fmt.Errorf("index %q on %s.%s has a filter the driver can't recreate; drop it before renaming the column", idx.name, table, from))
 			}
 			if err := r.exec(idx.dropSQL(table)); err != nil {
@@ -417,7 +417,7 @@ func (d *SQLServerDriver) alterColumn(r *run, canonicalTable string, raw schema.
 	table, column := d.resolver.Resolve(canonicalTable), d.resolver.ResolveColumn(canonicalTable, raw.Name)
 	col := applyOverride(raw)
 	if col.AutoInc && col.Type != schema.ColTypeInteger && col.Type != schema.ColTypeBigInt {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
+		return errs.NewMigrationError(op, errs.CodeMigrationUnsupportedAutoIncrement,
 			fmt.Errorf("column %q: AutoInc requires an integer column, got %q", col.Name, col.Type))
 	}
 
@@ -427,7 +427,7 @@ func (d *SQLServerDriver) alterColumn(r *run, canonicalTable string, raw schema.
 	}
 	i := slices.IndexFunc(live.columns, func(c liveColumn) bool { return c.name == column })
 	if i < 0 {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationExecFailed, fmt.Errorf("column %q does not exist in table %q", column, table))
+		return errs.NewMigrationError(op, errs.CodeMigrationExecFailed, fmt.Errorf("column %q does not exist in table %q", column, table))
 	}
 	current, _ := live.columns[i].canonical(nil, nil)
 	target := d.NormalizeColumn(canonicalTable, raw)
@@ -456,7 +456,7 @@ func (d *SQLServerDriver) alterColumn(r *run, canonicalTable string, raw schema.
 				continue
 			}
 			if !idx.representable {
-				return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationExecFailed,
+				return errs.NewMigrationError(op, errs.CodeMigrationExecFailed,
 					fmt.Errorf("index %q depends on %s.%s and the driver can't recreate it; drop it before altering the column", idx.name, table, column))
 			}
 			if err := r.exec(idx.dropSQL(table)); err != nil {
@@ -509,7 +509,7 @@ func (d *SQLServerDriver) alterColumn(r *run, canonicalTable string, raw schema.
 // nullability is read from the live table.
 func (d *SQLServerDriver) addIndex(r *run, canonicalTable string, idx schema.Index) error {
 	if len(idx.Columns) == 0 {
-		return behemotherr.NewMigrationError("SQLServerDriver.addIndex", behemotherr.ErrorCodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
+		return errs.NewMigrationError("SQLServerDriver.addIndex", errs.CodeMigrationInvalidIndex, fmt.Errorf("index %q has no columns", idx.Name))
 	}
 	table := d.resolver.Resolve(canonicalTable)
 	cols := make([]string, len(idx.Columns))
@@ -539,7 +539,7 @@ func (d *SQLServerDriver) createIndexes(r *run, table string, indexes []liveInde
 
 func (d *SQLServerDriver) buildAddForeignKey(canonicalTable string, fk schema.ForeignKey) (string, error) {
 	if len(fk.Columns) == 0 || len(fk.Columns) != len(fk.RefColumns) {
-		return "", behemotherr.NewMigrationError("SQLServerDriver.AddForeignKey", behemotherr.ErrorCodeMigrationInvalidForeignKey,
+		return "", errs.NewMigrationError("SQLServerDriver.AddForeignKey", errs.CodeMigrationInvalidForeignKey,
 			fmt.Errorf("foreign key %q: %d column(s) vs %d referenced column(s)", fk.Name, len(fk.Columns), len(fk.RefColumns)))
 	}
 	cols := make([]string, len(fk.Columns))
@@ -562,7 +562,7 @@ func (d *SQLServerDriver) dropDefault(r *run, table, column string) error {
 			JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
 			WHERE dc.parent_object_id = OBJECT_ID(@p1) AND c.name = @p2)`, quoteIdent(table), column).Scan(&name)
 	if err != nil {
-		return behemotherr.NewMigrationError("SQLServerDriver.dropDefault", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return errs.NewMigrationError("SQLServerDriver.dropDefault", errs.CodeMigrationQueryFailed, err)
 	}
 	if !name.Valid {
 		return nil
@@ -593,7 +593,7 @@ const rebuildSuffix = "__behemoth_rebuild"
 func (d *SQLServerDriver) rebuildTable(r *run, table string, live liveTable, column string, raw schema.Column, unique bool) error {
 	const op = "SQLServerDriver.rebuildTable"
 	refuse := func(reason string) error {
-		return behemotherr.NewMigrationError(op, behemotherr.ErrorCodeMigrationRebuildFailed,
+		return errs.NewMigrationError(op, errs.CodeMigrationRebuildFailed,
 			fmt.Errorf("changing auto-increment on %s.%s needs the table rebuilt, which would lose %s", table, column, reason))
 	}
 	if extra, err := d.unrebuildableObjects(r.ctx, r.tx, table); err != nil {
@@ -710,7 +710,7 @@ func columnDefinition(raw schema.Column) (string, error) {
 	}
 	if col.AutoInc {
 		if col.Type != schema.ColTypeInteger && col.Type != schema.ColTypeBigInt {
-			return "", behemotherr.NewMigrationError("SQLServerDriver.columnDefinition", behemotherr.ErrorCodeMigrationUnsupportedAutoIncrement,
+			return "", errs.NewMigrationError("SQLServerDriver.columnDefinition", errs.CodeMigrationUnsupportedAutoIncrement,
 				fmt.Errorf("column %q: AutoInc requires an integer column, got %q", col.Name, col.Type))
 		}
 		// An identity column can't have a default and is never NULL.
@@ -829,7 +829,7 @@ func renderLiteral(v any) (string, error) {
 	case float64:
 		return strconv.FormatFloat(val, 'f', -1, 64), nil
 	default:
-		return "", behemotherr.NewMigrationError("SQLServerDriver.renderLiteral", behemotherr.ErrorCodeMigrationUnsupportedDefaultType, fmt.Errorf("cannot render default value of type %T", v))
+		return "", errs.NewMigrationError("SQLServerDriver.renderLiteral", errs.CodeMigrationUnsupportedDefaultType, fmt.Errorf("cannot render default value of type %T", v))
 	}
 }
 
@@ -871,7 +871,7 @@ func renderSQLServerType(ct schema.ColumnType, length int) (string, error) {
 	case schema.ColTypeBytes, schema.ColTypeBlob:
 		return "VARBINARY(MAX)", nil
 	default:
-		return "", behemotherr.NewMigrationError("SQLServerDriver.renderSQLServerType", behemotherr.ErrorCodeMigrationUnsupportedCanonicalType, fmt.Errorf("no SQL Server rendering for canonical type %q", ct))
+		return "", errs.NewMigrationError("SQLServerDriver.renderSQLServerType", errs.CodeMigrationUnsupportedCanonicalType, fmt.Errorf("no SQL Server rendering for canonical type %q", ct))
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
@@ -31,7 +31,7 @@ func TestSignInRefusedByAHookIsAuditedAsRejectedByHook(t *testing.T) {
 	user, _ := app.signUp(t, "ada@example.com", 1)
 
 	_, err := app.passwords.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "correct horse"})
-	assert.True(t, behemotherr.IsCode(err, emailverification.ErrorCodeEmailNotVerified), "the caller gets the plugin's own error: %v", err)
+	assert.True(t, errs.IsCode(err, emailverification.ErrorCodeEmailNotVerified), "the caller gets the plugin's own error: %v", err)
 
 	events := app.rec.Audit.OfType(string(hooks.HookSignInFailed))
 	require.Len(t, events, 1)

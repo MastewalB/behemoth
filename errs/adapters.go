@@ -1,4 +1,4 @@
-package behemotherr
+package errs
 
 import (
 	"errors"
@@ -163,13 +163,13 @@ func SerializableNotImplemented() error {
 	return NewNotImplemented("model does not implement Serializable interface")
 }
 
-func IsNotFound(err error) bool { return Is(err, CategoryNotFound) }
+func IsNotFound(err error) bool { return IsCategory(err, CategoryNotFound) }
 
-func IsUndefinedTable(err error) bool { return Is(err, CategoryUndefinedTable) }
+func IsUndefinedTable(err error) bool { return IsCategory(err, CategoryUndefinedTable) }
 
-func IsDuplicateKey(err error) bool { return Is(err, CategoryDuplicateKey) }
+func IsDuplicateKey(err error) bool { return IsCategory(err, CategoryDuplicateKey) }
 
-func IsValidationError(err error) bool { return Is(err, CategoryValidation) }
+func IsValidationError(err error) bool { return IsCategory(err, CategoryValidation) }
 
 func IsRetryable(err error) bool {
 	var de *DomainError

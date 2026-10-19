@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -167,11 +167,11 @@ func New(opts Options) *Plugin {
 // with the AuthContext's Crypto.Passwords.
 func (p *Plugin) Init(ac *types.AuthContext) error {
 	if p.opts.MinPasswordLength < 1 || p.opts.MaxPasswordLength < p.opts.MinPasswordLength {
-		return behemotherr.NewConfigurationError("emailpassword.Init",
+		return errs.NewConfigurationError("emailpassword.Init",
 			fmt.Sprintf("password length limits are invalid: min %d, max %d", p.opts.MinPasswordLength, p.opts.MaxPasswordLength), nil)
 	}
 	if ac.Crypto.Passwords == nil {
-		return behemotherr.NewConfigurationError("emailpassword.Init", "AuthContext.Crypto has no password hasher", nil)
+		return errs.NewConfigurationError("emailpassword.Init", "AuthContext.Crypto has no password hasher", nil)
 	}
 	p.authContext = ac
 	p.log = telemetry.NoOpLogger{}
@@ -333,7 +333,7 @@ func credentialFields(key string, data map[string]any) (value, password string, 
 		case string:
 			return v, nil
 		default:
-			return "", behemotherr.NewValidationError("emailpassword.SignIn", key, fmt.Errorf("%s must be a string", key))
+			return "", errs.NewValidationError("emailpassword.SignIn", key, fmt.Errorf("%s must be a string", key))
 		}
 	}
 	if value, err = field(key); err != nil {
@@ -375,19 +375,19 @@ const (
 // not sent to the client, since Options.ValidateEmail and ValidatePassword
 // are the application's and may say more than a stranger should read.
 func errInvalidEmail(cause error) error {
-	return behemotherr.NewInvalidInputError("emailpassword.SignUp", credentialEmailKey, "invalid email", cause)
+	return errs.NewInvalidInputError("emailpassword.SignUp", credentialEmailKey, "invalid email", cause)
 }
 
 func errInvalidPassword(op string, cause error) error {
-	return behemotherr.NewInvalidInputError(op, credentialPasswordKey, "invalid password", cause)
+	return errs.NewInvalidInputError(op, credentialPasswordKey, "invalid password", cause)
 }
 
 // errEmailTaken is sign-up's typed conflict (409) for an email that already
 // has an account.
 func errEmailTaken() error {
 	const op, message = "emailpassword.SignUp", "an account with this email already exists"
-	return &behemotherr.DomainError{
-		Category: behemotherr.CategoryConflict, Op: op, Code: ErrorCodeEmailTaken,
+	return &errs.DomainError{
+		Category: errs.CategoryConflict, Op: op, Code: ErrorCodeEmailTaken,
 		PublicMessage: message, InternalMessage: op + ": " + message,
 	}
 }
@@ -419,7 +419,7 @@ func (p *Plugin) signUpBody(hctx *types.HookContext, userData behemoth.M) (*mode
 		}
 		return nil, errEmailTaken()
 	}
-	if !behemotherr.IsNotFound(err) {
+	if !errs.IsNotFound(err) {
 		return nil, err // infra error (DB down): not "no such user"
 	}
 
@@ -494,7 +494,7 @@ const ErrorCodeInvalidCredentials = "invalid_credentials"
 // identifier is the credentials' Key, for the message: "invalid email or
 // password", "invalid username or password". The code is the same for all.
 func errInvalidCredentials(identifier string) error {
-	return behemotherr.NewUnauthorized("emailpassword.SignIn", ErrorCodeInvalidCredentials, "invalid "+identifier+" or password")
+	return errs.NewUnauthorized("emailpassword.SignIn", ErrorCodeInvalidCredentials, "invalid "+identifier+" or password")
 }
 
 // signInBody is the one sign-in by password. How the user is found is the
@@ -508,7 +508,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 	user, err := creds.Find(hctx.Ctx, ac.Store, creds.Value)
 	if err != nil {
 		hashPassword(hctx, creds.Password) // timing mitigation
-		if behemotherr.IsNotFound(err) {
+		if errs.IsNotFound(err) {
 			attempted := creds.Value
 			if creds.normalize != nil {
 				attempted = creds.normalize(attempted)
@@ -535,7 +535,7 @@ func (p *Plugin) signInBody(hctx *types.HookContext, creds IdentifierCredentials
 	credential, err := ac.Store.FindAccount(hctx.Ctx, models.ProviderCredential, user.ID)
 	if err != nil {
 		hashPassword(hctx, creds.Password) // timing mitigation
-		if behemotherr.IsNotFound(err) {
+		if errs.IsNotFound(err) {
 			if err := dispatcher.Fail(hctx, hooks.HookSignInFailed, rejected("no_credential_account", nil)); err != nil {
 				return nil, err
 			}
@@ -662,10 +662,10 @@ func (p *Plugin) SignInWith(ctx context.Context, creds IdentifierCredentials) (*
 		return nil, err
 	}
 	if creds.Key == "" || creds.Key == credentialPasswordKey {
-		return nil, behemotherr.NewConfigurationError(op, fmt.Sprintf("IdentifierCredentials.Key %q can't name an identifier", creds.Key), nil)
+		return nil, errs.NewConfigurationError(op, fmt.Sprintf("IdentifierCredentials.Key %q can't name an identifier", creds.Key), nil)
 	}
 	if creds.Find == nil {
-		return nil, behemotherr.NewConfigurationError(op, "IdentifierCredentials.Find is not set", nil)
+		return nil, errs.NewConfigurationError(op, "IdentifierCredentials.Find is not set", nil)
 	}
 	creds.normalize = nil
 	delete(hctx.Values, hooks.HookValueEmail) // an enclosing operation's, not this sign-in's
@@ -698,7 +698,7 @@ func publishEmail(hctx *types.HookContext, email string) {
 // the request ctx carries, or nil.
 func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, error) {
 	if p.authContext == nil {
-		return nil, behemotherr.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	return &types.HookContext{
 		Ctx:     ctx,
@@ -741,7 +741,7 @@ func SignOut(hctx *types.HookContext, sessionID string) error {
 func (p *Plugin) handleSignUp(rctx *types.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("emailpassword.SignUp", "request", err)
+		return errs.NewValidationError("emailpassword.SignUp", "request", err)
 	}
 
 	user, err := p.SignUp(rctx.Ctx, body)
@@ -767,7 +767,7 @@ func (p *Plugin) handleSignIn(rctx *types.RequestContext) error {
 	// password reach the before handlers, in creds.Extra.
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("SignIn", "request", err)
+		return errs.NewValidationError("SignIn", "request", err)
 	}
 	var creds EmailAndPasswordCredentials
 	if err := creds.FromMap(body); err != nil {

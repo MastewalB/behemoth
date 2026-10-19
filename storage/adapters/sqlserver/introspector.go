@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration/core"
 	"github.com/MastewalB/behemoth/storage/adapters"
 	"github.com/MastewalB/behemoth/types/schema"
@@ -137,7 +137,7 @@ func (d *SQLServerDriver) objectKind(ctx context.Context, physical string) (kind
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, behemotherr.NewMigrationError("SQLServerIntrospector.objectKind", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return "", false, errs.NewMigrationError("SQLServerIntrospector.objectKind", errs.CodeMigrationQueryFailed, err)
 	}
 	switch objType {
 	case "U":
@@ -271,7 +271,7 @@ func (d *SQLServerDriver) liveColumns(ctx context.Context, q adapters.Querier, t
 		WHERE c.object_id = OBJECT_ID(@p1)
 		ORDER BY c.column_id`, quoteIdent(table))
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SQLServerIntrospector.columns", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("SQLServerIntrospector.columns", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -280,7 +280,7 @@ func (d *SQLServerDriver) liveColumns(ctx context.Context, q adapters.Querier, t
 		var c liveColumn
 		if err := rows.Scan(&c.name, &c.typeName, &c.maxLength, &c.precision, &c.scale, &c.nullable, &c.identity,
 			&c.seed, &c.step, &c.computed, &c.collation, &c.defaultDef); err != nil {
-			return nil, behemotherr.NewMigrationError("SQLServerIntrospector.columns", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("SQLServerIntrospector.columns", errs.CodeMigrationScanFailed, err)
 		}
 		cols = append(cols, c)
 	}
@@ -355,7 +355,7 @@ func (c liveColumn) nativeDefinition() string {
 func (d *SQLServerDriver) nullableColumns(ctx context.Context, q adapters.Querier, table string) (map[string]bool, error) {
 	rows, err := q.QueryContext(ctx, `SELECT name, is_nullable FROM sys.columns WHERE object_id = OBJECT_ID(@p1)`, quoteIdent(table))
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SQLServerIntrospector.nullableColumns", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("SQLServerIntrospector.nullableColumns", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 	nullable := map[string]bool{}
@@ -363,7 +363,7 @@ func (d *SQLServerDriver) nullableColumns(ctx context.Context, q adapters.Querie
 		var name string
 		var isNullable bool
 		if err := rows.Scan(&name, &isNullable); err != nil {
-			return nil, behemotherr.NewMigrationError("SQLServerIntrospector.nullableColumns", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("SQLServerIntrospector.nullableColumns", errs.CodeMigrationScanFailed, err)
 		}
 		nullable[name] = isNullable
 	}
@@ -417,7 +417,7 @@ func (d *SQLServerDriver) liveIndexes(ctx context.Context, q adapters.Querier, t
 		WHERE i.object_id = OBJECT_ID(@p1) AND i.type > 0 AND i.is_hypothetical = 0
 		ORDER BY i.name, ic.is_included_column, ic.key_ordinal`, quoteIdent(table))
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SQLServerIntrospector.indexes", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("SQLServerIntrospector.indexes", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -429,7 +429,7 @@ func (d *SQLServerDriver) liveIndexes(ctx context.Context, q adapters.Querier, t
 		var included bool
 		var column string
 		if err := rows.Scan(&idx.name, &idx.unique, &idx.primaryKey, &idx.uniqueConstraint, &indexType, &idx.filter, &included, &column); err != nil {
-			return nil, behemotherr.NewMigrationError("SQLServerIntrospector.indexes", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("SQLServerIntrospector.indexes", errs.CodeMigrationScanFailed, err)
 		}
 		if n := len(indexes); n == 0 || indexes[n-1].name != idx.name {
 			indexes = append(indexes, idx)
@@ -495,7 +495,7 @@ func (d *SQLServerDriver) liveForeignKeys(ctx context.Context, q adapters.Querie
 		WHERE `+where+`
 		ORDER BY fk.name, fkc.constraint_column_id`, quoteIdent(table))
 	if err != nil {
-		return nil, behemotherr.NewMigrationError("SQLServerIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return nil, errs.NewMigrationError("SQLServerIntrospector.foreignKeys", errs.CodeMigrationQueryFailed, err)
 	}
 	defer rows.Close()
 
@@ -504,7 +504,7 @@ func (d *SQLServerDriver) liveForeignKeys(ctx context.Context, q adapters.Querie
 		var fk liveForeignKey
 		var onDelete, onUpdate, col, refCol string
 		if err := rows.Scan(&fk.table, &fk.name, &onDelete, &onUpdate, &fk.refTable, &col, &refCol); err != nil {
-			return nil, behemotherr.NewMigrationError("SQLServerIntrospector.foreignKeys", behemotherr.ErrorCodeMigrationScanFailed, err)
+			return nil, errs.NewMigrationError("SQLServerIntrospector.foreignKeys", errs.CodeMigrationScanFailed, err)
 		}
 		if n := len(fks); n == 0 || fks[n-1].name != fk.name || fks[n-1].table != fk.table {
 			// The catalog spells actions NO_ACTION, SET_NULL, SET_DEFAULT.
@@ -540,7 +540,7 @@ func (d *SQLServerDriver) unrebuildableObjects(ctx context.Context, q adapters.Q
 		SELECT (SELECT COUNT(*) FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(@p1)),
 			(SELECT COUNT(*) FROM sys.triggers WHERE parent_id = OBJECT_ID(@p1))`, quoteIdent(table)).Scan(&checks, &triggers)
 	if err != nil {
-		return "", behemotherr.NewMigrationError("SQLServerIntrospector.unrebuildableObjects", behemotherr.ErrorCodeMigrationQueryFailed, err)
+		return "", errs.NewMigrationError("SQLServerIntrospector.unrebuildableObjects", errs.CodeMigrationQueryFailed, err)
 	}
 	switch {
 	case checks > 0:

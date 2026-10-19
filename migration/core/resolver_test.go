@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -154,7 +154,7 @@ func TestStaleDecisionRequiresReview(t *testing.T) {
 	reordered := issueWith(dropAdd, rename, leave)
 	for run := 1; run <= 2; run++ {
 		_, err := resolve(reordered)
-		if !behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationUnresolvedIssues) {
+		if !errs.IsCode(err, errs.CodeMigrationUnresolvedIssues) {
 			t.Fatalf("run %d after the options changed: want unresolved_issues, got %v", run, err)
 		}
 	}

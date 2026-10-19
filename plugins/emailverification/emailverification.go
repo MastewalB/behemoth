@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -172,7 +172,7 @@ func requestFields(op string, data map[string]any) (email, redirect string, meta
 		case string:
 			return v, nil
 		default:
-			return "", behemotherr.NewInvalidInputError(op, key, key+" must be a string", nil)
+			return "", errs.NewInvalidInputError(op, key, key+" must be a string", nil)
 		}
 	}
 	if email, err = field(keyEmail); err != nil {
@@ -188,7 +188,7 @@ func requestFields(op string, data map[string]any) (email, redirect string, meta
 	case map[string]any: // a decoded request body
 		metadata = v
 	default:
-		return "", "", nil, behemotherr.NewInvalidInputError(op, keyMetadata, keyMetadata+" must be an object", nil)
+		return "", "", nil, errs.NewInvalidInputError(op, keyMetadata, keyMetadata+" must be an object", nil)
 	}
 	return email, redirect, metadata, nil
 }
@@ -467,8 +467,8 @@ func (p *Plugin) Register(reg types.HookRegistry) error {
 			return nil, err
 		}
 		if !user.EmailVerified {
-			return nil, &behemotherr.DomainError{
-				Category: behemotherr.CategoryForbidden, Op: "emailverification.RequireVerified",
+			return nil, &errs.DomainError{
+				Category: errs.CategoryForbidden, Op: "emailverification.RequireVerified",
 				Code: ErrorCodeEmailNotVerified, PublicMessage: "email address is not verified",
 				InternalMessage: "emailverification.RequireVerified: email address is not verified",
 			}
@@ -500,10 +500,10 @@ func (p *Plugin) Middlewares() []types.Middleware {
 func (p *Plugin) Init(ac *types.AuthContext) error {
 	const op = "emailverification.Init"
 	if ac.Mailer == nil || !ac.Mailer.Configured() {
-		return behemotherr.NewConfigurationError(op, "no mail sender is configured; set BootConfig.Mail.Sender: the plugin does not send email itself", nil)
+		return errs.NewConfigurationError(op, "no mail sender is configured; set BootConfig.Mail.Sender: the plugin does not send email itself", nil)
 	}
 	if p.opts.TTL < 0 {
-		return behemotherr.NewConfigurationError(op, fmt.Sprintf("Options.TTL is negative: %s", p.opts.TTL), nil)
+		return errs.NewConfigurationError(op, fmt.Sprintf("Options.TTL is negative: %s", p.opts.TTL), nil)
 	}
 	page, err := parseLinkURL(op, "LinkURL", p.opts.LinkURL)
 	if err != nil {
@@ -527,7 +527,7 @@ func (p *Plugin) Init(ac *types.AuthContext) error {
 func parseLinkURL(op, option, raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, behemotherr.NewConfigurationError(op,
+		return nil, errs.NewConfigurationError(op,
 			fmt.Sprintf("Options.%s %q is not an absolute http or https URL", option, raw), err)
 	}
 	return u, nil
@@ -597,7 +597,7 @@ func (p *Plugin) sendVerification(ctx context.Context, req SendRequest) (*SendRe
 	if req.user == nil && req.UserID != "" {
 		req.user, err = p.authContext.Store.FindUserByID(ctx, req.UserID)
 		if err != nil {
-			if behemotherr.IsNotFound(err) {
+			if errs.IsNotFound(err) {
 				return nil, ErrNoAccount
 			}
 			return nil, err
@@ -620,17 +620,17 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 	// on whether the email has an account.
 	email := req.Email
 	if !utils.IsValidEmail(email) {
-		return nil, behemotherr.NewInvalidInputError(op, keyEmail, "invalid email", nil)
+		return nil, errs.NewInvalidInputError(op, keyEmail, "invalid email", nil)
 	}
 	if req.RedirectURL != "" && !types.TrustedRedirect(ac.Origins, req.RedirectURL) {
-		return nil, behemotherr.NewInvalidInputError(op, "redirect_url", "redirect URL is not allowed", nil)
+		return nil, errs.NewInvalidInputError(op, "redirect_url", "redirect URL is not allowed", nil)
 	}
 
 	user := req.user
 	if user == nil {
 		found, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 		if err != nil {
-			if !behemotherr.IsNotFound(err) {
+			if !errs.IsNotFound(err) {
 				return nil, err // infra error (DB down): not "no such user"
 			}
 			if failErr := ac.Dispatcher.Fail(hctx, HookSendFailed, types.FailureReason{
@@ -691,13 +691,13 @@ func (p *Plugin) sendBody(hctx *types.HookContext, req SendRequest) (*SendResult
 // errInvalidLink is Verify's one answer to every link it refuses. It is
 // typed (unauthorized, 401).
 func errInvalidLink() error {
-	return behemotherr.NewUnauthorized("emailverification.Verify", ErrorCodeInvalidLink, "invalid or expired link")
+	return errs.NewUnauthorized("emailverification.Verify", ErrorCodeInvalidLink, "invalid or expired link")
 }
 
 // isTokenRejection reports whether err says the token is not usable (not
 // found, expired, consumed, revoked), as opposed to a failure of the system.
 func isTokenRejection(err error) bool {
-	return behemotherr.Is(err, behemotherr.CategoryToken) || behemotherr.IsNotFound(err)
+	return errs.IsCategory(err, errs.CategoryToken) || errs.IsNotFound(err)
 }
 
 // Verify marks the email of the user a link was sent to as verified.
@@ -767,7 +767,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 
 	user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
 	if err != nil {
-		if !behemotherr.IsNotFound(err) {
+		if !errs.IsNotFound(err) {
 			return nil, err
 		}
 		return nil, refuse("user_not_found")
@@ -791,7 +791,7 @@ func (p *Plugin) verifyBody(hctx *types.HookContext, in verifyInput) (*models.Us
 // the request ctx carries, or nil.
 func (p *Plugin) operation(ctx context.Context, op string) (*types.HookContext, error) {
 	if p.authContext == nil {
-		return nil, behemotherr.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	return &types.HookContext{
 		Ctx:     ctx,
@@ -821,7 +821,7 @@ func publishEmail(hctx *types.HookContext, email string) {
 func (p *Plugin) handleSend(rctx *types.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("emailverification.SendVerification", "request", err)
+		return errs.NewValidationError("emailverification.SendVerification", "request", err)
 	}
 	var req SendRequest
 	if err := req.FromMap(body); err != nil {
@@ -845,11 +845,11 @@ func (p *Plugin) handleSend(rctx *types.RequestContext) error {
 func (p *Plugin) handleVerify(rctx *types.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError("emailverification.Verify", "request", err)
+		return errs.NewValidationError("emailverification.Verify", "request", err)
 	}
 	rawToken, _ := body[keyToken].(string)
 	if rawToken == "" {
-		return behemotherr.NewInvalidInputError("emailverification.Verify", keyToken, "token is required", nil)
+		return errs.NewInvalidInputError("emailverification.Verify", keyToken, "token is required", nil)
 	}
 
 	result, err := p.Verify(rctx.Ctx, rawToken)

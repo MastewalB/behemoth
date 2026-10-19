@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth/crypto"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -117,7 +117,7 @@ func TestCachedKeySetRefetchesForAnUnknownKID(t *testing.T) {
 
 	src.set(nil, "k1", "k2")
 	_, err = set.PublicKey(ctx, "k2")
-	refused(t, err, behemotherr.ErrorCodeJWTUnknownKey, "within a minute of the last fetch")
+	refused(t, err, errs.CodeJWTUnknownKey, "within a minute of the last fetch")
 	assert.Equal(t, 1, src.fetches())
 
 	clock.add(crypto.DefaultKeyRefetchInterval)
@@ -128,12 +128,12 @@ func TestCachedKeySetRefetchesForAnUnknownKID(t *testing.T) {
 
 	for range 10 {
 		_, err = set.PublicKey(ctx, "made-up")
-		refused(t, err, behemotherr.ErrorCodeJWTUnknownKey)
+		refused(t, err, errs.CodeJWTUnknownKey)
 	}
 	assert.Equal(t, 2, src.fetches(), "made-up kids cause no fetch")
 	clock.add(crypto.DefaultKeyRefetchInterval)
 	_, err = set.PublicKey(ctx, "made-up")
-	refused(t, err, behemotherr.ErrorCodeJWTUnknownKey, "still unknown once fetched again")
+	refused(t, err, errs.CodeJWTUnknownKey, "still unknown once fetched again")
 	assert.Equal(t, 3, src.fetches())
 }
 
@@ -165,7 +165,7 @@ func TestCachedKeySetServesStaleKeysWhileTheSourceFails(t *testing.T) {
 	clock.add(time.Minute)
 	_, err = set.PublicKey(ctx, "k1")
 	require.ErrorIs(t, err, down, "past MaxStale")
-	assert.False(t, behemotherr.Is(err, behemotherr.CategoryToken))
+	assert.False(t, errs.IsCategory(err, errs.CategoryToken))
 
 	src.set(nil, "k1")
 	_, err = set.PublicKey(ctx, "k1")
@@ -230,7 +230,7 @@ func TestCachedKeySetForcedFetchFailure(t *testing.T) {
 	clock.add(crypto.DefaultKeyRefetchInterval)
 	_, err = set.PublicKey(ctx, "k2")
 	require.ErrorIs(t, err, down)
-	assert.False(t, behemotherr.Is(err, behemotherr.CategoryToken), "not a refused token")
+	assert.False(t, errs.IsCategory(err, errs.CategoryToken), "not a refused token")
 	_, err = set.PublicKey(ctx, "k3")
 	require.ErrorIs(t, err, down, "within RefetchInterval of the failure: a new kid can't be told from a made-up one")
 	assert.Equal(t, 2, src.fetches())
@@ -247,7 +247,7 @@ func TestCachedKeySetForcedFetchFailure(t *testing.T) {
 	require.NoError(t, err, "stale keys")
 	_, err = stale.PublicKey(ctx, "k2")
 	require.ErrorIs(t, err, down)
-	assert.False(t, behemotherr.Is(err, behemotherr.CategoryToken))
+	assert.False(t, errs.IsCategory(err, errs.CategoryToken))
 }
 
 // Concurrent calls share the fetches.
@@ -272,9 +272,9 @@ func TestCachedKeySetIsSafeForConcurrentUse(t *testing.T) {
 // A set without a source, or with a negative duration, can't work.
 func TestNewCachedKeySetOptions(t *testing.T) {
 	_, err := crypto.NewCachedKeySet(nil, crypto.CacheOptions{})
-	assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%v", err)
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	for _, opts := range []crypto.CacheOptions{{TTL: -time.Second}, {RefetchInterval: -time.Second}} {
 		_, err := crypto.NewCachedKeySet(&fakeSource{}, opts)
-		assert.True(t, behemotherr.Is(err, behemotherr.CategoryConfiguration), "%+v: %v", opts, err)
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%+v: %v", opts, err)
 	}
 }

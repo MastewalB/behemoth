@@ -10,7 +10,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/types/schema"
 )
 
@@ -139,7 +139,7 @@ func (r ledgerReader) FindMany(context.Context, behemoth.Model, clause.Expressio
 
 func (r ledgerReader) FindOne(context.Context, behemoth.Model, clause.Expression) (behemoth.Model, error) {
 	if r.db.snapshot == nil {
-		return nil, behemotherr.NewNotFound("memoryDatabase.FindOne", "schema_snapshot", nil)
+		return nil, errs.NewNotFound("memoryDatabase.FindOne", "schema_snapshot", nil)
 	}
 	snapshot := *r.db.snapshot
 	return &snapshot, nil
@@ -181,7 +181,7 @@ func TestGenerateAndMigrateRejectAnIncompleteSetup(t *testing.T) {
 		} {
 			dir := filepath.Join(t.TempDir(), "migrations")
 			_, err := call(context.Background(), MigrationConfig{FolderPath: dir, Path: tc.path}, tc.declared, tc.backend, RunOptions{Confirm: true})
-			if !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+			if !errs.IsCategory(err, errs.CategoryConfiguration) {
 				t.Errorf("%s, %s: err = %v, want a configuration error", entry, name, err)
 			}
 			if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
@@ -196,7 +196,7 @@ func TestMigrateRefusesTheGenerateOnlyPath(t *testing.T) {
 	db := newMemoryDatabase()
 	dir := filepath.Join(t.TempDir(), "migrations")
 	_, err := Migrate(context.Background(), MigrationConfig{FolderPath: dir}, Declared{Schemas: declaredRegistry(t, runUsers)}, db.backend(), RunOptions{Confirm: true})
-	if !behemotherr.Is(err, behemotherr.CategoryConfiguration) || len(db.applied) != 0 {
+	if !errs.IsCategory(err, errs.CategoryConfiguration) || len(db.applied) != 0 {
 		t.Errorf("err = %v, applied = %v; want a configuration error and nothing applied", err, db.applied)
 	}
 }
@@ -215,7 +215,7 @@ func TestEntryPointsRejectAnotherPath(t *testing.T) {
 		Presenter:    NewFilePresenter(DraftPath(managed)),
 		Generator:    &DefaultMigrationGenerator{},
 	}, true)
-	if !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+	if !errs.IsCategory(err, errs.CategoryConfiguration) {
 		t.Errorf("RunGenerateCLI on a managed configuration: err = %v, want a configuration error", err)
 	}
 
@@ -226,7 +226,7 @@ func TestEntryPointsRejectAnotherPath(t *testing.T) {
 		"RunManagedGenerate": RunManagedGenerate, "RunManagedApply": RunManagedApply,
 	} {
 		_, err = call(ctx, generateOnly, declared, MigrationDeps{Introspector: db, Runner: runner}, true)
-		if !behemotherr.Is(err, behemotherr.CategoryConfiguration) {
+		if !errs.IsCategory(err, errs.CategoryConfiguration) {
 			t.Errorf("%s on a generate-only configuration: err = %v, want a configuration error", name, err)
 		}
 	}
@@ -504,7 +504,7 @@ func TestManagedRefusesSeveralFilesWithoutALedger(t *testing.T) {
 		"Generate": Generate, "Migrate": Migrate,
 	} {
 		_, err := call(context.Background(), r.cfg, r.declared, db.backend(), RunOptions{Confirm: true})
-		if !behemotherr.IsCode(err, behemotherr.ErrorCodeMigrationUnappliedNoLedger) || len(db.applied) != 0 {
+		if !errs.IsCode(err, errs.CodeMigrationUnappliedNoLedger) || len(db.applied) != 0 {
 			t.Errorf("%s: err = %v, applied = %v; want the run refused", name, err, db.applied)
 		}
 	}

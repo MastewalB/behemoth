@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
-	behemotherr "github.com/MastewalB/behemoth/errors"
+	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -282,11 +282,11 @@ func (p *Plugin) declareChange(ic *types.PluginInitContext, byAddress func(*http
 func (p *Plugin) initChange(ac *types.AuthContext) error {
 	const op = "emailverification.Init"
 	if p.opts.ChangeLinkURL == "" || p.opts.RevertLinkURL == "" {
-		return behemotherr.NewConfigurationError(op,
+		return errs.NewConfigurationError(op,
 			"Options.ChangeLinkURL and Options.RevertLinkURL go together: the email change flow needs both pages", nil)
 	}
 	if p.opts.ChangeTTL < 0 || p.opts.RevertTTL < 0 {
-		return behemotherr.NewConfigurationError(op,
+		return errs.NewConfigurationError(op,
 			fmt.Sprintf("Options.ChangeTTL (%s) and Options.RevertTTL (%s) can't be negative", p.opts.ChangeTTL, p.opts.RevertTTL), nil)
 	}
 	var err error
@@ -322,7 +322,7 @@ func (p *Plugin) changeOperation(ctx context.Context, op string) (*types.HookCon
 		return nil, err
 	}
 	if p.changeURL == nil {
-		return nil, behemotherr.NewConfigurationError(op,
+		return nil, errs.NewConfigurationError(op,
 			"the email change flow is off; set Options.ChangeLinkURL and Options.RevertLinkURL", nil)
 	}
 	return hctx, nil
@@ -355,7 +355,7 @@ func (p *Plugin) RequestChange(ctx context.Context, req ChangeRequest) (*ChangeR
 		return nil, err
 	}
 	if req.UserID == "" {
-		return nil, behemotherr.NewInvalidInputError(op, "user", "a user is required", nil)
+		return nil, errs.NewInvalidInputError(op, "user", "a user is required", nil)
 	}
 	// Published for the rule per user, and for the audit events' subject.
 	hctx.Values[hooks.HookValueUserID] = req.UserID
@@ -370,21 +370,21 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 
 	newEmail := req.NewEmail
 	if !utils.IsValidEmail(newEmail) {
-		return nil, behemotherr.NewInvalidInputError(op, keyEmail, "invalid email", nil)
+		return nil, errs.NewInvalidInputError(op, keyEmail, "invalid email", nil)
 	}
 	if req.RedirectURL != "" && !types.TrustedRedirect(ac.Origins, req.RedirectURL) {
-		return nil, behemotherr.NewInvalidInputError(op, "redirect_url", "redirect URL is not allowed", nil)
+		return nil, errs.NewInvalidInputError(op, "redirect_url", "redirect URL is not allowed", nil)
 	}
 	user, err := ac.Store.FindUserByID(hctx.Ctx, req.UserID)
 	if err != nil {
-		if behemotherr.IsNotFound(err) {
+		if errs.IsNotFound(err) {
 			return nil, ErrNoAccount
 		}
 		return nil, err
 	}
 	current := store.NormalizeEmail(user.Email)
 	if newEmail == current {
-		return nil, behemotherr.NewInvalidInputError(op, keyEmail, "this is already the account's email", nil)
+		return nil, errs.NewInvalidInputError(op, keyEmail, "this is already the account's email", nil)
 	}
 
 	failed := func(code string, cause error) error {
@@ -431,7 +431,7 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 	// address is not reserved: the confirm checks again, by writing it.
 	if _, err := ac.Store.FindUserByEmail(hctx.Ctx, newEmail); err == nil {
 		return nil, failed("email_taken", ErrEmailTaken)
-	} else if !behemotherr.IsNotFound(err) {
+	} else if !errs.IsNotFound(err) {
 		return nil, err
 	}
 
@@ -460,15 +460,15 @@ func (p *Plugin) changeRequestBody(hctx *types.HookContext, req ChangeRequest) (
 // errInvalidChangeLink is the one answer to every confirm or revert link
 // that is refused. It is typed (unauthorized, 401).
 func errInvalidChangeLink(op string) error {
-	return behemotherr.NewUnauthorized(op, ErrorCodeInvalidChangeLink, "invalid or expired link")
+	return errs.NewUnauthorized(op, ErrorCodeInvalidChangeLink, "invalid or expired link")
 }
 
 // errEmailTaken is the typed conflict (409) of a confirm or a revert whose
 // address another account holds by now. Whoever sees it holds a link that
 // was mailed to that address, so it tells them nothing new about it.
 func errEmailTaken(op string) error {
-	return &behemotherr.DomainError{
-		Category: behemotherr.CategoryConflict, Op: op, Code: ErrorCodeEmailTaken,
+	return &errs.DomainError{
+		Category: errs.CategoryConflict, Op: op, Code: ErrorCodeEmailTaken,
 		PublicMessage:   "this email address is not available",
 		InternalMessage: op + ": the address belongs to another account",
 	}
@@ -559,7 +559,7 @@ func (p *Plugin) changeConfirmBody(hctx *types.HookContext, in changeTokenInput)
 	userID := fmt.Sprint(token.Subject)
 	user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
 	if err != nil {
-		if !behemotherr.IsNotFound(err) {
+		if !errs.IsNotFound(err) {
 			return nil, err
 		}
 		return nil, refuse("user_not_found", nil, userID, errInvalidChangeLink(op))
@@ -579,7 +579,7 @@ func (p *Plugin) changeConfirmBody(hctx *types.HookContext, in changeTokenInput)
 	// data.user.updated handler sends nothing to a verified user.
 	updated, err := ac.Store.UpdateUser(hctx.Ctx, user.ID, behemoth.M{models.UserEmail: to, models.UserEmailVerified: true})
 	if err != nil {
-		if behemotherr.IsDuplicateKey(err) {
+		if errs.IsDuplicateKey(err) {
 			return nil, refuse("email_taken", err, userID, errEmailTaken(op))
 		}
 		return nil, err
@@ -636,7 +636,7 @@ func (p *Plugin) changeRevertBody(hctx *types.HookContext, in changeTokenInput) 
 	restore, _ := token.MetadataJSON[keyRestore].(string)
 	user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
 	if err != nil {
-		if !behemotherr.IsNotFound(err) {
+		if !errs.IsNotFound(err) {
 			return nil, err
 		}
 		return nil, refuse("user_not_found", nil, userID, errInvalidChangeLink(op))
@@ -675,7 +675,7 @@ func (p *Plugin) changeRevertBody(hctx *types.HookContext, in changeTokenInput) 
 		switch {
 		case err == nil:
 			user = updated
-		case behemotherr.IsDuplicateKey(err):
+		case errs.IsDuplicateKey(err):
 			taken = true // nothing reserves the old address; see docs/ongoing.md
 		default:
 			return nil, err
@@ -701,7 +701,7 @@ func (p *Plugin) handleChange(rctx *types.RequestContext) error {
 	const op = "emailverification.RequestChange"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return behemotherr.NewValidationError(op, "request", err)
+		return errs.NewValidationError(op, "request", err)
 	}
 	var req ChangeRequest
 	if err := req.FromMap(body); err != nil {
@@ -709,7 +709,7 @@ func (p *Plugin) handleChange(rctx *types.RequestContext) error {
 	}
 	session, _ := rctx.Values["session"].(*models.Session)
 	if session == nil {
-		return behemotherr.NewSessionError(op, behemotherr.ErrorCodeSessionNotFresh, nil)
+		return errs.NewSessionError(op, errs.CodeSessionNotFresh, nil)
 	}
 	req.UserID = session.UserID
 
@@ -723,11 +723,11 @@ func (p *Plugin) handleChange(rctx *types.RequestContext) error {
 func changeToken(rctx *types.RequestContext, op string) (string, error) {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
-		return "", behemotherr.NewValidationError(op, "request", err)
+		return "", errs.NewValidationError(op, "request", err)
 	}
 	rawToken, _ := body[keyToken].(string)
 	if rawToken == "" {
-		return "", behemotherr.NewInvalidInputError(op, keyToken, "token is required", nil)
+		return "", errs.NewInvalidInputError(op, keyToken, "token is required", nil)
 	}
 	return rawToken, nil
 }
