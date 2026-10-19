@@ -150,3 +150,7 @@ Keep this list current, newest last.
 | [0001](0001-reporting-a-hook-refusal.md) | Report a hook chain's error through one helper, with one code | Accepted |
 | [0002](0002-deriving-external-jwt-keys.md) | Derive the signing keys of external JWTs from the master secret | Accepted |
 | [0003](0003-remote-jwt-verification-and-outbound-calls.md) | Verify remote JWTs in `crypto` over a key source, and call other services through one client | Proposed |
+| [0004](0004-carrying-the-caller-in-the-context.md) | Carry the caller of an operation in the context | Proposed |
+| [0005](0005-treating-a-missing-caller-as-anonymous.md) | Treat a call without a caller as anonymous | Proposed |
+| [0006](0006-requiring-declared-permissions.md) | Require a declared permission in every self-service flow and admin operation | Proposed |
+| [0007](0007-layering-the-packages.md) | Lay out the packages in layers, with the plugin contracts in `core` | Proposed |
