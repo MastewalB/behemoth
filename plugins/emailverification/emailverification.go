@@ -68,9 +68,9 @@ const (
 
 // Names of the rate-limit rules the plugin declares.
 const (
-	RuleSendRoute   = "emailverification.send.route"   // send requests per client address
-	RuleVerifyRoute = "emailverification.verify.route" // verify attempts per client address
-	RuleSendEmail   = "emailverification.send.email"   // links sent per email, from any caller
+	RuleSendAddress   = "emailverification.send.address"   // sends a caller asked for, per client address
+	RuleVerifyAddress = "emailverification.verify.address" // verify attempts per client address
+	RuleSendEmail     = "emailverification.send.email"     // links sent per email, from any caller
 )
 
 // Paths of the plugin's routes, below the router's base path.
@@ -91,6 +91,24 @@ const (
 // leaves in the update's Values for its data.user.updated handler: this
 // update changed the address, so a new link is due once it has committed.
 const valueEmailChanged = PluginName + ".emailChanged"
+
+// valueRequested marks a send that a caller asked for (SendVerification),
+// in the send's Values, for the rate-limit rule per client address. The
+// plugin's own sends, for a new user and after a change of address, carry
+// no mark.
+const valueRequested = PluginName + ".requested"
+
+// requestedByAddress is the KeyFunc of RuleSendAddress: the caller's
+// address, for a send a caller asked for. The plugin's own sends are not
+// counted: what causes them is limited already (a sign-up per address, a
+// change per user), and a refusal there would leave a new user without a
+// link.
+func requestedByAddress(hctx *core.HookContext) (string, bool) {
+	if requested, _ := hctx.Values[valueRequested].(bool); !requested {
+		return "", false
+	}
+	return core.KeyByClientIP()(hctx)
+}
 
 // ErrorCodeInvalidLink is the code of the error Verify returns for a link
 // it refuses: unknown, expired, already used, replaced by a newer link, or
@@ -372,26 +390,22 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 		}
 	}
 
-	byAddress := func(_ *http.Request, ip string) string { return ip }
-	for _, rule := range []core.RouteRateLimitRule{
-		{Name: RuleSendRoute, Method: http.MethodPost, Path: PathSend, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
-		{Name: RuleVerifyRoute, Method: http.MethodPost, Path: PathVerify, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
+	// Per client address on the flows' before points, like core's sign-in
+	// rule, so they hold for every transport. Per email on the send itself,
+	// so it also bounds the automatic sends; from the route it counts
+	// requests for unknown emails too, and so answers the same for both.
+	perAddress := core.Limit{Max: 10, Window: time.Minute}
+	for _, rule := range []core.HookRateLimitRule{
+		{Name: RuleSendAddress, Point: HookSendBefore, KeyFunc: requestedByAddress, Limit: perAddress},
+		{Name: RuleVerifyAddress, Point: HookVerifyBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+		{Name: RuleSendEmail, Point: HookSendBefore, KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.SendLimit},
 	} {
-		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
+		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
 			return err
 		}
 	}
-	// Per email on the send itself, so it also bounds the automatic sends
-	// and SendVerification called from code. From the route it counts
-	// requests for unknown emails too, and so answers the same for both.
-	if err := ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
-		Name: RuleSendEmail, Point: HookSendBefore,
-		KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.SendLimit,
-	}); err != nil {
-		return err
-	}
 	if p.changeEnabled() {
-		return p.declareChange(ic, byAddress)
+		return p.declareChange(ic, perAddress)
 	}
 	return nil
 }
@@ -483,7 +497,7 @@ func (p *Plugin) sendTo(ctx context.Context, user *models.User) error {
 	if user == nil || user.EmailVerified || user.Email == "" {
 		return nil
 	}
-	_, err := p.sendVerification(ctx, SendRequest{user: user})
+	_, err := p.sendVerification(ctx, SendRequest{user: user}, false)
 	if errors.Is(err, ErrAlreadyVerified) {
 		return nil
 	}
@@ -584,13 +598,20 @@ func (e *afterLookupError) Unwrap() error { return e.err }
 // this method reports neither sentinel. The plugin must have been
 // initialized by Boot.
 func (p *Plugin) SendVerification(ctx context.Context, req SendRequest) (*SendResult, error) {
-	return p.sendVerification(ctx, req)
+	return p.sendVerification(ctx, req, true)
 }
 
-func (p *Plugin) sendVerification(ctx context.Context, req SendRequest) (*SendResult, error) {
+// sendVerification is SendVerification. requested says that a caller asked
+// for the send, and not the plugin itself (see valueRequested).
+func (p *Plugin) sendVerification(ctx context.Context, req SendRequest, requested bool) (*SendResult, error) {
 	hctx, err := p.operation(ctx, "emailverification.SendVerification")
 	if err != nil {
 		return nil, err
+	}
+	if requested {
+		hctx.Values[valueRequested] = true
+	} else {
+		delete(hctx.Values, valueRequested) // an enclosing operation's
 	}
 	// A request by id is resolved here, before the flow: the email has to
 	// be in Values when the before point's rate limit runs.

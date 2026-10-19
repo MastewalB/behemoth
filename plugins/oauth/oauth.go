@@ -158,8 +158,8 @@ func (p *Plugin) Version() string {
 //     database, so that the plugin works without a key-value storage;
 //   - the auth.oauth.* points around Begin. None is audited: Begin needs no
 //     session and is not about an account;
-//   - two rate-limit rules: starts and completions of a sign-in per client
-//     address.
+//   - a rate-limit rule: starts of a sign-in per client address. A
+//     completion is a sign-in, which core's rule per address counts.
 //
 // It declares no sign-in points: core declares auth.signIn.* and
 // auth.signUp.*.
@@ -179,19 +179,13 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 		}
 	}
 
-	// Per address on the routes, like the magic link plugin's: it slows one
-	// client down and can't be used to keep another one out. Begin needs no
-	// session and writes a token for every call.
-	byAddress := func(_ *http.Request, ip string) string { return ip }
-	for _, rule := range []core.RouteRateLimitRule{
-		{Name: RuleBeginRoute, Method: http.MethodPost, Path: PathBegin, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
-		{Name: RuleCompleteRoute, Method: http.MethodPost, Path: PathComplete, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
-	} {
-		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
-			return err
-		}
-	}
-	return nil
+	// Per client address on Begin's before point, like the magic link
+	// plugin's: it slows one client down and can't be used to keep another
+	// one out. Begin needs no session and writes a token for every call.
+	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
+		Name: RuleBeginAddress, Point: HookBeginBefore,
+		KeyFunc: core.KeyByClientIP(), Limit: core.Limit{Max: 10, Window: time.Minute},
+	})
 }
 
 // Register implements [core.Plugin]. The plugin attaches no handlers to

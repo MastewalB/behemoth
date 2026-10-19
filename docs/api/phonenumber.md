@@ -196,10 +196,11 @@ Every flow publishes the number under `phonenumber.HookValuePhoneNumber` in `Val
 | Rule | Limits | Default |
 | --- | --- | --- |
 | `phonenumber.RuleSendNumber` | codes per number, from any caller and for any purpose | `SendLimit`, 3 per 15 minutes |
-| `phonenumber.RuleSendRoute` | requests to `send-otp` per client address | 10 a minute |
-| `phonenumber.RuleVerifyRoute` | requests to `verify` per client address | 10 a minute |
-| `phonenumber.RuleSignInRoute` | requests to `sign-in/phone-number` per client address | 10 a minute |
-| `phonenumber.RuleResetRequestRoute`, `RuleResetRoute` | requests to the two reset routes per client address | 10 a minute each |
+| `phonenumber.RuleSendAddress` | codes asked for with `SendCode` per client address | 10 a minute |
+| `phonenumber.RuleVerifyAddress` | verify attempts per client address | 10 a minute |
+| `phonenumber.RuleResetRequestAddress`, `RuleResetAddress` | reset codes asked for, and reset attempts, per client address | 10 a minute each |
+
+A sign-in, with a code or a password, is limited by core to 10 attempts a minute per client address and sign-in method (`engine.RuleSignInAddress`); the phone number method counts apart from the others. The rules per address are on the flows' before points, so they hold for the flows called from your own code or another transport. Change a limit, or turn a rule off, by its name with `RateLimitConfig`; see [Hooks](hooks.md#change-a-rule-by-its-name).
 
 The rule per number is attached to `auth.phoneNumber.beforeSend`, so it holds for `SendCode` called from code. It counts requests for numbers nobody holds too, so a `429` does not show whether a number has an account. Each message costs money and reaches somebody's phone, which is why this limit is tighter than the one for email links.
 

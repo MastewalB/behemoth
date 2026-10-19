@@ -75,18 +75,14 @@ A `DomainError` has a category (`validation`, `unauthorized`, `conflict`, `rate_
 
 ### A protection belongs to the operation, not to the path
 
-Password reset declares two kinds of limit, and its comment says why the second is a hook rule:
+Password reset limits its request per client address and per email, both on the flow's before point:
 
 ```go
-// Per email on the request itself, so it also holds for
-// RequestPasswordReset called from code.
-return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
-	Name: RuleResetRequestEmail, Point: HookResetRequestBefore,
-	KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.Reset.RequestLimit,
-})
+{Name: RuleResetRequestAddress, Point: HookResetRequestBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+{Name: RuleResetRequestEmail, Point: HookResetRequestBefore, KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.Reset.RequestLimit},
 ```
 
-A hook rule on the flow's before point counts every call of the flow. A route rule counts requests to one path and nothing else. Prefer the hook rule for a limit that protects an account, a mailbox or a resource. A route rule suits what is about HTTP itself.
+A hook rule on the flow's before point counts every call of the flow. A route rule counts requests to one path and nothing else. `core.KeyByClientIP` keys on the address the transport put on the caller, so a limit per client address is a hook rule too. Prefer the hook rule for a limit that protects an account, a mailbox, or a resource, and for one per client address. A route rule suits what is about HTTP itself, or a flow with no before point.
 
 ### What a client may learn is decided in the flow
 
@@ -124,9 +120,7 @@ A flow's guarantees are tested by calling the flow: the limit that refuses the e
 
 Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted:
 
-- The limits per client address are route rules, so sign-in and sign-up called from code have no rate limit. "A flow called from code skips the per-address limits of its route".
 - The handlers of the link request, verification send, email change and reset request routes hide whether an account exists. "Hiding whether an account exists is done by the HTTP handlers".
-- Hook rules learn the client's address from the `*http.Request`, with a `ClientIPConfig` of their own. "The caller of an operation is known only through the HTTP request" and "A hook rule has no direct way to the resolved client address".
 - `core.Plugin` requires `Routes` and `Middlewares`. The stages around a handler are built in `Router.Build`. `core`, `errs`, `auth`, and each plugin's package import `net/http`, so no import rule checks any of this yet. [`../plans/package_layout.md`](../plans/package_layout.md) plans a package for the HTTP types, and the check. "`Plugin` requires HTTP routes, and the request pipeline lives in the router".
 - The email change route requires a fresh session through `RequireFreshSession`, and `RequestChange` doesn't check it. "The fresh-session rule of an email change is checked by its route only".
 - The verify, confirm, and revert handlers refuse a missing token themselves, and several flows take positional arguments that no input type checks. "Some flows take loose arguments instead of a request type".

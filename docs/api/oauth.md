@@ -320,12 +320,13 @@ Starting and completing a sign-in also fire the token manager's points (`token.b
 
 ## Rate limits
 
-The plugin declares two rules.
+The plugin declares one rule.
 
 | Rule | Limits | Default |
 | --- | --- | --- |
-| `oauth.RuleBeginRoute` | requests to `POST /sign-in/oauth` per client address | 10 a minute |
-| `oauth.RuleCompleteRoute` | requests to `POST /oauth/complete` per client address | 10 a minute |
+| `oauth.RuleBeginAddress` | sign-ins started per client address | 10 a minute |
+
+Completing a sign-in is a sign-in, which core limits to 10 attempts a minute per client address and sign-in method (`engine.RuleSignInAddress`), and the sign-up of a new user is limited the same way (`engine.RuleSignUpAddress`). Both count the `oauth` method apart from the others. The rules are on the flows' before points, so they hold for `Begin` and `Complete` called from your own code too. Change a limit, or turn a rule off, by its name with `RateLimitConfig`; see [Hooks](hooks.md#change-a-rule-by-its-name).
 
 ## Limits
 

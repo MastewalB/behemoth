@@ -66,14 +66,12 @@ const (
 	PathAvailable = "/username/available"
 )
 
-// Names of the rate-limit rules the plugin declares, both per client
-// address: sign-in attempts, like core's rule on the email sign-in route,
-// and availability checks, which bounds how fast one client can list the
-// usernames that exist.
-const (
-	RuleSignInRoute    = "username.signin.route"
-	RuleAvailableRoute = "username.available.route"
-)
+// RuleAvailableRoute is the name of the rate-limit rule on availability
+// checks per client address, which bounds how fast one client can list the
+// usernames that exist. It is a route rule: Available fires no hook point
+// for a hook rule to sit on, so a call from code is not counted. Sign-ins
+// are counted by core's core.signin.address, per client address and method.
+const RuleAvailableRoute = "username.available.route"
 
 // HookValueUsername is the key a sign-in's username is published under in
 // HookContext.Values, in its stored form. A rate-limit rule on
@@ -208,20 +206,13 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 	})); err != nil {
 		return err
 	}
-	byAddress := func(_ *http.Request, ip string) string { return ip }
-	if err := ic.RateLimits.DeclareRouteRateLimitRule(core.RouteRateLimitRule{
-		Name: RuleSignInRoute, Method: http.MethodPost, Path: PathSignIn,
-		KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute},
-	}); err != nil {
-		return err
-	}
 	if !p.opts.AvailabilityRoute {
 		return nil
 	}
 	// More generous than sign-in: a form checks as the user types.
 	return ic.RateLimits.DeclareRouteRateLimitRule(core.RouteRateLimitRule{
 		Name: RuleAvailableRoute, Method: http.MethodPost, Path: PathAvailable,
-		KeyFunc: byAddress, Limit: core.Limit{Max: 30, Window: time.Minute},
+		KeyFunc: func(_ *http.Request, ip string) string { return ip }, Limit: core.Limit{Max: 30, Window: time.Minute},
 	})
 }
 

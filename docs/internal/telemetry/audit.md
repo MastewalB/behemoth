@@ -144,7 +144,7 @@ A failed operation is never attributed to its subject. A wrong password for an a
 | `IPAddress` | the caller's `Peer().IPAddress`, which the authentication stage resolved with the router's proxy configuration, so it is the address a session records. Empty with `AuditConfig.OmitIPAndAgent`. |
 | `UserAgent` | the caller's `Peer().UserAgent`. Empty with `AuditConfig.OmitIPAndAgent`. |
 
-`BootConfig.Audit.OmitIPAndAgent` leaves the address and the user agent out of every event the dispatcher builds. It is separate from `SessionConfig.CaptureIPAndAgent`, which decides the same for session rows. An event an application records itself through `Telemetry.RecordAudit` keeps what the application put in it.
+`BootConfig.Audit.OmitIPAndAgent` leaves the address and the user agent out of every event the dispatcher builds, and the rate limiter leaves the address and the counter key out of `ratelimit.exceeded`. It is separate from `SessionConfig.CaptureIPAndAgent`, which decides the same for session rows. An event an application records itself through `Telemetry.RecordAudit` keeps what the application put in it.
 
 `causeCode` is what tells one hook refusal from another. Every one of them has the `code` `rejected_by_hook`, since the firing site can't know which handler refused, and the handler's own error code (`email_not_verified`, `rate_limited`) is in `causeCode`. The metric attribute is still the reason's `code`, so a plugin's error codes do not become metric label values.
 

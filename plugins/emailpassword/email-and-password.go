@@ -614,6 +614,7 @@ func (p *Plugin) SignUp(ctx context.Context, input behemoth.M) (*models.User, er
 	}
 	email, _ := input[credentialEmailKey].(string)
 	publishEmail(hctx, email)
+	hctx.Values[hooks.HookValueMethod] = PluginName // core's per-address limit counts each method apart
 	return p.signUp(hctx, input)
 }
 
@@ -633,6 +634,7 @@ func (p *Plugin) SignIn(ctx context.Context, creds EmailAndPasswordCredentials) 
 		return nil, err
 	}
 	publishEmail(hctx, creds.Email)
+	hctx.Values[hooks.HookValueMethod] = PluginName // core's per-address limit counts each method apart
 	return p.signIn(hctx, IdentifierCredentials{
 		Key: credentialEmailKey, Value: creds.Email, Password: creds.Password, Extra: creds.Extra,
 		Find: func(ctx context.Context, s *store.Store, email string) (*models.User, error) {
@@ -653,9 +655,10 @@ func (p *Plugin) SignIn(ctx context.Context, creds EmailAndPasswordCredentials) 
 // in PluginMeta.Dependencies and is given it at construction.
 //
 // creds.Value is published in the operation's Values under creds.Key, where
-// a rate-limit rule on auth.signIn.before keys on it. No email is published:
-// it is not known before the lookup, so a rule per email does not count
-// these sign-ins.
+// a rate-limit rule on auth.signIn.before keys on it, and creds.Method under
+// hooks.HookValueMethod, where core's per-address rule does. No email is
+// published: it is not known before the lookup, so a rule per email does not
+// count these sign-ins.
 func (p *Plugin) SignInWith(ctx context.Context, creds IdentifierCredentials) (*SignInResult, error) {
 	const op = "emailpassword.SignInWith"
 	hctx, err := p.operation(ctx, op)
@@ -675,6 +678,11 @@ func (p *Plugin) SignInWith(ctx context.Context, creds IdentifierCredentials) (*
 	} else {
 		hctx.Values[creds.Key] = creds.Value
 	}
+	method := creds.Method
+	if method == "" {
+		method = PluginName
+	}
+	hctx.Values[hooks.HookValueMethod] = method // core's per-address limit counts each method apart
 	return p.signIn(hctx, creds)
 }
 

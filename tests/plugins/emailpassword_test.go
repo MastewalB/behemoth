@@ -23,6 +23,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	dbschema "github.com/MastewalB/behemoth/schema"
@@ -54,7 +55,8 @@ CREATE TABLE sessions (
 CREATE TABLE audit_log (
 	id TEXT PRIMARY KEY, event_type TEXT NOT NULL, outcome TEXT NOT NULL, actor_type TEXT NOT NULL,
 	actor_id TEXT, delegate_type TEXT, delegate_id TEXT, subject_type TEXT, subject_id TEXT, session_id TEXT, request_id TEXT,
-	ip_address TEXT, user_agent TEXT, metadata TEXT, created_at TIMESTAMP NOT NULL);`
+	ip_address TEXT, user_agent TEXT, metadata TEXT, created_at TIMESTAMP NOT NULL);
+CREATE TABLE rate_limits (limit_key TEXT PRIMARY KEY, count BIGINT NOT NULL, expires_at TIMESTAMP NOT NULL);`
 
 type passDispatcher struct{}
 
@@ -515,8 +517,9 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, user.ID)
 
-	// The flow publishes the email it was called with, for rate-limit rules.
-	email := behemoth.M{hooks.HookValueEmail: "ada@example.com"}
+	// The flow publishes the email it was called with and its method, for
+	// rate-limit rules.
+	email := behemoth.M{hooks.HookValueEmail: "ada@example.com", hooks.HookValueMethod: "emailpassword"}
 	with := func(base behemoth.M, extra behemoth.M) behemoth.M {
 		m := maps.Clone(base)
 		maps.Copy(m, extra)
@@ -644,14 +647,14 @@ func TestEmailAndPasswordCredentialsPayload(t *testing.T) {
 
 // Core limits sign-in, and sign-up, to ten attempts a minute per client
 // address. Through the router the eleventh is answered 429 with the time left
-// in the window, before the route runs. Another address is not affected, and
-// the two routes count separately.
+// in the window, before the flow looks up the user. Another address is not
+// affected, and the two flows count separately.
 func TestSignInRouteIsRateLimited(t *testing.T) {
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-limit.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(schema + `CREATE TABLE rate_limits (limit_key TEXT PRIMARY KEY, count BIGINT NOT NULL, expires_at TIMESTAMP NOT NULL);`)
+	_, err = db.Exec(schema)
 	require.NoError(t, err)
 
 	tel, rec := telemetrytest.New()
@@ -719,8 +722,79 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 	limited := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
 	require.Len(t, limited, 2)
 	assert.Equal(t, "203.0.113.7", limited[0].IPAddress)
-	assert.Equal(t, engine.RuleSignInRoute, limited[0].Metadata["rule"])
-	assert.Equal(t, engine.RuleSignUpRoute, limited[1].Metadata["rule"])
+	assert.Equal(t, engine.RuleSignInAddress, limited[0].Metadata["rule"])
+	assert.Equal(t, engine.RuleSignUpAddress, limited[1].Metadata["rule"])
+}
+
+// The per-address limits are hook rules on the flows, so a flow called from
+// another transport's wrapper is limited like the route: a sign-in through
+// a caller with an address is refused at the eleventh attempt. Each sign-in
+// method counts apart, code that named itself is not counted, and
+// RateLimitConfig changes a limit by name.
+func TestSignInLimitsHoldForEveryTransport(t *testing.T) {
+	ctx := context.Background()
+	boot := func(t *testing.T, cfg core.RateLimitConfig) (*emailpassword.Plugin, error) {
+		t.Helper()
+		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-transports.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { db.Close() })
+		_, err = db.Exec(schema)
+		require.NoError(t, err)
+		p := emailpassword.New(emailpassword.Options{})
+		app, err := engine.Prepare([]core.Plugin{p}, engine.PrepareConfig{})
+		require.NoError(t, err)
+		_, err = engine.Boot(ctx, app, sqliteAdapter.NewSQLiteAdapter(db, nil), engine.BootConfig{
+			Crypto: crypto.Config{
+				Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
+			},
+			RateLimit: cfg,
+		})
+		return p, err
+	}
+	overGRPC := identity.WithCaller(ctx, identity.Anonymous(identity.Peer{Transport: "grpc", IPAddress: "203.0.113.7"}))
+	byPassword := func(p *emailpassword.Plugin, ctx context.Context) error {
+		_, err := p.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: "nobody@example.com", Password: "a wrong password"})
+		return err
+	}
+	byUsername := func(p *emailpassword.Plugin, ctx context.Context) error {
+		_, err := p.SignInWith(ctx, emailpassword.IdentifierCredentials{
+			Key: "username", Value: "nobody", Password: "a wrong password", Method: "username",
+			Find: func(context.Context, *store.Store, string) (*models.User, error) {
+				return nil, errs.NewNotFound("test", models.UserTable, nil)
+			},
+		})
+		return err
+	}
+	limited := func(err error) bool { return errs.IsCategory(err, errs.CategoryRateLimited) }
+
+	p, err := boot(t, core.RateLimitConfig{})
+	require.NoError(t, err)
+	for i := 1; i <= 10; i++ {
+		err := byPassword(p, overGRPC)
+		require.Error(t, err)
+		require.False(t, limited(err), "attempt %d reaches the flow: %v", i, err)
+	}
+	assert.True(t, limited(byPassword(p, overGRPC)), "the eleventh is refused")
+	assert.False(t, limited(byUsername(p, overGRPC)), "another method has its own count")
+	job := identity.WithCaller(ctx, identity.System("import"))
+	for i := 1; i <= 12; i++ {
+		require.False(t, limited(byPassword(p, job)), "code in the process has no address to count")
+	}
+
+	p, err = boot(t, core.RateLimitConfig{Limits: map[string]core.Limit{engine.RuleSignInAddress: {Max: 2, Window: time.Minute}}})
+	require.NoError(t, err)
+	assert.False(t, limited(byPassword(p, overGRPC)))
+	assert.False(t, limited(byPassword(p, overGRPC)))
+	assert.True(t, limited(byPassword(p, overGRPC)), "the limit the configuration set")
+
+	p, err = boot(t, core.RateLimitConfig{Disabled: []string{engine.RuleSignInAddress}})
+	require.NoError(t, err)
+	for i := 1; i <= 12; i++ {
+		require.False(t, limited(byPassword(p, overGRPC)), "the rule is off")
+	}
+
+	_, err = boot(t, core.RateLimitConfig{Disabled: []string{"core.signin.route"}})
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "a name no rule has: %v", err)
 }
 
 // limitsPlugin declares a token kind and one hook rate-limit rule per firing
@@ -763,7 +837,6 @@ func TestHookRateLimitRulesKeyOnPublishedValues(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema + `
-CREATE TABLE rate_limits (limit_key TEXT PRIMARY KEY, count BIGINT NOT NULL, expires_at TIMESTAMP NOT NULL);
 CREATE TABLE tokens (
 	id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT, lookup_hash TEXT NOT NULL, token_hash TEXT NOT NULL,
 	key_version INTEGER NOT NULL, metadata TEXT, expires_at TIMESTAMP, consumed_at TIMESTAMP, revoked_at TIMESTAMP,

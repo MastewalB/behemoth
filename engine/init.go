@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/MastewalB/behemoth/dispatch"
 	"github.com/MastewalB/behemoth/messaging"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -351,7 +350,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 
 	// Counters fire no data hooks, so they get a store of their own: the
 	// one plugins use is built later, from the dispatcher this feeds.
-	rateLimiter, err := ratelimit.NewDefaultRateLimiter(app.RateLimits, kv, store.New(db, store.WithSchema(app.Resolver), store.WithTelemetry(tel)), cfg.RateLimit, tel)
+	rateLimiter, err := ratelimit.NewDefaultRateLimiter(app.RateLimits, kv, store.New(db, store.WithSchema(app.Resolver), store.WithTelemetry(tel)), cfg.RateLimit, cfg.Audit, tel)
 	if err != nil {
 		return nil, err
 	}
@@ -657,6 +656,7 @@ func (s *scopedRateLimitCatalog) DeclareRouteRateLimitRule(rule core.RouteRateLi
 func (s *scopedRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {
 	return s.inner.RulesForRoute()
 }
+func (s *scopedRateLimitCatalog) HasRule(name string) bool { return s.inner.HasRule(name) }
 
 // scopedSchemaRegistry injects the declaring owner into every table and
 // contribution, the same way the catalog wrappers above do.
@@ -874,65 +874,42 @@ func CoreDeclareSchema(ic *core.PluginInitContext) error {
 	return nil
 }
 
-// RuleSignInRoute and RuleSignUpRoute are the names of core's rate-limit
-// rules on the email sign-in and sign-up routes. An application or plugin
-// that wants another limit on one of them declares a rule for the same method
-// and path with a more specific match, or the same one with Disabled set.
+// The names of core's limits per client address. Each is a hook rule on its
+// flow's before point, keyed by core.KeyByClientIP, so it counts every call
+// of the flow, over HTTP or another transport, and not the requests to one
+// path. A call whose caller has no address, such as code in the process, is
+// not counted. RateLimitConfig.Limits and Disabled change them by name.
 const (
-	RuleSignInRoute = "core.signin.route"
-	RuleSignUpRoute = "core.signup.route"
-	// RuleSessionTokenRoute limits POST /session/token per client address.
-	// A client asks again every few minutes, and a page with several tabs
-	// asks once per tab, so the limit is higher than sign-in's.
-	RuleSessionTokenRoute = "core.session_token.route"
+	// RuleSignInAddress limits sign-ins per client address and sign-in
+	// method (hooks.HookValueMethod): each method, such as emailpassword or
+	// magiclink, keeps a count of its own.
+	RuleSignInAddress = "core.signin.address"
+	// RuleSignUpAddress limits sign-ups per client address and method, as
+	// RuleSignInAddress does.
+	RuleSignUpAddress = "core.signup.address"
+	// RuleSessionTokenAddress limits session token issues per client
+	// address. A client asks again every few minutes, and a page with
+	// several tabs asks once per tab, so the limit is higher than sign-in's.
+	RuleSessionTokenAddress = "core.session_token.address"
 )
 
 // CoreDeclareRateLimitRules declares the limits core applies without being
-// asked: ten attempts a minute per client address on sign-in, and the same
-// on sign-up. The two count separately.
+// asked: ten attempts a minute per client address and method on sign-in,
+// the same on sign-up, and thirty session token issues a minute per client
+// address. Sign-in and sign-up count separately.
 //
 // The limits are per address and not per account. On sign-in that slows one
 // client guessing passwords and does not let anyone lock a user out by
 // failing on purpose. On sign-up it bounds how fast one client can create
 // accounts and make the server hash passwords.
-//
-// There is no password-reset route yet, and so no rule for one.
 func CoreDeclareRateLimitRules(ic *core.PluginInitContext) error {
-	byAddress := func(r *http.Request, ip string) string { return ip }
-	coreRules := []core.RouteRateLimitRule{
-		{
-			Name:      RuleSignInRoute,
-			Method:    http.MethodPost,
-			Path:      "/sign-in/email",
-			KeyFunc:   byAddress,
-			Limit:     core.Limit{Max: 10, Window: time.Minute},
-			Algorithm: core.AlgorithmFixedWindow,
-			Action:    core.ActionReject,
-			Owner:     "core",
-		},
-		{
-			Name:      RuleSessionTokenRoute,
-			Method:    http.MethodPost,
-			Path:      core.PathSessionToken,
-			KeyFunc:   byAddress,
-			Limit:     core.Limit{Max: 30, Window: time.Minute},
-			Algorithm: core.AlgorithmFixedWindow,
-			Action:    core.ActionReject,
-			Owner:     "core",
-		},
-		{
-			Name:      RuleSignUpRoute,
-			Method:    http.MethodPost,
-			Path:      "/sign-up/email",
-			KeyFunc:   byAddress,
-			Limit:     core.Limit{Max: 10, Window: time.Minute},
-			Algorithm: core.AlgorithmFixedWindow,
-			Action:    core.ActionReject,
-			Owner:     "core",
-		},
-	}
-	for _, r := range coreRules {
-		if err := ic.RateLimits.DeclareRouteRateLimitRule(r); err != nil {
+	perMinute := func(max int64) core.Limit { return core.Limit{Max: max, Window: time.Minute} }
+	for _, rule := range []core.HookRateLimitRule{
+		{Name: RuleSignInAddress, Point: hooks.HookSignInBefore, KeyFunc: core.KeyByClientIP(hooks.HookValueMethod), Limit: perMinute(10)},
+		{Name: RuleSignUpAddress, Point: hooks.HookSignUpBefore, KeyFunc: core.KeyByClientIP(hooks.HookValueMethod), Limit: perMinute(10)},
+		{Name: RuleSessionTokenAddress, Point: hooks.HookSessionTokenBeforeIssue, KeyFunc: core.KeyByClientIP(), Limit: perMinute(30)},
+	} {
+		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
 			return err
 		}
 	}

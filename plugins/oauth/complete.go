@@ -202,6 +202,9 @@ func (p *Plugin) Complete(ctx context.Context, req CompleteRequest) (*CompleteRe
 		return nil, err
 	}
 	hctx.Values[HookValueProvider] = req.Provider
+	// Core's per-address limits count each method apart. The sign-up of a
+	// new user inside the flow inherits it.
+	hctx.Values[hooks.HookValueMethod] = PluginName
 
 	result, err := p.complete(hctx, in)
 	if err != nil {

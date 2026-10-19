@@ -154,6 +154,7 @@ func (c fixedRuleCatalog) DeclareHookRateLimitRule(HookRateLimitRule) error   { 
 func (c fixedRuleCatalog) RulesForHook(HookPoint) []HookRateLimitRule         { return nil }
 func (c fixedRuleCatalog) DeclareRouteRateLimitRule(RouteRateLimitRule) error { return nil }
 func (c fixedRuleCatalog) RulesForRoute() []RouteRateLimitRule                { return c.routes }
+func (c fixedRuleCatalog) HasRule(string) bool                                { return false }
 
 // rejectingLimiter rejects every request and reports which rule fired.
 type rejectingLimiter struct{}

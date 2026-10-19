@@ -3,8 +3,9 @@ package ratelimit
 import (
 	"context"
 	"errors"
-	"github.com/MastewalB/behemoth/dispatch"
+	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/dispatch"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
@@ -163,5 +165,92 @@ func TestRateLimiterMetrics(t *testing.T) {
 	events := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
 	if len(events) != 1 || events[0].Outcome != telemetry.OutcomeDenied || events[0].IPAddress != "203.0.113.7" {
 		t.Errorf("audit events = %+v, want one denied event with the address", events)
+	}
+}
+
+// limitRecorder allows every check and records the rule and limit of each.
+type limitRecorder struct{ seen map[string]core.Limit }
+
+func (l limitRecorder) Allow(_ context.Context, key string, limit core.Limit) (bool, time.Duration, error) {
+	rule, _, _ := strings.Cut(key, ":")
+	l.seen[rule] = limit
+	return true, 0, nil
+}
+
+// RateLimitConfig.Limits replaces a rule's limit and Disabled turns a rule
+// off, for hook and route rules alike. A name no rule has, or a limit that
+// can't be counted, is a configuration error.
+func TestRateLimitConfigChangesRulesByName(t *testing.T) {
+	const point = core.HookPoint("test.thing.before")
+	hookCatalog := dispatch.NewDefaultHookCatalog()
+	if err := hookCatalog.Declare(core.HookPointDef{Point: point, Owner: "test", Phase: core.BeforeHookPhase}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := limitRecorder{seen: map[string]core.Limit{}}
+	declared := core.Limit{Max: 10, Window: time.Minute}
+	catalog := NewRateLimitCatalog(hookCatalog)
+	for _, name := range []string{"hook.tuned", "hook.off", "hook.kept"} {
+		if err := catalog.DeclareHookRateLimitRule(core.HookRateLimitRule{
+			Name: name, Point: point, KeyFunc: core.KeyByValues(), Limit: declared, Limiter: recorder, Owner: "test",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"route.tuned", "route.off"} {
+		if err := catalog.DeclareRouteRateLimitRule(core.RouteRateLimitRule{
+			Name: name, Method: http.MethodPost, Path: "/" + name, KeyFunc: func(*http.Request, string) string { return "" },
+			Limit: declared, Limiter: recorder, Owner: "test",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tuned := core.Limit{Max: 3, Window: time.Hour}
+	cfg := core.RateLimitConfig{
+		Limits:   map[string]core.Limit{"hook.tuned": tuned, "route.tuned": tuned},
+		Disabled: []string{"hook.off", "route.off"},
+	}
+	rl, err := NewDefaultRateLimiter(catalog, nil, nil, cfg, core.AuditConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := rl.CheckHookLimit(ctx, point, &core.HookContext{Ctx: ctx}); err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range catalog.RulesForRoute() {
+		if err := rl.CheckRouteLimit(ctx, rule, httptest.NewRequest(http.MethodPost, rule.Path, nil), &core.ClientIPConfig{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := map[string]core.Limit{"hook.tuned": tuned, "hook.kept": declared, "route.tuned": tuned}
+	if !maps.Equal(recorder.seen, want) {
+		t.Errorf("checks made = %v, want %v: the tuned rules with their new limit, the disabled ones not at all", recorder.seen, want)
+	}
+
+	for name, bad := range map[string]core.RateLimitConfig{
+		"a limit for no rule":      {Limits: map[string]core.Limit{"no.such.rule": tuned}},
+		"a limit that can't count": {Limits: map[string]core.Limit{"hook.tuned": {Max: 0, Window: time.Minute}}},
+		"disabling no rule":        {Disabled: []string{"no.such.rule"}},
+	} {
+		if _, err := NewDefaultRateLimiter(catalog, nil, nil, bad, core.AuditConfig{}, nil); !errs.IsCategory(err, errs.CategoryConfiguration) {
+			t.Errorf("%s: got %v, want a configuration error", name, err)
+		}
+	}
+}
+
+// With AuditConfig.OmitIPAndAgent the event of a refusal records neither
+// the address nor the key, which for a rule per address is the address.
+func TestRateLimitRefusalOmitsTheAddressWhenConfigured(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	rl := &DefaultRateLimiter{tel: tel, audit: core.AuditConfig{OmitIPAndAgent: true}}
+	ctx := context.Background()
+	err := rl.evaluate(ctx, "signin", "signin:203.0.113.7", "203.0.113.7", fixedLimiter{allowed: false}, core.Limit{}, "", 0)
+	if !errs.IsCategory(err, errs.CategoryRateLimited) {
+		t.Fatalf("got %v", err)
+	}
+	events := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
+	if len(events) != 1 || events[0].IPAddress != "" || events[0].Metadata["key"] != nil || events[0].Metadata["rule"] != "signin" {
+		t.Errorf("audit events = %+v, want one event with the rule and without the address or the key", events)
 	}
 }

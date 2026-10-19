@@ -138,7 +138,7 @@ Every refusal answers with one typed unauthorized error, `invalid_verification_l
 | --- | --- |
 | token kinds | `email_change` (to the new address, `ChangeTTL`) and `email_change_revert` (to the old address, `RevertTTL`); both single use, database backend, subject the user's id |
 | hook points | `auth.emailChange.` `beforeRequest`, `afterRequest`, `requestFailed`; `beforeConfirm`, `afterConfirm`, `confirmFailed`; `beforeRevert`, `afterRevert`, `revertFailed`. After and failed are audited |
-| route rules | 10 a minute per client address on each of the three routes |
+| hook rules per address | `emailverification.change.address`, `.change.confirm.address`, `.change.revert.address` on the three before points: 10 a minute per client address (`core.KeyByClientIP`) |
 | hook rule | `emailverification.change.user` on `beforeRequest`: `Options.ChangeLimit` per `HookValueUserID` |
 
 No table or column holds the pending change. The two addresses travel in the tokens' metadata:

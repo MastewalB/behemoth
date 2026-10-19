@@ -114,7 +114,7 @@ The tests run on SQLite, with `_txlock=immediate`: the data handlers read in the
 These limits apply:
 
 - `[Not built]` A route to change the caller's username or its spelling. `SetUsername` is the flow such a route would call.
-- `[Limit]` The availability route's limit is a route rule, so `Available` called from code has none. This is the gap of *A flow called from code skips the per-address limits of its route* in `docs/ongoing.md`.
+- `[Limit]` The availability route's limit is a route rule, so `Available` called from code has none: the flow fires no hook point for a hook rule to sit on. A sign-in by username is counted by core's `core.signin.address` under the method `username`, which `SignIn` passes to `emailpassword.SignInWith`.
 - `[Limit]` A released username is free at once. `docs/ongoing.md` has the entry.
 - `[Limit]` The loser of two writes racing for a username gets the store's code. `docs/ongoing.md` has the entry.
 - The validation messages are sent to the client, unlike `emailpassword`'s `invalid email`: they are the plugin's own text and say which rule was broken.

@@ -79,7 +79,7 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 | `POST /sign-out` | the request has no session token | `401` | `{"error": "missing session token", "code": "session_missing"}` |
 | `POST /sign-out` | the token belongs to no session, or its session is revoked or expired | `401` | the message and code of the reason: `session_invalid`, `session_revoked`, `session_expired`. With a cookie delivery the response also removes the cookie. See [Sessions](sessions.md#protect-your-own-routes). |
 | any | a hook handler rejected the request with a typed error | the error's status | the error's public message and code |
-| any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
+| any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address (`engine.RuleSignInAddress`, `engine.RuleSignUpAddress`) | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
 
 Sign-in gives the same answer for an unknown email and a wrong password, so the response does not show which addresses have an account. Sign-up does show it: a `409` says the address is registered.
@@ -331,11 +331,13 @@ The after and failed points are audited under their point names. Issuing and con
 
 | Rule | Limits | Default |
 | --- | --- | --- |
-| `emailpassword.RuleResetRequestRoute` | requests to `POST /password-reset/request` per client address | 10 a minute |
-| `emailpassword.RuleResetConfirmRoute` | requests to `POST /password-reset/confirm` per client address | 10 a minute |
+| `emailpassword.RuleResetRequestAddress` | reset requests per client address | 10 a minute |
+| `emailpassword.RuleResetConfirmAddress` | reset attempts per client address | 10 a minute |
 | `emailpassword.RuleResetRequestEmail` | reset requests per email | `Reset.RequestLimit`, 5 per 15 minutes |
 
-The rule per email is attached to `auth.passwordReset.beforeRequest`, so it also holds for `RequestPasswordReset` called from code. It counts requests for unknown emails too, so a `429` does not show whether the address has an account.
+The rules are attached to the flows' before points, `auth.passwordReset.beforeRequest` and `auth.passwordReset.before`, so they also hold for `RequestPasswordReset` and `ResetPassword` called from your own code or another transport. A call from code with no client address is counted per email only. Change a limit, or turn a rule off, by its name with `RateLimitConfig`; see [Hooks](hooks.md#change-a-rule-by-its-name).
+
+The rule per email It counts requests for unknown emails too, so a `429` does not show whether the address has an account.
 
 ## Limits
 

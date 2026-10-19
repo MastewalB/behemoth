@@ -236,6 +236,8 @@ Things worth knowing:
   }
   ```
 
+  A `ratelimit.exceeded` event then also leaves out the counter key from its metadata: for a limit per client address the key is the address.
+
 - **An impersonated action names both users.** The impersonated user is the actor, so a query by their id finds it, and the impersonator is the delegate.
 - **Rate-limit rejections are recorded one by one.** A client that keeps sending requests past its limit adds one event per request.
 

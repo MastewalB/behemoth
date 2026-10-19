@@ -97,18 +97,34 @@ const (
 	HookResetFailed core.HookPoint = "auth.phoneNumber.passwordResetFailed"
 )
 
-// Names of the rate-limit rules the plugin declares. The route rules count
-// per client address. RuleSendNumber counts the codes asked for per number,
-// from any caller and for any purpose: each one is a text message somebody
-// pays for and somebody receives.
+// Names of the rate-limit rules the plugin declares. The rules that end in
+// .address count per client address. RuleSendAddress counts the codes asked
+// for with SendCode, and RuleResetRequestAddress those for a password reset.
+// RuleSendNumber counts the codes asked for per number, from any caller and
+// for any purpose: each one is a text message somebody pays for and somebody
+// receives. A sign-in, with a code or a password, is counted by core's
+// core.signin.address, per client address and method.
 const (
-	RuleSendRoute         = "phonenumber.send.route"
-	RuleVerifyRoute       = "phonenumber.verify.route"
-	RuleSignInRoute       = "phonenumber.signin.route"
-	RuleResetRequestRoute = "phonenumber.reset_request.route"
-	RuleResetRoute        = "phonenumber.reset.route"
-	RuleSendNumber        = "phonenumber.send.number"
+	RuleSendAddress         = "phonenumber.send.address"
+	RuleVerifyAddress       = "phonenumber.verify.address"
+	RuleResetRequestAddress = "phonenumber.reset_request.address"
+	RuleResetAddress        = "phonenumber.reset.address"
+	RuleSendNumber          = "phonenumber.send.number"
 )
+
+// sendByAddress returns the KeyFunc of a send rule per client address: the
+// caller's address, for the sends of a password reset when reset is true and
+// for the other sends when it is false. The send publishes its purpose in
+// Values under keyPurpose.
+func sendByAddress(reset bool) func(hctx *core.HookContext) (string, bool) {
+	byAddress := core.KeyByClientIP()
+	return func(hctx *core.HookContext) (string, bool) {
+		if (hctx.Values[keyPurpose] == string(PurposePasswordReset)) != reset {
+			return "", false
+		}
+		return byAddress(hctx)
+	}
+}
 
 // HookValuePhoneNumber is the key a flow's number is published under in
 // HookContext.Values, in E.164 form, for rate-limit rules:
@@ -284,12 +300,15 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 		{Point: HookVerifyAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
 		{Point: HookVerifyFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 	}
-	byAddress := func(_ *http.Request, ip string) string { return ip }
-	perMinute := core.Limit{Max: 10, Window: time.Minute}
-	rules := []core.RouteRateLimitRule{
-		{Name: RuleSendRoute, Method: http.MethodPost, Path: PathSendOTP, KeyFunc: byAddress, Limit: perMinute},
-		{Name: RuleVerifyRoute, Method: http.MethodPost, Path: PathVerify, KeyFunc: byAddress, Limit: perMinute},
-		{Name: RuleSignInRoute, Method: http.MethodPost, Path: PathSignIn, KeyFunc: byAddress, Limit: perMinute},
+	// Per client address on the flows' before points, so they hold for
+	// every transport. Per number on the send itself, so it holds for every
+	// purpose; it counts requests for numbers nobody holds too, and so
+	// answers the same for both.
+	perAddress := core.Limit{Max: 10, Window: time.Minute}
+	rules := []core.HookRateLimitRule{
+		{Name: RuleSendAddress, Point: HookSendBefore, KeyFunc: sendByAddress(false), Limit: perAddress},
+		{Name: RuleVerifyAddress, Point: HookVerifyBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+		{Name: RuleSendNumber, Point: HookSendBefore, KeyFunc: core.KeyByValues(HookValuePhoneNumber), Limit: p.opts.SendLimit},
 	}
 	if p.opts.PasswordReset {
 		points = append(points,
@@ -298,8 +317,8 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 			core.HookPointDef{Point: HookResetFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 		)
 		rules = append(rules,
-			core.RouteRateLimitRule{Name: RuleResetRequestRoute, Method: http.MethodPost, Path: PathResetRequest, KeyFunc: byAddress, Limit: perMinute},
-			core.RouteRateLimitRule{Name: RuleResetRoute, Method: http.MethodPost, Path: PathReset, KeyFunc: byAddress, Limit: perMinute},
+			core.HookRateLimitRule{Name: RuleResetRequestAddress, Point: HookSendBefore, KeyFunc: sendByAddress(true), Limit: perAddress},
+			core.HookRateLimitRule{Name: RuleResetAddress, Point: HookResetBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
 		)
 	}
 	for _, def := range points {
@@ -308,17 +327,11 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 		}
 	}
 	for _, rule := range rules {
-		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
+		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
 			return err
 		}
 	}
-	// Per number on the send itself, so it holds for every purpose and for
-	// SendCode called from code. It counts requests for numbers nobody
-	// holds too, and so answers the same for both.
-	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
-		Name: RuleSendNumber, Point: HookSendBefore,
-		KeyFunc: core.KeyByValues(HookValuePhoneNumber), Limit: p.opts.SendLimit,
-	})
+	return nil
 }
 
 // Register implements [core.Plugin]. Two handlers keep the column to
@@ -614,6 +627,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 	}
 
 	payload := behemoth.M{HookValuePhoneNumber: number, keyPurpose: string(purpose)}
+	hctx.Values[keyPurpose] = string(purpose) // the rules per address count a reset's sends apart
 	if req.UserID != "" {
 		payload[hooks.HookValueUserID] = req.UserID
 	}
@@ -825,6 +839,7 @@ func (p *Plugin) SignInWithCode(ctx context.Context, phoneNumber, code string) (
 	if err != nil {
 		return nil, err
 	}
+	hctx.Values[hooks.HookValueMethod] = PluginName // core's per-address limit counts each method apart
 	return p.signIn(hctx, signInInput{number: number, code: code})
 }
 

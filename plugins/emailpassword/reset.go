@@ -60,9 +60,9 @@ const (
 
 // Names of the rate-limit rules the plugin declares when reset is enabled.
 const (
-	RuleResetRequestRoute = "emailpassword.reset.request.route" // reset requests per client address
-	RuleResetConfirmRoute = "emailpassword.reset.confirm.route" // reset attempts per client address
-	RuleResetRequestEmail = "emailpassword.reset.request.email" // reset requests per email, from any caller
+	RuleResetRequestAddress = "emailpassword.reset.request.address" // reset requests per client address
+	RuleResetConfirmAddress = "emailpassword.reset.confirm.address" // reset attempts per client address
+	RuleResetRequestEmail   = "emailpassword.reset.request.email"   // reset requests per email, from any caller
 )
 
 // Paths of the reset routes, below the router's base path.
@@ -252,24 +252,23 @@ func (p *Plugin) declareReset(ic *core.PluginInitContext) error {
 		}
 	}
 
-	// Per address on the routes, like core's sign-in rule: it slows one
-	// client down and can't be used to keep another one out.
-	byAddress := func(_ *http.Request, ip string) string { return ip }
-	for _, rule := range []core.RouteRateLimitRule{
-		{Name: RuleResetRequestRoute, Method: http.MethodPost, Path: PathResetRequest, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
-		{Name: RuleResetConfirmRoute, Method: http.MethodPost, Path: PathResetConfirm, KeyFunc: byAddress, Limit: core.Limit{Max: 10, Window: time.Minute}},
+	// Per client address, like core's sign-in rule: it slows one client down
+	// and can't be used to keep another one out. Per email, so that a
+	// mailbox is not flooded; it counts requests for unknown emails too, and
+	// so answers the same for both. All are on the flows' before points, so
+	// they hold for RequestPasswordReset and ResetPassword called from any
+	// transport.
+	perAddress := core.Limit{Max: 10, Window: time.Minute}
+	for _, rule := range []core.HookRateLimitRule{
+		{Name: RuleResetRequestAddress, Point: HookResetRequestBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+		{Name: RuleResetConfirmAddress, Point: HookResetBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+		{Name: RuleResetRequestEmail, Point: HookResetRequestBefore, KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.Reset.RequestLimit},
 	} {
-		if err := ic.RateLimits.DeclareRouteRateLimitRule(rule); err != nil {
+		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
 			return err
 		}
 	}
-	// Per email on the request itself, so it also holds for
-	// RequestPasswordReset called from code. It counts requests for unknown
-	// emails too, and so answers the same for both.
-	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
-		Name: RuleResetRequestEmail, Point: HookResetRequestBefore,
-		KeyFunc: core.KeyByValues(hooks.HookValueEmail), Limit: p.opts.Reset.RequestLimit,
-	})
+	return nil
 }
 
 // initReset checks the reset options and wraps the two flows with their

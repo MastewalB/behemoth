@@ -25,7 +25,7 @@ Compare with the email/password plugin, which declares nothing. This one is the 
 | --- | --- |
 | token kind | `core.TokenKindMagicLink`, single use, `Options.TTL`, database backend |
 | hook points | `auth.magicLink.beforeRequest` (before), `.afterRequest` (after, audited), `.requestFailed` (failed, audited) |
-| route rules | `magiclink.request.route` and `magiclink.verify.route`: 10 a minute per client address |
+| hook rule per address | `magiclink.request.address` on `auth.magicLink.beforeRequest`: 10 a minute per client address (`core.KeyByClientIP`). Verify is a sign-in, which core's `core.signin.address` counts per address and method; `Verify` publishes `HookValueMethod` for it |
 | hook rule | `magiclink.request.email` on `auth.magicLink.beforeRequest`: `Options.RequestLimit` per `HookValueEmail` |
 
 The token kind is database-backed on purpose. `RevokeAllForSubject` is not supported for a key-value kind, and `Store.DeleteUser` removes a user's tokens from the table.

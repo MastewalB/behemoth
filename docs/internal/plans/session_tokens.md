@@ -204,7 +204,7 @@ Behemoth would issue tokens to other applications, with client registration, con
 | the JWT provider and the key set route | `crypto/jwt.go` (`JWTProviderImpl`) and `auth/key_set.go` (`KeySetRoutes`), with the set written by `crypto/jwk.go` (`MarshalJWKSet`) and external tokens checked by `crypto/verify.go` (`VerifyJWT`) |
 | the derived keys | `crypto/external_keys.go` (`NewDerivedKeySet`) |
 | `JWTConfig`, its defaults and its checks, `ExternalKeySet` | `crypto/contracts.go` |
-| the wiring, the hook points, and `core.session_token.route` (30 a minute per address) | `engine/init.go` (`Boot`, `CoreDeclareHookPoints`, `CoreDeclareRateLimitRules`) |
+| the wiring, the hook points, and `core.session_token.address` (30 a minute per address, a hook rule on `auth.sessionToken.beforeIssue`) | `engine/init.go` (`Boot`, `CoreDeclareHookPoints`, `CoreDeclareRateLimitRules`) |
 | the tests | `crypto/jwt_test.go`, `tests/plugins/session_token_test.go` |
 
 The flow reads the token back with `JWTProvider.Verify` after signing it, for its `jti` and `exp`. That keeps `Sign` returning a string, at the cost of one signature check per issued token.
