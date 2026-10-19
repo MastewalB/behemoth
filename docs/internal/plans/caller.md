@@ -363,7 +363,7 @@ The caller's package sits below `telemetry`, and a hook callout sends the caller
 | 1 | Part 1 of [`package_layout.md`](package_layout.md): the packages move to their layout, except for the HTTP types | Done |
 | 2 | The caller's package, `WithCaller`, `CallerFrom`, `System`, `For`, `HookContext.Caller`, the permission catalog, and `Access`, with tests. Nothing reads them yet. | Done |
 | 3 | The authenticator. The router authenticates every call and puts the caller on the context. The token carrier takes the four HTTP methods of `SessionManager`, and `TokenTransport` gets its new name, `TokenDelivery`. `RequireSession`, `RequireFreshSession`, and `optionalSession` become wrappers, and the session keys in `RequestContext.Values` go. | Done |
-| 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules. The hook rules get new names that end in `.address`, such as `core.signin.address`, and the route rules they replace go. Every sign-in plugin fires `auth.signIn.before`, so the sign-in rule keys on the address and the sign-in method, which each flow publishes in the operation's `Values`: each method keeps a limit of its own. | Not started |
+| 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules. Audit events get a setting of their own for the address, `BootConfig.Audit.OmitIPAndAgent`. The hook rules get new names that end in `.address`, such as `core.signin.address`, and the route rules they replace go. Every sign-in plugin fires `auth.signIn.before`, so the sign-in rule keys on the address and the sign-in method, which each flow publishes in the operation's `Values`: each method keeps a limit of its own. | In progress. Done: `requestMeta`, the audit actor with the delegate columns, `NormalizeAuditEvent`, and `BootConfig.Audit`. Left: `KeyByClientIP` and the per-address hook rules. |
 | 5 | The flows: the permissions declared, and the flows in the table above require them. The `UserID` fields of `phonenumber.SendRequest`, `phonenumber.VerifyRequest`, and `emailverification.ChangeRequest` go, and so does `SessionTokenRequest.Session`. | Not started |
 | 6 | Admin operations require a privileged caller. The examples, the CLI, and the tests name their callers. | Not started |
 | 7 | The docs: the guideline's list of differences, `docs/api/sessions.md`, `docs/api/hooks.md`, the token delivery and audit pages, and the hook context page | Not started |
@@ -385,7 +385,7 @@ These entries in `docs/ongoing.md` are resolved by this plan. Each is removed wi
 
 These entries affect the plan:
 
-- **"Audit events record the IP address whatever the session setting says".** Step 4 changes the code that records the address. The fix lands with it or before it.
+- **"Audit events record the IP address whatever the session setting says".** Resolved with step 4: audit events have a setting of their own, `BootConfig.Audit.OmitIPAndAgent`, and keep recording the address by default.
 - **"No route answers with the caller's session, and sign-out belongs to one plugin".** A session route in core reads the caller.
 - **"`Plugin` requires HTTP routes, and the request pipeline lives in the router".** The HTTP types leave `core` after step 6, as part 2 of [`package_layout.md`](package_layout.md).
 - **"Some flows take loose arguments instead of a request type".** `SignOut` takes its session from the caller.

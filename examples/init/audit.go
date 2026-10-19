@@ -43,6 +43,9 @@ func audit(ctx context.Context, email string, limit int) error {
 		if e.ActorID != "" {
 			actor += ":" + e.ActorID
 		}
+		if e.DelegateType != "" {
+			actor += " via " + string(e.DelegateType) + ":" + e.DelegateID // an impersonator, or a job acting for the user
+		}
 		line := fmt.Sprintf("%s  %-26s %-8s actor=%-46s subject=%s:%s ip=%s",
 			e.Timestamp.Format("2006-01-02 15:04:05Z"), e.Type, e.Outcome, actor, e.SubjectType, e.SubjectID, e.IPAddress)
 		if len(e.Metadata) > 0 {

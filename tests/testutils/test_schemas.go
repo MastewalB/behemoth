@@ -200,5 +200,5 @@ func NewGormTestUser(id string) *GormTestUser {
 var AuditLogSQLiteSchema = `
 CREATE TABLE audit_log (
 	id TEXT PRIMARY KEY, event_type TEXT NOT NULL, outcome TEXT NOT NULL, actor_type TEXT NOT NULL,
-	actor_id TEXT, subject_type TEXT, subject_id TEXT, session_id TEXT, request_id TEXT,
+	actor_id TEXT, delegate_type TEXT, delegate_id TEXT, subject_type TEXT, subject_id TEXT, session_id TEXT, request_id TEXT,
 	ip_address TEXT, user_agent TEXT, metadata TEXT, created_at TIMESTAMP NOT NULL);`

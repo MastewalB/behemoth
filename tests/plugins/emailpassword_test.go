@@ -53,7 +53,7 @@ CREATE TABLE sessions (
 	revoked_reason TEXT, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL);
 CREATE TABLE audit_log (
 	id TEXT PRIMARY KEY, event_type TEXT NOT NULL, outcome TEXT NOT NULL, actor_type TEXT NOT NULL,
-	actor_id TEXT, subject_type TEXT, subject_id TEXT, session_id TEXT, request_id TEXT,
+	actor_id TEXT, delegate_type TEXT, delegate_id TEXT, subject_type TEXT, subject_id TEXT, session_id TEXT, request_id TEXT,
 	ip_address TEXT, user_agent TEXT, metadata TEXT, created_at TIMESTAMP NOT NULL);`
 
 type passDispatcher struct{}
@@ -90,7 +90,7 @@ func authContext(t *testing.T) *core.AuthContext {
 		Public:     dbschema.NewPublicView([]dbschema.Table{models.UserTableSchema()}),
 		SessionManager: auth.NewSessionManager(st, nil, c,
 			core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-			passDispatcher{}, nil, nil, nil),
+			passDispatcher{}, nil, nil),
 		TokenCarrier: core.NewTokenCarrier(core.TokenCarrierConfig{Delivery: core.DeliveryHeader}),
 	}
 }
@@ -1102,8 +1102,16 @@ func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core
 		Hooks:     appHooks,
 	})
 	require.NoError(t, err)
+	// Each route as the router runs it, without the router's other stages:
+	// the authentication stage, then the route's middlewares.
+	stage := core.AuthenticateRequests(ac.Authenticator, ac.TokenCarrier, nil)
 	routes := map[string]core.Route{}
 	for _, r := range p.Routes() {
+		h := r.Handler
+		for i := len(r.Middlewares) - 1; i >= 0; i-- {
+			h = r.Middlewares[i](h)
+		}
+		r.Handler, r.Middlewares = stage(h), nil
 		routes[r.Path] = r
 	}
 	return ac, p, routes
@@ -1180,13 +1188,8 @@ func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, about.Events, 4, "created, signed up, one failed sign-in, signed in")
 
-	// Sign-out through its route middleware, behind the authentication
-	// stage: the actor is the session's user.
+	// Sign-out: the actor is the session's user.
 	signOut := routes["/sign-out"].Handler
-	for i := len(routes["/sign-out"].Middlewares) - 1; i >= 0; i-- {
-		signOut = routes["/sign-out"].Middlewares[i](signOut)
-	}
-	signOut = core.AuthenticateRequests(ac.Authenticator, ac.TokenCarrier, nil)(signOut)
 	req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
 	req.Header.Set("Authorization", "Bearer "+rawToken)
 	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}

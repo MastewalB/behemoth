@@ -176,7 +176,7 @@ func newSessionManager(t *testing.T, cfg core.SessionConfig) (core.SessionManage
 	if cfg.PendingExpiresIn == 0 {
 		cfg.PendingExpiresIn = 5 * time.Minute
 	}
-	return auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg, d, nil, managersAuth, nil), d
+	return auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg, d, nil, managersAuth), d
 }
 
 // managersAuth is the AuthContext the managers under test are built with. It
@@ -292,7 +292,7 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 	require.NoError(t, err)
 	sm := auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t),
 		core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		&passDispatcher{}, nil, managersAuth, nil)
+		&passDispatcher{}, nil, managersAuth)
 
 	reached := 0
 	handler := requireSession(sm, core.DeliveryHeader, func(*core.RequestContext) error {
@@ -371,7 +371,7 @@ func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 			cfg.ExpiresIn = time.Hour
 		}
 		cfg.PendingExpiresIn = time.Minute
-		return auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t), cfg, &passDispatcher{}, nil, managersAuth, nil)
+		return auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil)), nil, testCrypto(t), cfg, &passDispatcher{}, nil, managersAuth)
 	}
 	// request sends cookie and bearer, carried the way delivery says,
 	// through the middleware mw builds, and returns the response and the
@@ -480,7 +480,7 @@ func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
 		}
 		tc.cfg.ExpiresIn = time.Hour
 		sm := auth.NewSessionManager(store.New(sqliteAdapter.NewSQLiteAdapter(sqlDB, nil).WithLogger(rec.Logger)),
-			kv, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth, nil)
+			kv, testCrypto(t), tc.cfg, &passDispatcher{}, nil, managersAuth)
 		_, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 		require.NoError(t, err, name)
 		require.NotEmpty(t, rec.Logger.At(slog.LevelDebug), "%s: creating the session ran statements, so they are being counted", name)
@@ -570,23 +570,20 @@ func TestSessionHooksGetACompleteContext(t *testing.T) {
 	assert.Equal(t, behemoth.M{"flow": "sign-in"}, flow, "nothing a nested operation writes reaches the caller's Values")
 }
 
-// A session records the IP address and user agent of the request on the
-// context. The caller's SessionMeta overrides them, no request leaves them
-// empty, and nothing is recorded unless CaptureIPAndAgent is on.
-func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
-	req := httptest.NewRequest("POST", "/sign-in", nil)
-	req.RemoteAddr = "203.0.113.7:51234"
-	req.Header.Set("User-Agent", "test-agent/1.0")
-	req.Header.Set("X-Forwarded-For", "198.51.100.9")
-	inRequest := core.ContextWithRequest(context.Background(), &core.RequestContext{Request: req})
+// A session records the IP address and user agent of the caller on the
+// context. SessionMeta overrides them, a caller no transport authenticated
+// leaves them empty, and nothing is recorded unless CaptureIPAndAgent is on.
+func TestSessionCreateTakesIPAndUserAgentFromTheCaller(t *testing.T) {
+	inRequest := identity.WithCaller(context.Background(),
+		identity.Anonymous(identity.Peer{Transport: "http", IPAddress: "203.0.113.7", UserAgent: "test-agent/1.0"}))
 	capture := core.SessionConfig{CaptureIPAndAgent: true}
 	active := core.SessionMeta{State: models.SessionActive}
 
-	t.Run("from the request", func(t *testing.T) {
+	t.Run("from the caller", func(t *testing.T) {
 		sm, _ := newSessionManager(t, capture)
 		sess, _, err := sm.Create(inRequest, "u1", active)
 		require.NoError(t, err)
-		assert.Equal(t, "203.0.113.7", sess.IPAddress, "the direct peer, without its port; an untrusted peer's forwarding header is ignored")
+		assert.Equal(t, "203.0.113.7", sess.IPAddress)
 		assert.Equal(t, "test-agent/1.0", sess.UserAgent)
 	})
 	t.Run("the caller's values win", func(t *testing.T) {
@@ -596,9 +593,9 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 		assert.Equal(t, "192.0.2.1", sess.IPAddress)
 		assert.Equal(t, "job", sess.UserAgent)
 	})
-	t.Run("no request", func(t *testing.T) {
+	t.Run("no transport", func(t *testing.T) {
 		sm, _ := newSessionManager(t, capture)
-		sess, _, err := sm.Create(context.Background(), "u1", active)
+		sess, _, err := sm.Create(identity.WithCaller(context.Background(), identity.System("job").For("u1")), "u1", active)
 		require.NoError(t, err, "a session can be created outside a request")
 		assert.Empty(t, sess.IPAddress)
 		assert.Empty(t, sess.UserAgent)
@@ -624,15 +621,35 @@ func TestSessionCreateTakesIPAndUserAgentFromTheRequest(t *testing.T) {
 		assert.Empty(t, sess.IPAddress)
 		assert.Empty(t, sess.UserAgent)
 	})
+	// Over HTTP the authentication stage resolves the address, with the
+	// router's proxy settings, and the session records what it resolved.
+	signIn := func(t *testing.T, ipCfg *core.ClientIPConfig) *models.Session {
+		t.Helper()
+		sm, _ := newSessionManager(t, capture)
+		req := httptest.NewRequest(http.MethodPost, "/sign-in", nil)
+		req.RemoteAddr = "203.0.113.7:51234"
+		req.Header.Set("User-Agent", "test-agent/1.0")
+		req.Header.Set("X-Forwarded-For", "198.51.100.9")
+		var sess *models.Session
+		stage := core.AuthenticateRequests(auth.NewAuthenticator(sm, nil), core.NewTokenCarrier(core.TokenCarrierConfig{}), ipCfg)
+		handler := stage(func(rctx *core.RequestContext) error {
+			var err error
+			sess, _, err = sm.Create(rctx.Ctx, "u1", active)
+			return err
+		})
+		rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+		require.NoError(t, handler(rctx))
+		return sess
+	}
+	t.Run("over HTTP", func(t *testing.T) {
+		sess := signIn(t, nil)
+		assert.Equal(t, "203.0.113.7", sess.IPAddress, "the direct peer, without its port; an untrusted peer's forwarding header is ignored")
+		assert.Equal(t, "test-agent/1.0", sess.UserAgent)
+	})
 	t.Run("behind a trusted proxy", func(t *testing.T) {
 		ipCfg, err := core.NewClientConfig([]string{"203.0.113.0/24"}, "")
 		require.NoError(t, err)
-		sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t),
-			core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute, CaptureIPAndAgent: true},
-			&passDispatcher{}, nil, managersAuth, ipCfg)
-		sess, _, err := sm.Create(inRequest, "u1", active)
-		require.NoError(t, err)
-		assert.Equal(t, "198.51.100.9", sess.IPAddress, "the client the proxy forwarded for")
+		assert.Equal(t, "198.51.100.9", signIn(t, ipCfg).IPAddress, "the client the proxy forwarded for")
 	})
 }
 
@@ -653,7 +670,7 @@ func createWithRewrite(t *testing.T, cfg core.SessionConfig, ctx context.Context
 	t.Helper()
 	cfg.ExpiresIn, cfg.PendingExpiresIn = time.Hour, time.Minute
 	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), cfg,
-		&rewriteDispatcher{}, nil, managersAuth, nil)
+		&rewriteDispatcher{}, nil, managersAuth)
 	sess, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	return sess, err
 }
@@ -891,7 +908,7 @@ func TestSessionFreshness(t *testing.T) {
 // the documented default.
 func TestSessionManagerWithAZeroConfig(t *testing.T) {
 	ctx := context.Background()
-	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), core.SessionConfig{}, &passDispatcher{}, nil, managersAuth, nil)
+	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), nil, testCrypto(t), core.SessionConfig{}, &passDispatcher{}, nil, managersAuth)
 
 	active, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)

@@ -98,7 +98,7 @@ A caller in code can be told more than a client. That calls for two entry points
 
 A flow, a manager or a rate-limit rule in core does not need the request. It needs a few facts about the caller: the address, the user agent, the session. When a flow needs one of them, the wrapper passes it in the input or publishes it in the operation's `Values`, the way `publishEmail` does with `HookValueEmail`, and the way `SessionMeta.IPAddress` lets a caller name the address.
 
-Today the address and the user agent are read from the `*http.Request` found with `core.RequestFrom(ctx)`, in the session manager and in the audit event builder. A caller value in the context is planned to replace those reads, and to carry the session and the principal as well. [`../plans/caller.md`](../plans/caller.md) has the design, and [ADR-0004](../decisions/0004-carrying-the-caller-in-the-context.md) the choice of the context. Until it is built, avoid adding a new place that reads the request below the wrapper.
+The transport puts those facts on the context as the caller (`identity.CallerFrom(ctx)`): its principal, its session, and its peer, the address and the user agent. The session manager and the audit event builder read them there. [`../plans/caller.md`](../plans/caller.md) has the design, and [ADR-0004](../decisions/0004-carrying-the-caller-in-the-context.md) the choice of the context. Read the caller, and don't add a place that reads the request below the wrapper.
 
 ### A hook handler reads the payload and `Values`
 
@@ -126,7 +126,7 @@ Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted titl
 
 - The limits per client address are route rules, so sign-in and sign-up called from code have no rate limit. "A flow called from code skips the per-address limits of its route".
 - The handlers of the link request, verification send, email change and reset request routes hide whether an account exists. "Hiding whether an account exists is done by the HTTP handlers".
-- The session manager, the audit event builder and hook rules learn about the caller from the `*http.Request`. A flow reached another way is audited as the system, without an address. "The caller of an operation is known only through the HTTP request" and "A hook rule has no direct way to the resolved client address".
+- Hook rules learn the client's address from the `*http.Request`, with a `ClientIPConfig` of their own. "The caller of an operation is known only through the HTTP request" and "A hook rule has no direct way to the resolved client address".
 - `core.Plugin` requires `Routes` and `Middlewares`. The stages around a handler are built in `Router.Build`. `core`, `errs`, `auth`, and each plugin's package import `net/http`, so no import rule checks any of this yet. [`../plans/package_layout.md`](../plans/package_layout.md) plans a package for the HTTP types, and the check. "`Plugin` requires HTTP routes, and the request pipeline lives in the router".
 - The email change route requires a fresh session through `RequireFreshSession`, and `RequestChange` doesn't check it. "The fresh-session rule of an email change is checked by its route only".
 - The verify, confirm, and revert handlers refuse a missing token themselves, and several flows take positional arguments that no input type checks. "Some flows take loose arguments instead of a request type".

@@ -277,7 +277,7 @@ func TestDeleteUserRemovesSessionsAndAccounts(t *testing.T) {
 			ctx := context.Background()
 			st := store.New(openDB(t), store.WithSchema(resolver), store.WithEncryptor(testCrypto(t).AtRest))
 			sm := auth.NewSessionManager(st, nil, testCrypto(t),
-				core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil, nil)
+				core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil)
 
 			ada, grace := &models.User{Email: "ada@example.com"}, &models.User{Email: "grace@example.com"}
 			tokens := map[*models.User]string{}
@@ -510,7 +510,7 @@ func usersContract(t *testing.T, st *store.Store) {
 func sessionsContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
 	sm := auth.NewSessionManager(st, nil, testCrypto(t),
-		core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil, nil)
+		core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil)
 
 	sess, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
 	require.NoError(t, err)
@@ -699,9 +699,11 @@ func auditLogContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
+	// An impersonated actor, so that the delegate columns round-trip too.
 	full := telemetry.AuditEvent{
 		Type: "auth.signIn.failed", Outcome: telemetry.OutcomeFailure,
-		ActorType:   telemetry.ActorAnonymous,
+		ActorType: telemetry.ActorUser, ActorID: "user-9",
+		DelegateType: telemetry.ActorUser, DelegateID: "admin-1",
 		SubjectType: models.UserTable, SubjectID: "user-1",
 		SessionID: "sess-1", RequestID: "req-1", IPAddress: "203.0.113.7", UserAgent: "curl/8",
 		Metadata:  behemoth.M{"code": "invalid_credentials", "email": "ada@example.com"},

@@ -216,10 +216,11 @@ Each event has:
 | --- | --- |
 | `ID` | assigned when the event is stored |
 | `Type`, `Outcome` | see the table above |
-| `ActorType`, `ActorID` | who did it: a `user` with its id, `anonymous` for a request without a signed-in user, or `system` for work outside a request |
+| `ActorType`, `ActorID` | who did it: a `user` with its id, a `service` with its id, `anonymous` for a request without a signed-in user, or `system` for work outside a request, with the name the code gave itself (`identity.System("purge-sessions")`) |
+| `DelegateType`, `DelegateID` | who acted for the actor, when someone did: the user who impersonated them, or the code that ran a flow for them (`identity.System("support-tool").For(userID)`). Empty otherwise. |
 | `SubjectType`, `SubjectID` | what it was done to: a table name such as `users` or `sessions`, and the row's id |
 | `SessionID`, `RequestID` | the session and request involved, when there is one |
-| `IPAddress`, `UserAgent` | of the request, when there is one |
+| `IPAddress`, `UserAgent` | of the request, when there is one, unless `BootConfig.Audit.OmitIPAndAgent` is set |
 | `Metadata` | details of the event type: the failure `code`, with `cause` and `causeCode` (the text and the error code of the error behind it, when there is one), a token's `kind`, the `email` tried in a sign-in for an unknown address |
 | `Timestamp` | when it was recorded |
 
@@ -227,7 +228,15 @@ Things worth knowing:
 
 - **A failed sign-in names the account, not the person.** A wrong password for an existing user has that user as subject and an anonymous actor. Behemoth does not know who typed it.
 - **Email addresses are kept** in audit metadata, where logs redact them. Passwords, tokens, and other secrets are redacted in both.
-- **IP address and user agent are always recorded**, also when `SessionConfig.CaptureIPAndAgent` is off. That setting covers session rows only.
+- **IP address and user agent are recorded unless you turn them off.** `SessionConfig.CaptureIPAndAgent` covers session rows only. Audit events have a setting of their own:
+
+  ```go
+  engine.BootConfig{
+  	Audit: core.AuditConfig{OmitIPAndAgent: true}, // audit events keep neither
+  }
+  ```
+
+- **An impersonated action names both users.** The impersonated user is the actor, so a query by their id finds it, and the impersonator is the delegate.
 - **Rate-limit rejections are recorded one by one.** A client that keeps sending requests past its limit adds one event per request.
 
 ### Read events
@@ -283,7 +292,7 @@ Behemoth has no HTTP route for the audit log. Put `QueryAuditEvents` behind a ro
 
 ### The table
 
-`audit_log` is one of Behemoth's own tables and is created by your migrations like `users` and `sessions`. Because user changes write to it in their transaction, it has to exist before your application serves requests. After upgrading from a version without it, run your migrations first.
+`audit_log` is one of Behemoth's own tables and is created by your migrations like `users` and `sessions`. Because user changes write to it in their transaction, it has to exist before your application serves requests. After upgrading from a version without it, run your migrations first. The same holds for the table's `delegate_type` and `delegate_id` columns: generate and apply the migration that adds them before the new version writes events.
 
 Behemoth never deletes audit events. Remove old ones from a scheduled job of your own:
 

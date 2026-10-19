@@ -138,6 +138,8 @@ func AuditLogTableSchema() schema.Table {
 			{Name: AuditLogOutcome, Type: schema.ColTypeString, Length: 16},
 			{Name: AuditLogActorType, Type: schema.ColTypeString, Length: 16},
 			{Name: AuditLogActorID, Type: schema.ColTypeString, Length: 255, Nullable: true},
+			{Name: AuditLogDelegateType, Type: schema.ColTypeString, Length: 16, Nullable: true},
+			{Name: AuditLogDelegateID, Type: schema.ColTypeString, Length: 255, Nullable: true},
 			{Name: AuditLogSubjectType, Type: schema.ColTypeString, Length: 64, Nullable: true},
 			{Name: AuditLogSubjectID, Type: schema.ColTypeString, Length: 255, Nullable: true},
 			{Name: AuditLogSessionID, Type: schema.ColTypeString, Length: 36, Nullable: true},

@@ -25,24 +25,21 @@ type DefaultDispatcher struct {
 	frozenChains Chains
 	rateLimiter  core.RateLimiter // nil-safe; a deployment with no declared point rules simply skips this
 	tel          *telemetry.Telemetry
-	// ipCfg resolves the client address recorded in audit events, the same
-	// way sessions and route rate limits resolve it.
-	ipCfg *core.ClientIPConfig
+	audit        core.AuditConfig // what the audit events of audited points record
 }
 
 // NewDefaultDispatcher returns the dispatcher of chains, which FreezeChains
 // froze for the points of catalog. rateLimiter checks the hook rules of a
-// point before its chain runs, and may be nil. ipCfg resolves the client
-// address that audit events record, the same way sessions and route rate
-// limits resolve it; nil trusts no proxy.
+// point before its chain runs, and may be nil. audit says what the events of
+// audited points record; its zero value records them in full.
 func NewDefaultDispatcher(
 	catalog core.HookCatalog,
 	chains Chains,
 	rateLimiter core.RateLimiter,
-	ipCfg *core.ClientIPConfig,
+	audit core.AuditConfig,
 	tel *telemetry.Telemetry,
 ) *DefaultDispatcher {
-	return &DefaultDispatcher{catalog: catalog, frozenChains: chains, rateLimiter: rateLimiter, ipCfg: ipCfg, tel: telemetry.OrDefault(tel).Named("hooks")}
+	return &DefaultDispatcher{catalog: catalog, frozenChains: chains, rateLimiter: rateLimiter, audit: audit, tel: telemetry.OrDefault(tel).Named("hooks")}
 }
 
 // checkPhase is the single check that point exists and is declared with the
@@ -403,7 +400,7 @@ func (d *DefaultDispatcher) recordAuditTx(hctx *core.HookContext, point core.Hoo
 
 // auditEvent builds the event of one dispatch from what the dispatcher can
 // see: the point, its result or failure reason, the operation's Values and
-// the request.
+// the caller on the context.
 //
 // Metadata of a failure: the reason's Metadata, its Code as "code", and for
 // a reason with a Cause the error's text as "cause" and, when it is a typed
@@ -412,13 +409,19 @@ func (d *DefaultDispatcher) recordAuditTx(hctx *core.HookContext, point core.Hoo
 // Subject, first match: the failure reason's, the result's (auditSubject),
 // the operation's user (Values[HookValueUserID]).
 //
-// Actor, first match: the user of the session the request was authenticated
-// with (RequireSession); for a successful operation inside a request, the
-// user the subject belongs to, which covers sign-up and sign-in, where no
-// session exists yet. Otherwise the actor is anonymous inside a request and
-// the system outside one. A failed operation is never attributed to its
-// subject: a wrong password for an account was not typed by its owner as far
-// as behemoth knows.
+// Actor, first match: the caller's principal, with its delegate
+// (telemetry.AuditActor); for a successful operation of an anonymous caller
+// that a transport authenticated, the user the subject belongs to, which
+// covers sign-up and sign-in, where no session exists yet. Otherwise the
+// actor is anonymous when a transport authenticated the caller, and the
+// system when no transport did: code in the process that did not name
+// itself. A failed operation is never attributed to its subject: a wrong
+// password for an account was not typed by its owner as far as behemoth
+// knows.
+//
+// The address and the user agent are the caller's (identity.Peer), unless
+// AuditConfig.OmitIPAndAgent leaves them out. The session is the one the
+// caller signed in with.
 func (d *DefaultDispatcher) auditEvent(hctx *core.HookContext, point core.HookPoint, def core.HookPointDef, result any, reason *core.FailureReason) telemetry.AuditEvent {
 	event := telemetry.AuditEvent{Type: coalesce(def.Audit.Type, string(point)), Metadata: behemoth.M{}}
 
@@ -454,41 +457,30 @@ func (d *DefaultDispatcher) auditEvent(hctx *core.HookContext, point core.HookPo
 		event.Metadata[hooks.HookValueTokenKind] = string(tok.Kind)
 	}
 
-	if req := hctx.Request; req != nil {
-		if req.Request != nil {
-			event.IPAddress = core.ClientIP(req.Request, d.clientIPConfig())
-			event.UserAgent = req.Request.UserAgent()
-		}
+	caller := hctx.Caller()
+	peer := caller.Peer()
+	if !d.audit.OmitIPAndAgent {
+		event.IPAddress, event.UserAgent = peer.IPAddress, peer.UserAgent
 	}
-	if caller := hctx.Caller(); !caller.IsAnonymous() {
-		if sess, ok := caller.Session(); ok {
-			event.ActorID, event.SessionID = sess.UserID, sess.ID
-		}
+	if sess, ok := caller.Session(); ok && !caller.IsAnonymous() {
+		event.SessionID = sess.ID
 	}
 	if event.SessionID == "" {
 		event.SessionID = coalesce(sessionID, valueString(hctx.Values, hooks.HookValueSessionID))
 	}
-	if event.ActorID == "" && reason == nil && hctx.Request != nil {
-		event.ActorID = subjectUser
-	}
-	switch {
-	case event.ActorID != "":
-		event.ActorType = telemetry.ActorUser
-	case hctx.Request != nil:
-		event.ActorType = telemetry.ActorAnonymous
-	default:
-		event.ActorType = telemetry.ActorSystem
+	event.ActorType, event.ActorID, event.DelegateType, event.DelegateID = telemetry.AuditActor(caller)
+	if event.ActorType == "" {
+		overTransport := peer.Transport != ""
+		switch {
+		case overTransport && reason == nil && subjectUser != "":
+			event.ActorType, event.ActorID = telemetry.ActorUser, subjectUser
+		case overTransport:
+			event.ActorType = telemetry.ActorAnonymous
+		default:
+			event.ActorType = telemetry.ActorSystem
+		}
 	}
 	return event
-}
-
-// clientIPConfig returns how the client address is resolved. A dispatcher
-// built without a configuration trusts no proxy.
-func (d *DefaultDispatcher) clientIPConfig() *core.ClientIPConfig {
-	if d.ipCfg == nil {
-		return &core.ClientIPConfig{}
-	}
-	return d.ipCfg
 }
 
 func coalesce(s, fallback string) string {

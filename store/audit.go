@@ -36,19 +36,21 @@ func (s *Store) RecordAuditEvent(ctx context.Context, event telemetry.AuditEvent
 		event.Timestamp = s.now()
 	}
 	return s.db.Create(ctx, &models.AuditLog{
-		ID:          newAuditID(),
-		EventType:   event.Type,
-		Outcome:     string(event.Outcome),
-		ActorType:   string(event.ActorType),
-		ActorID:     event.ActorID,
-		SubjectType: event.SubjectType,
-		SubjectID:   event.SubjectID,
-		SessionID:   event.SessionID,
-		RequestID:   event.RequestID,
-		IPAddress:   event.IPAddress,
-		UserAgent:   event.UserAgent,
-		Metadata:    event.Metadata,
-		CreatedAt:   event.Timestamp.UTC(),
+		ID:           newAuditID(),
+		EventType:    event.Type,
+		Outcome:      string(event.Outcome),
+		ActorType:    string(event.ActorType),
+		ActorID:      event.ActorID,
+		DelegateType: string(event.DelegateType),
+		DelegateID:   event.DelegateID,
+		SubjectType:  event.SubjectType,
+		SubjectID:    event.SubjectID,
+		SessionID:    event.SessionID,
+		RequestID:    event.RequestID,
+		IPAddress:    event.IPAddress,
+		UserAgent:    event.UserAgent,
+		Metadata:     event.Metadata,
+		CreatedAt:    event.Timestamp.UTC(),
 	})
 }
 
@@ -120,19 +122,21 @@ func (s *Store) QueryAuditEvents(ctx context.Context, filter telemetry.AuditFilt
 			break
 		}
 		page.Events = append(page.Events, telemetry.AuditEvent{
-			ID:          row.ID,
-			Type:        row.EventType,
-			Outcome:     telemetry.AuditOutcome(row.Outcome),
-			ActorType:   telemetry.ActorType(row.ActorType),
-			ActorID:     row.ActorID,
-			SubjectType: row.SubjectType,
-			SubjectID:   row.SubjectID,
-			SessionID:   row.SessionID,
-			RequestID:   row.RequestID,
-			IPAddress:   row.IPAddress,
-			UserAgent:   row.UserAgent,
-			Metadata:    row.Metadata,
-			Timestamp:   row.CreatedAt,
+			ID:           row.ID,
+			Type:         row.EventType,
+			Outcome:      telemetry.AuditOutcome(row.Outcome),
+			ActorType:    telemetry.ActorType(row.ActorType),
+			ActorID:      row.ActorID,
+			DelegateType: telemetry.ActorType(row.DelegateType),
+			DelegateID:   row.DelegateID,
+			SubjectType:  row.SubjectType,
+			SubjectID:    row.SubjectID,
+			SessionID:    row.SessionID,
+			RequestID:    row.RequestID,
+			IPAddress:    row.IPAddress,
+			UserAgent:    row.UserAgent,
+			Metadata:     row.Metadata,
+			Timestamp:    row.CreatedAt,
 		})
 	}
 	return page, nil

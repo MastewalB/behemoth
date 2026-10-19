@@ -460,6 +460,18 @@ type Dispatcher interface {
 	Fail(hctx *HookContext, point HookPoint, reason FailureReason) error
 }
 
+// AuditConfig configures the audit events behemoth records. It is
+// BootConfig.Audit. The zero value records every event in full.
+type AuditConfig struct {
+	// OmitIPAndAgent leaves the client's IP address and user agent out of
+	// the audit events behemoth records. False, the default, records both.
+	// It is separate from SessionConfig.CaptureIPAndAgent, which decides
+	// the same for session rows: the audit log serves an investigation, a
+	// session row a user's list of devices, and an application may keep
+	// the address in one and not the other.
+	OmitIPAndAgent bool
+}
+
 // AuditSpec marks a hook point as audited: every dispatch of the point
 // records one audit event. See HookPointDef.Audit for when and how reliably.
 type AuditSpec struct {
