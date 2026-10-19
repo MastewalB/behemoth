@@ -14,23 +14,28 @@ import (
 const (
 	AuditLogTable = "audit_log"
 
-	AuditLogID          = "id"
-	AuditLogEventType   = "event_type"
-	AuditLogOutcome     = "outcome"
-	AuditLogActorType   = "actor_type"
-	AuditLogActorID     = "actor_id"
-	AuditLogSubjectType = "subject_type"
-	AuditLogSubjectID   = "subject_id"
-	AuditLogSessionID   = "session_id"
-	AuditLogRequestID   = "request_id"
-	AuditLogIPAddress   = "ip_address"
-	AuditLogUserAgent   = "user_agent"
-	AuditLogMetadata    = "metadata"
-	AuditLogCreatedAt   = "created_at"
+	AuditLogID        = "id"
+	AuditLogEventType = "event_type"
+	AuditLogOutcome   = "outcome"
+	AuditLogActorType = "actor_type"
+	AuditLogActorID   = "actor_id"
+	// AuditLogDelegateType and AuditLogDelegateID are who acted for the
+	// actor, such as an impersonator. Both are NULL when the actor acted
+	// itself.
+	AuditLogDelegateType = "delegate_type"
+	AuditLogDelegateID   = "delegate_id"
+	AuditLogSubjectType  = "subject_type"
+	AuditLogSubjectID    = "subject_id"
+	AuditLogSessionID    = "session_id"
+	AuditLogRequestID    = "request_id"
+	AuditLogIPAddress    = "ip_address"
+	AuditLogUserAgent    = "user_agent"
+	AuditLogMetadata     = "metadata"
+	AuditLogCreatedAt    = "created_at"
 )
 
 var auditLogColumns = columnSet(AuditLogID, AuditLogEventType, AuditLogOutcome, AuditLogActorType, AuditLogActorID,
-	AuditLogSubjectType, AuditLogSubjectID, AuditLogSessionID, AuditLogRequestID, AuditLogIPAddress,
+	AuditLogDelegateType, AuditLogDelegateID, AuditLogSubjectType, AuditLogSubjectID, AuditLogSessionID, AuditLogRequestID, AuditLogIPAddress,
 	AuditLogUserAgent, AuditLogMetadata, AuditLogCreatedAt)
 
 // AuditLog is one row of the audit log: a telemetry.AuditEvent as stored.
@@ -44,19 +49,23 @@ var auditLogColumns = columnSet(AuditLogID, AuditLogEventType, AuditLogOutcome, 
 // The table has no foreign key to users: an event outlives the user it is
 // about.
 type AuditLog struct {
-	ID          string
-	EventType   string
-	Outcome     string
-	ActorType   string
-	ActorID     string // "" is stored as NULL, like every optional column below
-	SubjectType string
-	SubjectID   string
-	SessionID   string
-	RequestID   string
-	IPAddress   string
-	UserAgent   string
-	Metadata    behemoth.M
-	CreatedAt   time.Time
+	ID        string
+	EventType string
+	Outcome   string
+	ActorType string
+	ActorID   string // "" is stored as NULL, like every optional column below
+	// DelegateType and DelegateID are who acted for the actor. An older
+	// row, written before the columns existed, has neither.
+	DelegateType string
+	DelegateID   string
+	SubjectType  string
+	SubjectID    string
+	SessionID    string
+	RequestID    string
+	IPAddress    string
+	UserAgent    string
+	Metadata     behemoth.M
+	CreatedAt    time.Time
 }
 
 func (a *AuditLog) SchemaName() string     { return AuditLogTable }
@@ -76,19 +85,21 @@ func (a *AuditLog) ToMap() (map[string]any, error) {
 		metadata = string(b)
 	}
 	return map[string]any{
-		AuditLogID:          a.ID,
-		AuditLogEventType:   a.EventType,
-		AuditLogOutcome:     a.Outcome,
-		AuditLogActorType:   a.ActorType,
-		AuditLogActorID:     nullable(a.ActorID),
-		AuditLogSubjectType: nullable(a.SubjectType),
-		AuditLogSubjectID:   nullable(a.SubjectID),
-		AuditLogSessionID:   nullable(a.SessionID),
-		AuditLogRequestID:   nullable(a.RequestID),
-		AuditLogIPAddress:   nullable(a.IPAddress),
-		AuditLogUserAgent:   nullable(a.UserAgent),
-		AuditLogMetadata:    metadata,
-		AuditLogCreatedAt:   a.CreatedAt,
+		AuditLogID:           a.ID,
+		AuditLogEventType:    a.EventType,
+		AuditLogOutcome:      a.Outcome,
+		AuditLogActorType:    a.ActorType,
+		AuditLogActorID:      nullable(a.ActorID),
+		AuditLogDelegateType: nullable(a.DelegateType),
+		AuditLogDelegateID:   nullable(a.DelegateID),
+		AuditLogSubjectType:  nullable(a.SubjectType),
+		AuditLogSubjectID:    nullable(a.SubjectID),
+		AuditLogSessionID:    nullable(a.SessionID),
+		AuditLogRequestID:    nullable(a.RequestID),
+		AuditLogIPAddress:    nullable(a.IPAddress),
+		AuditLogUserAgent:    nullable(a.UserAgent),
+		AuditLogMetadata:     metadata,
+		AuditLogCreatedAt:    a.CreatedAt,
 	}, nil
 }
 
@@ -98,6 +109,8 @@ func (a *AuditLog) FromMap(m map[string]any) error {
 	a.Outcome = text(m[AuditLogOutcome])
 	a.ActorType = text(m[AuditLogActorType])
 	a.ActorID = text(m[AuditLogActorID])
+	a.DelegateType = text(m[AuditLogDelegateType])
+	a.DelegateID = text(m[AuditLogDelegateID])
 	a.SubjectType = text(m[AuditLogSubjectType])
 	a.SubjectID = text(m[AuditLogSubjectID])
 	a.SessionID = text(m[AuditLogSessionID])

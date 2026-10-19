@@ -15,6 +15,7 @@ import (
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -29,7 +30,6 @@ type DefaultSessionManager struct {
 	disp   core.Dispatcher
 	tel    *telemetry.Telemetry
 	auth   *core.AuthContext
-	ipCfg  *core.ClientIPConfig // how the client's address is resolved from a request; see requestMeta
 }
 
 func cacheKey(lookupHash string) string { return "session:" + lookupHash }
@@ -39,9 +39,9 @@ func cacheKey(lookupHash string) string { return "session:" + lookupHash }
 // HookContext.Auth and is not read during construction, so Boot may pass it
 // before all of its fields are set.
 //
-// ipCfg is the client-IP configuration the router uses (trusted proxies and
-// the forwarding header), so a session records the same address rate limiting
-// sees. nil means no proxy is trusted: the address is the direct peer's.
+// A new session's IP address and user agent come from the caller on the
+// context Create is given (see requestMeta), so a session records the
+// address the transport resolved.
 func NewSessionManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
@@ -50,11 +50,7 @@ func NewSessionManager(
 	disp core.Dispatcher,
 	tel *telemetry.Telemetry,
 	auth *core.AuthContext,
-	ipCfg *core.ClientIPConfig,
 ) core.SessionManager {
-	if ipCfg == nil {
-		ipCfg = &core.ClientIPConfig{}
-	}
 	return &DefaultSessionManager{
 		st:     st,
 		kv:     kv,
@@ -63,26 +59,22 @@ func NewSessionManager(
 		disp:   disp,
 		tel:    telemetry.OrDefault(tel).Named("session"),
 		auth:   auth,
-		ipCfg:  ipCfg,
 	}
 }
 
 // requestMeta returns the IP address and user agent a new session records.
-// A value the caller set in meta is used as it is. An empty one is taken from
-// the request being handled (core.RequestFrom), and stays empty when ctx
-// carries none: a CLI, a job, or a caller that did not pass on the request's
-// context.
+// A value set in meta is used as it is. An empty one is taken from the
+// caller on ctx, which the transport filled (identity.Peer), and stays empty
+// for a caller no transport authenticated: a CLI, a job, or code that did
+// not pass on the request's context.
 func (sm *DefaultSessionManager) requestMeta(ctx context.Context, meta core.SessionMeta) (ip, ua string) {
+	peer := identity.CallerFrom(ctx).Peer()
 	ip, ua = meta.IPAddress, meta.UserAgent
-	rc := core.RequestFrom(ctx)
-	if rc == nil || rc.Request == nil {
-		return ip, ua
-	}
 	if ip == "" {
-		ip = core.ClientIP(rc.Request, sm.ipCfg)
+		ip = peer.IPAddress
 	}
 	if ua == "" {
-		ua = rc.Request.UserAgent()
+		ua = peer.UserAgent
 	}
 	return ip, ua
 }

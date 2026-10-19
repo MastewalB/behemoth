@@ -213,6 +213,11 @@ type BootConfig struct {
 	Session   core.SessionConfig
 	Token     core.TokenConfig
 
+	// Audit says what the audit events behemoth records hold. Zero value =
+	// every event in full, the client's IP address and user agent included.
+	// Where events go is Telemetry's audit recorder.
+	Audit core.AuditConfig
+
 	// JWT configures the JWTs behemoth issues. Naming an external audience
 	// (Audiences[JWTExternal]) turns session tokens on: POST /session/token
 	// and the key set route at JWKSPath are mounted. An empty Issuer is
@@ -356,7 +361,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err != nil {
 		return nil, err
 	}
-	dispatcher := dispatch.NewDefaultDispatcher(app.Hooks, frozenChains, rateLimiter, ipCfg, tel)
+	dispatcher := dispatch.NewDefaultDispatcher(app.Hooks, frozenChains, rateLimiter, cfg.Audit, tel)
 
 	origins, err := core.NewTrustedOrigins(cfg.Router.TrustedOrigins)
 	if err != nil {
@@ -407,7 +412,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err := cfg.Session.Validate(); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
-	ac.SessionManager = auth.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
+	ac.SessionManager = auth.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac)
 	ac.Access = auth.NewAccess(app.Permissions, ac.SessionManager.IsFresh)
 	ac.Authenticator = auth.NewAuthenticator(ac.SessionManager, tel)
 

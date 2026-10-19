@@ -34,7 +34,7 @@ func afterDispatcher(t *testing.T, audit telemetry.AuditRecorder, handlers ...co
 		chain[i] = registeredHandler{plugin: "test", handler: h}
 	}
 	chains := map[core.HookPoint][]registeredHandler{point: chain}
-	return NewDefaultDispatcher(catalog, chains, nil, nil, telemetry.New(nil, audit, nil)), point
+	return NewDefaultDispatcher(catalog, chains, nil, core.AuditConfig{}, telemetry.New(nil, audit, nil)), point
 }
 
 // A data-level after hook runs inside the write's transaction: the first
@@ -109,7 +109,7 @@ func beforeDispatcher(t *testing.T, handlers ...core.BeforeHookFunc) (*DefaultDi
 		chain[i] = registeredHandler{plugin: "test", handler: h}
 	}
 	chains := map[core.HookPoint][]registeredHandler{point: chain}
-	return NewDefaultDispatcher(catalog, chains, nil, nil, telemetry.New(nil, nil, nil)), point
+	return NewDefaultDispatcher(catalog, chains, nil, core.AuditConfig{}, telemetry.New(nil, nil, nil)), point
 }
 
 // A before handler that returns a nil payload leaves the payload unchanged,
@@ -276,7 +276,7 @@ func TestDispatcherMetrics(t *testing.T) {
 			{plugin: "analytics", handler: core.AfterHookFunc(func(*core.HookContext, any) error { return nil })},
 		},
 	}
-	d := NewDefaultDispatcher(catalog, chains, nil, nil, tel)
+	d := NewDefaultDispatcher(catalog, chains, nil, core.AuditConfig{}, tel)
 	hctx := &core.HookContext{Ctx: context.Background()}
 
 	if err := d.RunAfter(hctx, hooks.HookSignInAfter, nil); err != nil {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/identity"
 )
 
 // AuditOutcome says how the audited action ended.
@@ -17,13 +18,15 @@ const (
 	OutcomeDenied  AuditOutcome = "denied"  // stopped before it was attempted: a rate limit
 )
 
-// ActorType says what kind of actor ActorID names.
+// ActorType says what kind of actor ActorID names, and what kind of
+// delegate DelegateID names.
 type ActorType string
 
 const (
 	ActorUser      ActorType = "user"      // ActorID is a user id
-	ActorAnonymous ActorType = "anonymous" // a request with no authenticated user
-	ActorSystem    ActorType = "system"    // behemoth itself or code outside a request: a job, a CLI, a migration
+	ActorService   ActorType = "service"   // ActorID is the id of a service, another program calling behemoth
+	ActorAnonymous ActorType = "anonymous" // a call over a transport with no authenticated principal
+	ActorSystem    ActorType = "system"    // behemoth itself or code in the process: a job, a CLI, a migration. ActorID is its name, when it gave one
 )
 
 // Audit event types behemoth records that are not named after a hook point.
@@ -50,10 +53,17 @@ type AuditEvent struct {
 
 	Outcome AuditOutcome // "" is recorded as OutcomeSuccess
 
-	// ActorType and ActorID say who did it. An empty ActorType is derived
-	// by NormalizeAuditEvent.
+	// ActorType and ActorID say who did it: the caller's principal (see
+	// AuditActor). An empty ActorType is derived by NormalizeAuditEvent.
 	ActorType ActorType
 	ActorID   string
+
+	// DelegateType and DelegateID say who acted on the actor's behalf: the
+	// user who impersonates the actor, or the code in the process that ran
+	// a flow for the actor (identity.System(name).For(userID)). Both are
+	// empty when the actor acted itself.
+	DelegateType ActorType
+	DelegateID   string
 
 	// SubjectType and SubjectID say what it was done to: SubjectType is the
 	// table's canonical name ("users", "sessions", "tokens") for a row.
@@ -151,8 +161,11 @@ func (t *Telemetry) AuditConfigured() bool {
 //   - Timestamp: the current time in UTC when zero.
 //   - RequestID: the context's request ID when empty.
 //   - Outcome: OutcomeSuccess when empty.
-//   - ActorType, when empty: ActorUser if ActorID is set, ActorAnonymous
-//     for an event recorded while handling a request, ActorSystem otherwise.
+//   - ActorType, when empty: ActorUser if ActorID is set. An event that
+//     names no actor takes the caller on ctx (AuditActor), with its
+//     delegate. A caller without a principal is ActorAnonymous when a
+//     transport authenticated it or the event has a request ID, and
+//     ActorSystem otherwise: code in the process that did not name itself.
 //   - Metadata: a redacted copy (see Redact). Email addresses are kept.
 //
 // RecordAudit calls it. Code that hands an event to a recorder itself, like
@@ -168,10 +181,12 @@ func NormalizeAuditEvent(ctx context.Context, event AuditEvent) AuditEvent {
 		event.Outcome = OutcomeSuccess
 	}
 	if event.ActorType == "" {
-		switch {
+		switch caller := identity.CallerFrom(ctx); {
 		case event.ActorID != "":
 			event.ActorType = ActorUser
-		case event.RequestID != "":
+		case !caller.Principal().IsZero():
+			event.ActorType, event.ActorID, event.DelegateType, event.DelegateID = AuditActor(caller)
+		case caller.Peer().Transport != "" || event.RequestID != "":
 			event.ActorType = ActorAnonymous
 		default:
 			event.ActorType = ActorSystem
@@ -182,6 +197,31 @@ func NormalizeAuditEvent(ctx context.Context, event AuditEvent) AuditEvent {
 }
 
 var auditRedactor = newRedactor(options{allowEmails: true})
+
+// AuditActor returns the actor and the delegate an audit event records for
+// caller: its principal, and its delegate when it has one. A principal maps
+// to the ActorType of its kind, and a system principal's name is its id. A
+// caller without a principal, an anonymous one, returns empty values: who
+// that is depends on where the call came from, which the code recording the
+// event decides.
+func AuditActor(caller identity.Caller) (actorType ActorType, actorID string, delegateType ActorType, delegateID string) {
+	actorType, actorID = actorOf(caller.Principal())
+	delegateType, delegateID = actorOf(caller.Delegate())
+	return actorType, actorID, delegateType, delegateID
+}
+
+// actorOf returns the ActorType and id of p. The zero principal has none.
+func actorOf(p identity.Principal) (ActorType, string) {
+	switch p.Type {
+	case identity.PrincipalUser:
+		return ActorUser, p.ID
+	case identity.PrincipalService:
+		return ActorService, p.ID
+	case identity.PrincipalSystem:
+		return ActorSystem, p.ID
+	}
+	return "", ""
+}
 
 // RecordAudit normalizes event and records it, best effort: a failed write
 // is logged at Error and returned, and the caller carries on. Components

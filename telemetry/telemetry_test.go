@@ -13,6 +13,7 @@ import (
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 )
@@ -314,6 +315,34 @@ func TestNormalizeAuditEvent(t *testing.T) {
 	})
 	if kept.Outcome != telemetry.OutcomeDenied || kept.ActorType != telemetry.ActorSystem || kept.RequestID != "other" {
 		t.Errorf("explicit values were overwritten: %+v", kept)
+	}
+}
+
+// An event that names no actor takes the caller on the context: its
+// principal and delegate, or anonymous for a caller a transport
+// authenticated without one.
+func TestNormalizeAuditEventTakesTheCaller(t *testing.T) {
+	forUser := identity.WithCaller(context.Background(), identity.System("support-tool").For("u1"))
+	got := telemetry.NormalizeAuditEvent(forUser, telemetry.AuditEvent{Type: "x"})
+	if got.ActorType != telemetry.ActorUser || got.ActorID != "u1" ||
+		got.DelegateType != telemetry.ActorSystem || got.DelegateID != "support-tool" {
+		t.Errorf("actor %s %q, delegate %s %q; want the user and the job acting for it", got.ActorType, got.ActorID, got.DelegateType, got.DelegateID)
+	}
+
+	job := identity.WithCaller(context.Background(), identity.System("purge-sessions"))
+	if got := telemetry.NormalizeAuditEvent(job, telemetry.AuditEvent{}); got.ActorType != telemetry.ActorSystem || got.ActorID != "purge-sessions" {
+		t.Errorf("actor %s %q, want the job by its name", got.ActorType, got.ActorID)
+	}
+
+	overHTTP := identity.WithCaller(context.Background(), identity.Anonymous(identity.Peer{Transport: "http"}))
+	if got := telemetry.NormalizeAuditEvent(overHTTP, telemetry.AuditEvent{}); got.ActorType != telemetry.ActorAnonymous {
+		t.Errorf("actor type = %q, want anonymous for a caller a transport authenticated", got.ActorType)
+	}
+
+	// An event that names its actor keeps it, whatever the caller.
+	named := telemetry.NormalizeAuditEvent(forUser, telemetry.AuditEvent{ActorType: telemetry.ActorSystem, ActorID: "migrator"})
+	if named.ActorID != "migrator" || named.DelegateID != "" {
+		t.Errorf("the event's own actor was replaced: %+v", named)
 	}
 }
 

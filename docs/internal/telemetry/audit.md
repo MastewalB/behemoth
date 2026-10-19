@@ -6,7 +6,9 @@ An audit event differs from a log line in purpose. A log line is for whoever ope
 
 The code lives in:
 
-- `telemetry/audit.go`: `AuditEvent`, the recorder and reader interfaces, `NormalizeAuditEvent`, `Telemetry.RecordAudit`, `MultiRecorder`
+- `telemetry/audit.go`: `AuditEvent`, the recorder and reader interfaces, `NormalizeAuditEvent`, `AuditActor`, `Telemetry.RecordAudit`, `MultiRecorder`
+- `identity/identity.go`: `Caller`, whose principal, delegate, session and peer an event records
+- `core/plugins.go`: `AuditConfig` (`BootConfig.Audit`)
 - `models/audit.go`, `models/schema.go`: the `AuditLog` model and the `audit_log` table
 - `store/audit.go`: `Store.RecordAuditEvent`, `QueryAuditEvents`, `PurgeAuditEvents`, and `store.AuditRecorder`
 - `dispatch/dispatcher.go`: `DefaultDispatcher.auditEvent`, `recordAudit`, `recordAuditTx`
@@ -46,8 +48,10 @@ type AuditEvent struct {
 	ID          string       // assigned by the recorder
 	Type        string
 	Outcome     AuditOutcome // success | failure | denied
-	ActorType   ActorType    // user | anonymous | system
-	ActorID     string
+	ActorType    ActorType    // user | service | anonymous | system
+	ActorID      string
+	DelegateType ActorType    // who acted for the actor: user | system | service
+	DelegateID   string
 	SubjectType string       // a table's canonical name for a row: "users", "sessions", "tokens"
 	SubjectID   string
 	SessionID   string
@@ -68,7 +72,7 @@ type AuditEvent struct {
 | `Timestamp` | now, UTC |
 | `RequestID` | the context's request ID |
 | `Outcome` | `success` |
-| `ActorType` | `user` if `ActorID` is set, `anonymous` inside a request, `system` otherwise |
+| `ActorType` | `user` if `ActorID` is set. Otherwise the caller on the context (`identity.CallerFrom`): its principal and delegate through `AuditActor`; for a caller without a principal, `anonymous` when a transport authenticated it or the event has a request ID, and `system` otherwise |
 | `Metadata` | always replaced by a redacted copy. The log redaction rules apply, except that email addresses are kept. |
 
 `Telemetry.RecordAudit(ctx, event)` normalizes, calls `Audit.Record`, and reports a failed write through `Telemetry.AuditFailed`: an Error line with the event's type and one `behemoth.audit.record_failures`. Every producer outside the dispatcher's transaction path records through it, so no audit failure is dropped silently. Before this phase the rate limiter and the migration runner ignored the error.
@@ -112,9 +116,21 @@ A point declared with `Audit: &core.AuditSpec{}` records one event per dispatch,
 
 **Actor**, first match:
 
-1. The user of the session the caller signed in with: `hctx.Caller().Session()`, which the router's authentication stage fills for every request that carries a valid session token.
-2. For a successful operation inside a request, the user the subject belongs to. This covers sign-up and sign-in, where no session exists yet and the user acts for themselves.
-3. Otherwise `anonymous` inside a request and `system` outside one.
+1. The caller's principal and delegate (`hctx.Caller()`, through `telemetry.AuditActor`). The router's authentication stage fills the caller for every request, and code in the process names itself with `identity.System`.
+2. For a successful operation of an anonymous caller that a transport authenticated, the user the subject belongs to. This covers sign-up and sign-in, where no session exists yet and the user acts for themselves.
+3. Otherwise `anonymous` when a transport authenticated the caller (its `Peer().Transport` is set), and `system` when none did: code in the process that did not name itself.
+
+`AuditActor` maps a principal to the actor type of its kind:
+
+| Caller | `ActorType`, `ActorID` | `DelegateType`, `DelegateID` |
+| --- | --- | --- |
+| signed in with a session | `user`, the session's user | empty |
+| signed in with a session that impersonates | `user`, the impersonated user | `user`, the impersonator |
+| `identity.System(name)` | `system`, `name` | empty |
+| `identity.System(name).For(userID)` | `user`, `userID` | `system`, `name` |
+| a service | `service`, its id | empty |
+
+The impersonated user is the actor, in the same way as an impersonation session stores that user in `user_id`. A query by `ActorID` then finds what was done as the user, and the delegate says who did it.
 
 A failed operation is never attributed to its subject. A wrong password for an account was not typed by its owner as far as behemoth knows, so the event has that account as subject and an anonymous actor.
 
@@ -124,9 +140,11 @@ A failed operation is never attributed to its subject. A wrong password for an a
 | --- | --- |
 | `Outcome` | `failure` for `Fail`, otherwise left to normalization (`success`) |
 | `Metadata` | for `Fail`: `FailureReason.Metadata`, then `code`, and when the reason has a cause, `cause` (the error's text) and `causeCode` (the code of a cause that is a `DomainError` with one). For a token result: `kind`. |
-| `SessionID` | the request's session; else the result's, when it is a session; else `Values[HookValueSessionID]` |
-| `IPAddress` | `core.ClientIP` with the router's proxy configuration, so it is the same address a session and a rate limit see |
-| `UserAgent` | the request's `User-Agent` header |
+| `SessionID` | the session the caller signed in with; else the result's, when it is a session; else `Values[HookValueSessionID]` |
+| `IPAddress` | the caller's `Peer().IPAddress`, which the authentication stage resolved with the router's proxy configuration, so it is the address a session records. Empty with `AuditConfig.OmitIPAndAgent`. |
+| `UserAgent` | the caller's `Peer().UserAgent`. Empty with `AuditConfig.OmitIPAndAgent`. |
+
+`BootConfig.Audit.OmitIPAndAgent` leaves the address and the user agent out of every event the dispatcher builds. It is separate from `SessionConfig.CaptureIPAndAgent`, which decides the same for session rows. An event an application records itself through `Telemetry.RecordAudit` keeps what the application put in it.
 
 `causeCode` is what tells one hook refusal from another. Every one of them has the `code` `rejected_by_hook`, since the firing site can't know which handler refused, and the handler's own error code (`email_not_verified`, `rate_limited`) is in `causeCode`. The metric attribute is still the reason's `code`, so a plugin's error codes do not become metric label values.
 
@@ -146,6 +164,22 @@ A failed operation is never attributed to its subject. A wrong password for an a
 **Decision:** Derive it. With `RequireSession` on a route the actor is exact. Without a session the rule is right for the two flows that have none by nature.
 
 **Revisit if:** an admin flow acts on other users through code paths that carry no session, at which point an explicit actor on the context is needed.
+
+That point has come: the actor is now the caller on the context, which the authentication stage sets for a request and code sets with `identity.System`. The rule for unauthenticated success still applies to an anonymous caller. See *The delegate is two columns, and the actor stays the principal* below.
+
+### The delegate is two columns, and the actor stays the principal
+
+**Context:** A caller can act for someone else: an impersonating user, or a job that runs a flow for a user (`identity.System(name).For(userID)`). The event has to say both who the action was done as and who did it.
+
+**Options considered:**
+
+- *The delegate as the actor, and the principal in `Metadata`.* No schema change. A query by `ActorID` for the user would miss what was done as them, and a key in `Metadata` can't be filtered on.
+- *The principal as the actor, and the delegate in `Metadata`.* No schema change. The delegate can't be filtered on either, and `Metadata` is redacted like log fields.
+- *Two nullable columns, `delegate_type` and `delegate_id`.* The principal stays the actor, as the session row stores the impersonated user in `user_id`, and the delegate is a value of its own. Both columns are additions, so the previous version of behemoth keeps working against the new schema.
+
+**Decision:** two columns. `AuditFilter` does not filter on the delegate yet; that is a field to add when a query needs it.
+
+**Revisit if:** a caller chain longer than one delegate appears, such as an agent acting for a service acting for a user.
 
 ## Reliability
 
@@ -195,6 +229,8 @@ A dispatch with no `HookContext.Tx` (a caller other than the store) has no trans
 | `event_type` | string(128) | `AuditEvent.Type`. Not `type`: adapters emit column names unquoted. |
 | `outcome`, `actor_type` | string(16) | |
 | `actor_id`, `subject_id` | string(255), nullable | |
+| `delegate_type` | string(16), nullable | who acted for the actor; NULL when the actor acted itself |
+| `delegate_id` | string(255), nullable | |
 | `subject_type` | string(64), nullable | |
 | `session_id` | string(36), nullable | |
 | `request_id` | string(128), nullable | |

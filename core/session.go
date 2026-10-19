@@ -14,8 +14,9 @@ import (
 // (Authenticator) joins the two on every request.
 type SessionManager interface {
 	// Create starts a session for userID in meta.State and returns it with
-	// its raw token. Pass the context of the request being handled: the
-	// session's IP address and user agent are read from it (see SessionMeta).
+	// its raw token. Pass the context of the call being handled: the
+	// session's IP address and user agent are read from its caller (see
+	// SessionMeta).
 	Create(ctx context.Context, userID any, meta SessionMeta) (*models.Session, string /* raw token */, error)
 
 	// Validate resolves a raw bearer token to its Session.
@@ -85,11 +86,11 @@ const SessionRevokedUserDeleted = "user_deleted"
 // SessionMeta is caller-supplied context at creation time.
 type SessionMeta struct {
 	// IPAddress and UserAgent are optional. Left empty, the session manager
-	// takes them from the request being handled, which it finds on the
-	// context passed to Create (ContextWithRequest); without a request they
-	// stay empty. Set them only to override that, e.g. from a job acting on
-	// a recorded request. Neither is stored unless
-	// SessionConfig.CaptureIPAndAgent is on.
+	// takes them from the caller on the context passed to Create
+	// (identity.CallerFrom(ctx).Peer()), which the transport filled; for a
+	// caller no transport authenticated they stay empty. Set them only to
+	// override that, e.g. from a job acting on a recorded request. Neither
+	// is stored unless SessionConfig.CaptureIPAndAgent is on.
 	IPAddress string
 	UserAgent string
 	State     models.SessionState // Active or Pending: set by the caller (SignIn passes Active or Pending depending on whether 2FA is required)
