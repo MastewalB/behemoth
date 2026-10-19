@@ -28,6 +28,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/schema"
@@ -375,7 +376,7 @@ func (p *Plugin) Init(ac *core.AuthContext) error {
 // add a number to the caller, without one they sign in. The two reset routes
 // are added only with Options.PasswordReset.
 func (p *Plugin) Routes() []core.Route {
-	session := []core.Middleware{optionalSession(p.authContext.SessionManager)}
+	session := []core.Middleware{optionalSession()}
 	routes := []core.Route{
 		{Method: http.MethodPost, Path: PathSendOTP, Handler: p.handleSend, Middlewares: session},
 		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify, Middlewares: session},
@@ -1082,36 +1083,28 @@ func (p *Plugin) SetPhoneNumber(ctx context.Context, userID, phoneNumber string)
 	return p.write(ctx, userID, number)
 }
 
-// optionalSession is the session read of the send and verify routes. A
-// request without a session token passes as it is. One with a token has to
-// have a valid one, and the handler then finds the session in
-// rctx.Values["session"]: a caller whose session has ended is told so, and
-// is not taken for a visitor who wants to sign in. Unlike RequireSession it
-// does not extend the session.
-func optionalSession(sm core.SessionManager) core.Middleware {
+// optionalSession is the session check of the send and verify routes. The
+// router has authenticated the request: a request without a session token
+// passes as a visitor who wants to sign in, and one with a valid session
+// passes as its user (sessionUser). A request whose token failed is refused
+// with the reason, so a caller whose session has ended is told so and is not
+// taken for a visitor.
+func optionalSession() core.Middleware {
 	return func(next core.HandlerFunc) core.HandlerFunc {
 		return func(rctx *core.RequestContext) error {
-			token, ok := sm.ExtractToken(rctx.Request)
-			if !ok {
-				return next(rctx)
+			if caller := identity.CallerFrom(rctx.Ctx); caller.IsAnonymous() && caller.AuthError() != nil {
+				return caller.AuthError()
 			}
-			session, err := sm.Validate(rctx.Ctx, token)
-			if err != nil {
-				if errs.IsNotFound(err) {
-					err = errs.NewSessionError("phonenumber.session", errs.CodeSessionInvalid, err)
-				}
-				return err
-			}
-			rctx.Values["session"] = session
 			return next(rctx)
 		}
 	}
 }
 
-// sessionUser returns the id of the user whose session optionalSession
-// found, or "".
+// sessionUser returns the id of the user whose session the request carries,
+// or "".
 func sessionUser(rctx *core.RequestContext) string {
-	if session, _ := rctx.Values["session"].(*models.Session); session != nil {
+	caller := identity.CallerFrom(rctx.Ctx)
+	if session, ok := caller.Session(); ok && !caller.IsAnonymous() {
 		return session.UserID
 	}
 	return ""

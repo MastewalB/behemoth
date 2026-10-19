@@ -73,6 +73,11 @@ type AuthContext struct {
 	// self-service flow requires a user and a permission, and an admin
 	// operation a privileged caller. Never nil on an AuthContext Boot returns.
 	Access Access
+	// Authenticator turns the credential of a call into its caller. The router
+	// authenticates every request through it, and an application's own
+	// transport authenticates through it too, so that its calls get the same
+	// caller. Never nil on an AuthContext Boot returns.
+	Authenticator Authenticator
 	// Telemetry is never nil on an AuthContext Boot returns, and neither are
 	// its fields. Plugins take their logger from here, usually through
 	// telemetry.Named.

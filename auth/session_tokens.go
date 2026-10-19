@@ -14,6 +14,7 @@ import (
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 )
 
@@ -132,7 +133,7 @@ func (s *DefaultSessionTokens) Routes() []core.Route {
 	}
 	return []core.Route{{
 		Method: http.MethodPost, Path: core.PathSessionToken, Handler: s.handleIssue,
-		Middlewares: []core.Middleware{core.RequireSession(s.sm)},
+		Middlewares: []core.Middleware{core.RequireSession()},
 	}}
 }
 
@@ -150,7 +151,8 @@ func (s *DefaultSessionTokens) handleIssue(rctx *core.RequestContext) error {
 	if !ok && body[core.SessionTokenAudienceKey] != nil {
 		return errs.NewInvalidInputError(op, core.SessionTokenAudienceKey, "audience must be a string", nil)
 	}
-	session, _ := rctx.Values["session"].(*models.Session)
+	ref, _ := identity.CallerFrom(rctx.Ctx).Session() // RequireSession let the request through
+	session := &models.Session{ID: ref.ID, UserID: ref.UserID, State: models.SessionState(ref.State), ExpiresAt: ref.ExpiresAt, FreshAt: ref.FreshAt}
 
 	issued, err := s.Issue(rctx.Ctx, core.SessionTokenRequest{Session: session, Audience: audience})
 	if err != nil {

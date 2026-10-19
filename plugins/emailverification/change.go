@@ -12,6 +12,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -707,8 +708,8 @@ func (p *Plugin) handleChange(rctx *core.RequestContext) error {
 	if err := req.FromMap(body); err != nil {
 		return err
 	}
-	session, _ := rctx.Values["session"].(*models.Session)
-	if session == nil {
+	session, ok := identity.CallerFrom(rctx.Ctx).Session()
+	if !ok {
 		return errs.NewSessionError(op, errs.CodeSessionNotFresh, nil)
 	}
 	req.UserID = session.UserID

@@ -16,6 +16,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -207,7 +208,7 @@ func (p *Plugin) Routes() []core.Route {
 		{Method: http.MethodPost, Path: "/sign-in/email", Handler: p.handleSignIn},
 		{Method: http.MethodPost, Path: "/sign-out", Handler: p.handleSignOut,
 			Middlewares: []core.Middleware{
-				core.RequireSession(p.authContext.SessionManager),
+				core.RequireSession(),
 			},
 		},
 	}
@@ -790,7 +791,8 @@ func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 // send the error's text. After a sign-out that went through, it takes the
 // session token back from the client.
 func (p *Plugin) handleSignOut(rctx *core.RequestContext) error {
-	sessionID, _ := rctx.Values["sessionID"].(string) // populated by session middleware upstream
+	session, _ := identity.CallerFrom(rctx.Ctx).Session() // RequireSession let the request through
+	sessionID := session.ID
 	hctx := &core.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
 	if err := SignOut(hctx, sessionID); err != nil {
 		return err

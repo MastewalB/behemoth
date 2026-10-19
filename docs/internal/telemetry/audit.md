@@ -112,7 +112,7 @@ A point declared with `Audit: &core.AuditSpec{}` records one event per dispatch,
 
 **Actor**, first match:
 
-1. The user of the session the request was authenticated with: `RequestContext.Values["session"]`, which `core.RequireSession` sets.
+1. The user of the session the caller signed in with: `hctx.Caller().Session()`, which the router's authentication stage fills for every request that carries a valid session token.
 2. For a successful operation inside a request, the user the subject belongs to. This covers sign-up and sign-in, where no session exists yet and the user acts for themselves.
 3. Otherwise `anonymous` inside a request and `system` outside one.
 

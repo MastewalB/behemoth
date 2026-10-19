@@ -403,6 +403,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	ac.SessionManager = auth.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
 	ac.Access = auth.NewAccess(app.Permissions, ac.SessionManager.IsFresh)
+	ac.Authenticator = auth.NewAuthenticator(ac.SessionManager, tel)
 
 	// JWTs: internal ones always, external ones and session tokens when an
 	// external audience is named. The external keys are derived from the
@@ -460,6 +461,9 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 
 	// Route-scoped rate limiting is baked in once, before any driver sees the routes.
+	// Authentication wraps each route inside its rate limit, so that a refused
+	// request costs no session lookup.
+	router.ApplyAuthentication(ac.Authenticator, ac.SessionManager, ipCfg)
 	router.ApplyRateLimiting(rateLimiter, app.RateLimits, ipCfg)
 
 	if cfg.HTTP != nil {

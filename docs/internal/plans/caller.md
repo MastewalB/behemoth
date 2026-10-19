@@ -152,7 +152,7 @@ A session that waits for a second factor authenticates nobody. The caller keeps 
 | --- | --- |
 | Framework adapter (gin, echo, chi, fiber, net/http) | Turns the framework's request into an `*http.Request`, as now. |
 | Transport (the router; later a module per transport) | Takes the credential from where the token carrier says, and notes the transport, the resolved address, and the user agent. Calls the authenticator and puts the caller on the context. Writes back what the outcome asks for: the cookie with a new expiry, or a cleared cookie. |
-| Authenticator, in core | Validates the token, maps "not found" to `session_invalid`, checks the state, applies the rolling extension, and builds the caller. |
+| Authenticator: `core.Authenticator`, implemented by `auth.DefaultAuthenticator` | Validates the token, maps "not found" to `session_invalid`, checks the state, applies the rolling extension, and builds the caller. |
 | Flow | Requires what it needs, through `Access`. |
 
 The contracts, to be settled in step 3:
@@ -170,7 +170,7 @@ type Authenticator interface {
 	// anonymous caller when cred is nil. A missing or dead credential is not
 	// an error: the caller is anonymous and keeps the reason
 	// (Caller.AuthError). A failed lookup is kept in the same way, and
-	// logged once.
+	// logged by the authenticator.
 	Authenticate(ctx context.Context, cred *Credential, peer identity.Peer) (identity.Caller, AuthOutcome)
 }
 
@@ -364,7 +364,7 @@ The caller's package sits below `telemetry`, and a hook callout sends the caller
 | --- | --- | --- |
 | 1 | Part 1 of [`package_layout.md`](package_layout.md): the packages move to their layout, except for the HTTP types | Done |
 | 2 | The caller's package, `WithCaller`, `CallerFrom`, `System`, `For`, `HookContext.Caller`, the permission catalog, and `Access`, with tests. Nothing reads them yet. | Done |
-| 3 | The authenticator. The router authenticates every call and puts the caller on the context. The token carrier takes the four HTTP methods of `SessionManager`, and `TokenTransport` gets its new name. `RequireSession`, `RequireFreshSession`, and `optionalSession` become wrappers, and the session keys in `RequestContext.Values` go. | Not started |
+| 3 | The authenticator. The router authenticates every call and puts the caller on the context. The token carrier takes the four HTTP methods of `SessionManager`, and `TokenTransport` gets its new name. `RequireSession`, `RequireFreshSession`, and `optionalSession` become wrappers, and the session keys in `RequestContext.Values` go. | In progress. Done: the authenticator, the authentication stage (`AuthenticateRequests`), `RequireSession` and `RequireFreshSession` over the caller, `optionalSession`, and the session keys. Waiting for the new name: the token carrier and `TokenTransport`. |
 | 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules | Not started |
 | 5 | The flows: the permissions declared, and the flows in the table above require them. The `UserID` fields of `phonenumber.SendRequest`, `phonenumber.VerifyRequest`, and `emailverification.ChangeRequest` go, and so does `SessionTokenRequest.Session`. | Not started |
 | 6 | Admin operations require a privileged caller. The examples, the CLI, and the tests name their callers. | Not started |
