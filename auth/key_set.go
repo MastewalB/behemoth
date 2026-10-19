@@ -1,4 +1,4 @@
-package transport
+package auth
 
 import (
 	"encoding/json"
@@ -41,7 +41,7 @@ func keySetHandler(keys crypto.KeySet) types.HandlerFunc {
 		}
 		set, err := crypto.MarshalJWKSet(published)
 		if err != nil {
-			return errs.NewSecurityError("transport.KeySet", errs.CodeJWKSReadFailed, err)
+			return errs.NewSecurityError("auth.KeySet", errs.CodeJWKSReadFailed, err)
 		}
 		rctx.Response.SetHeader("Cache-Control", fmt.Sprintf("public, max-age=%d", int(keySetMaxAge/time.Second)))
 		return rctx.Response.JSON(http.StatusOK, json.RawMessage(set))

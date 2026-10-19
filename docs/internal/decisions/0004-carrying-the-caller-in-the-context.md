@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-19
 - **Deciders:** MastewalB
-- **Affects:** `types` (`HookContext`, `Access`, `Authenticator`), `identity` (new), `types/init` (the dispatcher, the rate limiter, `Boot`), `transport` (`DefaultSessionManager`), `telemetry` (`NormalizeAuditEvent`), the router, every plugin's flows
+- **Affects:** `types` (`HookContext`, `Access`, `Authenticator`), `identity` (new), `types/init` (the dispatcher, the rate limiter, `Boot`), `auth` (`DefaultSessionManager`), `telemetry` (`NormalizeAuditEvent`), the router, every plugin's flows
 
 ## Context and problem
 

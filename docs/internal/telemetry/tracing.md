@@ -11,7 +11,7 @@ The code lives in:
 - `store/instrument.go`: `WithTelemetry`, `instrumentedDB`
 - `dispatch/dispatcher.go`: `DefaultDispatcher.chainSpan`, `handlerSpan`
 - `ratelimit/limiter.go`: the span in `DefaultRateLimiter.evaluate`
-- `transport/session.go`, `transport/token.go`: the span wrappers around `Create`, `Get`, `Revoke`, `Issue`, `Consume`
+- `auth/session.go`, `auth/token.go`: the span wrappers around `Create`, `Get`, `Revoke`, `Issue`, `Consume`
 - `plugins/emailpassword`: `hashPassword`, the verify span in `signInBody`
 - `migration/runner.go`: `applyTraced`
 - `telemetry/adapters/otel/`: the OpenTelemetry backend, in its own module

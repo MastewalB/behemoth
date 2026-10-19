@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/auth"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/migration"
@@ -20,7 +21,6 @@ import (
 	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/transport"
 	"github.com/MastewalB/behemoth/types"
 	"github.com/MastewalB/behemoth/types/hooks"
 	"github.com/MastewalB/behemoth/utils"
@@ -105,7 +105,7 @@ func Prepare(plugins []types.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 
 	// Initialize Catalogs
 	hookCatalog := dispatch.NewDefaultHookCatalog()
-	tokenCatalog := transport.NewDefaultTokenCatalog()
+	tokenCatalog := auth.NewDefaultTokenCatalog()
 	rateLimitCatalog := ratelimit.NewRateLimitCatalog(hookCatalog)
 	schemaRegistry := schema.NewRegistry()
 
@@ -383,15 +383,15 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// through the store, so they are built in that order.
 	ac.Store = store.New(db, store.WithHooks(dispatch.NewDataHooks(ac)), store.WithSchema(app.Resolver),
 		store.WithEncryptor(cryptoSuite.AtRest), store.WithTelemetry(tel))
-	ac.Codes = transport.NewCodeManager(ac.Store, cryptoSuite)
-	ac.TokenManager = transport.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token, ac)
+	ac.Codes = auth.NewCodeManager(ac.Store, cryptoSuite)
+	ac.TokenManager = auth.NewDefaultTokenManager(ac.Store, kv, app.Tokens, cryptoSuite, dispatcher, cfg.Token, ac)
 	if err := cfg.Session.Validate(); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	if err := checkCookieAgainstBaseURL(cfg.Session, cfg.Router.BaseURL); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
-	ac.SessionManager = transport.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
+	ac.SessionManager = auth.NewSessionManager(ac.Store, kv, cryptoSuite, cfg.Session, dispatcher, tel, ac, ipCfg)
 
 	// JWTs: internal ones always, external ones and session tokens when an
 	// external audience is named. The external keys are derived from the
@@ -409,7 +409,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	jwtProvider := crypto.NewJWTProvider(cryptoSuite.JWTSign, externalKeys, jwtCfg)
 	ac.JWT = jwtProvider
-	sessionTokens := transport.NewSessionTokens(jwtProvider, dispatcher, ac, ac.SessionManager, jwtCfg)
+	sessionTokens := auth.NewSessionTokens(jwtProvider, dispatcher, ac, ac.SessionManager, jwtCfg)
 	ac.SessionTokens = sessionTokens
 
 	// Init before routing, so Routes() and Middlewares() may rely on
@@ -444,7 +444,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err := router.Mount(coreOwner, "", sessionTokens.Routes()); err != nil {
 		return nil, err
 	}
-	if err := router.MountAbsolute(coreOwner, transport.KeySetRoutes(externalKeys, jwtCfg.JWKSPath)...); err != nil {
+	if err := router.MountAbsolute(coreOwner, auth.KeySetRoutes(externalKeys, jwtCfg.JWKSPath)...); err != nil {
 		return nil, err
 	}
 
@@ -671,7 +671,7 @@ func (s *scopedSchemaRegistry) Freeze() error {
 
 func newScopedInitContext(
 	hooks *dispatch.DefaultHookCatalog,
-	tokens *transport.DefaultTokenCatalog,
+	tokens *auth.DefaultTokenCatalog,
 	rl *ratelimit.DefaultRateLimitCatalog,
 	schemas schema.Registry,
 	owner string,
