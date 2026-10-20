@@ -193,7 +193,11 @@ user, err := plugin.SetPassword(ctx, userID, newPassword)
 - It does not check who is asking, fires no points, and works with password reset by email off.
 - Call `ValidatePassword` first when a later refusal would cost you something, such as a code already used up.
 
-`emailpassword.SignOut(hctx, sessionID)` revokes a session and fires the sign-out points. It writes nothing to a response, so the session's cookie stays with its browser. A route of yours that calls it for the caller's own session removes the cookie afterwards with `ac.TokenCarrier.Clear(rctx)`; see [Sessions](sessions.md#write-a-route-that-ends-the-session).
+`passwords.SignOut(ctx)` ends the session of the caller on `ctx` and fires the sign-out points. It is the flow behind `POST /sign-out`, and requires the permission `emailpassword.PermissionSignOut` (`session:sign_out`), which a signed-in user holds:
+
+- **The caller is the one the router put on the request's context**, or the one another transport put there. A caller that is not signed in gets the reason as a `401` session error, as from `core.RequireSession`.
+- **It ends the caller's own session only.** A job that acts for a user (`identity.System("job").For(userID)`) has no session, and gets `session_missing`. To end another session from code, call `ac.SessionManager.Revoke`.
+- **It writes nothing to a response,** so the session's cookie stays with its browser. A route of yours that calls it removes the cookie afterwards with `ac.TokenCarrier.Clear(rctx)`; see [Sessions](sessions.md#write-a-route-that-ends-the-session).
 
 ## Reject a sign-up from a hook
 

@@ -43,17 +43,17 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req core.SessionTokenR
 		return nil, errs.NewConfigurationErrorCode(op, errs.CodeJWTExternalNotConfigured,
 			"session tokens need JWTConfig.Audiences[JWTExternal]")
 	}
-	session := req.Session
-	switch {
-	case session == nil:
-		return nil, errs.NewInvalidInputError(op, "session", "a session is required", nil)
-	case session.State == models.SessionPending:
-		// A second factor is still asked for: not a signed-in user.
-		return nil, errs.NewSessionError(op, errs.CodeSessionPending, nil)
-	case session.State != models.SessionActive || session.RevokedAt != nil:
-		return nil, errs.NewSessionError(op, errs.CodeSessionRevoked, nil)
-	case !session.ExpiresAt.IsZero() && time.Now().After(session.ExpiresAt):
-		return nil, errs.NewSessionError(op, errs.CodeSessionExpired, nil)
+	// A signed-in user, or the reason the caller is not one: the
+	// authenticator checked the session's state and expiry.
+	userID, err := s.auth.Access.RequireUser(ctx, core.PermissionSessionTokenIssue)
+	if err != nil {
+		return nil, err
+	}
+	session, ok := identity.CallerFrom(ctx).Session()
+	if !ok {
+		// A system caller acting for the user: the token's sid would name
+		// no session.
+		return nil, errs.NewSessionError(op, errs.CodeSessionMissing, nil)
 	}
 	allowed := s.cfg.Audiences[crypto.JWTExternal]
 	audience := req.Audience
@@ -63,8 +63,6 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req core.SessionTokenR
 	if !slices.Contains(allowed, audience) {
 		return nil, errs.NewInvalidInputError(op, core.SessionTokenAudienceKey, "audience is not allowed", nil)
 	}
-	userID := session.UserID
-
 	// One operation: the three points share Values, where a rate-limit
 	// rule finds the user and the session.
 	opCtx := core.BeginOperation(ctx)
@@ -131,10 +129,8 @@ func (s *DefaultSessionTokens) Routes() []core.Route {
 	if !s.cfg.ExternalEnabled() {
 		return nil
 	}
-	return []core.Route{{
-		Method: http.MethodPost, Path: core.PathSessionToken, Handler: s.handleIssue,
-		Middlewares: []core.Middleware{core.RequireSession()},
-	}}
+	// No session middleware: Issue requires the caller itself.
+	return []core.Route{{Method: http.MethodPost, Path: core.PathSessionToken, Handler: s.handleIssue}}
 }
 
 // handleIssue answers with the token, its expiry and its audience. The body
@@ -151,10 +147,7 @@ func (s *DefaultSessionTokens) handleIssue(rctx *core.RequestContext) error {
 	if !ok && body[core.SessionTokenAudienceKey] != nil {
 		return errs.NewInvalidInputError(op, core.SessionTokenAudienceKey, "audience must be a string", nil)
 	}
-	ref, _ := identity.CallerFrom(rctx.Ctx).Session() // RequireSession let the request through
-	session := &models.Session{ID: ref.ID, UserID: ref.UserID, State: models.SessionState(ref.State), ExpiresAt: ref.ExpiresAt, FreshAt: ref.FreshAt}
-
-	issued, err := s.Issue(rctx.Ctx, core.SessionTokenRequest{Session: session, Audience: audience})
+	issued, err := s.Issue(rctx.Ctx, core.SessionTokenRequest{Audience: audience})
 	if err != nil {
 		return err
 	}

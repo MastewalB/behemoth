@@ -148,8 +148,9 @@ The reset itself is the email/password plugin's: the same password rules, every 
 ## Call the flows from code
 
 ```go
-sent, err := phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: number, UserID: userID}) // add a number
-sent, err = phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: number})                  // sign in
+forUser := identity.WithCaller(ctx, identity.System("support-tool").For(userID))
+sent, err := phones.SendCode(forUser, phonenumber.SendRequest{PhoneNumber: number}) // add a number to the user
+sent, err = phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: number})      // sign in: an anonymous caller
 // sent.Sent, sent.Reason, sent.ExpiresAt
 
 user, err := phones.AddNumber(ctx, userID, number, code)
@@ -166,7 +167,8 @@ number, ok, err := phonenumber.Column.Get(user)
 The flows behave as follows:
 
 - `SendCode` and `RequestPasswordReset` tell a caller in code what the routes hide. `sent.Sent` is false when no code went out, and `sent.Reason` is `phonenumber.ReasonNoAccount`, `ReasonNumberTaken`, `ReasonAlreadySet`, or `ReasonSendFailed`. Their only errors are a number that is not E.164, a rate limit, a hook's rejection, and a failure of the system.
-- `Verify(ctx, VerifyRequest{...})` is `AddNumber` with a `UserID` and `SignInWithCode` without. The route calls it.
+- `SendCode` and `Verify` read the caller on `ctx`, as the routes do. For a caller that acts for a user they add a number to that user, and require `phonenumber.PermissionPhoneChange` (`phone:change`), which a signed-in user holds. For an anonymous caller they sign in. A caller whose session token failed gets the reason, and a system caller that names no user is a configuration error.
+- `Verify(ctx, VerifyRequest{...})` is `AddNumber` for the caller's user, and `SignInWithCode` for an anonymous caller. The route calls it.
 - `SignIn` and `SignInWithCode` return the raw session token and deliver nothing. From a route of your own, hand the result to `core.WriteSignIn`.
 - `SetPhoneNumber` does not check who is asking.
 - Before `Boot`, the flows return a configuration error.

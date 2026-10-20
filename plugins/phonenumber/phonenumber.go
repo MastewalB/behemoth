@@ -28,7 +28,6 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/schema"
@@ -96,6 +95,11 @@ const (
 	// "no_account", "invalid_code" and "rejected_by_hook".
 	HookResetFailed core.HookPoint = "auth.phoneNumber.passwordResetFailed"
 )
+
+// PermissionPhoneChange is the permission SendCode and Verify require of a
+// caller that acts for a user: adding a phone number to the caller's own
+// account. A caller signing in by code needs none.
+const PermissionPhoneChange core.Permission = "phone:change"
 
 // Names of the rate-limit rules the plugin declares. The rules that end in
 // .address count per client address. RuleSendAddress counts the codes asked
@@ -280,12 +284,18 @@ func (p *Plugin) Version() string {
 //     without the plugin can still insert users;
 //   - the auth.phoneNumber.* points around sending a code, adding a number
 //     and, with Options.PasswordReset, resetting a password;
-//   - a rate-limit rule per client address on each route, and one per number
-//     on sending.
+//   - a rate-limit rule per client address on each flow, and one per number
+//     on sending;
+//   - the permission PermissionPhoneChange.
 //
 // It declares no table and no token kind: codes are rows of core's
 // verification_codes table, issued by the code manager.
 func (p *Plugin) Declare(ic *core.PluginInitContext) error {
+	if err := ic.Permissions.Declare(core.PermissionDef{
+		Name: PermissionPhoneChange, Kind: core.PermissionSelf, Description: "Add or change the phone number of your account",
+	}); err != nil {
+		return err
+	}
 	if err := ic.Schemas.ExtendColumn(Column.Contribution(schema.Column{
 		Type: schema.ColTypeString, Length: columnLength, Nullable: true, Unique: true, Public: true,
 	})); err != nil {
@@ -384,15 +394,13 @@ func (p *Plugin) Init(ac *core.AuthContext) error {
 	return nil
 }
 
-// Routes implements [core.Plugin]. The send and verify routes read the
-// caller's session when there is one (optionalSession): with a session they
-// add a number to the caller, without one they sign in. The two reset routes
-// are added only with Options.PasswordReset.
+// Routes implements [core.Plugin]. The send and verify flows read the
+// caller: for a signed-in user they add a number, for a visitor they sign
+// in. The two reset routes are added only with Options.PasswordReset.
 func (p *Plugin) Routes() []core.Route {
-	session := []core.Middleware{optionalSession()}
 	routes := []core.Route{
-		{Method: http.MethodPost, Path: PathSendOTP, Handler: p.handleSend, Middlewares: session},
-		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify, Middlewares: session},
+		{Method: http.MethodPost, Path: PathSendOTP, Handler: p.handleSend},
+		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify},
 		{Method: http.MethodPost, Path: PathSignIn, Handler: p.handleSignIn},
 	}
 	if p.opts.PasswordReset {
@@ -540,13 +548,14 @@ func (p *Plugin) findHolder(ctx context.Context, number string) (*models.User, e
 type SendRequest struct {
 	// PhoneNumber is the number to send the code to, in E.164 form.
 	PhoneNumber string
-	// UserID names the user who is adding the number. Empty means the code
-	// is for signing in with a number somebody already holds. The route
-	// fills it from the caller's session.
-	UserID string
 	// Metadata is passed to the SMS sender as it is, in
 	// SMSMessage.Metadata: a locale. The plugin does not read or store it.
 	Metadata behemoth.M
+
+	// userID is the user who is adding the number: the one the caller acts
+	// for, set by SendCode. Empty means the code is for signing in with a
+	// number somebody already holds.
+	userID string
 }
 
 // SendResult is what SendCode and RequestPasswordReset return, and what
@@ -576,10 +585,13 @@ func (r *SendResult) AuditSubject() (subjectType, subjectID string) {
 
 // SendCode sends a one-time code to a phone number.
 //
-// With req.UserID it is the first step of adding the number to that user,
-// who may hold another number already: the code is confirmed with Verify,
-// and only then is the number written. Without it the code signs in the user
-// who holds the number.
+// For a caller that acts for a user, it is the first step of adding the
+// number to that user, who may hold another number already: the code is
+// confirmed with Verify, and only then is the number written. The caller
+// needs PermissionPhoneChange (Access.OptionalUser). For an anonymous caller
+// the code signs in the user who holds the number. A caller whose
+// credential failed gets the reason as a session error, so a user whose
+// session has ended is not taken for a visitor who wants to sign in.
 //
 // A number that is not in E.164 form is a validation error, and too many
 // codes for one number a rate-limit error. Every other outcome is a result
@@ -592,11 +604,20 @@ func (r *SendResult) AuditSubject() (subjectType, subjectID string) {
 // auth.phoneNumber.beforeSend, and .afterSend or .sendFailed. It is the flow
 // behind POST /phone-number/send-otp.
 func (p *Plugin) SendCode(ctx context.Context, req SendRequest) (*SendResult, error) {
-	purpose := PurposeSignIn
-	if req.UserID != "" {
-		purpose = PurposeVerify
+	const op = "phonenumber.SendCode"
+	if p.authContext == nil {
+		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
-	return p.send(ctx, "phonenumber.SendCode", purpose, req)
+	userID, forUser, err := p.authContext.Access.OptionalUser(ctx, PermissionPhoneChange)
+	if err != nil {
+		return nil, err
+	}
+	purpose := PurposeSignIn
+	req.userID = ""
+	if forUser {
+		purpose, req.userID = PurposeVerify, userID
+	}
+	return p.send(ctx, op, purpose, req)
 }
 
 // send is the flow behind SendCode and RequestPasswordReset. It fires its
@@ -628,8 +649,8 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 
 	payload := behemoth.M{HookValuePhoneNumber: number, keyPurpose: string(purpose)}
 	hctx.Values[keyPurpose] = string(purpose) // the rules per address count a reset's sends apart
-	if req.UserID != "" {
-		payload[hooks.HookValueUserID] = req.UserID
+	if req.userID != "" {
+		payload[hooks.HookValueUserID] = req.userID
 	}
 	if _, err := dispatcher.RunBefore(hctx, HookSendBefore, payload); err != nil {
 		return nil, core.FailIfRejected(dispatcher, hctx, HookSendFailed, err, core.FailureReason{})
@@ -647,7 +668,7 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 	switch purpose {
 	case PurposeVerify:
 		kind, message = codeVerify, core.SMSPhoneVerification
-		if user, err = ac.Store.FindUserByID(hctx.Ctx, req.UserID); err != nil {
+		if user, err = ac.Store.FindUserByID(hctx.Ctx, req.userID); err != nil {
 			return nil, err
 		}
 		if holder != nil && holder.ID == user.ID {
@@ -702,10 +723,6 @@ func (p *Plugin) send(ctx context.Context, op string, purpose Purpose, req SendR
 type VerifyRequest struct {
 	PhoneNumber string
 	Code        string
-	// UserID names the user who is adding the number, as in SendRequest.
-	// Empty means the code signs in. The route fills it from the caller's
-	// session.
-	UserID string
 }
 
 // VerifyResult is what Verify returns. One of its two fields is set.
@@ -716,12 +733,22 @@ type VerifyResult struct {
 	SignIn *core.SignInResult
 }
 
-// Verify confirms the code SendCode sent to req.PhoneNumber. With
-// req.UserID it is AddNumber, and without it SignInWithCode; it exists so
-// that the verify route calls one flow.
+// Verify confirms the code SendCode sent to req.PhoneNumber. For a caller
+// that acts for a user it adds the number to that user, as AddNumber does,
+// and needs PermissionPhoneChange (Access.OptionalUser); for an anonymous
+// caller it is SignInWithCode. A caller whose credential failed gets the
+// reason. It exists so that the verify route calls one flow.
 func (p *Plugin) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, error) {
-	if req.UserID != "" {
-		user, err := p.AddNumber(ctx, req.UserID, req.PhoneNumber, req.Code)
+	const op = "phonenumber.Verify"
+	if p.authContext == nil {
+		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+	}
+	userID, forUser, err := p.authContext.Access.OptionalUser(ctx, PermissionPhoneChange)
+	if err != nil {
+		return nil, err
+	}
+	if forUser {
+		user, err := p.addNumber(ctx, userID, req.PhoneNumber, req.Code)
 		if err != nil {
 			return nil, err
 		}
@@ -758,6 +785,12 @@ func (v *verifyInput) FromMap(map[string]any) error { return nil }
 //
 // It fires auth.phoneNumber.beforeVerify, .afterVerify and .verifyFailed.
 func (p *Plugin) AddNumber(ctx context.Context, userID, phoneNumber, code string) (*models.User, error) {
+	return p.addNumber(ctx, userID, phoneNumber, code)
+}
+
+// addNumber is AddNumber, and what Verify runs for the user its caller acts
+// for.
+func (p *Plugin) addNumber(ctx context.Context, userID, phoneNumber, code string) (*models.User, error) {
 	const op = "phonenumber.AddNumber"
 	number, err := Parse(phoneNumber)
 	if err != nil {
@@ -1098,33 +1131,6 @@ func (p *Plugin) SetPhoneNumber(ctx context.Context, userID, phoneNumber string)
 	return p.write(ctx, userID, number)
 }
 
-// optionalSession is the session check of the send and verify routes. The
-// router has authenticated the request: a request without a session token
-// passes as a visitor who wants to sign in, and one with a valid session
-// passes as its user (sessionUser). A request whose token failed is refused
-// with the reason, so a caller whose session has ended is told so and is not
-// taken for a visitor.
-func optionalSession() core.Middleware {
-	return func(next core.HandlerFunc) core.HandlerFunc {
-		return func(rctx *core.RequestContext) error {
-			if caller := identity.CallerFrom(rctx.Ctx); caller.IsAnonymous() && caller.AuthError() != nil {
-				return caller.AuthError()
-			}
-			return next(rctx)
-		}
-	}
-}
-
-// sessionUser returns the id of the user whose session the request carries,
-// or "".
-func sessionUser(rctx *core.RequestContext) string {
-	caller := identity.CallerFrom(rctx.Ctx)
-	if session, ok := caller.Session(); ok && !caller.IsAnonymous() {
-		return session.UserID
-	}
-	return ""
-}
-
 // body decodes a request body as a map.
 func body(rctx *core.RequestContext, op string) (behemoth.M, error) {
 	var data behemoth.M
@@ -1164,7 +1170,7 @@ func (p *Plugin) handleSend(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	if _, err := p.SendCode(rctx.Ctx, SendRequest{PhoneNumber: number, UserID: sessionUser(rctx), Metadata: metadata}); err != nil {
+	if _, err := p.SendCode(rctx.Ctx, SendRequest{PhoneNumber: number, Metadata: metadata}); err != nil {
 		return err
 	}
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "ok"})
@@ -1187,7 +1193,7 @@ func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	result, err := p.Verify(rctx.Ctx, VerifyRequest{PhoneNumber: number, Code: code, UserID: sessionUser(rctx)})
+	result, err := p.Verify(rctx.Ctx, VerifyRequest{PhoneNumber: number, Code: code})
 	if err != nil {
 		return err
 	}

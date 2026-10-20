@@ -12,7 +12,6 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -94,6 +93,10 @@ const (
 	HookChangeRevertFailed core.HookPoint = "auth.emailChange.revertFailed"
 )
 
+// PermissionEmailChange is the permission RequestChange requires: changing
+// the caller's own email address. It is declared with the change flow.
+const PermissionEmailChange core.Permission = "email:change"
+
 // Names of the flow's rate-limit rules.
 const (
 	RuleChangeAddress        = "emailverification.change.address"         // change requests per client address
@@ -149,10 +152,8 @@ var ErrEmailTaken = errors.New("emailverification: the new email belongs to anot
 // It implements [behemoth.Serializable], which is how WithLifecycle turns it
 // into the auth.emailChange.beforeRequest payload and back.
 type ChangeRequest struct {
-	// UserID is the user whose address changes. The route takes it from
-	// the session.
-	UserID string
-	// NewEmail is the address to change to.
+	// NewEmail is the address to change to. The address that changes is
+	// the one of the user the caller acts for.
 	NewEmail string
 	// RedirectURL is where the application should send the user after the
 	// new address has confirmed. Optional, and checked like
@@ -162,6 +163,9 @@ type ChangeRequest struct {
 	// Optional.
 	Metadata behemoth.M
 
+	// userID is the user whose address changes: the one the caller acts
+	// for, set by RequestChange. It is in the payload as "userID".
+	userID string
 	// inFlow is set once the request has entered the flow. FromMap then
 	// reads a rewritten payload and not a request body.
 	inFlow bool
@@ -169,7 +173,7 @@ type ChangeRequest struct {
 
 // ToMap returns the request as a hook payload.
 func (r *ChangeRequest) ToMap() (map[string]any, error) {
-	m := map[string]any{keyUserID: r.UserID, keyEmail: r.NewEmail, keyRedirectURL: r.RedirectURL}
+	m := map[string]any{keyUserID: r.userID, keyEmail: r.NewEmail, keyRedirectURL: r.RedirectURL}
 	if r.Metadata != nil {
 		m[keyMetadata] = r.Metadata
 	}
@@ -179,7 +183,7 @@ func (r *ChangeRequest) ToMap() (map[string]any, error) {
 // FromMap sets the request from a request body or a rewritten payload. From
 // a payload only the redirect URL and the metadata are taken: whose address
 // changes, and to what, is not a handler's to decide. From a body the user
-// is not read either; the route takes it from the session.
+// is not read either; it is the caller's.
 func (r *ChangeRequest) FromMap(data map[string]any) error {
 	email, redirect, metadata, err := requestFields("emailverification.RequestChange", data)
 	if err != nil {
@@ -236,6 +240,11 @@ func (p *Plugin) changeEnabled() bool {
 // declareChange declares what the flow needs: its two token kinds, nine
 // points and four rate-limit rules.
 func (p *Plugin) declareChange(ic *core.PluginInitContext, perAddress core.Limit) error {
+	if err := ic.Permissions.Declare(core.PermissionDef{
+		Name: PermissionEmailChange, Kind: core.PermissionSelf, Description: "Change the email address of your account",
+	}); err != nil {
+		return err
+	}
 	for _, def := range []core.TokenKindDef{
 		{Kind: TokenKindEmailChange, SingleUse: true, DefaultTTL: p.opts.ChangeTTL, Backend: core.TokenBackendDB},
 		{Kind: TokenKindEmailChangeRevert, SingleUse: true, DefaultTTL: p.opts.RevertTTL, Backend: core.TokenBackendDB},
@@ -305,8 +314,8 @@ func (p *Plugin) initChange(ac *core.AuthContext) error {
 // are opened from a mailbox, by whoever holds the link, and need none.
 func (p *Plugin) changeRoutes() []core.Route {
 	return []core.Route{
-		{Method: http.MethodPost, Path: PathChange, Handler: p.handleChange,
-			Middlewares: []core.Middleware{core.RequireFreshSession(p.authContext.SessionManager)}},
+		// No session middleware: RequestChange requires a fresh caller itself.
+		{Method: http.MethodPost, Path: PathChange, Handler: p.handleChange},
 		{Method: http.MethodPost, Path: PathChangeConfirm, Handler: p.handleChangeConfirm},
 		{Method: http.MethodPost, Path: PathChangeRevert, Handler: p.handleChangeRevert},
 	}
@@ -326,7 +335,7 @@ func (p *Plugin) changeOperation(ctx context.Context, op string) (*core.HookCont
 	return hctx, nil
 }
 
-// RequestChange starts a change of req.UserID's email to req.NewEmail. The
+// RequestChange starts a change of the caller's email to req.NewEmail. The
 // user's address does not change yet. Two messages go out:
 //
 //   - to the current address, a notice (core.MailEmailChangeNotice) with a
@@ -343,20 +352,27 @@ func (p *Plugin) changeOperation(ctx context.Context, op string) (*core.HookCont
 // address the account already has, and a redirect URL outside the trusted
 // origins are validation errors.
 //
-// It is the flow behind POST /email/change, which requires a fresh session.
-// A caller from code vouches for the request itself: nothing here checks
-// who is asking.
+// The caller needs PermissionEmailChange, with a fresh session
+// (Access.RequireFreshUser): a stolen long-lived session is not enough to
+// move the account to another address. A caller that is not signed in gets
+// the reason as a session error, and a session that is too old
+// errs.CodeSessionNotFresh. Code in the process acts for a user with
+// identity.System(name).For(userID), which passes without a session.
+//
+// It is the flow behind POST /email/change.
 func (p *Plugin) RequestChange(ctx context.Context, req ChangeRequest) (*ChangeResult, error) {
 	const op = "emailverification.RequestChange"
 	hctx, err := p.changeOperation(ctx, op)
 	if err != nil {
 		return nil, err
 	}
-	if req.UserID == "" {
-		return nil, errs.NewInvalidInputError(op, "user", "a user is required", nil)
+	userID, err := p.authContext.Access.RequireFreshUser(ctx, PermissionEmailChange)
+	if err != nil {
+		return nil, err
 	}
+	req.userID = userID
 	// Published for the rule per user, and for the audit events' subject.
-	hctx.Values[hooks.HookValueUserID] = req.UserID
+	hctx.Values[hooks.HookValueUserID] = userID
 	req.NewEmail = store.NormalizeEmail(req.NewEmail)
 	req.inFlow = true
 	return p.changeRequest(hctx, req)
@@ -373,7 +389,7 @@ func (p *Plugin) changeRequestBody(hctx *core.HookContext, req ChangeRequest) (*
 	if req.RedirectURL != "" && !core.TrustedRedirect(ac.Origins, req.RedirectURL) {
 		return nil, errs.NewInvalidInputError(op, "redirect_url", "redirect URL is not allowed", nil)
 	}
-	user, err := ac.Store.FindUserByID(hctx.Ctx, req.UserID)
+	user, err := ac.Store.FindUserByID(hctx.Ctx, req.userID)
 	if err != nil {
 		if errs.IsNotFound(err) {
 			return nil, ErrNoAccount
@@ -691,8 +707,8 @@ func (p *Plugin) changeRevertBody(hctx *core.HookContext, in changeTokenInput) (
 	return user, nil
 }
 
-// handleChange takes the user from the session RequireFreshSession checked.
-// It answers a request for an address that is taken like one that was sent
+// handleChange decodes the request and calls RequestChange, which takes the
+// user from the caller and requires a fresh session. It answers a request for an address that is taken like one that was sent
 // its links, so a signed-in user can't use it to learn which addresses have
 // an account.
 func (p *Plugin) handleChange(rctx *core.RequestContext) error {
@@ -705,12 +721,6 @@ func (p *Plugin) handleChange(rctx *core.RequestContext) error {
 	if err := req.FromMap(body); err != nil {
 		return err
 	}
-	session, ok := identity.CallerFrom(rctx.Ctx).Session()
-	if !ok {
-		return errs.NewSessionError(op, errs.CodeSessionNotFresh, nil)
-	}
-	req.UserID = session.UserID
-
 	if _, err := p.RequestChange(rctx.Ctx, req); err != nil && !errors.Is(err, ErrEmailTaken) {
 		return err
 	}

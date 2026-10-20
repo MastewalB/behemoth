@@ -48,7 +48,7 @@ The signing keys are derived from your master secret (`crypto.Config.Secrets`), 
 | `POST /session/token` (`core.PathSessionToken`), below the base path | empty, `{}`, or `{"audience": "..."}` with one of the configured audiences | `200` with `{"token": "...", "expires_at": "2026-10-14T10:15:00Z", "audience": "..."}`, sent with `Cache-Control: no-store` |
 | `GET /.well-known/jwks.json` | none | `200` with the public keys as a JWK set (RFC 7517), sent with `Cache-Control: public, max-age=300` |
 
-The token route requires an active session, sent the way `RouterConfig.Carrier.Delivery` says. It answers like every protected route when there is none.
+The token route requires an active session, sent the way `RouterConfig.Carrier.Delivery` says, and the permission `core.PermissionSessionTokenIssue` (`session_token:issue`), which a signed-in user holds. The flow checks both, and answers like every protected route when there is no session.
 
 | When | Status | Code |
 | --- | --- | --- |
@@ -139,8 +139,8 @@ Replace `ROLES_OF` with your own lookup.
 `ac.SessionTokens.Issue` is the flow behind the route, for a transport other than HTTP:
 
 ```go
-issued, err := ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: session, Audience: "https://api.example.com"})
+issued, err := ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Audience: "https://api.example.com"})
 // issued.Token, issued.ExpiresAt, issued.ID
 ```
 
-`session` is a session your code has validated, such as the one `ac.SessionManager.Validate` returns. A pending or expired session is refused with its session code. With session tokens off, `Issue` returns a configuration error with the code `external_jwt_not_configured`.
+The token is for the caller on `ctx` and the session it signed in with. Your transport puts that caller on the context through `ac.Authenticator`, as the router does. A caller that is not signed in gets its session code, and a job that acts for a user (`identity.System(name).For(userID)`) gets `session_missing`: it has no session for the token's `sid` to name. With session tokens off, `Issue` returns a configuration error with the code `external_jwt_not_configured`.

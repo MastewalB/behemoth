@@ -65,8 +65,12 @@ func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
+// PermissionSignOut is the permission SignOut requires: ending the
+// caller's own session.
+const PermissionSignOut core.Permission = "session:sign_out"
+
 // Declare implements [core.Plugin]. Without password reset the plugin
-// declares nothing:
+// declares one permission, PermissionSignOut, and nothing else:
 //   - hook points: it fires core's auth.signUp.*, auth.signIn.* and
 //     auth.signOut.* points, which core declares before any plugin's Declare
 //     runs (CoreDeclareHookPoints);
@@ -74,12 +78,18 @@ func (p *Plugin) Version() string {
 //   - token kinds: none. Email verification is a plugin of its own
 //     (plugins/emailverification), which sends a link to a user this plugin
 //     signs up;
-//   - rate limits: core declares the baseline rule for /sign-in/email.
+//   - rate limits: core declares the limits per client address on sign-in
+//     and sign-up.
 //
 // With password reset enabled it declares the reset's token kind, points and
 // rate-limit rules (declareReset). Password change for a signed-in user is
 // not built.
 func (p *Plugin) Declare(ic *core.PluginInitContext) error {
+	if err := ic.Permissions.Declare(core.PermissionDef{
+		Name: PermissionSignOut, Kind: core.PermissionSelf, Description: "Sign out of this session",
+	}); err != nil {
+		return err
+	}
 	if p.opts.Reset.enabled() {
 		return p.declareReset(ic)
 	}
@@ -94,8 +104,7 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 }
 
 // Middlewares implements [core.Plugin]. The plugin has no middleware that
-// should run on every route of the application. The session check that
-// sign-out needs is attached to that route alone (see Routes).
+// should run on every route of the application.
 func (p *Plugin) Middlewares() []core.Middleware {
 	return nil
 }
@@ -206,11 +215,8 @@ func (p *Plugin) Routes() []core.Route {
 	routes := []core.Route{
 		{Method: http.MethodPost, Path: "/sign-up/email", Handler: p.handleSignUp},
 		{Method: http.MethodPost, Path: "/sign-in/email", Handler: p.handleSignIn},
-		{Method: http.MethodPost, Path: "/sign-out", Handler: p.handleSignOut,
-			Middlewares: []core.Middleware{
-				core.RequireSession(),
-			},
-		},
+		// No session middleware: SignOut requires the caller itself.
+		{Method: http.MethodPost, Path: "/sign-out", Handler: p.handleSignOut},
 	}
 	if p.opts.Reset.enabled() {
 		routes = append(routes,
@@ -717,16 +723,35 @@ func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, e
 	}, nil
 }
 
-// SignOut revokes the session with sessionID. It fires auth.signOut.before
-// and .after around the revoke, as one operation: both points share
-// hctx.Values, and the session manager's revoke points start from a copy of
-// them.
+// SignOut ends the session the caller on ctx signed in with. It fires
+// auth.signOut.before and .after around the revoke, as one operation: both
+// points share Values, and the session manager's revoke points start from a
+// copy of them.
 //
-// It writes nothing to a response. The session may be another client's, and
-// SignOut also runs where there is no request. A route that signs its own
-// caller out takes the token back afterwards (TokenCarrier.Clear), as
-// the plugin's sign-out route does.
-func SignOut(hctx *core.HookContext, sessionID string) error {
+// The caller needs PermissionSignOut (Access.RequireUser) and a session. A
+// caller that is not signed in gets the reason as a session error, as from
+// RequireSession, and a system caller acting for a user, which has no
+// session, gets errs.CodeSessionMissing. Ending another client's session is
+// not a self-service flow: code that has to does it with
+// SessionManager.Revoke.
+//
+// It is the flow behind POST /sign-out, and writes nothing to a response. A
+// route that signs its caller out takes the token back afterwards
+// (TokenCarrier.Clear), as the plugin's sign-out route does.
+func (p *Plugin) SignOut(ctx context.Context) error {
+	const op = "emailpassword.SignOut"
+	hctx, err := p.operation(ctx, op)
+	if err != nil {
+		return err
+	}
+	if _, err := p.authContext.Access.RequireUser(ctx, PermissionSignOut); err != nil {
+		return err
+	}
+	session, ok := identity.CallerFrom(ctx).Session()
+	if !ok {
+		return errs.NewSessionError(op, errs.CodeSessionMissing, nil)
+	}
+	sessionID := session.ID
 	hctx = core.AsOperation(hctx)
 	hctx.Values[hooks.HookValueSessionID] = sessionID // for the operation's later points and its audit event
 	ac := hctx.Auth
@@ -799,10 +824,7 @@ func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 // send the error's text. After a sign-out that went through, it takes the
 // session token back from the client.
 func (p *Plugin) handleSignOut(rctx *core.RequestContext) error {
-	session, _ := identity.CallerFrom(rctx.Ctx).Session() // RequireSession let the request through
-	sessionID := session.ID
-	hctx := &core.HookContext{Ctx: rctx.Ctx, Auth: rctx.Auth, Request: rctx}
-	if err := SignOut(hctx, sessionID); err != nil {
+	if err := p.SignOut(rctx.Ctx); err != nil {
 		return err
 	}
 	// The session is the caller's own and it has ended, so the client gives

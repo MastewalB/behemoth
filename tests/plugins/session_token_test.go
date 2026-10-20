@@ -169,7 +169,7 @@ func TestSessionTokenIsVerifiedWithVerifyJWT(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	issued, err := app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: app.session, Audience: reportsAudience})
+	issued, err := app.ac.SessionTokens.Issue(presenting(ctx, app.ac, app.raw), core.SessionTokenRequest{Audience: reportsAudience})
 	require.NoError(t, err)
 
 	source, err := keysource.NewJWKSet(nil, srv.URL+"/.well-known/jwks.json")
@@ -279,15 +279,16 @@ func TestSessionTokenNeedsASignedInSession(t *testing.T) {
 	revoked := app.issue(t, "")
 	assert.Equal(t, http.StatusUnauthorized, revoked.status)
 
-	// The flow refuses the same when it is called from code.
-	expired := *app.session
-	expired.RevokedAt, expired.State, expired.ExpiresAt = nil, models.SessionActive, time.Now().Add(-time.Minute)
-	_, err = app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: &expired})
-	assert.True(t, errs.IsCode(err, errs.CodeSessionExpired), "%v", err)
-	stillPending := *app.session
-	stillPending.State = models.SessionPending
-	_, err = app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: &stillPending})
+	// The flow refuses the same when it is called from code: it reads the
+	// caller, and not a session it is handed.
+	_, err = app.ac.SessionTokens.Issue(presenting(ctx, app.ac, app.raw), core.SessionTokenRequest{})
+	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
+	_, err = app.ac.SessionTokens.Issue(presenting(ctx, app.ac, pendingRaw), core.SessionTokenRequest{})
 	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
+	_, err = app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{})
+	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "an anonymous caller: %v", err)
+	_, err = app.ac.SessionTokens.Issue(actingFor(ctx, app.user.ID), core.SessionTokenRequest{})
+	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "a job acting for the user has no session for the token to name: %v", err)
 }
 
 // A handler on the before point adds claims, which travel under "custom",
@@ -356,7 +357,7 @@ func TestSessionTokensOff(t *testing.T) {
 	assert.NotContains(t, app.mounted, "/api/auth"+core.PathSessionToken)
 	assert.NotContains(t, app.mounted, "/.well-known/jwks.json")
 
-	_, err = app.ac.SessionTokens.Issue(ctx, core.SessionTokenRequest{Session: app.session})
+	_, err = app.ac.SessionTokens.Issue(presenting(ctx, app.ac, app.raw), core.SessionTokenRequest{})
 	assert.True(t, errs.IsCode(err, errs.CodeJWTExternalNotConfigured), "%v", err)
 
 	token, err := app.ac.JWT.Sign(ctx, crypto.JWTInternal, crypto.JWTRequest{Subject: app.user.ID})

@@ -127,7 +127,7 @@ func (app *phoneApp) withNumber(t *testing.T, email, number string) *models.User
 	ctx := context.Background()
 	user := app.signUp(t, email)
 	before := app.sms.count()
-	sent, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: number, UserID: user.ID})
+	sent, err := app.phones.SendCode(actingFor(ctx, user.ID), phonenumber.SendRequest{PhoneNumber: number})
 	require.NoError(t, err)
 	require.True(t, sent.Sent, sent.Reason)
 	user, err = app.phones.AddNumber(ctx, user.ID, number, app.sms.last(t, before+1).Code)
@@ -169,8 +169,8 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 	})
 	ada := app.signUp(t, "ada@example.com")
 
-	sent, err := app.phones.SendCode(ctx, phonenumber.SendRequest{
-		PhoneNumber: "  " + adaNumber + " ", UserID: ada.ID, Metadata: behemoth.M{"locale": "en"},
+	sent, err := app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{
+		PhoneNumber: "  " + adaNumber + " ", Metadata: behemoth.M{"locale": "en"},
 	})
 	require.NoError(t, err)
 	assert.True(t, sent.Sent)
@@ -198,7 +198,7 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 	_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "the mismatch used the code up: %v", err)
 
-	_, err = app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: ada.ID})
+	_, err = app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 	require.NoError(t, err)
 	msg = app.sms.last(t, 2)
 	grace := app.signUp(t, "grace@example.com")
@@ -221,7 +221,7 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 		"the holder":   {ada.ID, phonenumber.ReasonAlreadySet},
 		"another user": {grace.ID, phonenumber.ReasonNumberTaken},
 	} {
-		sent, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: tc.userID})
+		sent, err := app.phones.SendCode(actingFor(ctx, tc.userID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 		require.NoError(t, err, name)
 		assert.False(t, sent.Sent, name)
 		assert.Equal(t, tc.reason, sent.Reason, name)
@@ -229,7 +229,7 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 	assert.Equal(t, 2, app.sms.count(), "neither was sent a message")
 
 	// Changing the number replaces it.
-	_, err = app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: graceNumber, UserID: ada.ID})
+	_, err = app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: graceNumber})
 	require.NoError(t, err)
 	_, err = app.phones.AddNumber(ctx, ada.ID, graceNumber, app.sms.last(t, 3).Code)
 	require.NoError(t, err)
@@ -237,7 +237,7 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 	assert.Equal(t, graceNumber, number)
 
 	for _, bad := range []string{"", "4155550101", "+1 415 555 0101", "+0155550101", "+1415", "+14155550101234567", "+1415555010a"} {
-		_, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: bad, UserID: ada.ID})
+		_, err := app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: bad})
 		assert.True(t, hasCode(err, errs.CategoryValidation, phonenumber.ErrorCodeInvalidPhoneNumber), "%q: %v", bad, err)
 	}
 }
@@ -250,7 +250,7 @@ func TestPhoneCodeAttemptsAndReplacement(t *testing.T) {
 	ada := app.signUp(t, "ada@example.com")
 	send := func(n int) string {
 		t.Helper()
-		_, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: ada.ID})
+		_, err := app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 		require.NoError(t, err)
 		return app.sms.last(t, n).Code
 	}
@@ -499,7 +499,7 @@ func TestPhoneNumberTakenBeforeConfirmation(t *testing.T) {
 	ada := app.signUp(t, "ada@example.com")
 	grace := app.signUp(t, "grace@example.com")
 
-	_, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: ada.ID})
+	_, err := app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 	require.NoError(t, err)
 	_, err = app.phones.SetPhoneNumber(ctx, grace.ID, adaNumber)
 	require.NoError(t, err)
@@ -515,12 +515,12 @@ func TestPhoneCodesAreLimitedPerNumber(t *testing.T) {
 	ada := app.signUp(t, "ada@example.com")
 
 	for range 2 {
-		_, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: ada.ID})
+		_, err := app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 		require.NoError(t, err)
 	}
 	_, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber})
 	require.NoError(t, err, "the third, for another purpose")
-	_, err = app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: ada.ID})
+	_, err = app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 	assert.True(t, errs.IsCategory(err, errs.CategoryRateLimited), "the fourth: %v", err)
 	assert.Equal(t, 2, app.sms.count())
 
@@ -541,7 +541,7 @@ func TestPhoneCodeSending(t *testing.T) {
 	app := bootPhones(t, waited(phonenumber.Options{}), nil)
 	ada := app.signUp(t, "ada@example.com")
 	app.sms.fail = errors.New("provider down")
-	sent, err := app.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: ada.ID})
+	sent, err := app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 	require.NoError(t, err)
 	assert.False(t, sent.Sent)
 	assert.Equal(t, phonenumber.ReasonSendFailed, sent.Reason)
@@ -551,7 +551,7 @@ func TestPhoneCodeSending(t *testing.T) {
 
 	background := bootPhones(t, phonenumber.Options{}, nil)
 	grace := background.signUp(t, "grace@example.com")
-	sent, err = background.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: graceNumber, UserID: grace.ID})
+	sent, err = background.phones.SendCode(actingFor(ctx, grace.ID), phonenumber.SendRequest{PhoneNumber: graceNumber})
 	require.NoError(t, err)
 	assert.True(t, sent.Sent, "queued")
 	require.Eventually(t, func() bool { return background.sms.count() == 1 }, 5*time.Second, time.Millisecond)
@@ -780,7 +780,7 @@ func TestPhoneNumberOptionsAndWiring(t *testing.T) {
 	// The options reach the code.
 	custom := bootPhones(t, waited(phonenumber.Options{CodeLength: 8, CodeTTL: time.Hour}), nil)
 	ada := custom.signUp(t, "ada@example.com")
-	_, err = custom.phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber, UserID: ada.ID})
+	_, err = custom.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 	require.NoError(t, err)
 	msg := custom.sms.last(t, 1)
 	assert.Len(t, msg.Code, 8)

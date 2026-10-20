@@ -32,7 +32,7 @@ A signed-in client exchanges its session for a session token: a JWT signed with 
 
 ### The route
 
-`POST /session/token`, below the router's base path. It requires an active session: `RequireSession` runs before it, so a missing, revoked, expired, or pending session gets the session errors every protected route gives.
+`POST /session/token`, below the router's base path. It requires an active session: `SessionTokens.Issue` requires `session_token:issue` (`Access.RequireUser`) and the caller's session, so a missing, revoked, expired, or pending session gets the session errors every protected route gives.
 
 | Request body | Meaning |
 | --- | --- |

@@ -85,15 +85,23 @@ func authContext(t *testing.T) *core.AuthContext {
 	require.NoError(t, err)
 
 	st := store.New(sqliteAdapter.NewSQLiteAdapter(db, nil))
+	sm := auth.NewSessionManager(st, nil, c,
+		core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
+		passDispatcher{}, nil, nil)
+	// The permission the plugin's Declare would have declared under Prepare.
+	permissions := auth.NewDefaultPermissionCatalog()
+	require.NoError(t, permissions.Declare(core.PermissionDef{
+		Name: emailpassword.PermissionSignOut, Kind: core.PermissionSelf, Description: "sign out", Owner: emailpassword.PluginName,
+	}))
 	return &core.AuthContext{
-		Store:      st,
-		Crypto:     c,
-		Dispatcher: passDispatcher{},
-		Public:     dbschema.NewPublicView([]dbschema.Table{models.UserTableSchema()}),
-		SessionManager: auth.NewSessionManager(st, nil, c,
-			core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-			passDispatcher{}, nil, nil),
-		TokenCarrier: core.NewTokenCarrier(core.TokenCarrierConfig{Delivery: core.DeliveryHeader}),
+		Store:          st,
+		Crypto:         c,
+		Dispatcher:     passDispatcher{},
+		Public:         dbschema.NewPublicView([]dbschema.Table{models.UserTableSchema()}),
+		SessionManager: sm,
+		Access:         auth.NewAccess(permissions, sm.IsFresh),
+		Authenticator:  auth.NewAuthenticator(sm, nil),
+		TokenCarrier:   core.NewTokenCarrier(core.TokenCarrierConfig{Delivery: core.DeliveryHeader}),
 	}
 }
 
@@ -112,7 +120,14 @@ func (m mountedRoutes) Mount(routes ...core.Route) error {
 // call invokes a plugin route the way the router does.
 func call(t *testing.T, ac *core.AuthContext, route core.Route, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(body))
+	return callWith(t, context.Background(), ac, route, body)
+}
+
+// callWith is call for a request whose context is ctx, with the caller ctx
+// carries.
+func callWith(t *testing.T, ctx context.Context, ac *core.AuthContext, route core.Route, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, route.Path, strings.NewReader(body))
 	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
 	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	err := route.Handler(rctx)
@@ -234,15 +249,17 @@ func TestEmailPasswordSignInAndSignOutErrors(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, call(t, ac, routes["/sign-in/email"], `not json`).Code)
 
-	// A sign-out handler reached without its middleware, for a session that
-	// does not exist: a typed error with its own status, not a 500.
+	// Sign-out requires a signed-in caller. Without one it is refused with
+	// the reason, as RequireSession refused it, before anything is read.
 	w := call(t, ac, routes["/sign-out"], ``)
-	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), errs.CodeSessionMissing)
 
 	// With the database gone, both answer 500 and send none of the error.
+	signedIn := identity.WithCaller(ctx, identity.SignedIn(identity.SessionRef{ID: "s1", UserID: "u1", State: string(models.SessionActive)}, identity.Peer{}))
 	require.NoError(t, ac.Store.DB().(*sqliteAdapter.SQLiteAdapter).DB.(*sql.DB).Close())
 	for _, path := range []string{"/sign-in/email", "/sign-out"} {
-		w := call(t, ac, routes[path], `{"email":"ada@example.com","password":"correct horse"}`)
+		w := callWith(t, signedIn, ac, routes[path], `{"email":"ada@example.com","password":"correct horse"}`)
 		assert.Equal(t, http.StatusInternalServerError, w.Code, path)
 		assert.JSONEq(t, `{"error":"an internal error occurred","code":"database_error"}`, w.Body.String(), path)
 	}

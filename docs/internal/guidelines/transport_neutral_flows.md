@@ -122,7 +122,6 @@ Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted titl
 
 - The handlers of the link request, verification send, email change and reset request routes hide whether an account exists. "Hiding whether an account exists is done by the HTTP handlers".
 - `core.Plugin` requires `Routes` and `Middlewares`. The stages around a handler are built in `Router.Build`. `core`, `errs`, `auth`, and each plugin's package import `net/http`, so no import rule checks any of this yet. [`../plans/package_layout.md`](../plans/package_layout.md) plans a package for the HTTP types, and the check. "`Plugin` requires HTTP routes, and the request pipeline lives in the router".
-- The email change route requires a fresh session through `RequireFreshSession`, and `RequestChange` doesn't check it. "The fresh-session rule of an email change is checked by its route only".
 - The verify, confirm, and revert handlers refuse a missing token themselves, and several flows take positional arguments that no input type checks. "Some flows take loose arguments instead of a request type".
 
 ## Design decisions
