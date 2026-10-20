@@ -2,7 +2,7 @@
 
 This document describes how a flow learns who called it and where the call came from. It covers the caller value, the principals it names, how a transport authenticates a call through core, the permissions a flow requires, and how code in the process calls a flow. It also records the decisions taken and the order of the work.
 
-**Status:** planned, as of 2026-10-19. Step 1, the package layout, is done; the caller itself is not built. [Implementation steps](#implementation-steps) lists the work.
+**Status:** built, as of 2026-10-20. Steps 1 to 7 are done. Part 2 of [`package_layout.md`](package_layout.md), the move of the HTTP types out of `core`, follows. [Implementation steps](#implementation-steps) lists the work, and [`../../api/callers.md`](../../api/callers.md) describes the result for an application.
 
 The documents it builds on are:
 
@@ -382,7 +382,7 @@ The caller's package sits below `telemetry`, and a hook callout sends the caller
 | 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules. Audit events get a setting of their own for the address, `BootConfig.Audit.OmitIPAndAgent`. The hook rules get new names that end in `.address`, such as `core.signin.address`, and the route rules they replace go. Every sign-in plugin fires `auth.signIn.before`, so the sign-in rule keys on the address and the sign-in method, which each flow publishes in the operation's `Values`: each method keeps a limit of its own. | Done |
 | 5 | The flows: the permissions declared, and the flows in the table above require them. The `UserID` fields of `phonenumber.SendRequest`, `phonenumber.VerifyRequest`, and `emailverification.ChangeRequest` go, and so does `SessionTokenRequest.Session`. | Done |
 | 6 | Admin operations require a privileged caller. The examples, the CLI, and the tests name their callers. | Done |
-| 7 | The docs: the guideline's list of differences, `docs/api/sessions.md`, `docs/api/hooks.md`, the token delivery and audit pages, and the hook context page | Not started |
+| 7 | The docs: the guideline's list of differences, `docs/api/sessions.md`, `docs/api/hooks.md`, the token delivery and audit pages, and the hook context page | Done. `docs/api/callers.md` is the page for an application. |
 
 Each step leaves the code working. Steps 3, 5, and 6 change what an application or a plugin author writes, so they land before a tagged release.
 
