@@ -177,20 +177,23 @@ result, err := plugin.SignInWith(ctx, emailpassword.IdentifierCredentials{
 - `Value` is published in `Values` under `Key` as it is, so pass it in the form a rate-limit rule should count by. No email is published.
 - The error message names the key: `invalid username or password`.
 
-### Set a password from another plugin
+### Set a password from your code
 
 ```go
+admin := identity.WithCaller(ctx, identity.System("support-tool"))
 if err := plugin.ValidatePassword(newPassword); err != nil { /* password_invalid_input */ }
-user, err := plugin.SetPassword(ctx, userID, newPassword)
+user, err := plugin.SetPassword(admin, userID, newPassword)
 ```
 
-`SetPassword` is for a plugin that has established by its own means that the caller may set the password. The [phone number](phonenumber.md) plugin calls it after a code was confirmed.
+`SetPassword` sets the password of the account you name. It is an admin operation: it requires `emailpassword.PermissionSetPassword` (`user:set_password`), which only a system caller holds. A signed-in user gets `403` with the code `insufficient_scope`, and an anonymous caller the session error. Your code names itself with `identity.System(name)`, and the audit log records that name.
 
-`SetPassword` behaves as follows:
+`plugin.SetPasswordUnchecked(ctx, userID, newPassword)` is the same without the check of the caller. It is for a plugin that has established the right by its own means: the [phone number](phonenumber.md) plugin calls it after a code sent to the user's number was confirmed, for a caller who is anonymous. Don't call it from a route that takes the user id from its input.
 
-- It applies the password rules, gives a user without a password one, ends every session of the user, and creates none.
-- It sends the `core.MailPasswordChanged` notice when a mail sender is configured.
-- It does not check who is asking, fires no points, and works with password reset by email off.
+Both behave as follows:
+
+- They apply the password rules, give a user without a password one, end every session of the user, and create none.
+- They send the `core.MailPasswordChanged` notice when a mail sender is configured.
+- They fire no points, and work with password reset by email off.
 - Call `ValidatePassword` first when a later refusal would cost you something, such as a code already used up.
 
 `passwords.SignOut(ctx)` ends the session of the caller on `ctx` and fires the sign-out points. It is the flow behind `POST /sign-out`, and requires the permission `emailpassword.PermissionSignOut` (`session:sign_out`), which a signed-in user holds:
@@ -341,8 +344,8 @@ The after and failed points are audited under their point names. Issuing and con
 
 The rules are attached to the flows' before points, `auth.passwordReset.beforeRequest` and `auth.passwordReset.before`, so they also hold for `RequestPasswordReset` and `ResetPassword` called from your own code or another transport. A call from code with no client address is counted per email only. Change a limit, or turn a rule off, by its name with `RateLimitConfig`; see [Hooks](hooks.md#change-a-rule-by-its-name).
 
-The rule per email It counts requests for unknown emails too, so a `429` does not show whether the address has an account.
+The rule per email counts requests for unknown emails too, so a `429` does not show whether the address has an account.
 
 ## Limits
 
-The plugin has no password change for a signed-in user. To add one, write a plugin that depends on `emailpassword` and calls `SetPassword`, so that the password rules stay in one place.
+The plugin has no password change for a signed-in user. To add one, write a plugin that depends on `emailpassword`, checks the caller and the current password itself, and calls `SetPasswordUnchecked`, so that the password rules stay in one place.

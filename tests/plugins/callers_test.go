@@ -17,6 +17,12 @@ func actingFor(ctx context.Context, userID string) context.Context {
 	return identity.WithCaller(ctx, identity.System("test").For(userID))
 }
 
+// asAdmin returns ctx with a system caller, which holds every admin
+// permission: test code that runs an admin operation, as a job would.
+func asAdmin(ctx context.Context) context.Context {
+	return identity.WithCaller(ctx, identity.System("test-admin"))
+}
+
 // presenting returns ctx with the caller the authenticator makes of the
 // session token raw, as a transport would put it on the context: signed in
 // for a live session, anonymous with the reason otherwise.

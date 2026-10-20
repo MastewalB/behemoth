@@ -638,9 +638,11 @@ func (p *Plugin) ValidatePassword(password string) error {
 }
 
 // SetPassword sets password on the user with userID and returns the user.
-// It is for a plugin that has established by its own means that the caller
-// may set it: the phone number plugin calls it after a code sent to the
-// user's number was confirmed. It does not check who is asking.
+// It is an admin operation: the caller needs PermissionSetPassword
+// (Access.RequireAdmin), which only a system caller holds today, so
+// application code names itself with identity.System(name). An anonymous
+// caller gets the reason as a session error, and a signed-in user a
+// forbidden error with errs.CodeInsufficientScope.
 //
 // It is the second half of ResetPassword without the link: the password
 // goes through the plugin's rules, a user without a credential account gets
@@ -653,6 +655,30 @@ func (p *Plugin) ValidatePassword(password string) error {
 // initialized by Boot.
 func (p *Plugin) SetPassword(ctx context.Context, userID, password string) (*models.User, error) {
 	const op = "emailpassword.SetPassword"
+	if p.authContext == nil {
+		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+	}
+	if err := p.authContext.Access.RequireAdmin(ctx, PermissionSetPassword); err != nil {
+		return nil, err
+	}
+	return p.setPassword(ctx, op, userID, password)
+}
+
+// SetPasswordUnchecked is SetPassword without the check of the caller. It
+// is for a plugin that has established by its own means that the password
+// may be set: the phone number plugin calls it after a code sent to the
+// user's number was confirmed, for a caller who is anonymous. The caller on
+// ctx stays the caller of what it does, so its audit events and limits see
+// the original client.
+//
+// Application code calls SetPassword. A route that forwards a user id from
+// its input to SetPasswordUnchecked lets anyone set anyone's password.
+func (p *Plugin) SetPasswordUnchecked(ctx context.Context, userID, password string) (*models.User, error) {
+	return p.setPassword(ctx, "emailpassword.SetPasswordUnchecked", userID, password)
+}
+
+// setPassword is SetPassword after the check.
+func (p *Plugin) setPassword(ctx context.Context, op, userID, password string) (*models.User, error) {
 	hctx, err := p.operation(ctx, op)
 	if err != nil {
 		return nil, err

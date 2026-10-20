@@ -130,7 +130,7 @@ func (app *phoneApp) withNumber(t *testing.T, email, number string) *models.User
 	sent, err := app.phones.SendCode(actingFor(ctx, user.ID), phonenumber.SendRequest{PhoneNumber: number})
 	require.NoError(t, err)
 	require.True(t, sent.Sent, sent.Reason)
-	user, err = app.phones.AddNumber(ctx, user.ID, number, app.sms.last(t, before+1).Code)
+	user, err = app.phones.AddNumber(asAdmin(ctx), user.ID, number, app.sms.last(t, before+1).Code)
 	require.NoError(t, err)
 	return user
 }
@@ -193,24 +193,24 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 	assert.NotContains(t, stored, msg.Code, "only a hash of the code is stored")
 
 	// The code is for the number it was sent to, and for this user.
-	_, err = app.phones.AddNumber(ctx, ada.ID, graceNumber, msg.Code)
+	_, err = app.phones.AddNumber(asAdmin(ctx), ada.ID, graceNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "another number: %v", err)
-	_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, msg.Code)
+	_, err = app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "the mismatch used the code up: %v", err)
 
 	_, err = app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 	require.NoError(t, err)
 	msg = app.sms.last(t, 2)
 	grace := app.signUp(t, "grace@example.com")
-	_, err = app.phones.AddNumber(ctx, grace.ID, adaNumber, msg.Code)
+	_, err = app.phones.AddNumber(asAdmin(ctx), grace.ID, adaNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "another user: %v", err)
 
-	updated, err := app.phones.AddNumber(ctx, ada.ID, adaNumber, msg.Code)
+	updated, err := app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, msg.Code)
 	require.NoError(t, err)
 	number, _, err := phonenumber.Column.Get(updated)
 	require.NoError(t, err)
 	assert.Equal(t, adaNumber, number)
-	_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, msg.Code)
+	_, err = app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "a code works once: %v", err)
 
 	// What a later request for the same number is told, in code.
@@ -231,7 +231,7 @@ func TestPhoneNumberIsAddedByCode(t *testing.T) {
 	// Changing the number replaces it.
 	_, err = app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: graceNumber})
 	require.NoError(t, err)
-	_, err = app.phones.AddNumber(ctx, ada.ID, graceNumber, app.sms.last(t, 3).Code)
+	_, err = app.phones.AddNumber(asAdmin(ctx), ada.ID, graceNumber, app.sms.last(t, 3).Code)
 	require.NoError(t, err)
 	number, _ = app.numberOf(t, ada.ID)
 	assert.Equal(t, graceNumber, number)
@@ -257,19 +257,19 @@ func TestPhoneCodeAttemptsAndReplacement(t *testing.T) {
 
 	code := send(1)
 	for range 5 {
-		_, err := app.phones.AddNumber(ctx, ada.ID, adaNumber, wrongCode(code))
+		_, err := app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, wrongCode(code))
 		assert.True(t, invalidPhoneCode(err), "%v", err)
 	}
-	_, err := app.phones.AddNumber(ctx, ada.ID, adaNumber, code)
+	_, err := app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, code)
 	assert.True(t, invalidPhoneCode(err), "the right code after five wrong ones: %v", err)
 
 	first := send(2)
 	second := send(3)
 	if first != second {
-		_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, first)
+		_, err = app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, first)
 		assert.True(t, invalidPhoneCode(err), "the replaced code: %v", err)
 	}
-	_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, second)
+	_, err = app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, second)
 	require.NoError(t, err, "the wrong guess at the newer code cost one try, not the code")
 }
 
@@ -371,7 +371,7 @@ func TestPhoneNumberSignIn(t *testing.T) {
 	msg := app.sms.last(t, 2)
 	assert.Equal(t, core.SMSSignIn, msg.Kind)
 
-	_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, msg.Code)
+	_, err = app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, msg.Code)
 	assert.True(t, invalidPhoneCode(err), "a sign-in code adds no number: %v", err)
 
 	_, err = app.phones.SignInWithCode(ctx, adaNumber, wrongCode(msg.Code))
@@ -469,13 +469,13 @@ func TestPhoneNumberDirectWritesAreRefused(t *testing.T) {
 	assert.False(t, stored.Valid)
 
 	// The application vouches for a number through SetPhoneNumber.
-	updated, err := app.phones.SetPhoneNumber(ctx, grace.ID, graceNumber)
+	updated, err := app.phones.SetPhoneNumber(asAdmin(ctx), grace.ID, graceNumber)
 	require.NoError(t, err)
 	number, _, _ = phonenumber.Column.Get(updated)
 	assert.Equal(t, graceNumber, number)
-	_, err = app.phones.SetPhoneNumber(ctx, grace.ID, adaNumber)
+	_, err = app.phones.SetPhoneNumber(asAdmin(ctx), grace.ID, adaNumber)
 	assert.True(t, hasCode(err, errs.CategoryConflict, phonenumber.ErrorCodePhoneNumberTaken), "%v", err)
-	_, err = app.phones.SetPhoneNumber(ctx, grace.ID, "0911234567")
+	_, err = app.phones.SetPhoneNumber(asAdmin(ctx), grace.ID, "0911234567")
 	assert.True(t, errs.IsCode(err, phonenumber.ErrorCodeInvalidPhoneNumber), "%v", err)
 
 	// Removing a number passes, directly and through the plugin.
@@ -483,7 +483,7 @@ func TestPhoneNumberDirectWritesAreRefused(t *testing.T) {
 	require.NoError(t, err)
 	_, has = app.numberOf(t, ada.ID)
 	assert.False(t, has)
-	_, err = app.phones.SetPhoneNumber(ctx, grace.ID, "")
+	_, err = app.phones.SetPhoneNumber(asAdmin(ctx), grace.ID, "")
 	require.NoError(t, err)
 	_, has = app.numberOf(t, grace.ID)
 	assert.False(t, has)
@@ -501,9 +501,9 @@ func TestPhoneNumberTakenBeforeConfirmation(t *testing.T) {
 
 	_, err := app.phones.SendCode(actingFor(ctx, ada.ID), phonenumber.SendRequest{PhoneNumber: adaNumber})
 	require.NoError(t, err)
-	_, err = app.phones.SetPhoneNumber(ctx, grace.ID, adaNumber)
+	_, err = app.phones.SetPhoneNumber(asAdmin(ctx), grace.ID, adaNumber)
 	require.NoError(t, err)
-	_, err = app.phones.AddNumber(ctx, ada.ID, adaNumber, app.sms.last(t, 1).Code)
+	_, err = app.phones.AddNumber(asAdmin(ctx), ada.ID, adaNumber, app.sms.last(t, 1).Code)
 	assert.True(t, hasCode(err, errs.CategoryConflict, phonenumber.ErrorCodePhoneNumberTaken), "%v", err)
 }
 
@@ -555,7 +555,7 @@ func TestPhoneCodeSending(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, sent.Sent, "queued")
 	require.Eventually(t, func() bool { return background.sms.count() == 1 }, 5*time.Second, time.Millisecond)
-	_, err = background.phones.AddNumber(ctx, grace.ID, graceNumber, background.sms.last(t, 1).Code)
+	_, err = background.phones.AddNumber(asAdmin(ctx), grace.ID, graceNumber, background.sms.last(t, 1).Code)
 	require.NoError(t, err)
 }
 
@@ -774,7 +774,7 @@ func TestPhoneNumberOptionsAndWiring(t *testing.T) {
 	unbooted := phonenumber.New(passwords, phonenumber.Options{})
 	_, err = unbooted.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: adaNumber})
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
-	_, err = unbooted.SetPhoneNumber(ctx, "id", adaNumber)
+	_, err = unbooted.SetPhoneNumber(asAdmin(ctx), "id", adaNumber)
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 
 	// The options reach the code.

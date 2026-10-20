@@ -247,15 +247,15 @@ func TestUsernameRulesOnDirectWrites(t *testing.T) {
 	ada := app.signUp(t, "ada@example.com", "ada")
 	grace := app.signUp(t, "grace@example.com", "")
 
-	updated, err := app.names.SetUsername(ctx, grace.ID, " Grace.H ")
+	updated, err := app.names.SetUsername(asAdmin(ctx), grace.ID, " Grace.H ")
 	require.NoError(t, err)
 	name, _, err := username.Column.Get(updated)
 	require.NoError(t, err)
 	assert.Equal(t, "grace.h", name)
 
-	_, err = app.names.SetUsername(ctx, grace.ID, "ADA")
+	_, err = app.names.SetUsername(asAdmin(ctx), grace.ID, "ADA")
 	assert.True(t, hasCode(err, errs.CategoryConflict, username.ErrorCodeUsernameTaken), "%v", err)
-	_, err = app.names.SetUsername(ctx, grace.ID, "no spaces")
+	_, err = app.names.SetUsername(asAdmin(ctx), grace.ID, "no spaces")
 	assert.True(t, hasCode(err, errs.CategoryValidation, username.ErrorCodeInvalidUsername), "%v", err)
 	_, err = app.ac.Store.UpdateUser(ctx, grace.ID, behemoth.M{username.Column.Name: "ada"})
 	assert.True(t, errs.IsCode(err, username.ErrorCodeUsernameTaken), "Store.UpdateUser goes through the same handler: %v", err)
@@ -264,7 +264,7 @@ func TestUsernameRulesOnDirectWrites(t *testing.T) {
 
 	// Setting the name a user already holds is not a conflict with itself,
 	// and an update of another column is left alone.
-	_, err = app.names.SetUsername(ctx, ada.ID, "Ada")
+	_, err = app.names.SetUsername(asAdmin(ctx), ada.ID, "Ada")
 	require.NoError(t, err)
 	_, err = app.ac.Store.UpdateUser(ctx, ada.ID, behemoth.M{models.UserFirstname: "Ada"})
 	require.NoError(t, err)
@@ -278,13 +278,13 @@ func TestUsernameRulesOnDirectWrites(t *testing.T) {
 	assert.True(t, errs.IsCode(err, username.ErrorCodeUsernameTaken), "%v", err)
 
 	// An empty username removes it, and the name is free again.
-	_, err = app.names.SetUsername(ctx, grace.ID, "")
+	_, err = app.names.SetUsername(asAdmin(ctx), grace.ID, "")
 	require.NoError(t, err)
 	_, ok := app.nameOf(t, grace.ID)
 	assert.False(t, ok)
 	_, err = app.names.SignIn(ctx, username.Credentials{Username: "grace.h", Password: "correct horse"})
 	assert.True(t, errs.IsCode(err, emailpassword.ErrorCodeInvalidCredentials), "%v", err)
-	_, err = app.names.SetUsername(ctx, ada.ID, "grace.h")
+	_, err = app.names.SetUsername(asAdmin(ctx), ada.ID, "grace.h")
 	require.NoError(t, err)
 	result, err := app.names.SignIn(ctx, username.Credentials{Username: "grace.h", Password: "correct horse"})
 	require.NoError(t, err)
@@ -471,7 +471,7 @@ func TestUsernameOptionsAndWiring(t *testing.T) {
 	unbooted := username.New(passwords, username.Options{})
 	_, err = unbooted.SignIn(ctx, username.Credentials{Username: "ada", Password: "x"})
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
-	_, err = unbooted.SetUsername(ctx, "id", "ada")
+	_, err = unbooted.SetUsername(asAdmin(ctx), "id", "ada")
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 
 	// SignInWith refuses credentials that can't name an identifier.
@@ -557,7 +557,7 @@ func TestDisplayUsername(t *testing.T) {
 	assert.Equal(t, "ada_l", name, "the username is untouched by a display change")
 
 	// A new username brings its display form, and removing it removes both.
-	_, err = app.names.SetUsername(ctx, ada.ID, "Countess.Ada")
+	_, err = app.names.SetUsername(asAdmin(ctx), ada.ID, "Countess.Ada")
 	require.NoError(t, err)
 	name, _ = app.nameOf(t, ada.ID)
 	shown, _ = app.shownAs(t, ada.ID)
@@ -565,7 +565,7 @@ func TestDisplayUsername(t *testing.T) {
 	assert.Equal(t, "Countess.Ada", shown)
 	_, err = app.ac.Store.UpdateUser(ctx, ada.ID, behemoth.M{username.Column.Name: "ada", username.DisplayColumn.Name: "Grace"})
 	assert.True(t, invalidDisplay(err), "both set together still have to agree: %v", err)
-	_, err = app.names.SetUsername(ctx, ada.ID, "")
+	_, err = app.names.SetUsername(asAdmin(ctx), ada.ID, "")
 	require.NoError(t, err)
 	_, ok = app.shownAs(t, ada.ID)
 	assert.False(t, ok)

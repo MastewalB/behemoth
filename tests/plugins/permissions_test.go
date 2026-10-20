@@ -12,33 +12,74 @@ import (
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
 	"github.com/MastewalB/behemoth/plugins/phonenumber"
+	"github.com/MastewalB/behemoth/plugins/username"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// Core and each plugin declare the permissions their self-service flows
-// require, under their own names, and Prepare freezes the catalog with them.
+// Core and each plugin declare the permissions their flows require, under
+// their own names and with their kind, and Prepare freezes the catalog with
+// them.
 func TestFlowsDeclareTheirPermissions(t *testing.T) {
 	passwords := emailpassword.New(emailpassword.Options{})
 	app, err := engine.Prepare([]core.Plugin{
 		passwords,
 		emailverification.New(changeOptions()),
 		phonenumber.New(passwords, phonenumber.Options{}),
+		username.New(passwords, username.Options{}),
 	}, engine.PrepareConfig{})
 	require.NoError(t, err)
 
-	got := map[core.Permission]string{}
-	for _, def := range app.Permissions.All() {
-		assert.Equal(t, core.PermissionSelf, def.Kind, def.Name)
-		assert.NotEmpty(t, def.Description, def.Name)
-		got[def.Name] = def.Owner
+	type declared struct {
+		owner string
+		kind  core.PermissionKind
 	}
-	assert.Equal(t, map[core.Permission]string{
-		core.PermissionSessionTokenIssue:        "core",
-		emailpassword.PermissionSignOut:         emailpassword.PluginName,
-		emailverification.PermissionEmailChange: emailverification.PluginName,
-		phonenumber.PermissionPhoneChange:       phonenumber.PluginName,
+	got := map[core.Permission]declared{}
+	for _, def := range app.Permissions.All() {
+		assert.NotEmpty(t, def.Description, def.Name)
+		got[def.Name] = declared{def.Owner, def.Kind}
+	}
+	self, admin := core.PermissionSelf, core.PermissionAdmin
+	assert.Equal(t, map[core.Permission]declared{
+		core.PermissionSessionTokenIssue:        {"core", self},
+		emailpassword.PermissionSignOut:         {emailpassword.PluginName, self},
+		emailpassword.PermissionSetPassword:     {emailpassword.PluginName, admin},
+		emailverification.PermissionEmailChange: {emailverification.PluginName, self},
+		phonenumber.PermissionPhoneChange:       {phonenumber.PluginName, self},
+		phonenumber.PermissionSetPhone:          {phonenumber.PluginName, admin},
+		phonenumber.PermissionAddPhone:          {phonenumber.PluginName, admin},
+		username.PermissionSetUsername:          {username.PluginName, admin},
 	}, got)
+}
+
+// An admin operation lets through a system caller only. A signed-in user is
+// forbidden with insufficient_scope, an anonymous caller gets the session
+// error, and a job acting for a user holds no admin permission.
+// SetPasswordUnchecked, for a plugin that has its own proof, checks nothing.
+func TestAdminOperationsRequireAPrivilegedCaller(t *testing.T) {
+	ctx := context.Background()
+	ac, p, _ := bootedPlugin(t, nil, nil)
+	_, err := p.SignUp(ctx, behemoth.M{"email": "ada@example.com", "password": "correct horse"})
+	require.NoError(t, err)
+	signedIn, err := p.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "correct horse"})
+	require.NoError(t, err)
+	userID := signedIn.User.ID
+
+	_, err = p.SetPassword(presenting(ctx, ac, signedIn.RawToken), userID, "another password")
+	assert.True(t, errs.IsCategory(err, errs.CategoryForbidden), "a signed-in user: %v", err)
+	assert.True(t, errs.IsCode(err, errs.CodeInsufficientScope), "%v", err)
+	_, err = p.SetPassword(ctx, userID, "another password")
+	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "an anonymous caller: %v", err)
+	_, err = p.SetPassword(actingFor(ctx, userID), userID, "another password")
+	assert.True(t, errs.IsCode(err, errs.CodeInsufficientScope), "a job acting for the user: %v", err)
+
+	_, err = p.SetPassword(asAdmin(ctx), userID, "another password")
+	require.NoError(t, err, "a system caller")
+	_, err = p.SignIn(ctx, emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "another password"})
+	require.NoError(t, err, "the password was set")
+
+	_, err = p.SetPasswordUnchecked(ctx, userID, "a third password")
+	require.NoError(t, err, "the unchecked step needs no caller")
 }
 
 // SignOut ends the session of the caller on the context, whatever reached

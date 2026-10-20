@@ -133,7 +133,7 @@ The refusal behaves as follows:
 
 - This holds for a route of yours that updates a user from a request body, for `Store.CreateUser` with a number on the row, and for another plugin.
 - Removing the number passes.
-- When your own code vouches for a number (an admin screen, an import of numbers confirmed elsewhere), call `phones.SetPhoneNumber(ctx, userID, number)`.
+- When your own code vouches for a number (an admin screen, an import of numbers confirmed elsewhere), call `phones.SetPhoneNumber(ctx, userID, number)` with a system caller on `ctx`; see below.
 
 ## Password reset
 
@@ -153,14 +153,15 @@ sent, err := phones.SendCode(forUser, phonenumber.SendRequest{PhoneNumber: numbe
 sent, err = phones.SendCode(ctx, phonenumber.SendRequest{PhoneNumber: number})      // sign in: an anonymous caller
 // sent.Sent, sent.Reason, sent.ExpiresAt
 
-user, err := phones.AddNumber(ctx, userID, number, code)
+admin := identity.WithCaller(ctx, identity.System("support-tool"))
+user, err := phones.AddNumber(admin, userID, number, code) // admin: a user adds their own with Verify
 result, err := phones.SignInWithCode(ctx, number, code)
 result, err = phones.SignIn(ctx, phonenumber.Credentials{PhoneNumber: number, Password: password})
 
 sent, err = phones.RequestPasswordReset(ctx, phonenumber.ResetRequest{PhoneNumber: number})
 user, err = phones.ResetPassword(ctx, number, code, newPassword)
 
-user, err = phones.SetPhoneNumber(ctx, userID, number) // no code; "" removes the number
+user, err = phones.SetPhoneNumber(admin, userID, number) // admin; no code; "" removes the number
 number, ok, err := phonenumber.Column.Get(user)
 ```
 
@@ -170,7 +171,7 @@ The flows behave as follows:
 - `SendCode` and `Verify` read the caller on `ctx`, as the routes do. For a caller that acts for a user they add a number to that user, and require `phonenumber.PermissionPhoneChange` (`phone:change`), which a signed-in user holds. For an anonymous caller they sign in. A caller whose session token failed gets the reason, and a system caller that names no user is a configuration error.
 - `Verify(ctx, VerifyRequest{...})` is `AddNumber` for the caller's user, and `SignInWithCode` for an anonymous caller. The route calls it.
 - `SignIn` and `SignInWithCode` return the raw session token and deliver nothing. From a route of your own, hand the result to `core.WriteSignIn`.
-- `SetPhoneNumber` does not check who is asking.
+- `AddNumber` and `SetPhoneNumber` are admin operations. They require `phonenumber.PermissionAddPhone` (`user:add_phone`) and `phonenumber.PermissionSetPhone` (`user:set_phone`), which only a system caller holds: a signed-in user gets `403` with the code `insufficient_scope`.
 - Before `Boot`, the flows return a configuration error.
 
 ## Hooks
