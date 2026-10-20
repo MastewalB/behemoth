@@ -291,6 +291,8 @@ The flows that require a caller today, with names to confirm in review:
 | `phonenumber.SendCode` and `phonenumber.Verify` | `phone:change` | `OptionalUser` |
 | `emailpassword.SetPassword`, `username.SetUsername`, `phonenumber.SetPhoneNumber`, `phonenumber.AddNumber` | `user:set_password`, `user:set_username`, `user:set_phone`, `user:add_phone` | `RequireAdmin` |
 
+`emailpassword.SetPasswordUnchecked` is `SetPassword` without the check, for a plugin with its own proof; see *`SetPassword` has an unchecked twin* below.
+
 Public flows (sign-up, sign-in, the reset and link requests, and every verify by token) require no principal and declare no permission. The single-use token of a verify, a confirm, or a reset grants one action. Its caller stays anonymous, and the audit log credits a success to the token's user, as it does today.
 
 ## Code in the process
@@ -347,6 +349,20 @@ A principal type for agents would have to say whose account an agent acts on, an
 
 The transport authenticates every call that presents a credential, including calls to public flows. Refusing the call would refuse a sign-in from a browser that still holds the cookie of an expired session. Anonymous, with the reason kept, lets a public flow proceed and lets a protected flow answer with the precise code.
 
+### `SetPassword` has an unchecked twin
+
+**Context:** `emailpassword.SetPassword` is an admin helper for applications, and it is also the step the phone number plugin's password reset runs once a code sent to the user's number checks out. The reset's caller is anonymous: the code is the proof.
+
+**Options considered:**
+
+- *One unchecked method, as before.* Simplest. An application route that forwards a user id to it has no guard.
+- *An admin method, which the plugin calls as `identity.System("phonenumber")`.* One entry point. The nested call's events, the revoked sessions, are credited to the system without the client's address, against the rule that a nested call inherits its caller.
+- *Two methods.* `SetPassword` requires an admin caller; `SetPasswordUnchecked` checks nothing, is named for it, and is documented for a plugin with its own proof. The reset keeps its caller.
+
+**Decision:** two methods. An application gets the guard by default, and a plugin opts out by a name a reviewer notices.
+
+**Revisit if:** more plugins need an unchecked twin of an admin operation. A capability handed to a plugin at construction would then be the general form.
+
 ### A caller holds a session reference, not the session row
 
 The caller's package sits below `telemetry`, and a hook callout sends the caller to another process. A `*models.Session` would put `models` under `telemetry`, and the session's token hashes into every hook payload. A `SessionRef` holds the fields flows read: the id, the user, the state, the expiry, the time of the last credential check, and the impersonator.
@@ -365,7 +381,7 @@ The caller's package sits below `telemetry`, and a hook callout sends the caller
 | 3 | The authenticator. The router authenticates every call and puts the caller on the context. The token carrier takes the four HTTP methods of `SessionManager`, and `TokenTransport` gets its new name, `TokenDelivery`. `RequireSession`, `RequireFreshSession`, and `optionalSession` become wrappers, and the session keys in `RequestContext.Values` go. | Done |
 | 4 | The readers: `requestMeta`, the audit actor with the delegate columns and their migration, `NormalizeAuditEvent`, `KeyByClientIP`, and the per-address limits as hook rules. Audit events get a setting of their own for the address, `BootConfig.Audit.OmitIPAndAgent`. The hook rules get new names that end in `.address`, such as `core.signin.address`, and the route rules they replace go. Every sign-in plugin fires `auth.signIn.before`, so the sign-in rule keys on the address and the sign-in method, which each flow publishes in the operation's `Values`: each method keeps a limit of its own. | Done |
 | 5 | The flows: the permissions declared, and the flows in the table above require them. The `UserID` fields of `phonenumber.SendRequest`, `phonenumber.VerifyRequest`, and `emailverification.ChangeRequest` go, and so does `SessionTokenRequest.Session`. | Done |
-| 6 | Admin operations require a privileged caller. The examples, the CLI, and the tests name their callers. | Not started |
+| 6 | Admin operations require a privileged caller. The examples, the CLI, and the tests name their callers. | Done |
 | 7 | The docs: the guideline's list of differences, `docs/api/sessions.md`, `docs/api/hooks.md`, the token delivery and audit pages, and the hook context page | Not started |
 
 Each step leaves the code working. Steps 3, 5, and 6 change what an application or a plugin author writes, so they land before a tagged release.

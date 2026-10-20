@@ -72,7 +72,7 @@ return p.passwords.SignInWith(ctx, emailpassword.IdentifierCredentials{
 - An unknown username, a user without a credential account and a wrong password get the email sign-in's `invalid_credentials`, and the password is hashed for an unknown username as it is for an unknown email.
 - An email address in the username field finds no user. The two routes do not accept each other's identifier, so a client plugin for usernames and one for email and password each have one route to call.
 
-`Plugin.SetUsername` is `Store.UpdateUser` with the one column, for the application's code. The update handler does the work, and sets the display form from the value passed.
+`Plugin.SetUsername` is `Store.UpdateUser` with the one column, for the application's code. It is an admin operation: `Access.RequireAdmin` with `user:set_username` (`PermissionSetUsername`). The update handler does the work, and sets the display form from the value passed.
 
 ## Availability
 

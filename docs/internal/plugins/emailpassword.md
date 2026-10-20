@@ -137,7 +137,7 @@ The two flows have the shape of the magic link plugin's request and verify; see 
 
 ## Setting a password for another plugin
 
-`Plugin.SetPassword(ctx, userID, password)` is the write half of a reset without the link: `validatePassword`, `hashPassword`, `storePasswordHash` in a transaction, then `afterPasswordChange`. `resetBody` uses the same two helpers, so a reset by link and one through `SetPassword` end the same way.
+`Plugin.SetPassword(ctx, userID, password)` is an admin operation: it requires `user:set_password` (`PermissionSetPassword`) through `Access.RequireAdmin`. `SetPasswordUnchecked` is the same without that check, for a plugin with its own proof; the phone number plugin's reset calls it for an anonymous caller, who stays the caller of the sessions it ends. Both are the write half of a reset without the link: `validatePassword`, `hashPassword`, `storePasswordHash` in a transaction, then `afterPasswordChange`. `resetBody` uses the same two helpers, so a reset by link and one through `SetPassword` end the same way.
 
 | Helper | What |
 | --- | --- |

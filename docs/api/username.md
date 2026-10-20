@@ -125,7 +125,8 @@ result, err := names.SignIn(ctx, username.Credentials{
 })
 // result.User, result.Session, result.RawToken; result.Method is "username"
 
-user, err := names.SetUsername(ctx, userID, "Ada.L") // stores "ada.l", shows "Ada.L"; "" removes both
+admin := identity.WithCaller(ctx, identity.System("support-tool"))
+user, err := names.SetUsername(admin, userID, "Ada.L") // stores "ada.l", shows "Ada.L"; "" removes both
 
 free, err := names.Available(ctx, "ada.l") // works with the route on or off
 
@@ -136,7 +137,7 @@ shown, ok, err := username.DisplayColumn.Get(user) // "Ada.L"
 The flows behave as follows:
 
 - `SignIn` is the flow behind the route. It returns the raw session token and delivers nothing. From a route of your own, hand the result to `core.WriteSignIn`.
-- `SetUsername` applies the rules and returns the same typed errors as sign-up (`username.ErrorCodeInvalidUsername`, `username.ErrorCodeUsernameTaken`). It does not check who is asking, so call it from a route that has checked the session. The old username is free for another user at once.
+- `SetUsername` applies the rules and returns the same typed errors as sign-up (`username.ErrorCodeInvalidUsername`, `username.ErrorCodeUsernameTaken`). It is an admin operation: it requires `username.PermissionSetUsername` (`user:set_username`), which only a system caller holds, so your code names itself with `identity.System(name)`. A signed-in user gets `403` with the code `insufficient_scope`. The old username is free for another user at once.
 - To give usernames to users you had before adding the plugin, call `SetUsername` for each of them from a job, and handle the two errors for names that break the rules or collide.
 - `Available` returns false for a taken or reserved username, and a validation error for one that breaks a rule of length or characters.
 - `username.Column` and `username.DisplayColumn` are the typed columns (`schema.Field[string]`). `Store.UpdateUser(ctx, id, behemoth.M{username.Column.Name: "ada"})` goes through the same checks. To change only the spelling, update `username.DisplayColumn.Name`.
@@ -179,5 +180,5 @@ The plugin declares no such rule itself: a limit per username lets anyone keep a
 
 The plugin has these limits:
 
-- **No route to change a username or its spelling.** Call `SetUsername` from a route of your own.
+- **No route to change a username or its spelling.** A route of your own that lets a user change their own checks the caller, then calls `SetUsername` with a system caller for that user's id.
 - **No holding period for released usernames.** Another user can take a released username at once.

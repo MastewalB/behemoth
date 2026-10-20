@@ -65,12 +65,19 @@ func (p *Plugin) Version() string {
 	return pluginVersion
 }
 
-// PermissionSignOut is the permission SignOut requires: ending the
-// caller's own session.
-const PermissionSignOut core.Permission = "session:sign_out"
+// The permissions the plugin declares.
+const (
+	// PermissionSignOut is the permission SignOut requires: ending the
+	// caller's own session.
+	PermissionSignOut core.Permission = "session:sign_out"
+	// PermissionSetPassword is the admin permission SetPassword requires:
+	// setting the password of an account named in the input.
+	PermissionSetPassword core.Permission = "user:set_password"
+)
 
 // Declare implements [core.Plugin]. Without password reset the plugin
-// declares one permission, PermissionSignOut, and nothing else:
+// declares two permissions, PermissionSignOut and PermissionSetPassword, and
+// nothing else:
 //   - hook points: it fires core's auth.signUp.*, auth.signIn.* and
 //     auth.signOut.* points, which core declares before any plugin's Declare
 //     runs (CoreDeclareHookPoints);
@@ -85,10 +92,13 @@ const PermissionSignOut core.Permission = "session:sign_out"
 // rate-limit rules (declareReset). Password change for a signed-in user is
 // not built.
 func (p *Plugin) Declare(ic *core.PluginInitContext) error {
-	if err := ic.Permissions.Declare(core.PermissionDef{
-		Name: PermissionSignOut, Kind: core.PermissionSelf, Description: "Sign out of this session",
-	}); err != nil {
-		return err
+	for _, def := range []core.PermissionDef{
+		{Name: PermissionSignOut, Kind: core.PermissionSelf, Description: "Sign out of this session"},
+		{Name: PermissionSetPassword, Kind: core.PermissionAdmin, Description: "Set the password of any account"},
+	} {
+		if err := ic.Permissions.Declare(def); err != nil {
+			return err
+		}
 	}
 	if p.opts.Reset.enabled() {
 		return p.declareReset(ic)

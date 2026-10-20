@@ -73,6 +73,10 @@ const (
 // are counted by core's core.signin.address, per client address and method.
 const RuleAvailableRoute = "username.available.route"
 
+// PermissionSetUsername is the admin permission SetUsername requires:
+// setting the username of an account named in the input.
+const PermissionSetUsername core.Permission = "user:set_username"
+
 // HookValueUsername is the key a sign-in's username is published under in
 // HookContext.Values, in its stored form. A rate-limit rule on
 // auth.signIn.before counts sign-ins per username with
@@ -188,14 +192,21 @@ func (p *Plugin) Version() string {
 //     plugin can still insert users;
 //   - the display username column (DisplayColumn), nullable for the same
 //     reasons;
-//   - a rate-limit rule per client address on each of its routes: sign-in
-//     attempts and, with Options.AvailabilityRoute, availability checks.
+//   - with Options.AvailabilityRoute, a rate-limit rule per client address
+//     on availability checks. Sign-in attempts are counted by core's rule
+//     per address and method;
+//   - the admin permission PermissionSetUsername.
 //
 // It declares no hook points, no token kind and no rule per username. A
 // limit per username would let anyone keep a user out by failing on purpose;
 // an application that wants one declares it on auth.signIn.before with
 // HookValueUsername.
 func (p *Plugin) Declare(ic *core.PluginInitContext) error {
+	if err := ic.Permissions.Declare(core.PermissionDef{
+		Name: PermissionSetUsername, Kind: core.PermissionAdmin, Description: "Set the username of any account",
+	}); err != nil {
+		return err
+	}
 	if err := ic.Schemas.ExtendColumn(Column.Contribution(schema.Column{
 		Type: schema.ColTypeString, Length: MaxColumnLength, Nullable: true, Unique: true, Public: true,
 	})); err != nil {
@@ -620,11 +631,16 @@ func (p *Plugin) Available(ctx context.Context, username string) (bool, error) {
 // assigns usernames to the users an application had before it added the
 // plugin.
 //
-// It does not check who is asking. The old username is free for another
-// user at once.
+// It is an admin operation: the caller needs PermissionSetUsername
+// (Access.RequireAdmin), which only a system caller holds today, so
+// application code names itself with identity.System(name). The old
+// username is free for another user at once.
 func (p *Plugin) SetUsername(ctx context.Context, userID, username string) (*models.User, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError("username.SetUsername", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+	}
+	if err := p.authContext.Access.RequireAdmin(ctx, PermissionSetUsername); err != nil {
+		return nil, err
 	}
 	// The data.user.beforeUpdate handler checks and normalizes the value.
 	return p.authContext.Store.UpdateUser(ctx, userID, behemoth.M{Column.Name: username})

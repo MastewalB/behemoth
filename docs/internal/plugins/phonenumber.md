@@ -42,8 +42,8 @@ All three kinds have a user id as their subject, and the number in their metadat
 
 | Kind | Issued by | Subject | Consumed by |
 | --- | --- | --- | --- |
-| `phonenumber.verify` | `SendCode` with a `UserID` | the user adding the number | `AddNumber` |
-| `phonenumber.sign_in` | `SendCode` without one | the user who holds the number | `SignInWithCode` |
+| `phonenumber.verify` | `SendCode` for a caller that acts for a user | the user adding the number | `Verify` for that caller, or `AddNumber` |
+| `phonenumber.sign_in` | `SendCode` for an anonymous caller | the user who holds the number | `SignInWithCode` |
 | `phonenumber.password_reset` | `RequestPasswordReset` | the user who holds the number | `ResetPassword` |
 
 - **A kind per purpose** is what keeps a sign-in code from adding a number, and a reset code from signing in. `TestPhoneNumberSignIn` and `TestPhonePasswordReset` try both.
@@ -89,11 +89,11 @@ The third row matters. A signed-in user whose session expired while they typed t
 | Flow | Call | What it reuses |
 | --- | --- | --- |
 | `SignIn` | `passwords.SignInWith` with `Key: "phone_number"` | the whole password sign-in; see *Sign-in by another identifier* in [`emailpassword.md`](emailpassword.md) |
-| `ResetPassword` | `passwords.ValidatePassword`, then `passwords.SetPassword` | the password rules, the hash, ending the sessions, the notice |
+| `ResetPassword` | `passwords.ValidatePassword`, then `passwords.SetPasswordUnchecked` | the password rules, the hash, ending the sessions, the notice. The unchecked entry point because the code is the proof: `SetPassword` is an admin operation, and the caller here is anonymous |
 
 - `SignIn`'s `Find` returns a NotFound error for a string that is not E.164, so a malformed number is answered like a wrong password and not with a `400`. The sign-in route therefore says nothing about the shape of what it was sent.
-- `ResetPassword` validates the password before the wrapped flow, so a refused password costs the code no attempt. `SetPassword` validates again; the second check can't fail.
-- After the consume, only `SetPassword`'s write can fail, and then the code is spent. The reset by email has the same limit with its token.
+- `ResetPassword` validates the password before the wrapped flow, so a refused password costs the code no attempt. `SetPasswordUnchecked` validates again; the second check can't fail.
+- After the consume, only `SetPasswordUnchecked`'s write can fail, and then the code is spent. The reset by email has the same limit with its token.
 
 ## Tests
 
@@ -175,7 +175,7 @@ These limits apply:
 - *Always on.* One option fewer. Every application's accounts become as strong as their owners' SIM cards, without anyone choosing that.
 - *On with `Options.PasswordReset`.* The application decides.
 
-**Decision:** The second. The reset is `emailpassword.SetPassword`, so it ends the sessions and sends the mail notice like a reset by link.
+**Decision:** The second. The reset is `emailpassword.SetPassword`, so it ends the sessions and sends the mail notice like a reset by link. Since `SetPassword` became an admin operation, the reset calls its unchecked twin, `SetPasswordUnchecked`, which does the same work.
 
 ### Request bodies use `phone_number`
 

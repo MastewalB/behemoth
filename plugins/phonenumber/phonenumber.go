@@ -96,10 +96,19 @@ const (
 	HookResetFailed core.HookPoint = "auth.phoneNumber.passwordResetFailed"
 )
 
-// PermissionPhoneChange is the permission SendCode and Verify require of a
-// caller that acts for a user: adding a phone number to the caller's own
-// account. A caller signing in by code needs none.
-const PermissionPhoneChange core.Permission = "phone:change"
+// The permissions the plugin declares.
+const (
+	// PermissionPhoneChange is the permission SendCode and Verify require
+	// of a caller that acts for a user: adding a phone number to the
+	// caller's own account. A caller signing in by code needs none.
+	PermissionPhoneChange core.Permission = "phone:change"
+	// PermissionSetPhone is the admin permission SetPhoneNumber requires:
+	// setting the number of an account named in the input, without a code.
+	PermissionSetPhone core.Permission = "user:set_phone"
+	// PermissionAddPhone is the admin permission AddNumber requires: adding
+	// a number, with its code, to an account named in the input.
+	PermissionAddPhone core.Permission = "user:add_phone"
+)
 
 // Names of the rate-limit rules the plugin declares. The rules that end in
 // .address count per client address. RuleSendAddress counts the codes asked
@@ -286,15 +295,20 @@ func (p *Plugin) Version() string {
 //     and, with Options.PasswordReset, resetting a password;
 //   - a rate-limit rule per client address on each flow, and one per number
 //     on sending;
-//   - the permission PermissionPhoneChange.
+//   - the permission PermissionPhoneChange, and the admin permissions
+//     PermissionSetPhone and PermissionAddPhone.
 //
 // It declares no table and no token kind: codes are rows of core's
 // verification_codes table, issued by the code manager.
 func (p *Plugin) Declare(ic *core.PluginInitContext) error {
-	if err := ic.Permissions.Declare(core.PermissionDef{
-		Name: PermissionPhoneChange, Kind: core.PermissionSelf, Description: "Add or change the phone number of your account",
-	}); err != nil {
-		return err
+	for _, def := range []core.PermissionDef{
+		{Name: PermissionPhoneChange, Kind: core.PermissionSelf, Description: "Add or change the phone number of your account"},
+		{Name: PermissionSetPhone, Kind: core.PermissionAdmin, Description: "Set the phone number of any account without a code"},
+		{Name: PermissionAddPhone, Kind: core.PermissionAdmin, Description: "Add a confirmed phone number to any account"},
+	} {
+		if err := ic.Permissions.Declare(def); err != nil {
+			return err
+		}
 	}
 	if err := ic.Schemas.ExtendColumn(Column.Contribution(schema.Column{
 		Type: schema.ColTypeString, Length: columnLength, Nullable: true, Unique: true, Public: true,
@@ -784,7 +798,17 @@ func (v *verifyInput) FromMap(map[string]any) error { return nil }
 // ErrorCodePhoneNumberTaken. Each attempt costs the code one of its tries.
 //
 // It fires auth.phoneNumber.beforeVerify, .afterVerify and .verifyFailed.
+//
+// It is an admin operation: the caller needs PermissionAddPhone
+// (Access.RequireAdmin), which only a system caller holds today. A user
+// adds a number to their own account with Verify.
 func (p *Plugin) AddNumber(ctx context.Context, userID, phoneNumber, code string) (*models.User, error) {
+	if p.authContext == nil {
+		return nil, errs.NewConfigurationError("phonenumber.AddNumber", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+	}
+	if err := p.authContext.Access.RequireAdmin(ctx, PermissionAddPhone); err != nil {
+		return nil, err
+	}
 	return p.addNumber(ctx, userID, phoneNumber, code)
 }
 
@@ -1105,7 +1129,9 @@ func (p *Plugin) resetBody(hctx *core.HookContext, in resetInput) (*models.User,
 	}
 	// The code is spent from here on. The password passed the rules before
 	// the flow began, so what can still fail is the write itself.
-	return p.passwords.SetPassword(hctx.Ctx, user.ID, in.password)
+	// The code is the proof, so the password plugin's admin check does not
+	// apply: the caller is anonymous, and stays the caller of what follows.
+	return p.passwords.SetPasswordUnchecked(hctx.Ctx, user.ID, in.password)
 }
 
 // SetPhoneNumber gives the user with userID the phone number without a
@@ -1116,10 +1142,15 @@ func (p *Plugin) resetBody(hctx *core.HookContext, in resetInput) (*models.User,
 // error, and one another user holds a conflict with
 // ErrorCodePhoneNumberTaken.
 //
-// It does not check who is asking, and it fires no points of the plugin.
+// It is an admin operation: the caller needs PermissionSetPhone
+// (Access.RequireAdmin), which only a system caller holds today. It fires no
+// points of the plugin.
 func (p *Plugin) SetPhoneNumber(ctx context.Context, userID, phoneNumber string) (*models.User, error) {
 	if p.authContext == nil {
 		return nil, errs.NewConfigurationError("phonenumber.SetPhoneNumber", "the plugin is not initialized; pass it to Prepare and Boot first", nil)
+	}
+	if err := p.authContext.Access.RequireAdmin(ctx, PermissionSetPhone); err != nil {
+		return nil, err
 	}
 	number := strings.TrimSpace(phoneNumber)
 	if number != "" {

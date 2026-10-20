@@ -37,6 +37,7 @@ import (
 
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/telemetry"
 )
@@ -87,6 +88,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, prepare P
 		usage(stdout)
 		return ExitOK
 	}
+	// The commands are code in the process: they name themselves as the
+	// caller of what they run.
+	ctx = identity.WithCaller(ctx, identity.System(program))
 	for _, cmd := range commands() {
 		if cmd.name == args[0] {
 			return cmd.exec(ctx, args[1:], stdout, stderr, prepare, backend)
