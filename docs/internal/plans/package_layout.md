@@ -2,7 +2,7 @@
 
 This document describes the layout Behemoth's packages move to: which package holds what, the order in which packages may import each other, and where each exported identifier of a moving package ends up. It also lists the steps of the move, which leaves behavior unchanged.
 
-**Status:** part 1 done, as of 2026-10-19. Part 2 waits for step 6 of [`caller.md`](caller.md). [Implementation steps](#implementation-steps) lists the work.
+**Status:** part 1 done, as of 2026-10-19. The caller plan, which part 2 waited for, is built as of 2026-10-20, so part 2 can start. [Implementation steps](#implementation-steps) lists the work.
 
 The documents it builds on are:
 
@@ -228,7 +228,7 @@ To move code, use `git mv`, which keeps each file's history. Change import paths
 
 ### Part 2
 
-Part 2 waits for step 6 of [`caller.md`](caller.md). Until then, `HookContext.Request` and four methods of `SessionManager` refer to the HTTP types, and moving those types out of `core` would make `core` import them back.
+Part 2 waited for [`caller.md`](caller.md), which is built: `SessionManager` has no HTTP method any more, and the session manager, the audit log, and the rate limiter read the caller instead of the request. What still ties `core` to the HTTP types is `HookContext.Request`, the router and its stages, `TokenCarrier`, and `Plugin.Routes` and `Plugin.Middlewares`, which step 12 moves.
 
 | Step | Content | Status |
 | --- | --- | --- |

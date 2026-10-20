@@ -272,7 +272,7 @@ Refusals are counted in the `behemoth.http.origin_refused` metric by `reason`. S
 	Middlewares: []core.Middleware{core.RequireSession()}},
 ```
 
-The router authenticates every request before its route runs: it reads the token where the delivery says, and puts the caller on the request's context. `core.RequireSession` answers `401` unless the caller signed in with a valid active session. Your handler reads the session from the caller with `identity.CallerFrom(rctx.Ctx).Session()`, and the user is `Session().UserID`. With `UpdateAge` set, a session that is due has been extended by then, and the session your handler reads has the new expiry. See [Rolling expiration](#rolling-expiration).
+The router authenticates every request before its route runs: it reads the token where the delivery says, and puts the caller on the request's context. `core.RequireSession` answers `401` unless the caller signed in with a valid active session. Your handler reads the session from the caller with `identity.CallerFrom(rctx.Ctx).Session()`, and the user is `Session().UserID`. [Callers and permissions](callers.md) describes the caller in full. With `UpdateAge` set, a session that is due has been extended by then, and the session your handler reads has the new expiry. See [Rolling expiration](#rolling-expiration).
 
 A request it refuses does not reach your handler. The response is JSON with a message and a code your client can act on:
 

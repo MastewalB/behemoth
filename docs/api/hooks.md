@@ -113,6 +113,8 @@ Every handler receives a `*core.HookContext`.
 | `Values` | A scratch map for handlers, shared by all the points of one operation. A handler can leave a note for a later handler. It is not the payload. See [Pass data between handlers](#pass-data-between-handlers). |
 | `Request` | The HTTP request being handled, or nil when the operation was started outside a request (a CLI, a background job). Most handlers don't need it. |
 
+`hctx.Caller()` returns the caller of the operation: who it runs for, and the client's address and user agent, however the operation was reached. Read the caller rather than `Request` when a handler needs to know who is calling. See [Callers and permissions](callers.md).
+
 Some points publish well-known entries in `Values` or in the payload. The keys are constants in `core/hooks` (for example `HookValueUserID`, `HookValueSessionID`, and `HookValueIPAddress`). Use the constants so that handlers from different authors agree on the names.
 
 ### Pass data between handlers

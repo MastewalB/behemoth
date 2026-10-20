@@ -131,6 +131,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | [Email verification](./docs/api/emailverification.md) | Confirming a user's address: when a link is sent, routes, requiring a verified email, and changing an address safely |
 | [Mail](./docs/api/mail.md) | The mail sender plugins use, and waiting or background sends |
 | [Router adapters](./docs/api/routers.md) | Mounting the routes on `net/http`, Gin, Echo, chi or Fiber, and what is specific to each |
+| [Callers and permissions](./docs/api/callers.md) | Who a call runs for: reading the caller, naming your own code, authenticating another transport, and the permissions flows require |
 | [Sessions](./docs/api/sessions.md) | Session settings, how the token travels (cookie, header, body), the sign-in response, protecting your own routes |
 | [Session tokens](./docs/api/session-tokens.md) | Short-lived JWTs that tell another service who a request is from, and the published keys it checks them with |
 | [JWT verification](./docs/api/jwt-verification.md) | Checking a JWT signed with an asymmetric key, such as a session token in another Go service: the checks, the key set cache, and the errors |
