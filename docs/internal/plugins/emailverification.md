@@ -261,6 +261,8 @@ The same link therefore cancels a change that is pending and undoes one that was
 
 **Decision:** A fresh session, with `RequireFreshSession`. It is the use `FreshAge` was put in `SessionConfig` for.
 
+The check has since moved from the route into the flow: `RequestChange` requires `email:change` through `Access.RequireFreshUser`, and the route has no middleware. The rule now holds for every caller of the flow, and code in the process passes by naming the user (`identity.System(name).For(userID)`).
+
 **Revisit if:** a way to re-check credentials on an existing session is added. The user would then not have to sign in again.
 
 ## Tests

@@ -95,13 +95,13 @@ It has two callers: a route that ended its caller's own session, and the authent
 
 `[Convention, important]` **A route calls it only after the session has ended.** `POST /sign-out` is the one route that does:
 
-1. The authentication stage resolves the caller's session, and `RequireSession` lets the request through.
-2. `emailpassword.SignOut` fires the sign-out points and revokes it.
+1. The authentication stage resolves the caller's session.
+2. `emailpassword.Plugin.SignOut` requires a signed-in caller (`Access.RequireUser`), fires the sign-out points, and revokes the caller's session.
 3. `handleSignOut` calls `TokenCarrier.Clear` and answers `200`.
 
 A sign-out that did not go through returns at step 2: a hook handler on `auth.signOut.before` refused it, or the revoke failed. The session is then still live, so the cookie stays. Clearing it would leave a live session that no client holds the token of.
 
-`SignOut` does not call `Clear` itself, for two reasons. It takes a session id, which may be another client's (an administrator ending a user's session), and the cookie on the response belongs to the caller. It also runs from code, where `HookContext.Request` is nil.
+`SignOut` does not call `Clear` itself: it is a flow, which takes a context and writes no response, and it also runs from code or another transport, where there is no cookie to remove.
 
 **A session that ends in another request** leaves its cookie in the browser at first: one revoked from another device, by `RevokeAllForUser` (the email change revert), by eviction over `MaxConcurrent`, expired, or deleted with its user. No response went to that browser when it ended. The authentication stage takes the cookie back on the next request that carries it, whatever the route: see *What the session check answers* below. Until that request the cookie is a dead token that grants nothing.
 

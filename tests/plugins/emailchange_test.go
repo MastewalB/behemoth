@@ -59,7 +59,7 @@ func (app *verificationApp) mails(t *testing.T, n int) []core.MailMessage {
 // confirmation it sent, which are messages n-1 and n.
 func (app *verificationApp) requestChange(t *testing.T, userID, newEmail string, n int) (notice, confirm core.MailMessage) {
 	t.Helper()
-	_, err := app.plugin.RequestChange(context.Background(), emailverification.ChangeRequest{UserID: userID, NewEmail: newEmail})
+	_, err := app.plugin.RequestChange(actingFor(context.Background(), userID), emailverification.ChangeRequest{NewEmail: newEmail})
 	require.NoError(t, err)
 	msgs := app.mails(t, n)
 	return msgs[n-2], msgs[n-1]
@@ -98,8 +98,8 @@ func TestEmailChangeConfirmAndRevert(t *testing.T) {
 	app := bootVerification(t, changeOptions())
 	user, rawSession := app.verifiedUser(t, "ada@example.com")
 
-	result, err := app.plugin.RequestChange(ctx, emailverification.ChangeRequest{
-		UserID: user.ID, NewEmail: " Ada@New.example.com ", RedirectURL: "/settings", Metadata: behemoth.M{"locale": "fr"},
+	result, err := app.plugin.RequestChange(actingFor(ctx, user.ID), emailverification.ChangeRequest{
+		NewEmail: " Ada@New.example.com ", RedirectURL: "/settings", Metadata: behemoth.M{"locale": "fr"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "ada@example.com", result.OldEmail)
@@ -235,7 +235,7 @@ func TestEmailChangeToAnAddressThatIsTaken(t *testing.T) {
 	user, _ := app.verifiedUser(t, "ada@example.com")
 	app.verifiedUser(t, "grace@example.com")
 
-	_, err := app.plugin.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "Grace@example.com"})
+	_, err := app.plugin.RequestChange(actingFor(ctx, user.ID), emailverification.ChangeRequest{NewEmail: "Grace@example.com"})
 	assert.ErrorIs(t, err, emailverification.ErrEmailTaken)
 	msgs := app.mails(t, 1)
 	assert.Equal(t, core.MailEmailChangeNotice, msgs[0].Kind, "the account's own address is still told")
@@ -273,7 +273,7 @@ func TestEmailChangeNeedsItsNotice(t *testing.T) {
 	app.outbox.mu.Lock()
 	app.outbox.err = down
 	app.outbox.mu.Unlock()
-	_, err := app.plugin.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "ada@new.example.com"})
+	_, err := app.plugin.RequestChange(actingFor(ctx, user.ID), emailverification.ChangeRequest{NewEmail: "ada@new.example.com"})
 	assert.ErrorIs(t, err, down, "the request waits for the notice and reports its failure")
 	app.outbox.mu.Lock()
 	app.outbox.err = nil
@@ -393,7 +393,7 @@ func TestEmailChangeRequestsAreLimitedPerUser(t *testing.T) {
 
 	app.requestChange(t, user.ID, "ada@one.example.com", 2)
 	app.requestChange(t, user.ID, "ada@two.example.com", 4)
-	_, err := app.plugin.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "ada@three.example.com"})
+	_, err := app.plugin.RequestChange(actingFor(ctx, user.ID), emailverification.ChangeRequest{NewEmail: "ada@three.example.com"})
 	assert.True(t, errs.IsCategory(err, errs.CategoryRateLimited), "the third request of the user: %v", err)
 	app.requestChange(t, other.ID, "grace@new.example.com", 6)
 
@@ -408,7 +408,7 @@ func TestEmailChangeIsOptIn(t *testing.T) {
 	ctx := context.Background()
 	app := bootVerification(t, emailverification.Options{})
 	user, _ := app.verifiedUser(t, "ada@example.com")
-	_, err := app.plugin.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "ada@new.example.com"})
+	_, err := app.plugin.RequestChange(actingFor(ctx, user.ID), emailverification.ChangeRequest{NewEmail: "ada@new.example.com"})
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	_, err = app.plugin.ConfirmChange(ctx, "token")
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)

@@ -71,15 +71,14 @@ All three kinds have a user id as their subject, and the number in their metadat
 
 ## Verify: one route, two flows
 
-`Plugin.Verify` calls `AddNumber` when the request names a user and `SignInWithCode` when it does not. `handleSend` and `handleVerify` fill the user from `optionalSession`.
+`Plugin.Verify` adds the number when its caller acts for a user, and calls `SignInWithCode` when the caller is anonymous. `SendCode` decides the same way between a code to add a number and a code to sign in. Both ask `Access.OptionalUser` for `phone:change` (`PermissionPhoneChange`); the routes have no session middleware:
 
-`optionalSession` is a middleware on those two routes only. The router has authenticated the request already, so it reads the caller:
-
-| Request | Result |
+| Caller | Result |
 | --- | --- |
-| no session token | passes; the handler sees no session |
-| a valid token | passes; the caller is the session's user (`sessionUser`) |
-| a token that is expired, revoked, pending or unknown | the caller's `AuthError`, a session error, `401` |
+| anonymous, no session token | no user: the code signs in |
+| signed in, or a system caller acting for a user | the user: the code adds the number to that user |
+| anonymous because its token is expired, revoked, pending or unknown | the caller's `AuthError`, a session error, `401` |
+| a system caller that names no user | a configuration error |
 
 The third row matters. A signed-in user whose session expired while they typed the code would otherwise be taken for a visitor, and their request to add a number would become a sign-in attempt for whoever holds it.
 

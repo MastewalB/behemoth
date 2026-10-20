@@ -125,6 +125,9 @@ func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	if err := CoreDeclareRateLimitRules(coreIC); err != nil {
 		return nil, err
 	}
+	if err := CoreDeclarePermissions(coreIC); err != nil {
+		return nil, err
+	}
 	if err := CoreDeclareSchema(coreIC); err != nil {
 		return nil, err
 	}
@@ -872,6 +875,17 @@ func CoreDeclareSchema(ic *core.PluginInitContext) error {
 		}
 	}
 	return nil
+}
+
+// CoreDeclarePermissions declares the permissions core's own flows require:
+// core.PermissionSessionTokenIssue, for SessionTokens.Issue. It is declared
+// whether or not session tokens are on, so that the catalog does not depend
+// on BootConfig.
+func CoreDeclarePermissions(ic *core.PluginInitContext) error {
+	return ic.Permissions.Declare(core.PermissionDef{
+		Name: core.PermissionSessionTokenIssue, Kind: core.PermissionSelf,
+		Description: "Get a short-lived token that proves your session to another service",
+	})
 }
 
 // The names of core's limits per client address. Each is a hook rule on its

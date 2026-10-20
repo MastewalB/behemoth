@@ -7,9 +7,9 @@ This document explains how `plugins/emailpassword` fits into `Prepare` and `Boot
 | `core.Plugin` method | Result | Why |
 | --- | --- | --- |
 | `Meta` | name `emailpassword`, no dependencies, no mount path | routes sit directly under the base path (`/sign-in/email`) |
-| `Declare` | nothing, or with reset on: the `password_reset` token kind, six `auth.passwordReset.*` points and three rate-limit rules | core declares the sign-up, sign-in and sign-out points (`CoreDeclareHookPoints`) and owns `users`, `accounts` and `sessions` |
+| `Declare` | the permission `session:sign_out` (`PermissionSignOut`), and with reset on: the `password_reset` token kind, six `auth.passwordReset.*` points and three rate-limit rules | core declares the sign-up, sign-in and sign-out points (`CoreDeclareHookPoints`) and owns `users`, `accounts` and `sessions` |
 | `Register` | nothing | the plugin fires points; it does not handle any |
-| `Middlewares` | nothing | the session check is on the sign-out route only (`core.RequireSession`) |
+| `Middlewares` | nothing | no route has a session middleware: `SignOut` requires its caller itself (`Access.RequireUser`) |
 | `Init` | checks `Options`, wraps the flows with `core.WithLifecycle`; with reset on, also requires a mail sender | runs in `Boot`, after the dispatcher exists |
 | `Routes` | sign-up, sign-in, sign-out, and the two reset routes when reset is on | reads the session manager, so it must run after `Init`; `Boot` guarantees that order |
 
@@ -19,7 +19,7 @@ The sign-in route answers through `core.WriteSignIn`, which writes the body ever
 
 The plugin knows nothing about email verification. A user it signs up is created with `EmailVerified` false, and the email verification plugin, if installed, sends the link from its handler on `data.user.created`; see [`emailverification.md`](emailverification.md).
 
-Compare with a plugin such as the example `activity` (`examples/init/plugin.go`): that one declares a table in `Declare` and has a mount path. This one adds behaviour on top of core tables, and declares nothing unless reset is on.
+Compare with a plugin such as the example `activity` (`examples/init/plugin.go`): that one declares a table in `Declare` and has a mount path. This one adds behaviour on top of core tables, and declares one permission and, with reset on, the reset's parts.
 
 ## The flows
 
@@ -27,7 +27,7 @@ The plugin has these flows:
 
 - **Sign-up** (`Plugin.signUpBody`) validates the email and password with the plugin's `Options`, hashes the password with `AuthContext.Crypto.Passwords`, and creates the user and its credential account in one store transaction.
 - **Sign-in** (`Plugin.signInBody`) verifies the password against the credential account and creates a session. It passes only the session's state to `SessionManager.Create`; the manager takes the IP address and user agent from the request on the context, so the flow also runs without a request. It applies no password rules, so a password accepted under an older policy still works.
-- **Sign-out** (`SignOut`) revokes the session. The route, `handleSignOut`, then takes the token back from the client with `TokenCarrier.Clear`, which removes the cookie under a cookie delivery. `SignOut` itself writes no response: see *Taking the token back* in [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
+- **Sign-out** (`Plugin.SignOut(ctx)`) ends the session of the caller on the context. It requires `session:sign_out` through `Access.RequireUser`, and a session: a caller that is not signed in gets the reason as a session error, and a system caller acting for a user gets `session_missing`. The route, `handleSignOut`, then takes the token back from the client with `TokenCarrier.Clear`, which removes the cookie under a cookie delivery. `SignOut` itself writes no response: see *Taking the token back* in [`../sessions/token_delivery.md`](../sessions/token_delivery.md). Ending another session is not a self-service flow; code calls `SessionManager.Revoke`.
 
 `signUpBody` and `signInBody` are methods on the plugin, which `Init` wraps with `WithLifecycle`. `signUpBody` reads the options; `signInBody` reads none today and is a method so both flows have the same shape.
 

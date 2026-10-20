@@ -429,7 +429,7 @@ ALTER TABLE users ADD COLUMN risk_note TEXT;`)
 
 	user, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
 	require.NoError(t, err)
-	_, err = verification.RequestChange(ctx, emailverification.ChangeRequest{UserID: user.ID, NewEmail: "ada@new.example.com"})
+	_, err = verification.RequestChange(actingFor(ctx, user.ID), emailverification.ChangeRequest{NewEmail: "ada@new.example.com"})
 	require.NoError(t, err)
 	change := lastMail(core.MailEmailChange)
 	check("email change confirm", call(t, ac, mounted["/api/auth"+emailverification.PathChangeConfirm], `{"token":"`+change.Token+`"}`), http.StatusOK)

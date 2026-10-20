@@ -21,11 +21,15 @@ const (
 	SessionTokenClaimsKey = "claims"
 )
 
-// SessionTokenRequest is the input of SessionTokens.Issue.
+// PermissionSessionTokenIssue is the permission SessionTokens.Issue
+// requires: a session token for another service, for the caller's own
+// session. Core declares it.
+const PermissionSessionTokenIssue Permission = "session_token:issue"
+
+// SessionTokenRequest is the input of SessionTokens.Issue. The token is for
+// the caller on the context and the session it signed in with; nothing in
+// the request names them.
 type SessionTokenRequest struct {
-	// Session is the caller's session: active and not expired, as
-	// RequireSession resolves it. Required.
-	Session *models.Session
 	// Audience is the service the token is for: one of
 	// JWTConfig.Audiences[JWTExternal]. Empty means the first of them.
 	Audience string
@@ -60,11 +64,14 @@ func (t *SessionToken) AuditSubject() (subjectType, subjectID string) {
 // Behemoth never accepts a session token as a session: RequireSession takes
 // the session's own token only.
 type SessionTokens interface {
-	// Issue signs a session token for req.Session. It fires
-	// auth.sessionToken.beforeIssue, .afterIssue and .issueFailed. A session
-	// that is not active or has expired is a session error, an audience that
-	// is not configured a validation error (code "audience_invalid_input"),
-	// and session tokens that are not configured a configuration error
-	// (errs.CodeJWTExternalNotConfigured).
+	// Issue signs a session token for the caller on ctx and its session.
+	// The caller needs PermissionSessionTokenIssue (Access.RequireUser) and
+	// a session: a caller that is not signed in gets the reason as a
+	// session error, and a system caller acting for a user, which has no
+	// session, gets errs.CodeSessionMissing. It fires
+	// auth.sessionToken.beforeIssue, .afterIssue and .issueFailed. An
+	// audience that is not configured is a validation error (code
+	// "audience_invalid_input"), and session tokens that are not configured
+	// a configuration error (errs.CodeJWTExternalNotConfigured).
 	Issue(ctx context.Context, req SessionTokenRequest) (*SessionToken, error)
 }

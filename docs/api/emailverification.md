@@ -166,11 +166,11 @@ The change flow behaves as follows:
 
 ### A recent sign-in is required
 
-`POST /email/change` uses `core.RequireFreshSession`: the session has to be valid and has to have signed in, or passed its second factor, within `SessionConfig.FreshAge` (15 minutes by default). A session that is older gets `401` with the code `session_not_fresh`. Your client asks the user to sign in again and retries.
+`RequestChange`, the flow behind `POST /email/change`, requires the permission `emailverification.PermissionEmailChange` (`email:change`) with a fresh session: the session has to be valid and has to have signed in, or passed its second factor, within `SessionConfig.FreshAge` (15 minutes by default). A session that is older gets `401` with the code `session_not_fresh`. Your client asks the user to sign in again and retries. The flow checks it, so it holds however the flow is reached.
 
 This is what stops someone who got hold of a long-lived session, for example from a shared computer, from moving the account to their own address. Nothing refreshes a session in place, so signing in again is the only way to get a fresh one.
 
-You can put the same check on a route of your own ([Sessions](sessions.md#fresh-sessions) has more):
+You can put a fresh-session check on a route of your own ([Sessions](sessions.md#fresh-sessions) has more):
 
 ```go
 {Method: http.MethodPost, Path: "/account/delete", Handler: deleteAccount,
@@ -200,15 +200,16 @@ The last point matters after several changes in sequence. Suppose the account go
 ### Call the change flow from code
 
 ```go
+// The address that changes is the one of the user the caller acts for.
+ctx = identity.WithCaller(ctx, identity.System("support-tool").For(user.ID))
 result, err := verification.RequestChange(ctx, emailverification.ChangeRequest{
-	UserID:   user.ID,
 	NewEmail: "ada@new.example.com",
 })
 confirmed, err := verification.ConfirmChange(ctx, rawToken) // confirmed.User, confirmed.RedirectURL
 user, err := verification.RevertChange(ctx, rawToken)
 ```
 
-- `RequestChange` does not check who is asking. The route does that with the fresh session, and a caller from code vouches for the request.
+- `RequestChange` changes the address of the user the caller on `ctx` acts for. A signed-in user needs a fresh session. Code in the process names the user with `identity.System(name).For(userID)`, which passes without a session; a system caller that names no user is a configuration error.
 - It returns `emailverification.ErrEmailTaken` when the address belongs to another account, which the route hides, and `emailverification.ErrNoAccount` for an unknown user.
 - With the flow off, all three return a configuration error.
 
