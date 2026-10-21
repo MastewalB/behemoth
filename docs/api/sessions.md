@@ -126,7 +126,7 @@ Every route that signs a user in answers with the same JSON, whichever plugin it
 The response follows these rules:
 
 - A plugin can add fields of its own next to these. The magic link plugin adds `redirect_url`.
-- A pending session's token is delivered like any other. The client presents it together with the second factor.
+- A pending session's token is delivered like any other. The client presents it together with the second factor, which the [two-factor plugin](twofactor.md#sign-in-with-a-second-factor) checks.
 - When the second factor passes, the answer carries a new token, delivered the same way, and the pending token stops working. Send the second factor once the client's other requests with the pending token have returned: under the cookie deliveries, a late answer to such a request would remove the new cookie.
 - The response has `Cache-Control: no-store`.
 - Sign-up answers `{"user": {...}}` too. It creates no session, so it has no token.

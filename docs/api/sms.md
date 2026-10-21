@@ -19,7 +19,7 @@ defer ac.SMS.Close(context.Background())
 
 | `SMSMessage` field | Content |
 | --- | --- |
-| `Kind` | what the message is for: `core.SMSPhoneVerification`, `core.SMSSignIn`, `core.SMSPasswordReset` |
+| `Kind` | what the message is for: `core.SMSPhoneVerification`, `core.SMSSignIn`, `core.SMSPasswordReset`, and the two-factor plugin's `core.SMSTwoFactorSetup` and `core.SMSTwoFactorCode` |
 | `To` | the number, in E.164 form |
 | `Code` | the one-time code. It is a credential: do not log it. |
 | `ExpiresAt` | when the code stops working |

@@ -8,8 +8,13 @@
 // creates a session that authenticates nobody until the second factor passes
 // and the session is promoted (core.SessionManager.Promote).
 //
-// Experimental: setting methods up, turning them off, and replacing the
-// recovery codes work. A sign-in does not ask for the second factor yet.
+// Every sign-in passes core's checkpoint, auth.signIn.credentialsVerified,
+// once its first factor checked out. The plugin's handler there makes the
+// session of a user with a method pending, and Challenge, SendCode, and
+// Verify complete the sign-in.
+//
+// Experimental: the plugin has no routes yet; call its flows from your own
+// code. Its API can still change.
 package twofactor
 
 import (
@@ -43,6 +48,9 @@ const (
 	MethodTOTP  Method = core.FactorTOTP  // a code from an authenticator app
 	MethodEmail Method = core.FactorEmail // a code sent by email
 	MethodSMS   Method = core.FactorSMS   // a code sent by text message
+	// MethodRecoveryCode is not a method a user turns on: a user gets
+	// recovery codes with the first method. Verify takes it to spend one.
+	MethodRecoveryCode Method = core.FactorRecoveryCode
 )
 
 // parseMethod returns the method named s, or a validation error.
@@ -54,13 +62,31 @@ func parseMethod(op, s string) (Method, error) {
 	return "", errs.NewInvalidInputError(op, keyMethod, "method must be one of totp, email, or sms", nil)
 }
 
+// parseVerifyMethod is parseMethod for a second factor presented to Verify,
+// which may be a recovery code too.
+func parseVerifyMethod(op, s string) (Method, error) {
+	if Method(s) == MethodRecoveryCode {
+		return MethodRecoveryCode, nil
+	}
+	method, err := parseMethod(op, s)
+	if err != nil {
+		return "", errs.NewInvalidInputError(op, keyMethod, "method must be one of totp, email, sms, or recovery_code", nil)
+	}
+	return method, nil
+}
+
 // Purpose says what a sent code is for. It is the "purpose" of the
 // auth.twoFactor.beforeSend payload and of a SendResult.
 type Purpose string
 
-// PurposeSetup is a code that confirms an address or a number a user sets
-// up as a method.
-const PurposeSetup Purpose = "setup"
+const (
+	// PurposeSetup is a code that confirms an address or a number a user
+	// sets up as a method.
+	PurposeSetup Purpose = "setup"
+	// PurposeSignIn is a code that completes a sign-in waiting for a
+	// second factor.
+	PurposeSignIn Purpose = "sign_in"
+)
 
 // codeKind is the kind of the codes sent for purpose by method, such as
 // "twofactor.setup_email": a kind per purpose and channel keeps a setup code
@@ -96,7 +122,8 @@ const (
 	// *SendResult, which holds no code.
 	HookSendAfter core.HookPoint = "auth.twoFactor.afterSend"
 	// HookSendFailed fires for a code that was not sent: codes
-	// "send_failed" and "rejected_by_hook".
+	// "method_unavailable", "locked", "send_failed", and
+	// "rejected_by_hook".
 	HookSendFailed core.HookPoint = "auth.twoFactor.sendFailed"
 
 	// HookRegenerateBefore runs before a user's recovery codes are
@@ -105,6 +132,18 @@ const (
 	// HookRegenerateAfter runs once they are replaced, with a
 	// *RegenerateResult, which holds no code.
 	HookRegenerateAfter core.HookPoint = "auth.twoFactor.afterRegenerate"
+
+	// HookVerifyBefore runs before a pending sign-in's second factor is
+	// checked, on "userID", "method", and "sessionID". Veto only. The rate
+	// limits per user and per address run here.
+	HookVerifyBefore core.HookPoint = "auth.twoFactor.beforeVerify"
+	// HookVerifyAfter runs once the sign-in is finished, with its
+	// *core.SignInResult.
+	HookVerifyAfter core.HookPoint = "auth.twoFactor.afterVerify"
+	// HookVerifyFailed fires for a second factor that was refused: codes
+	// "invalid_code", "method_unavailable", "locked", and
+	// "rejected_by_hook".
+	HookVerifyFailed core.HookPoint = "auth.twoFactor.verifyFailed"
 )
 
 // The permissions the plugin declares.
@@ -116,15 +155,22 @@ const (
 	// fresh session: turning methods on and off, and replacing the recovery
 	// codes, on the caller's own account.
 	PermissionManage core.Permission = "two_factor:manage"
+	// PermissionReset is the admin permission Reset requires: turning every
+	// method of an account named in the input off.
+	PermissionReset core.Permission = "user:reset_two_factor"
 )
 
 // Names of the rate-limit rules the plugin declares. RuleSendUser counts the
 // codes sent per user, for every purpose: each one is a message somebody
-// pays for and somebody receives.
+// pays for and somebody receives. RuleVerifyUser counts the second factors
+// tried per user, across pending sessions: whoever knows a user's password
+// can open a new pending session at any time.
 const (
 	RuleSendUser      = "twofactor.send.user"
 	RuleSendAddress   = "twofactor.send.address"
 	RuleEnableAddress = "twofactor.enable.address"
+	RuleVerifyUser    = "twofactor.verify.user"
+	RuleVerifyAddress = "twofactor.verify.address"
 )
 
 // Keys of the hook payloads, the code metadata, and the request bodies.
@@ -133,6 +179,7 @@ const (
 	keyPurpose     = "purpose"
 	keyReason      = "reason"
 	keyDestination = "destination"
+	keySessionID   = "session_id"
 )
 
 // The reasons in the payload of auth.twoFactor.beforeDisable and in a
@@ -140,6 +187,9 @@ const (
 const (
 	// ReasonUserDisabled is a method the user turned off (Disable).
 	ReasonUserDisabled = "user_disabled"
+	// ReasonAdminReset is every method of a user, turned off by an admin
+	// (Reset).
+	ReasonAdminReset = "admin_reset"
 )
 
 // Codes of the errors the plugin returns for its own rejections.
@@ -149,12 +199,25 @@ const (
 	// attempts.
 	ErrorCodeInvalidCode = "invalid_two_factor_code"
 	// ErrorCodeMethodUnavailable is the code of the forbidden error (403)
-	// for a method that Options.Methods does not offer.
+	// for a method that Options.Methods does not offer, that the user has
+	// not turned on, or that a sign-in may not use.
 	ErrorCodeMethodUnavailable = "two_factor_method_unavailable"
 	// ErrorCodeNotEnabled is the code of the conflict error (409) for
 	// turning off a method that is not on, and for replacing the recovery
 	// codes of a user without a method.
 	ErrorCodeNotEnabled = "two_factor_not_enabled"
+	// ErrorCodeLocked is the code of the forbidden error (403) for a second
+	// factor other than a recovery code, after Options.MaxFailures failed
+	// in a row.
+	ErrorCodeLocked = "two_factor_locked"
+	// ErrorCodeSameChannel is the code of the forbidden error (403) a
+	// sign-in returns when the user's methods all use the channel the
+	// sign-in's first factor used, and no recovery code is left: the user
+	// signs in another way.
+	ErrorCodeSameChannel = "two_factor_same_channel"
+	// ErrorCodeNotPending is the code of the conflict error (409) for a
+	// challenge flow called with a session that is active already.
+	ErrorCodeNotPending = "two_factor_not_pending"
 )
 
 // Defaults of Options, applied by New to the fields left at zero.
@@ -163,6 +226,9 @@ const (
 	DefaultRecoveryCodes = 10
 	// maxRecoveryCodes bounds Options.RecoveryCodes.
 	maxRecoveryCodes = 20
+	// DefaultMaxFailures is the number of failed second factors in a row
+	// that turns the lock on: the most NIST SP 800-63B allows.
+	DefaultMaxFailures = 100
 )
 
 // Options configures the plugin. Every field left at zero takes its default,
@@ -193,6 +259,15 @@ type Options struct {
 	// RecoveryCodes is the number of codes in a set of recovery codes,
 	// 1 to 20. Zero means DefaultRecoveryCodes.
 	RecoveryCodes int
+
+	// VerifyLimit bounds the second factors tried per user, across pending
+	// sessions. Zero means 5 per 15 minutes.
+	VerifyLimit core.Limit
+	// MaxFailures is the number of failed second factors in a row after
+	// which only a recovery code passes, until one does or an admin resets
+	// the user. Zero means DefaultMaxFailures, and a larger value is a
+	// configuration error.
+	MaxFailures int
 }
 
 // Plugin is the two-factor plugin. It declares its tables, hook points,
@@ -204,6 +279,7 @@ type Plugin struct {
 	log  telemetry.Logger
 
 	disable func(hctx *core.HookContext, in disableInput) (*DisableResult, error)
+	reset   func(hctx *core.HookContext, in disableInput) (*DisableResult, error)
 }
 
 // New returns the plugin configured with opts. Values left at zero take
@@ -229,6 +305,12 @@ func New(opts Options) *Plugin {
 	if opts.RecoveryCodes == 0 {
 		opts.RecoveryCodes = DefaultRecoveryCodes
 	}
+	if opts.VerifyLimit == (core.Limit{}) {
+		opts.VerifyLimit = core.Limit{Max: 5, Window: 15 * time.Minute}
+	}
+	if opts.MaxFailures == 0 {
+		opts.MaxFailures = DefaultMaxFailures
+	}
 	return &Plugin{opts: opts}
 }
 
@@ -244,16 +326,20 @@ func (p *Plugin) Version() string {
 }
 
 // Declare implements [core.Plugin]. The plugin declares:
-//   - its tables: two_factor_methods and two_factor_recovery_codes;
+//   - its tables: two_factor_methods, two_factor_recovery_codes, and
+//     two_factor_failures;
 //   - the auth.twoFactor.* points around turning a method on and off,
-//     sending a code, and replacing the recovery codes;
-//   - a rate-limit rule per user and one per client address on sending, and
-//     one per client address on turning a method on;
-//   - the permissions PermissionRead and PermissionManage.
+//     sending a code, replacing the recovery codes, and verifying a second
+//     factor;
+//   - rate-limit rules per user and per client address on sending and on
+//     verifying, and one per client address on turning a method on;
+//   - the permissions PermissionRead and PermissionManage, and the admin
+//     permission PermissionReset.
 func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 	for _, def := range []core.PermissionDef{
 		{Name: PermissionRead, Kind: core.PermissionSelf, Description: "See the two-factor methods of your account"},
 		{Name: PermissionManage, Kind: core.PermissionSelf, Description: "Turn two-factor methods of your account on or off, and replace its recovery codes"},
+		{Name: PermissionReset, Kind: core.PermissionAdmin, Description: "Turn off every two-factor method of any account"},
 	} {
 		if err := ic.Permissions.Declare(def); err != nil {
 			return err
@@ -276,6 +362,9 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 		{Point: HookSendFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 		{Point: HookRegenerateBefore, Phase: core.BeforeHookPhase},
 		{Point: HookRegenerateAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookVerifyBefore, Phase: core.BeforeHookPhase},
+		{Point: HookVerifyAfter, Phase: core.AfterHookPhase, Audit: &core.AuditSpec{}},
+		{Point: HookVerifyFailed, Phase: core.FailedHookPhase, Audit: &core.AuditSpec{}},
 	} {
 		if err := ic.Hooks.Declare(def); err != nil {
 			return err
@@ -288,6 +377,8 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 		{Name: RuleSendUser, Point: HookSendBefore, KeyFunc: core.KeyByValues(hooks.HookValueUserID), Limit: p.opts.SendLimit},
 		{Name: RuleSendAddress, Point: HookSendBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
 		{Name: RuleEnableAddress, Point: HookEnableBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
+		{Name: RuleVerifyUser, Point: HookVerifyBefore, KeyFunc: core.KeyByValues(hooks.HookValueUserID), Limit: p.opts.VerifyLimit},
+		{Name: RuleVerifyAddress, Point: HookVerifyBefore, KeyFunc: core.KeyByClientIP(), Limit: perAddress},
 	} {
 		if err := ic.RateLimits.DeclareHookRateLimitRule(rule); err != nil {
 			return err
@@ -296,11 +387,16 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 	return nil
 }
 
-// Register implements [core.Plugin]. A handler on data.user.beforeDelete
-// deletes the user's rows of the plugin's tables, in the delete's
-// transaction, so that they go on every database, MongoDB and SQLite without
-// foreign keys included.
+// Register implements [core.Plugin]. The plugin registers two handlers:
+//   - auth.signIn.credentialsVerified: a user with a method that is on gets
+//     a pending session, whichever plugin signs them in (onCredentialsVerified);
+//   - data.user.beforeDelete: the user's rows of the plugin's tables go in
+//     the delete's transaction, so that they go on every database, MongoDB
+//     and SQLite without foreign keys included.
 func (p *Plugin) Register(reg core.HookRegistry) error {
+	if err := reg.OnBefore(hooks.HookSignInCredentialsVerified, p.onCredentialsVerified, nil); err != nil {
+		return err
+	}
 	return reg.OnBefore(hooks.HookUserBeforeDelete, p.onUserDelete, nil)
 }
 
@@ -308,7 +404,7 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 func (p *Plugin) onUserDelete(hctx *core.HookContext, _ behemoth.M) (behemoth.M, error) {
 	userID, _ := hctx.Values[hooks.HookValueUserID].(string)
 	db := hctx.Tx.DB()
-	for _, model := range []behemoth.Model{&methodRow{}, &recoveryCodeRow{}} {
+	for _, model := range []behemoth.Model{&methodRow{}, &recoveryCodeRow{}, &failureRow{}} {
 		if err := db.DeleteMany(hctx.Ctx, model, byUser(userID)); err != nil {
 			return nil, err
 		}
@@ -317,7 +413,8 @@ func (p *Plugin) onUserDelete(hctx *core.HookContext, _ behemoth.M) (behemoth.M,
 }
 
 // Init implements [core.Plugin]. It checks the options against what the
-// methods need, keeps the AuthContext, and wraps Disable with its points.
+// methods need, keeps the AuthContext, and wraps Disable and Reset with
+// their points.
 func (p *Plugin) Init(ac *core.AuthContext) error {
 	const op = "twofactor.Init"
 	sends := false
@@ -353,12 +450,16 @@ func (p *Plugin) Init(ac *core.AuthContext) error {
 	if p.opts.RecoveryCodes < 1 || p.opts.RecoveryCodes > maxRecoveryCodes {
 		return errs.NewConfigurationError(op, fmt.Sprintf("Options.RecoveryCodes is %d: a set has 1 to %d codes", p.opts.RecoveryCodes, maxRecoveryCodes), nil)
 	}
+	if p.opts.MaxFailures < 1 || p.opts.MaxFailures > DefaultMaxFailures {
+		return errs.NewConfigurationError(op, fmt.Sprintf("Options.MaxFailures is %d: it is 1 to %d, the most NIST SP 800-63B allows", p.opts.MaxFailures, DefaultMaxFailures), nil)
+	}
 	p.ac = ac
 	p.log = telemetry.NoOpLogger{}
 	if ac.Telemetry != nil {
 		p.log = telemetry.Named(ac.Telemetry.Logger, PluginName)
 	}
 	p.disable = core.WithLifecycle(ac.Dispatcher, HookDisableBefore, HookDisableAfter, HookDisableFailed, p.disableBody)
+	p.reset = core.WithLifecycle(ac.Dispatcher, HookDisableBefore, HookDisableAfter, HookDisableFailed, p.resetBody)
 	return nil
 }
 
@@ -374,7 +475,7 @@ func (p *Plugin) method(op, s string) (Method, error) {
 		return "", err
 	}
 	if !p.offers(method) {
-		return "", errs.NewForbidden(op, ErrorCodeMethodUnavailable, "this two-factor method is not available")
+		return "", errMethodUnavailable(op)
 	}
 	return method, nil
 }
@@ -411,6 +512,26 @@ func (p *Plugin) failed(hctx *core.HookContext, point core.HookPoint, code strin
 // the response does not tell a wrong code from an expired or a used one.
 func errInvalidCode(op string) error {
 	return errs.NewUnauthorized(op, ErrorCodeInvalidCode, "invalid or expired code")
+}
+
+func errMethodUnavailable(op string) error {
+	return errs.NewForbidden(op, ErrorCodeMethodUnavailable, "this two-factor method is not available")
+}
+
+func errLocked(op string) error {
+	return errs.NewForbidden(op, ErrorCodeLocked, "too many failed codes; use a recovery code")
+}
+
+func errSameChannel(op string) error {
+	return errs.NewForbidden(op, ErrorCodeSameChannel, "this account's second factor uses the channel of this sign-in; sign in another way")
+}
+
+func errNotPending(op string) error {
+	const message = "the session is not waiting for a second factor"
+	return &errs.DomainError{
+		Category: errs.CategoryConflict, Op: op, Code: ErrorCodeNotPending,
+		PublicMessage: message, InternalMessage: op + ": " + message,
+	}
 }
 
 func errNotEnabled(op string) error {

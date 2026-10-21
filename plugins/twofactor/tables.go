@@ -16,6 +16,7 @@ import (
 const (
 	MethodTable       = "two_factor_methods"
 	RecoveryCodeTable = "two_factor_recovery_codes"
+	FailureTable      = "two_factor_failures"
 )
 
 // Columns of the plugin's tables.
@@ -31,6 +32,7 @@ const (
 	colCodeHash      = "code_hash"
 	colKeyVersion    = "key_version"
 	colUsedAt        = "used_at"
+	colFailures      = "consecutive_failures"
 	colCreatedAt     = "created_at"
 	colUpdatedAt     = "updated_at"
 )
@@ -132,6 +134,31 @@ func (r *recoveryCodeRow) FromMap(m map[string]any) error {
 	return nil
 }
 
+// failureRow is a row of two_factor_failures: the failed second factors of
+// one user since the last one that passed. The row exists only after a
+// failure, and a second factor that passes deletes it.
+type failureRow struct {
+	UserID    string
+	Failures  int
+	UpdatedAt time.Time
+}
+
+func (r *failureRow) SchemaName() string     { return FailureTable }
+func (r *failureRow) PrimaryKeyName() string { return colUserID }
+func (r *failureRow) PrimaryKeyField() any   { return r.UserID }
+func (r *failureRow) New() behemoth.Model    { return &failureRow{} }
+
+func (r *failureRow) ToMap() (map[string]any, error) {
+	return map[string]any{colUserID: r.UserID, colFailures: r.Failures, colUpdatedAt: r.UpdatedAt}, nil
+}
+
+func (r *failureRow) FromMap(m map[string]any) error {
+	r.UserID, _ = m[colUserID].(string)
+	r.Failures = int(int64Of(m[colFailures]))
+	r.UpdatedAt, _ = m[colUpdatedAt].(time.Time)
+	return nil
+}
+
 // tables are the plugin's tables with their models. Each row references a
 // user and goes with the user: by the foreign key's cascade where it is
 // enforced, and by onUserDelete everywhere.
@@ -178,6 +205,15 @@ func tables() []struct {
 			},
 			Indexes:     []schema.Index{{Name: "idx_two_factor_recovery_codes_user_id", Columns: []string{colUserID}}},
 			ForeignKeys: references("fk_two_factor_recovery_codes_user"),
+		}},
+		{&failureRow{}, schema.Table{
+			Name: FailureTable,
+			Columns: []schema.Column{
+				{Name: colUserID, Type: schema.ColTypeString, Length: 36, PrimaryKey: true},
+				{Name: colFailures, Type: schema.ColTypeInteger},
+				{Name: colUpdatedAt, Type: schema.ColTypeTimestamp},
+			},
+			ForeignKeys: references("fk_two_factor_failures_user"),
 		}},
 	}
 }

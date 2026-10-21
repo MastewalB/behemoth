@@ -1,8 +1,8 @@
 # Two-factor authentication
 
-The `twofactor` plugin lets a user turn on a second factor: a code from an authenticator app (TOTP), or a code sent by email or by text message. A user gets recovery codes with the first method.
+The `twofactor` plugin lets a user turn on a second factor: a code from an authenticator app (TOTP), or a code sent by email or by text message. A user gets recovery codes with the first method. A sign-in of that user then waits for the second factor, whichever plugin checked the first: a password, a magic link, a phone code, or an OAuth provider.
 
-`Experimental:` turning methods on and off and replacing the recovery codes work. A sign-in does not ask for the second factor yet, and the plugin has no routes yet: call its flows from your own code. Its API can still change.
+`Experimental:` the plugin has no routes yet: call its flows from your own code. Its API can still change.
 
 ## Setup
 
@@ -33,12 +33,12 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 - `Boot` fails without `Issuer` when TOTP is offered, without a mail sender when email is, and without an SMS sender when SMS is.
 - On SQLite, open the database with `_txlock=immediate`. See [Username](username.md#setup) for the reason.
 
-Your senders get a setup code in a message of these kinds, with the code in `Code` and no link:
+Your senders get a code in a message of these kinds, with the code in `Code` and no link:
 
 | Kind | When |
 | --- | --- |
-| `core.MailTwoFactorSetup` | a user sets up the email method |
-| `core.SMSTwoFactorSetup` | a user sets up the SMS method |
+| `core.MailTwoFactorSetup`, `core.SMSTwoFactorSetup` | a user sets up the email or SMS method |
+| `core.MailTwoFactorCode`, `core.SMSTwoFactorCode` | a user signs in and asked for a code |
 
 ## Options
 
@@ -52,6 +52,8 @@ Your senders get a setup code in a message of these kinds, with the code in `Cod
 | `SendLimit` | 3 per 15 minutes | Codes sent per user, for every purpose together. |
 | `WaitForSend` | false | false: the call returns once the message is queued, and a failed send is logged. true: the call waits for your sender, and a failed send revokes the code and is returned. |
 | `RecoveryCodes` | 10 | Codes in a set of recovery codes, 1 to 20. |
+| `VerifyLimit` | 5 per 15 minutes | Second factors tried per user, across sign-ins. |
+| `MaxFailures` | 100 | Failed second factors in a row after which only a recovery code passes. At most 100, the most NIST SP 800-63B allows. |
 
 TOTP codes are fixed at SHA-1, six digits, and 30 seconds, the parameters every authenticator app supports.
 
@@ -73,6 +75,24 @@ The setup follows these rules:
 
 A number is accepted in E.164 form only, as for the phone number plugin. See [Phone number](phonenumber.md#phone-numbers).
 
+## Sign in with a second factor
+
+A sign-in of a user with a method that is on creates a pending session, and its route answers `{"status": "requires_second_factor"}` with the session's token. See [Sessions](sessions.md#the-sign-in-response). The sign-in then goes on with the pending session as the caller:
+
+1. `Challenge` returns the methods this sign-in may use, with destinations partly hidden (`a***@example.com`, `+1******0123`).
+2. For email or SMS, `SendCode` sends a sign-in code. It works for this sign-in only.
+3. `Verify` takes the method and the code. It returns a finished sign-in, a `*core.SignInResult`, with a new session token: hand it to `httpapi.WriteSignIn` as any sign-in does. The pending token stops working.
+
+The sign-in follows these rules:
+
+- **A channel counts once.** After a magic link, which proves the mailbox, an email code doesn't count, and after a sign-in by phone code an SMS code doesn't. When none of a user's methods counts and no recovery code is left, the sign-in itself is refused with `403` and `two_factor_same_channel`: the user signs in another way, with a password for example.
+- **A recovery code counts after any sign-in**, under the method `twofactor.MethodRecoveryCode`. It works once, typed in any case and with or without its dash.
+- **A TOTP code works once.** A code that signed in, or confirmed the method, is refused when it comes again.
+- **Failures count per user**, whichever pending session they come from. After `MaxFailures` in a row, only a recovery code passes: the other methods get `403` with `two_factor_locked`, and `Challenge` reports `Locked`. A recovery code that passes lifts the lock. The user should then change their password, which someone else knows.
+- **The session records both factors** in `Session.Factors`, such as `password` and `totp`.
+
+An admin turns every method of a user off with `Reset`, for a user who lost every method and every recovery code. It requires `twofactor.PermissionReset` (`user:reset_two_factor`), which only a system caller holds.
+
 ## Call the flows from code
 
 Each flow acts on the caller's own account, which it reads from `ctx`. The setup flows need a fresh session: a session signed in within `SessionConfig.FreshAge`, 15 minutes by default.
@@ -83,14 +103,24 @@ enrollment, err := second.Enroll(ctx, twofactor.EnrollRequest{Method: twofactor.
 confirmed, err := second.Confirm(ctx, twofactor.ConfirmRequest{Method: twofactor.MethodTOTP, Code: code})
 // confirmed.First, confirmed.RecoveryCodes (with the first method only)
 
-status, err := second.Status(ctx) // status.Methods, status.RecoveryCodesLeft
+status, err := second.Status(ctx) // status.Methods, status.RecoveryCodesLeft, status.Locked
 codes, err := second.RegenerateRecoveryCodes(ctx)
 result, err := second.Disable(ctx, twofactor.DisableRequest{Method: twofactor.MethodTOTP}) // result.Off
+
+// With the pending session as the caller:
+challenge, err := second.Challenge(ctx) // challenge.Methods, challenge.Locked
+sent, err := second.SendCode(ctx, twofactor.SendCodeRequest{Method: twofactor.MethodEmail})
+signIn, err := second.Verify(ctx, twofactor.VerifyRequest{Method: twofactor.MethodTOTP, Code: code})
+
+admin := identity.WithCaller(ctx, identity.System("support-tool"))
+reset, err := second.Reset(admin, twofactor.ResetRequest{UserID: userID})
 ```
 
 The flows behave as follows:
 
-- `Status` requires `twofactor.PermissionRead` (`two_factor:read`). The other flows require `twofactor.PermissionManage` (`two_factor:manage`) and a fresh session; an older one gets `401` with `session_not_fresh`, and the user signs in again. A signed-in user holds both permissions.
+- `Status` requires `twofactor.PermissionRead` (`two_factor:read`). The setup flows require `twofactor.PermissionManage` (`two_factor:manage`) and a fresh session; an older one gets `401` with `session_not_fresh`, and the user signs in again. A signed-in user holds both permissions.
+- `Challenge`, `SendCode`, and `Verify` take the pending session from the caller: the caller of a call that presented its token. A caller without one gets its session error, such as `session_missing`, and one with an active session `409` with `two_factor_not_pending`.
+- `Verify` returns the raw session token in its result, and delivers nothing.
 - A system caller that acts for a user (`identity.System("support-tool").For(userID)`) passes without a session.
 - Before `Boot`, the flows return a configuration error.
 
@@ -98,8 +128,11 @@ The flows behave as follows:
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_two_factor_code` | `401` | `Confirm` with a code that is wrong, expired, used, out of attempts, or without a setup in progress |
-| `two_factor_method_unavailable` | `403` | a method `Options.Methods` does not offer |
+| `invalid_two_factor_code` | `401` | a code that is wrong, expired, used, out of attempts, or sent for another sign-in; a recovery code that is not one; `Confirm` without a setup in progress |
+| `two_factor_method_unavailable` | `403` | a method `Options.Methods` does not offer, the user has not turned on, or this sign-in may not use |
+| `two_factor_locked` | `403` | a method other than a recovery code after `MaxFailures` failures in a row |
+| `two_factor_same_channel` | `403` | a sign-in whose user has no method that counts after it, and no recovery code left. The sign-in route returns it. |
+| `two_factor_not_pending` | `409` | `Challenge`, `SendCode`, or `Verify` with an active session |
 | `two_factor_not_enabled` | `409` | `Disable` of a method that is not on, `RegenerateRecoveryCodes` without a method |
 | `method_invalid_input` | `400` | a name that is not a method |
 | `phone_number_invalid_input` | `400` | a number that is not in E.164 form |
@@ -111,16 +144,21 @@ The flows behave as follows:
 | `auth.twoFactor.beforeEnable` (`twofactor.HookEnableBefore`) | before | `userID`, `method`. Veto only. |
 | `auth.twoFactor.afterEnable` (`twofactor.HookEnableAfter`) | after | a `*twofactor.EnableResult`. No secret and no recovery code. |
 | `auth.twoFactor.enableFailed` (`twofactor.HookEnableFailed`) | failed | codes `invalid_code`, `rejected_by_hook` |
-| `auth.twoFactor.beforeDisable` (`twofactor.HookDisableBefore`) | before | `userID`, `method`, `reason`. Veto only. |
+| `auth.twoFactor.beforeDisable` (`twofactor.HookDisableBefore`) | before | `userID`, `method`, `reason` (`user_disabled`, or `admin_reset` with no method). Veto only. |
 | `auth.twoFactor.afterDisable` (`twofactor.HookDisableAfter`) | after | a `*twofactor.DisableResult` |
 | `auth.twoFactor.disableFailed` (`twofactor.HookDisableFailed`) | failed | codes `not_enabled`, `rejected_by_hook` |
-| `auth.twoFactor.beforeSend` (`twofactor.HookSendBefore`) | before | `userID`, `method`, `purpose` (`setup`). Veto only. |
+| `auth.twoFactor.beforeSend` (`twofactor.HookSendBefore`) | before | `userID`, `method`, `purpose` (`setup` or `sign_in`). Veto only. |
 | `auth.twoFactor.afterSend` (`twofactor.HookSendAfter`) | after | a `*twofactor.SendResult`. Not the code. |
-| `auth.twoFactor.sendFailed` (`twofactor.HookSendFailed`) | failed | codes `send_failed`, `rejected_by_hook` |
+| `auth.twoFactor.sendFailed` (`twofactor.HookSendFailed`) | failed | codes `method_unavailable`, `locked`, `send_failed`, `rejected_by_hook` |
 | `auth.twoFactor.beforeRegenerate` (`twofactor.HookRegenerateBefore`) | before | `userID`. Veto only. |
 | `auth.twoFactor.afterRegenerate` (`twofactor.HookRegenerateAfter`) | after | a `*twofactor.RegenerateResult`: the number of codes, not the codes |
+| `auth.twoFactor.beforeVerify` (`twofactor.HookVerifyBefore`) | before | `userID`, `method`, `sessionID`. Veto only. |
+| `auth.twoFactor.afterVerify` (`twofactor.HookVerifyAfter`) | after | the `*core.SignInResult` of the finished sign-in |
+| `auth.twoFactor.verifyFailed` (`twofactor.HookVerifyFailed`) | failed | codes `invalid_code`, `method_unavailable`, `locked`, `rejected_by_hook` |
 
 The after and failed points are audited. Every flow publishes the user under `hooks.HookValueUserID` in `Values`, for rate-limit rules.
+
+A sign-in that waits for a second factor fires `auth.signIn.after` once its first factor passes, with a pending session in the result. The finished sign-in is `auth.twoFactor.afterVerify`. A handler that acts on finished sign-ins checks `Session.State`, or listens on that point.
 
 ## Rate limits
 
@@ -129,6 +167,10 @@ The after and failed points are audited. Every flow publishes the user under `ho
 | `twofactor.RuleSendUser` | codes sent per user, for every purpose | `SendLimit`, 3 per 15 minutes |
 | `twofactor.RuleSendAddress` | codes sent per client address | 10 a minute |
 | `twofactor.RuleEnableAddress` | confirmations per client address | 10 a minute |
+| `twofactor.RuleVerifyUser` | second factors tried per user, across sign-ins | `VerifyLimit`, 5 per 15 minutes |
+| `twofactor.RuleVerifyAddress` | second factors tried per client address | 10 a minute |
+
+The rules per user count across sessions: whoever knows a user's password can open a new pending session at any time. Guessing is bounded twice: by `VerifyLimit` over time, and by `MaxFailures` in all.
 
 The rules are on the flows' before points, so they hold for the flows called from your own code. Change a limit, or turn a rule off, by its name with `RateLimitConfig`; see [Hooks](hooks.md#change-a-rule-by-its-name).
 
@@ -136,6 +178,8 @@ The rules are on the flows' before points, so they hold for the flows called fro
 
 The plugin has these limits:
 
-- A sign-in does not ask for the second factor yet.
 - The plugin mounts no routes yet.
-- A recovery code can't be used yet. Keep the set: it is what a user will sign in with when no method is at hand.
+- TOTP and sent codes can be phished by a site that relays them in real time. A passkey would not be, and no plugin offers one yet.
+- A request that still carries the pending token when the second factor passes finds no session. Under the cookie deliveries its answer can remove the new cookie, so send the second factor once the other requests have returned.
+- One sign-in code per user and channel is live: two sign-ins of one user replace each other's codes.
+- The lock does not end by itself.
