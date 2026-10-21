@@ -14,7 +14,7 @@ The code lives in:
 - `telemetry/metrics.go`: the metrics interface and catalog, described in `metrics.md`
 - `telemetry/tracer.go`: the tracer interface and span names, described in `tracing.md`
 - `telemetry/telemetrytest/`: in-memory sinks for tests
-- `core/router.go`: `withRequestScope`, which assigns the request ID
+- `httpapi/router.go`: `withRequestScope`, which assigns the request ID
 
 ## Place among other packages
 

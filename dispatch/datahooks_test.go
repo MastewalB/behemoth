@@ -3,7 +3,6 @@ package dispatch
 import (
 	"context"
 	"errors"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/MastewalB/behemoth"
@@ -93,33 +92,27 @@ func TestDataHooksUpdatePublishesTheID(t *testing.T) {
 	}
 }
 
-// A write made while handling a request dispatches with that request, and
-// its own chain-scoped Values; one made outside a request has none.
-func TestDataHooksCarryTheRequest(t *testing.T) {
+// A write dispatches with the write's context, so a handler finds what the
+// context carries, such as the request being handled (httpapi.RequestFrom),
+// and with the AuthContext and Values of its own.
+func TestDataHooksCarryTheContext(t *testing.T) {
 	d := &recordingDispatcher{}
 	h := dataHooks{ac: &core.AuthContext{Dispatcher: d}, points: coreDataHookPoints}
 
-	rc := &core.RequestContext{Request: httptest.NewRequest("POST", "/sign-up", nil), Values: behemoth.M{"request-only": true}}
-	ctx := core.ContextWithRequest(context.Background(), rc)
+	type requestKey struct{}
+	ctx := context.WithValue(context.Background(), requestKey{}, "the request")
 	if _, err := h.BeforeCreate(ctx, nil, "users", behemoth.M{}); err != nil {
 		t.Fatal(err)
 	}
 	got := d.before[0]
-	if core.RequestFrom(got.Ctx) != rc {
-		t.Error("the request was not carried into the data hook")
+	if got.Ctx.Value(requestKey{}) != "the request" {
+		t.Error("the write's context was not carried into the data hook")
 	}
-	if _, leaked := got.Values["request-only"]; leaked {
-		t.Error("request Values leaked into the data hook's chain")
+	if got.Values == nil {
+		t.Error("the data hook has no Values")
 	}
 	if got.Auth == nil {
 		t.Error("the data hook has no AuthContext")
-	}
-
-	if _, err := h.BeforeCreate(context.Background(), nil, "users", behemoth.M{}); err != nil {
-		t.Fatal(err)
-	}
-	if core.RequestFrom(d.before[1].Ctx) != nil {
-		t.Error("a write outside any request must not have one")
 	}
 }
 

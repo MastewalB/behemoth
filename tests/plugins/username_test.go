@@ -17,6 +17,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/username"
@@ -63,7 +64,7 @@ func bootUsernames(t *testing.T, opts username.Options, hookFn func(reg core.Hoo
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Router: core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router: httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		HTTP:   app.routes,
 		Hooks:  hookFn,
 	})
@@ -430,12 +431,12 @@ func TestUsernameSignInsCanBeLimitedPerUsername(t *testing.T) {
 // attempts per username.
 type perUsernameLimit struct{}
 
-func (perUsernameLimit) Meta() core.PluginMeta            { return core.PluginMeta{Name: "per-username"} }
-func (perUsernameLimit) Version() string                  { return "0.0.0" }
-func (perUsernameLimit) Init(*core.AuthContext) error     { return nil }
-func (perUsernameLimit) Routes() []core.Route             { return nil }
-func (perUsernameLimit) Middlewares() []core.Middleware   { return nil }
-func (perUsernameLimit) Register(core.HookRegistry) error { return nil }
+func (perUsernameLimit) Meta() core.PluginMeta             { return core.PluginMeta{Name: "per-username"} }
+func (perUsernameLimit) Version() string                   { return "0.0.0" }
+func (perUsernameLimit) Init(*core.AuthContext) error      { return nil }
+func (perUsernameLimit) Routes() []httpapi.Route           { return nil }
+func (perUsernameLimit) Middlewares() []httpapi.Middleware { return nil }
+func (perUsernameLimit) Register(core.HookRegistry) error  { return nil }
 func (perUsernameLimit) Declare(ic *core.PluginInitContext) error {
 	return ic.RateLimits.DeclareHookRateLimitRule(core.HookRateLimitRule{
 		Name: "per-username.signin", Point: hooks.HookSignInBefore,

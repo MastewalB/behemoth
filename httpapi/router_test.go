@@ -1,4 +1,4 @@
-package core
+package httpapi
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
@@ -69,7 +70,7 @@ func TestRouterMountConflicts(t *testing.T) {
 }
 
 func TestRouterBuildPipeline(t *testing.T) {
-	auth := &AuthContext{}
+	auth := &core.AuthContext{}
 	var order []string
 	trace := func(name string) Middleware {
 		return func(next HandlerFunc) HandlerFunc {
@@ -148,20 +149,12 @@ func TestRouterGlobalMiddlewareErrorIsMapped(t *testing.T) {
 	}
 }
 
-type fixedRuleCatalog struct{ routes []RouteRateLimitRule }
-
-func (c fixedRuleCatalog) DeclareHookRateLimitRule(HookRateLimitRule) error   { return nil }
-func (c fixedRuleCatalog) RulesForHook(HookPoint) []HookRateLimitRule         { return nil }
-func (c fixedRuleCatalog) DeclareRouteRateLimitRule(RouteRateLimitRule) error { return nil }
-func (c fixedRuleCatalog) RulesForRoute() []RouteRateLimitRule                { return c.routes }
-func (c fixedRuleCatalog) DeclareRule(RateLimitRule) error                    { return nil }
-func (c fixedRuleCatalog) Rule(string) (RateLimitRule, bool)                  { return RateLimitRule{}, false }
-func (c fixedRuleCatalog) HasRule(string) bool                                { return false }
-
 // rejectingLimiter rejects every request and reports which rule fired.
 type rejectingLimiter struct{}
 
-func (rejectingLimiter) CheckHookLimit(context.Context, HookPoint, *HookContext) error { return nil }
+func (rejectingLimiter) CheckHookLimit(context.Context, core.HookPoint, *core.HookContext) error {
+	return nil
+}
 func (rejectingLimiter) CheckRule(_ context.Context, name, _, _ string) error {
 	return errs.NewRateLimited("test", name, time.Second)
 }
@@ -186,12 +179,12 @@ func TestApplyRateLimitingMatchesRelativeAndAbsolutePaths(t *testing.T) {
 	rule := func(name, method, path string) RouteRateLimitRule {
 		return RouteRateLimitRule{Name: name, Method: method, Path: path, KeyFunc: func(*http.Request, string) string { return "" }}
 	}
-	r.ApplyRateLimiting(rejectingLimiter{}, fixedRuleCatalog{routes: []RouteRateLimitRule{
+	r.ApplyRateLimiting(rejectingLimiter{}, []RouteRateLimitRule{
 		rule("signin", http.MethodPost, "/sign-in/email"),            // relative to BasePath, no MountPath
 		rule("audit", http.MethodGet, "/audit/status"),               // relative to BasePath, includes MountPath
 		rule("jwks", http.MethodGet, "/.well-known/jwks.json"),       // absolute route: its full path
 		rule("full-path", http.MethodGet, "/custom/base/audit/open"), // full paths never match mounted routes
-	}}, &ClientIPConfig{})
+	}, &ClientIPConfig{})
 
 	d := &recordingDriver{}
 	if err := r.Build(d); err != nil {
@@ -280,7 +273,7 @@ func TestRouterRequestID(t *testing.T) {
 // taxonomy fields; a rejection is logged at Debug only.
 func TestRouterLogsFailures(t *testing.T) {
 	tel, rec := telemetrytest.New()
-	r := NewRouter(RouterConfig{}, &AuthContext{Telemetry: tel})
+	r := NewRouter(RouterConfig{}, &core.AuthContext{Telemetry: tel})
 	err := r.Mount("test", "", []Route{
 		{Method: http.MethodGet, Path: "/users/{id}", Handler: func(*RequestContext) error {
 			return errs.NewDatabaseError("Store.FindUser", errors.New("connection refused"))
@@ -342,7 +335,7 @@ func TestRouterLogsFailures(t *testing.T) {
 // status the client got, whether the handler answered or returned an error.
 func TestRouterMetrics(t *testing.T) {
 	tel, rec := telemetrytest.New()
-	r := NewRouter(RouterConfig{}, &AuthContext{Telemetry: tel})
+	r := NewRouter(RouterConfig{}, &core.AuthContext{Telemetry: tel})
 	err := r.Mount("test", "", []Route{
 		{Method: http.MethodGet, Path: "/users/{id}", Handler: func(rctx *RequestContext) error {
 			return rctx.Response.JSON(http.StatusOK, map[string]string{})
@@ -390,7 +383,7 @@ func TestRouterMetrics(t *testing.T) {
 // its context nests under it. Only a server error fails the span.
 func TestRouterTracing(t *testing.T) {
 	tel, rec := telemetrytest.New()
-	r := NewRouter(RouterConfig{}, &AuthContext{Telemetry: tel})
+	r := NewRouter(RouterConfig{}, &core.AuthContext{Telemetry: tel})
 	err := r.Mount("test", "", []Route{
 		{Method: http.MethodGet, Path: "/ok", Handler: func(rctx *RequestContext) error {
 			_, span := tel.StartSpan(rctx.Ctx, "inner", nil)

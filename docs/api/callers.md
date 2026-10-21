@@ -24,7 +24,7 @@ A context without a caller holds the zero `Caller`: anonymous, with nothing know
 In a route handler, read the caller from the request's context:
 
 ```go
-func me(rctx *core.RequestContext) error {
+func me(rctx *httpapi.RequestContext) error {
 	session, ok := identity.CallerFrom(rctx.Ctx).Session()
 	if !ok {
 		return errs.NewSessionError("me", errs.CodeSessionMissing, nil)
@@ -33,7 +33,7 @@ func me(rctx *core.RequestContext) error {
 }
 ```
 
-A route that needs a signed-in user can put `core.RequireSession()` in front of the handler instead; see [Sessions](sessions.md#protect-your-own-routes).
+A route that needs a signed-in user can put `httpapi.RequireSession()` in front of the handler instead; see [Sessions](sessions.md#protect-your-own-routes).
 
 In a hook handler, `hctx.Caller()` returns the caller of the operation that fired the point. It is the same value as `identity.CallerFrom(hctx.Ctx)`.
 

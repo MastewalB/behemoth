@@ -62,7 +62,7 @@ The plugins planned next act on the signed-in user's own account: a second facto
 
 - Roles, an admin plugin, and the application's own authorization.
 - API keys, client credentials, and Behemoth as an OAuth provider. The model leaves room for each of them, and this plan builds none.
-- Moving each plugin's handlers into a package of its own. "`Plugin` requires HTTP routes, and the request pipeline lives in the router" tracks it.
+- Moving each plugin's handlers into a package of its own. "The request pipeline lives in the HTTP router, and a plugin's handlers share its package" tracks it.
 
 ## The caller
 
@@ -193,7 +193,7 @@ The transport follows these rules:
 
 These parts of the session API change:
 
-- **The token carrier.** The four HTTP methods of `SessionManager` (`WriteToken`, `ExtractToken`, `ClearToken`, and `ExtendToken`) move to a token carrier that the HTTP layer owns. `SessionManager` keeps the lifecycle, which takes a context. Built as `core.TokenCarrier`, with `Write`, `Extract`, `Clear`, and `Extend`. Its settings, the delivery and the cookie's attributes, moved from `SessionConfig` to `RouterConfig.Carrier`. `TokenTransport` is `TokenDelivery`, because a transport here means HTTP or another protocol. See [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
+- **The token carrier.** The four HTTP methods of `SessionManager` (`WriteToken`, `ExtractToken`, `ClearToken`, and `ExtendToken`) move to a token carrier that the HTTP layer owns. `SessionManager` keeps the lifecycle, which takes a context. Built as `httpapi.TokenCarrier`, with `Write`, `Extract`, `Clear`, and `Extend`. Its settings, the delivery and the cookie's attributes, moved from `SessionConfig` to `RouterConfig.Carrier`. `TokenTransport` is `TokenDelivery`, because a transport here means HTTP or another protocol. See [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
 - **The middleware.** `RequireSession`, `RequireFreshSession`, and the phone number plugin's `optionalSession` become thin wrappers over the caller. `RequireSession` and `RequireFreshSession` stay public, because applications protect their own routes with them. They require a caller that was authenticated with a session, and take no permission, since an application's own routes declare none.
 - **The session in `Values`.** `RequestContext.Values["session"]` and `Values["sessionID"]` go. A handler reads `CallerFrom(rctx.Ctx).Session()`. `docs/api/sessions.md` shows the old keys and changes with them.
 - **`HookContext.Request`.** It stays for handlers that want HTTP details. The session manager, the audit log, and rate-limit rules stop reading it. It becomes an accessor in the HTTP package when the HTTP types leave `core`.
@@ -403,5 +403,5 @@ These entries affect the plan:
 
 - **"Audit events record the IP address whatever the session setting says".** Resolved with step 4: audit events have a setting of their own, `BootConfig.Audit.OmitIPAndAgent`, and keep recording the address by default.
 - **"No route answers with the caller's session, and sign-out belongs to one plugin".** A session route in core reads the caller.
-- **"`Plugin` requires HTTP routes, and the request pipeline lives in the router".** The HTTP types leave `core` after step 6, as part 2 of [`package_layout.md`](package_layout.md).
+- **"The request pipeline lives in the HTTP router, and a plugin's handlers share its package".** The HTTP types leave `core` after step 6, as part 2 of [`package_layout.md`](package_layout.md).
 - **"Some flows take loose arguments instead of a request type".** `SignOut` takes its session from the caller.

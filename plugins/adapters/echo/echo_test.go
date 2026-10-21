@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/labstack/echo/v5"
 )
 
@@ -13,7 +13,7 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 	e := echo.New()
 	e.GET("/api/auth/taken", func(c *echo.Context) error { return c.NoContent(http.StatusTeapot) })
 
-	echoParam := core.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *core.RequestContext) error {
+	echoParam := httpapi.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *httpapi.RequestContext) error {
 		return rctx.Response.JSON(http.StatusOK, map[string]string{"id": rctx.Param("id")})
 	}}
 	if err := New(e).Mount(echoParam); err != nil {
@@ -26,7 +26,7 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 		t.Errorf("got %d %s, want 200 {\"id\":\"42\"}", w.Code, w.Body.String())
 	}
 
-	conflict := core.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: func(*core.RequestContext) error { return nil }}
+	conflict := httpapi.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: func(*httpapi.RequestContext) error { return nil }}
 	if err := New(e).Mount(conflict); err == nil {
 		t.Error("expected an error for a route the server already has")
 	}
@@ -34,7 +34,7 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 
 func TestHandlerFailureIsInternalServerError(t *testing.T) {
 	e := echo.New()
-	failing := core.Route{Method: http.MethodGet, Path: "/api/auth/fail", Handler: func(*core.RequestContext) error {
+	failing := httpapi.Route{Method: http.MethodGet, Path: "/api/auth/fail", Handler: func(*httpapi.RequestContext) error {
 		return http.ErrHandlerTimeout // routes arrive mapped; a returned error means the response could not be built
 	}}
 	if err := New(e).Mount(failing); err != nil {

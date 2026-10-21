@@ -12,6 +12,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -312,8 +313,8 @@ func (p *Plugin) initChange(ac *core.AuthContext) error {
 // changeRoutes returns the flow's routes. A request needs a fresh session:
 // a stolen session that is hours old can't start a change. The other two
 // are opened from a mailbox, by whoever holds the link, and need none.
-func (p *Plugin) changeRoutes() []core.Route {
-	return []core.Route{
+func (p *Plugin) changeRoutes() []httpapi.Route {
+	return []httpapi.Route{
 		// No session middleware: RequestChange requires a fresh caller itself.
 		{Method: http.MethodPost, Path: PathChange, Handler: p.handleChange},
 		{Method: http.MethodPost, Path: PathChangeConfirm, Handler: p.handleChangeConfirm},
@@ -711,7 +712,7 @@ func (p *Plugin) changeRevertBody(hctx *core.HookContext, in changeTokenInput) (
 // user from the caller and requires a fresh session. It answers a request for an address that is taken like one that was sent
 // its links, so a signed-in user can't use it to learn which addresses have
 // an account.
-func (p *Plugin) handleChange(rctx *core.RequestContext) error {
+func (p *Plugin) handleChange(rctx *httpapi.RequestContext) error {
 	const op = "emailverification.RequestChange"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
@@ -728,7 +729,7 @@ func (p *Plugin) handleChange(rctx *core.RequestContext) error {
 }
 
 // changeToken reads the token from the body of a confirm or revert request.
-func changeToken(rctx *core.RequestContext, op string) (string, error) {
+func changeToken(rctx *httpapi.RequestContext, op string) (string, error) {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return "", errs.NewValidationError(op, "request", err)
@@ -740,7 +741,7 @@ func changeToken(rctx *core.RequestContext, op string) (string, error) {
 	return rawToken, nil
 }
 
-func (p *Plugin) handleChangeConfirm(rctx *core.RequestContext) error {
+func (p *Plugin) handleChangeConfirm(rctx *httpapi.RequestContext) error {
 	rawToken, err := changeToken(rctx, "emailverification.ConfirmChange")
 	if err != nil {
 		return err
@@ -753,12 +754,12 @@ func (p *Plugin) handleChangeConfirm(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{core.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
+	return rctx.Response.JSON(http.StatusOK, behemoth.M{httpapi.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
 }
 
 // handleChangeRevert answers without the user: the caller holds a link from
 // a mailbox and no session, and every session has just ended.
-func (p *Plugin) handleChangeRevert(rctx *core.RequestContext) error {
+func (p *Plugin) handleChangeRevert(rctx *httpapi.RequestContext) error {
 	rawToken, err := changeToken(rctx, "emailverification.RevertChange")
 	if err != nil {
 		return err

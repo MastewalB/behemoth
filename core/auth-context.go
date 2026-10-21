@@ -40,7 +40,7 @@ type AuthContext struct {
 	SessionTokens SessionTokens
 	Dispatcher    Dispatcher
 	RateLimiter   RateLimiter
-	// Origins answers whether an origin is one of RouterConfig.TrustedOrigins.
+	// Origins answers whether an origin is one of httpapi.RouterConfig.TrustedOrigins.
 	// A plugin that takes a redirect URL from a request checks it with
 	// TrustedRedirect(Origins, url) before it stores or returns it. Never
 	// nil on an AuthContext Boot returns; with no origins configured it

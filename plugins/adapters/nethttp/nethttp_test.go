@@ -5,16 +5,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/httpapi"
 )
 
-func ok(*core.RequestContext) error { return nil }
+func ok(*httpapi.RequestContext) error { return nil }
 
 func TestMountServesAndReportsConflicts(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/auth/taken", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
 
-	echoParam := core.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *core.RequestContext) error {
+	echoParam := httpapi.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: func(rctx *httpapi.RequestContext) error {
 		return rctx.Response.JSON(http.StatusOK, map[string]string{"id": rctx.Param("id")})
 	}}
 	if err := New(mux).Mount(echoParam); err != nil {
@@ -27,7 +27,7 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 		t.Errorf("got %d %s, want 200 {\"id\":\"42\"}", w.Code, w.Body.String())
 	}
 
-	conflict := core.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: ok}
+	conflict := httpapi.Route{Method: http.MethodGet, Path: "/api/auth/taken", Handler: ok}
 	if err := New(mux).Mount(conflict); err == nil {
 		t.Error("expected an error for a route the mux already has")
 	}
@@ -41,8 +41,8 @@ func TestMountServesAndReportsConflicts(t *testing.T) {
 
 func TestMountRejectsDuplicatesWithinOneCall(t *testing.T) {
 	err := New(http.NewServeMux()).Mount(
-		core.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
-		core.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
+		httpapi.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
+		httpapi.Route{Method: http.MethodPost, Path: "/api/auth/x", Handler: ok},
 	)
 	if err == nil {
 		t.Error("expected an error for the same route twice")
@@ -54,14 +54,14 @@ func TestMountRejectsDuplicatesWithinOneCall(t *testing.T) {
 func TestMountConflictsWithDifferentlyNamedParam(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/auth/users/{name}", func(http.ResponseWriter, *http.Request) {})
-	err := New(mux).Mount(core.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: ok})
+	err := New(mux).Mount(httpapi.Route{Method: http.MethodGet, Path: "/api/auth/users/{id}", Handler: ok})
 	if err == nil {
 		t.Error("expected a conflict with the same pattern under another parameter name")
 	}
 }
 
 func TestInvalidRouteIsErrorNotPanic(t *testing.T) {
-	for name, rt := range map[string]core.Route{
+	for name, rt := range map[string]httpapi.Route{
 		"no leading slash": {Method: http.MethodGet, Path: "no-leading-slash", Handler: ok},
 		"no method":        {Path: "/api/auth/x", Handler: ok},
 	} {
@@ -73,7 +73,7 @@ func TestInvalidRouteIsErrorNotPanic(t *testing.T) {
 
 func TestHandlerFailureIsInternalServerError(t *testing.T) {
 	mux := http.NewServeMux()
-	if err := New(mux).Mount(core.Route{Method: http.MethodGet, Path: "/api/auth/fail", Handler: func(*core.RequestContext) error {
+	if err := New(mux).Mount(httpapi.Route{Method: http.MethodGet, Path: "/api/auth/fail", Handler: func(*httpapi.RequestContext) error {
 		return http.ErrHandlerTimeout // routes arrive mapped; a returned error means the response could not be built
 	}}); err != nil {
 		t.Fatal(err)
@@ -90,8 +90,8 @@ func TestHandlerFailureIsInternalServerError(t *testing.T) {
 func TestTrailingSlashMatchesOnePath(t *testing.T) {
 	mux := http.NewServeMux()
 	err := New(mux).Mount(
-		core.Route{Method: http.MethodGet, Path: "/", Handler: ok},
-		core.Route{Method: http.MethodGet, Path: "/api/auth/", Handler: ok},
+		httpapi.Route{Method: http.MethodGet, Path: "/", Handler: ok},
+		httpapi.Route{Method: http.MethodGet, Path: "/api/auth/", Handler: ok},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestMountConflictsWithMethodlessPattern(t *testing.T) {
 	} {
 		mux := http.NewServeMux()
 		mux.HandleFunc(tc.pattern, teapot)
-		if err := New(mux).Mount(core.Route{Method: http.MethodPost, Path: tc.path, Handler: ok}); err == nil {
+		if err := New(mux).Mount(httpapi.Route{Method: http.MethodPost, Path: tc.path, Handler: ok}); err == nil {
 			t.Errorf("POST %s on a mux with %q: expected an error", tc.path, tc.pattern)
 		}
 		// The application's handler still answers the method the route asked for.
@@ -151,7 +151,7 @@ func TestMountLeavesCatchAllsAndNamedMethodsAlone(t *testing.T) {
 	} {
 		mux := http.NewServeMux()
 		mux.HandleFunc(pattern, teapot)
-		err := New(mux).Mount(core.Route{Method: http.MethodPost, Path: "/api/auth/any", Handler: func(rctx *core.RequestContext) error {
+		err := New(mux).Mount(httpapi.Route{Method: http.MethodPost, Path: "/api/auth/any", Handler: func(rctx *httpapi.RequestContext) error {
 			rctx.Response.Status(http.StatusNoContent)
 			return nil
 		}})
@@ -173,7 +173,7 @@ func TestMountLeavesCatchAllsAndNamedMethodsAlone(t *testing.T) {
 func TestPatternWithAHostIsNotSeen(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("auth.example.com/api/auth/any", teapot)
-	if err := New(mux).Mount(core.Route{Method: http.MethodPost, Path: "/api/auth/any", Handler: ok}); err != nil {
+	if err := New(mux).Mount(httpapi.Route{Method: http.MethodPost, Path: "/api/auth/any", Handler: ok}); err != nil {
 		t.Fatal(err)
 	}
 	for host, want := range map[string]int{

@@ -1,4 +1,4 @@
-package core
+package httpapi
 
 import (
 	"net/http"
@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 )
 
@@ -23,7 +24,7 @@ func TestNewOriginCheckRefusesABadBaseURL(t *testing.T) {
 }
 
 func TestOriginCheck(t *testing.T) {
-	trusted, err := NewTrustedOrigins([]string{"https://app.example.com"})
+	trusted, err := core.NewTrustedOrigins([]string{"https://app.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}

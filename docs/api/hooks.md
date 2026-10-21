@@ -166,7 +166,7 @@ Things to know:
 - Some operations start with entries of their own, such as the email of a sign-in. [What a rule can key on](#what-a-rule-can-key-on) lists them. Don't overwrite them.
 - Prefix your keys with your plugin's name. All handlers of an operation share the map, and nested operations inherit it.
 - A value that the operation itself should act on goes in the payload, not in `Values`. The code that fires the point never reads `Values` back.
-- The `Values` of the HTTP request, `core.RequestFrom(hctx.Ctx).Values`, last for the whole request and exist only when there is one. `core.RequestFrom` returns nil outside a request, so check for nil before using it.
+- The `Values` of the HTTP request, `httpapi.RequestFrom(hctx.Ctx).Values`, last for the whole request and exist only when there is one. `httpapi.RequestFrom` returns nil outside a request, so check for nil before using it.
 - The outer values reach a nested operation through the `context.Context`. Code that calls the store or a manager with a new context (`context.Background()`) instead of the one it was given cuts the link, and the nested handlers see an empty map.
 
 ## Register handlers
@@ -473,6 +473,25 @@ A hook rate-limit rule works as follows:
 
 A route rule limits an HTTP path. A hook rule limits the operation, whoever calls it: "5 invite tokens a minute per team" on `token.beforeIssue` holds for a route, a CLI command and a background job alike.
 
+### Limit a path
+
+A route that fires no hook point, such as a check that a username is free, is limited by a route rule. The plugin returns its route rules from `RouteRateLimitRules`, the method of `httpapi.RouteRulesPlugin`, and `Prepare` declares them under the plugin's name:
+
+```go
+func (p *Plugin) RouteRateLimitRules() []httpapi.RouteRateLimitRule {
+	return []httpapi.RouteRateLimitRule{{
+		Name: "myplugin.lookup.route", Method: http.MethodPost, Path: "/myplugin/lookup",
+		KeyFunc: func(_ *http.Request, ip string) string { return ip },
+		Limit:   core.Limit{Max: 30, Window: time.Minute},
+	}}
+}
+```
+
+- **`Path` is relative to `RouterConfig.BasePath`** and includes the plugin's `MountPath`. A segment `*` matches one segment, and a last segment `**` any number.
+- **Of the rules that match a route, the most specific applies**, where every hook rule of a point applies. A rule declared with `Disabled` exempts its paths from a broader rule.
+- **`KeyFunc` gets the request and the client's address**, resolved with `RouterConfig.TrustedProxies`.
+- **The rule holds for the route only.** An operation with a before point gets a hook rule instead.
+
 ### What a rule can key on
 
 These operations put what they were called with in `hctx.Values` before the first handler and the rate limit run:
@@ -597,8 +616,7 @@ Fire it through the dispatcher on the `AuthContext`:
 
 ```go
 ctx = core.BeginOperation(ctx) // once per call, before the first dispatch
-hctx := &core.HookContext{Ctx: ctx, Auth: ac,
-	Values: core.HookValuesFrom(ctx), Request: core.RequestFrom(ctx)}
+hctx := &core.HookContext{Ctx: ctx, Auth: ac, Values: core.HookValuesFrom(ctx)}
 if err := ac.Dispatcher.RunAfter(hctx, HookInviteAccepted, invite); err != nil {
 	return err // the point is not declared, or not as an after point
 }

@@ -1,7 +1,7 @@
 // Package auth implements Behemoth's credential services: the session manager,
 // the token and code managers with the token catalog, session tokens for
-// other services, and the key set route those tokens are checked against.
-// The contracts it implements are in package core.
+// other services, the authenticator, and Access. The contracts it implements
+// are in package core, and their HTTP routes in package httpapi.
 package auth
 
 import (

@@ -15,7 +15,7 @@ The code lives in:
 - `plugins/oauth/protocol.go`: what the built-in providers share: the HTTP client, the code exchange, client authentication
 - `plugins/oauth/oidc.go`: the OpenID Connect provider: discovery, the key set, the ID token
 - `plugins/oauth/github.go`: the GitHub provider
-- `core/token_carrier.go`: `TokenCarrier.Config`, which the routes read through `RequestContext.TokenCarrier`
+- `httpapi/token_carrier.go`: `TokenCarrier.Config`, which the routes read through `RequestContext.TokenCarrier`
 - `store/seal.go`: `Store.Seal` and `Store.Open`, which `Begin` uses for the PKCE verifier
 
 ## What the plugin contributes
@@ -169,7 +169,7 @@ Both routes are JSON `POST`s, so the origin check and the refusal of form conten
 | Route | Flow | Answer |
 | --- | --- | --- |
 | `POST /sign-in/oauth` (`PathBegin`) | `Begin` | `{"authorization_url": ...}`, plus `binding` for a client without cookies, with `Cache-Control: no-store` |
-| `POST /oauth/complete` (`PathComplete`) | `Complete` | `core.WriteSignIn` with `redirect_url` as the extra key |
+| `POST /oauth/complete` (`PathComplete`) | `Complete` | `httpapi.WriteSignIn` with `redirect_url` as the extra key |
 
 Each flow is limited per client address on its before point, 10 a minute: `oauth.begin.address` for `Begin`, and core's `core.signin.address` for `Complete`.
 

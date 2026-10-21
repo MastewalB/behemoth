@@ -28,6 +28,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/schema"
@@ -371,10 +372,10 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 	return reg.OnBefore(hooks.HookUserBeforeUpdate, p.onUserUpdate, nil)
 }
 
-// Middlewares implements [core.Plugin]. The plugin has no middleware that
+// Middlewares implements [httpapi.Plugin]. The plugin has no middleware that
 // runs on every route. The session read its send and verify routes need is
 // attached to those two (see Routes).
-func (p *Plugin) Middlewares() []core.Middleware {
+func (p *Plugin) Middlewares() []httpapi.Middleware {
 	return nil
 }
 
@@ -408,19 +409,19 @@ func (p *Plugin) Init(ac *core.AuthContext) error {
 	return nil
 }
 
-// Routes implements [core.Plugin]. The send and verify flows read the
+// Routes implements [httpapi.Plugin]. The send and verify flows read the
 // caller: for a signed-in user they add a number, for a visitor they sign
 // in. The two reset routes are added only with Options.PasswordReset.
-func (p *Plugin) Routes() []core.Route {
-	routes := []core.Route{
+func (p *Plugin) Routes() []httpapi.Route {
+	routes := []httpapi.Route{
 		{Method: http.MethodPost, Path: PathSendOTP, Handler: p.handleSend},
 		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify},
 		{Method: http.MethodPost, Path: PathSignIn, Handler: p.handleSignIn},
 	}
 	if p.opts.PasswordReset {
 		routes = append(routes,
-			core.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
-			core.Route{Method: http.MethodPost, Path: PathReset, Handler: p.handleReset},
+			httpapi.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
+			httpapi.Route{Method: http.MethodPost, Path: PathReset, Handler: p.handleReset},
 		)
 	}
 	return routes
@@ -1162,7 +1163,7 @@ func (p *Plugin) SetPhoneNumber(ctx context.Context, userID, phoneNumber string)
 }
 
 // body decodes a request body as a map.
-func body(rctx *core.RequestContext, op string) (behemoth.M, error) {
+func body(rctx *httpapi.RequestContext, op string) (behemoth.M, error) {
 	var data behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&data); err != nil {
 		return nil, errs.NewValidationError(op, "request", err)
@@ -1186,7 +1187,7 @@ func metadataField(op string, data behemoth.M) (behemoth.M, error) {
 // says whether a code went out and why not, and none of it is passed on. A
 // validation error and a rate limit are the flow's errors and are reported,
 // since they do not depend on who holds the number.
-func (p *Plugin) handleSend(rctx *core.RequestContext) error {
+func (p *Plugin) handleSend(rctx *httpapi.RequestContext) error {
 	const op = "phonenumber.SendCode"
 	data, err := body(rctx, op)
 	if err != nil {
@@ -1207,9 +1208,9 @@ func (p *Plugin) handleSend(rctx *core.RequestContext) error {
 }
 
 // handleVerify answers with the user for a caller who added a number, and
-// the way every sign-in route does (core.WriteSignIn) for one who signed
+// the way every sign-in route does (httpapi.WriteSignIn) for one who signed
 // in.
-func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
+func (p *Plugin) handleVerify(rctx *httpapi.RequestContext) error {
 	const op = "phonenumber.Verify"
 	data, err := body(rctx, op)
 	if err != nil {
@@ -1228,18 +1229,18 @@ func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
 		return err
 	}
 	if result.SignIn != nil {
-		return core.WriteSignIn(rctx, result.SignIn, nil)
+		return httpapi.WriteSignIn(rctx, result.SignIn, nil)
 	}
 	view, err := rctx.Auth.Public.Of(result.User)
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{core.SignInUserKey: view})
+	return rctx.Response.JSON(http.StatusOK, behemoth.M{httpapi.SignInUserKey: view})
 }
 
 // handleSignIn decodes the body, calls SignIn and answers with
-// core.WriteSignIn. It returns the flow's error unchanged.
-func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
+// httpapi.WriteSignIn. It returns the flow's error unchanged.
+func (p *Plugin) handleSignIn(rctx *httpapi.RequestContext) error {
 	data, err := body(rctx, "phonenumber.SignIn")
 	if err != nil {
 		return err
@@ -1252,12 +1253,12 @@ func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return core.WriteSignIn(rctx, result, nil)
+	return httpapi.WriteSignIn(rctx, result, nil)
 }
 
 // handleResetRequest answers every well-formed request the same, like
 // handleSend.
-func (p *Plugin) handleResetRequest(rctx *core.RequestContext) error {
+func (p *Plugin) handleResetRequest(rctx *httpapi.RequestContext) error {
 	const op = "phonenumber.RequestPasswordReset"
 	data, err := body(rctx, op)
 	if err != nil {
@@ -1279,7 +1280,7 @@ func (p *Plugin) handleResetRequest(rctx *core.RequestContext) error {
 
 // handleReset returns ResetPassword's error unchanged. It delivers no
 // session token: a reset does not sign the user in.
-func (p *Plugin) handleReset(rctx *core.RequestContext) error {
+func (p *Plugin) handleReset(rctx *httpapi.RequestContext) error {
 	const op = "phonenumber.ResetPassword"
 	data, err := body(rctx, op)
 	if err != nil {
@@ -1303,4 +1304,4 @@ func (p *Plugin) handleReset(rctx *core.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "password_reset"})
 }
 
-var _ core.Plugin = (*Plugin)(nil)
+var _ httpapi.Plugin = (*Plugin)(nil)

@@ -6,7 +6,6 @@ package errs
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 )
 
@@ -182,21 +181,4 @@ func NewMigrationError(op, code string, original error) *DomainError {
 		InternalMessage: fmt.Sprintf("%s: %v", op, original),
 		Original:        original,
 	}
-}
-
-var categoryToStatus = map[Category]int{
-	CategoryValidation:       http.StatusBadRequest,
-	CategoryNotFound:         http.StatusNotFound,
-	CategoryDuplicateKey:     http.StatusConflict,
-	CategoryForeignKey:       http.StatusConflict,
-	CategoryConflict:         http.StatusConflict,
-	CategoryUnauthorized:     http.StatusUnauthorized,
-	CategoryForbidden:        http.StatusForbidden,
-	CategoryRateLimited:      http.StatusTooManyRequests,
-	CategoryUnsupportedMedia: http.StatusUnsupportedMediaType,
-	CategorySession:          http.StatusUnauthorized,
-	CategoryToken:            http.StatusUnauthorized,
-	CategoryTransaction:      http.StatusInternalServerError,
-	CategoryDatabase:         http.StatusInternalServerError,
-	CategoryUndefinedTable:   http.StatusInternalServerError,
 }

@@ -153,7 +153,7 @@ Every request to a Behemoth route has an ID. Behemoth takes it from, in order:
 The ID is returned in the same header of the response, including error responses, so a client can quote it in a bug report. Change the header with `RouterConfig.RequestIDHeader`:
 
 ```go
-Router: core.RouterConfig{RequestIDHeader: "X-Correlation-ID"},
+Router: httpapi.RouterConfig{RequestIDHeader: "X-Correlation-ID"},
 ```
 
 Read the ID in a route handler or a hook handler:
@@ -173,7 +173,7 @@ func (p *Plugin) Init(ac *core.AuthContext) error {
 	return nil
 }
 
-func (p *Plugin) accept(rctx *core.RequestContext) error {
+func (p *Plugin) accept(rctx *httpapi.RequestContext) error {
 	if err := p.redeem(rctx.Ctx, code); err != nil {
 		p.log.Warn(rctx.Ctx, "invite could not be redeemed", telemetry.ErrorFields(err))
 		return err

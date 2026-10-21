@@ -18,6 +18,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/phonenumber"
@@ -99,7 +100,7 @@ func bootPhones(t *testing.T, opts phonenumber.Options, hookFn func(reg core.Hoo
 		Crypto: crypto.Config{
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
-		Router: core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router: httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		SMS:    core.SMSConfig{Sender: app.sms},
 		HTTP:   app.routes,
 		Hooks:  hookFn,
@@ -628,7 +629,7 @@ func TestPhonePasswordReset(t *testing.T) {
 func TestPhoneNumberRoutes(t *testing.T) {
 	ctx := context.Background()
 	app := bootPhones(t, waited(phonenumber.Options{PasswordReset: true}), nil)
-	route := func(path string) core.Route {
+	route := func(path string) httpapi.Route {
 		r, ok := app.routes["/api/auth"+path]
 		require.True(t, ok, path)
 		return r

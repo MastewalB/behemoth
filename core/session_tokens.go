@@ -7,10 +7,6 @@ import (
 	"github.com/MastewalB/behemoth/models"
 )
 
-// PathSessionToken is the route that exchanges the caller's session for a
-// session token: POST, below the router's base path.
-const PathSessionToken = "/session/token"
-
 // Keys of the session token route's body and of the auth.sessionToken.beforeIssue
 // payload that are not hooks.HookValue keys.
 const (
@@ -61,7 +57,7 @@ func (t *SessionToken) AuditSubject() (subjectType, subjectID string) {
 // session that ends gets no new token, and a token issued before stays valid
 // until it expires (JWTConfig.TTL[JWTExternal], DefaultJWTTTL).
 //
-// Behemoth never accepts a session token as a session: RequireSession takes
+// Behemoth never accepts a session token as a session: httpapi.RequireSession takes
 // the session's own token only.
 type SessionTokens interface {
 	// Issue signs a session token for the caller on ctx and its session.

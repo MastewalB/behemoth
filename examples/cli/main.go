@@ -36,6 +36,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/examples/cli/auth"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 )
@@ -67,7 +68,7 @@ func main() {
 		Crypto:  cryptoCfg,
 		HTTP:    nethttp.New(mux),
 		Session: core.SessionConfig{ExpiresIn: 24 * time.Hour},
-		Router:  core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router:  httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 	}); err != nil {
 		log.Fatal(err)
 	}

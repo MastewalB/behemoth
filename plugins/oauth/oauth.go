@@ -38,6 +38,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/outbound"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -194,8 +195,8 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 	return nil
 }
 
-// Middlewares implements [core.Plugin]. The plugin has no middleware.
-func (p *Plugin) Middlewares() []core.Middleware {
+// Middlewares implements [httpapi.Plugin]. The plugin has no middleware.
+func (p *Plugin) Middlewares() []httpapi.Middleware {
 	return nil
 }
 
@@ -288,12 +289,12 @@ func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, e
 	}, nil
 }
 
-// Routes implements [core.Plugin].
-func (p *Plugin) Routes() []core.Route {
-	return []core.Route{
+// Routes implements [httpapi.Plugin].
+func (p *Plugin) Routes() []httpapi.Route {
+	return []httpapi.Route{
 		{Method: http.MethodPost, Path: PathBegin, Handler: p.handleBegin},
 		{Method: http.MethodPost, Path: PathComplete, Handler: p.handleComplete},
 	}
 }
 
-var _ core.Plugin = (*Plugin)(nil)
+var _ httpapi.Plugin = (*Plugin)(nil)

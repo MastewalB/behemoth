@@ -16,6 +16,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
+	"github.com/MastewalB/behemoth/httpapi"
 	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
@@ -90,7 +91,7 @@ func serve(ctx context.Context) error {
 // tel is the application's telemetry (telemetry.go). The same logger goes to
 // the database adapter, so SQL statements are logged at debug with the
 // request ID of the request that ran them.
-func boot(ctx context.Context, driver core.FrameworkDriver, tel *telemetry.Telemetry) (*core.AuthContext, *emailpassword.Plugin, *sql.DB, error) {
+func boot(ctx context.Context, driver httpapi.FrameworkDriver, tel *telemetry.Telemetry) (*core.AuthContext, *emailpassword.Plugin, *sql.DB, error) {
 	// 1. Declarations: plugins, hooks, tokens, rate limits, schema -> resolver.
 	all, ep := plugins()
 	app, err := engine.Prepare(all, prepareConfig())
@@ -131,7 +132,7 @@ func boot(ctx context.Context, driver core.FrameworkDriver, tel *telemetry.Telem
 		// defaults: routes under /api/auth. A magic link request that names
 		// a redirect to another origin would need that origin in
 		// Router.TrustedOrigins.
-		Router: core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router: httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		// KV, RateLimit and Token left at their defaults: no KV store
 		// (sessions and rate limits use the DB).
 	})

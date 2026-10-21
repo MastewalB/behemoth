@@ -4,12 +4,14 @@ This document explains how a session token reaches the client over HTTP and come
 
 The code lives in:
 
-- `core/token_carrier.go`: `TokenDelivery`, `SessionTokenHeader`, `TokenCarrierConfig` (`RouterConfig.Carrier`), `TokenCarrier`
-- `core/session.go`: the `SessionManager` interface, `RequireSession`, `RequireFreshSession`
-- `core/authenticator.go`: `AuthenticateRequests`, the stage the router puts in front of every route (`Router.ApplyAuthentication`)
+- `httpapi/token_carrier.go`: `TokenDelivery`, `SessionTokenHeader`, `TokenCarrierConfig` (`RouterConfig.Carrier`), `TokenCarrier`
+- `core/session.go`: the `SessionManager` interface
+- `httpapi/session.go`: `RequireSession`, `RequireFreshSession`
+- `httpapi/authenticate.go`: `AuthenticateRequests`, the stage the router puts in front of every route (`Router.ApplyAuthentication`)
 - `auth/authenticator.go`: `DefaultAuthenticator`, which resolves the token and applies the rolling expiration
 - `core/auth-options.go`: `SessionConfig`, `WithDefaults`, `Validate`
-- `core/signin.go`: `SignInResult`, `WriteSignIn`
+- `core/signin.go`: `SignInResult`
+- `httpapi/signin.go`: `WriteSignIn`
 - `auth/session.go`: `DefaultSessionManager.Touch`
 - `plugins/emailpassword/email-and-password.go`: `handleSignOut`, the one route that ends its caller's session
 - `models/user.go`: the user's JSON
@@ -31,7 +33,7 @@ The code lives in:
 
 ## The carrier and the session manager
 
-A session has two halves. The session manager (`SessionManager`) creates, resolves, extends, and revokes sessions, and takes a `context.Context`, never a request. The token carrier (`core.TokenCarrier`) is the HTTP half: it moves the raw token between the response, the client, and the next request, and knows nothing of sessions beyond a token and an expiry.
+A session has two halves. The session manager (`SessionManager`) creates, resolves, extends, and revokes sessions, and takes a `context.Context`, never a request. The token carrier (`httpapi.TokenCarrier`) is the HTTP half: it moves the raw token between the response, the client, and the next request, and knows nothing of sessions beyond a token and an expiry.
 
 | Step | Session manager | Token carrier |
 | --- | --- | --- |
@@ -60,9 +62,9 @@ Write(rctx *RequestContext, rawToken string, expiresAt time.Time) (inBody bool)
 
 | Route | Calls |
 | --- | --- |
-| `POST /sign-in/email` | `core.WriteSignIn(rctx, result, nil)` |
-| `POST /magic-link/verify` | `core.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
-| `POST /oauth/complete` | `core.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
+| `POST /sign-in/email` | `httpapi.WriteSignIn(rctx, result, nil)` |
+| `POST /magic-link/verify` | `httpapi.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
+| `POST /oauth/complete` | `httpapi.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
 
 A route that hands the client a value of its own reads `rctx.TokenCarrier.Config()`, the carrier's settings with their defaults, to deliver it the same way. The OAuth plugin's binding value is the one case ([`../plugins/oauth.md`](../plugins/oauth.md)).
 
@@ -154,7 +156,7 @@ The error is the caller's `AuthError`, which the authenticator set; for a reques
 
 The settings are in two places. `SessionConfig` (`BootConfig.Session`) is the session manager's: how long a session lasts and when it is extended. `TokenCarrierConfig` (`RouterConfig.Carrier`) is the carrier's: where the token travels over HTTP, and the cookie. Each has a `WithDefaults` that fills the fields below when they are left at zero.
 
-`NewSessionManager` applies `SessionConfig.WithDefaults`, and `NewTokenCarrier` applies `TokenCarrierConfig.WithDefaults`. `AuthContext.SessionConfig` and `AuthContext.TokenCarrier.Config()` hold the values with their defaults. `BootConfig`, read anywhere else, may still hold zeros.
+`NewSessionManager` applies `SessionConfig.WithDefaults`, and `NewTokenCarrier` applies `TokenCarrierConfig.WithDefaults`. `AuthContext.SessionConfig` and `RequestContext.TokenCarrier.Config()` hold the values with their defaults. `BootConfig`, read anywhere else, may still hold zeros.
 
 | Field | Default |
 | --- | --- |
@@ -187,7 +189,7 @@ A response carries a user as `AuthContext.Public.Of(user)`: a flat map of the us
 | Test | File | Covers |
 | --- | --- | --- |
 | `TestSessionConfigDefaults`, `TestSessionConfigValidate` | `core/auth_options_test.go` | every default, a set field kept, what `Validate` refuses |
-| `TestTokenCarrierConfigDefaults`, `TestTokenCarrierConfigValidate` | `core/token_carrier_test.go` | the same for the carrier's settings, and that `NewTokenCarrier` applies the defaults |
+| `TestTokenCarrierConfigDefaults`, `TestTokenCarrierConfigValidate` | `httpapi/token_carrier_test.go` | the same for the carrier's settings, and that `NewTokenCarrier` applies the defaults |
 | `TestTokenCarrierDeliveries` | same | per delivery: what `Write` sets and returns, the cookie's name and expiry, what `Extract` accepts, and that `Clear` expires that same cookie for the request that carried it, and writes nothing for a request without the cookie or with another session's |
 | `TestTokenCarrierCookieAttributes` | same | `Domain`, `SameSite`, and `Secure` from the settings, on the cookie and on its removal; `HttpOnly` and the path fixed |
 | `TestTokenCarrierExtend` | same | the cookie written again with the same token and the new date; nothing for the header and body deliveries, a bearer token next to another session's cookie, or a request without the cookie |
@@ -224,7 +226,7 @@ The decisions written before the token carrier existed use the names of that tim
 - *A `TokenCarrier` interface, implemented in `auth`.* An application could replace it. What it does follows from its settings alone, and nothing calls for a second implementation.
 - *A `TokenCarrier` struct in the HTTP layer, built from a section of `RouterConfig`.* The settings sit with the router, which also reads them for the origin check. The type moves with the HTTP types when they get a package of their own ([`../plans/package_layout.md`](../plans/package_layout.md)).
 
-**Decision:** the struct, `core.TokenCarrier`, built by `Boot` from `RouterConfig.Carrier` and put on `AuthContext.TokenCarrier`. The delivery and the cookie's settings moved from `SessionConfig` to `TokenCarrierConfig`. The methods take the session's expiry instead of a `*models.Session`, which was all they read of it. `SessionManager` has no method that takes an HTTP type.
+**Decision:** the struct, `httpapi.TokenCarrier`, built from `RouterConfig.Carrier`. It was put on `AuthContext.TokenCarrier` at first; when the HTTP types left `core`, the router took it over and hands it to every handler as `RequestContext.TokenCarrier`. The delivery and the cookie's settings moved from `SessionConfig` to `TokenCarrierConfig`. The methods take the session's expiry instead of a `*models.Session`, which was all they read of it. `SessionManager` has no method that takes an HTTP type.
 
 **Revisit if:** an application needs to carry the token in a way the four deliveries and the cookie's settings can't express, such as another header name. An interface would then be the place to extend.
 
@@ -251,7 +253,7 @@ The decisions written before the token carrier existed use the names of that tim
 
 **Decision:** The header, named `Set-Auth-Token`. Whether a header is the right place for a given client is the application's decision, and it made it by choosing the transport. The transport now names both directions, where before it described only how the client sends the token.
 
-**Revisit if:** applications need another header name. It is a constant, `core.SessionTokenHeader`.
+**Revisit if:** applications need another header name. It is a constant, `httpapi.SessionTokenHeader`.
 
 ### The body is a transport of its own
 

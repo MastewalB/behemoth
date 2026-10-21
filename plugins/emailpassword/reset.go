@@ -13,6 +13,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -711,7 +712,7 @@ func (p *Plugin) setPassword(ctx context.Context, op, userID, password string) (
 // issued and a failed send are all a 200. A validation error and a rate
 // limit are reported, since they do not depend on the account. Anything else
 // is a failure of the system and a 500 from the router.
-func (p *Plugin) handleResetRequest(rctx *core.RequestContext) error {
+func (p *Plugin) handleResetRequest(rctx *httpapi.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("emailpassword.RequestPasswordReset", "request", err)
@@ -737,7 +738,7 @@ func (p *Plugin) handleResetRequest(rctx *core.RequestContext) error {
 // maps it: a refused link is a typed unauthorized error (401), a refused
 // password a validation error (400). It delivers no session token: a reset
 // does not sign the user in.
-func (p *Plugin) handleResetConfirm(rctx *core.RequestContext) error {
+func (p *Plugin) handleResetConfirm(rctx *httpapi.RequestContext) error {
 	const op = "emailpassword.ResetPassword"
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {

@@ -7,11 +7,12 @@ package engine
 import (
 	"context"
 	"fmt"
-	"github.com/MastewalB/behemoth/dispatch"
-	"github.com/MastewalB/behemoth/messaging"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/MastewalB/behemoth/dispatch"
+	"github.com/MastewalB/behemoth/messaging"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/auth"
@@ -19,6 +20,7 @@ import (
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/outbound"
@@ -74,6 +76,10 @@ type PreparedApp struct {
 	Hooks      core.HookCatalog
 	Tokens     core.TokenCatalog
 	RateLimits core.RateLimitCatalog
+	// RouteRules are the route rate-limit rules the plugins returned
+	// (httpapi.RouteRulesPlugin), whose counting part RateLimits holds.
+	// Boot applies them to the mounted routes.
+	RouteRules []httpapi.RouteRateLimitRule
 	// Permissions holds the permissions core and the plugins declared, which
 	// Boot gives to AuthContext.Access.
 	Permissions core.PermissionCatalog
@@ -133,6 +139,7 @@ func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 	}
 
 	// Declare phase: every plugin, in dependency order
+	var routeRules []httpapi.RouteRateLimitRule
 	for _, name := range order {
 		p := lookup(plugins, name)
 		if p == nil {
@@ -141,6 +148,13 @@ func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 		ic := newScopedInitContext(hookCatalog, tokenCatalog, rateLimitCatalog, permissionCatalog, schemaRegistry, name)
 		if err := p.Declare(ic); err != nil {
 			return nil, fmt.Errorf("plugin %q Declare failed: %w", name, err)
+		}
+		if rp, ok := p.(httpapi.RouteRulesPlugin); ok {
+			rules, err := httpapi.DeclareRouteRules(ic.RateLimits, name, rp.RouteRateLimitRules())
+			if err != nil {
+				return nil, fmt.Errorf("plugin %q route rules: %w", name, err)
+			}
+			routeRules = append(routeRules, rules...)
 		}
 	}
 
@@ -172,6 +186,7 @@ func Prepare(plugins []core.Plugin, cfg PrepareConfig) (*PreparedApp, error) {
 		Hooks:       hookCatalog,
 		Tokens:      tokenCatalog,
 		RateLimits:  rateLimitCatalog,
+		RouteRules:  routeRules,
 		Permissions: permissionCatalog,
 		Schemas:     schemaRegistry,
 		Resolver:    resolver,
@@ -247,12 +262,12 @@ type BootConfig struct {
 	// Router configures behemoth's routes: base path, error mapping,
 	// client-IP resolution, and how the session token travels over HTTP
 	// (Carrier). Zero value = documented defaults.
-	Router core.RouterConfig
+	Router httpapi.RouterConfig
 
 	// HTTP mounts behemoth's routes onto the application's framework
 	// instance, e.g. ginadapter.New(engine). nil = routes are built and
 	// checked but not served (workers, CLIs).
-	HTTP core.FrameworkDriver
+	HTTP httpapi.FrameworkDriver
 }
 
 // IndexChecker is an optional interface of a Database on which a missing
@@ -359,7 +374,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	// One client-IP configuration for sessions, route rate limiting, and audit
 	// events, so that all of them see the same address for a request.
-	ipCfg, err := core.NewClientConfig(cfg.Router.TrustedProxies, cfg.Router.ClientIPHeader)
+	ipCfg, err := httpapi.NewClientConfig(cfg.Router.TrustedProxies, cfg.Router.ClientIPHeader)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +385,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		return nil, errs.NewConfigurationError("Boot", "RouterConfig.TrustedOrigins", err)
 	}
 	// Built whatever the delivery, so a malformed BaseURL fails here.
-	originCheck, err := core.NewOriginCheck(cfg.Router.BaseURL, origins)
+	originCheck, err := httpapi.NewOriginCheck(cfg.Router.BaseURL, origins)
 	if err != nil {
 		return nil, errs.NewConfigurationError("Boot", "RouterConfig.BaseURL", err)
 	}
@@ -432,8 +447,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	}
 	jwtProvider := crypto.NewJWTProvider(cryptoSuite.JWTSign, externalKeys, jwtCfg)
 	ac.JWT = jwtProvider
-	sessionTokens := auth.NewSessionTokens(jwtProvider, dispatcher, ac, ac.SessionManager, jwtCfg)
-	ac.SessionTokens = sessionTokens
+	ac.SessionTokens = auth.NewSessionTokens(jwtProvider, dispatcher, ac, ac.SessionManager, jwtCfg)
 
 	// Init before routing, so Routes() and Middlewares() may rely on
 	// anything a plugin sets up in Init.
@@ -446,16 +460,19 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 
 	// The route table is built and conflict-checked even without an HTTP
 	// driver, so a misconfiguration surfaces the same way in every process.
-	router := core.NewRouter(cfg.Router, ac)
-	var globalMiddleware []core.Middleware
+	router := httpapi.NewRouter(cfg.Router, ac)
+	var globalMiddleware []httpapi.Middleware
 	// A bearer token is never sent by the browser on its own, so only the
 	// cookie deliveries need the origin check and the refusal of form
 	// bodies behind it. Both run before the plugins' middleware.
 	if router.TokenCarrier().Config().Delivery.ReadsCookie() {
-		globalMiddleware = append(globalMiddleware, originCheck.Middleware(), core.RefuseFormContentTypes())
+		globalMiddleware = append(globalMiddleware, originCheck.Middleware(), httpapi.RefuseFormContentTypes())
 	}
 	for _, name := range order {
-		p := lookup(plugins, name)
+		p, ok := lookup(plugins, name).(httpapi.Plugin)
+		if !ok {
+			continue // a plugin without routes
+		}
 		if err := router.Mount(name, p.Meta().MountPath, p.Routes()); err != nil {
 			return nil, err
 		}
@@ -464,10 +481,12 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 
 	// Session tokens, when on: the exchange below the base path, and the
 	// key set at its well-known path outside it.
-	if err := router.Mount(coreOwner, "", sessionTokens.Routes()); err != nil {
-		return nil, err
+	if jwtCfg.ExternalEnabled() {
+		if err := router.Mount(coreOwner, "", httpapi.SessionTokenRoutes(ac.SessionTokens)); err != nil {
+			return nil, err
+		}
 	}
-	if err := router.MountAbsolute(coreOwner, auth.KeySetRoutes(externalKeys, jwtCfg.JWKSPath)...); err != nil {
+	if err := router.MountAbsolute(coreOwner, httpapi.KeySetRoutes(externalKeys, jwtCfg.JWKSPath)...); err != nil {
 		return nil, err
 	}
 
@@ -475,7 +494,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// Authentication wraps each route inside its rate limit, so that a refused
 	// request costs no session lookup.
 	router.ApplyAuthentication(ac.Authenticator, ipCfg)
-	router.ApplyRateLimiting(rateLimiter, app.RateLimits, ipCfg)
+	router.ApplyRateLimiting(rateLimiter, app.RouteRules, ipCfg)
 
 	if cfg.HTTP != nil {
 		if err := router.Build(cfg.HTTP, globalMiddleware...); err != nil {
@@ -496,12 +515,12 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 //   - CookieDomain has to be the base URL's host or a parent of it. A
 //     browser drops a cookie whose Domain does not cover the host that set
 //     it, and every sign-in would then seem to succeed and leave no session.
-func checkCookieAgainstBaseURL(carrier core.TokenCarrierConfig, baseURL string) error {
+func checkCookieAgainstBaseURL(carrier httpapi.TokenCarrierConfig, baseURL string) error {
 	if !carrier.Delivery.ReadsCookie() {
 		return nil
 	}
 	if baseURL == "" {
-		if carrier.CookieSameSite == core.SameSiteNone {
+		if carrier.CookieSameSite == httpapi.SameSiteNone {
 			return fmt.Errorf("RouterConfig.Carrier.CookieSameSite %q needs RouterConfig.BaseURL, which the origin check compares requests with", carrier.CookieSameSite)
 		}
 		return nil
@@ -649,13 +668,6 @@ func (s *scopedRateLimitCatalog) DeclareHookRateLimitRule(rule core.HookRateLimi
 }
 func (s *scopedRateLimitCatalog) RulesForHook(point core.HookPoint) []core.HookRateLimitRule {
 	return s.inner.RulesForHook(point)
-}
-func (s *scopedRateLimitCatalog) DeclareRouteRateLimitRule(rule core.RouteRateLimitRule) error {
-	rule.Owner = s.owner
-	return s.inner.DeclareRouteRateLimitRule(rule)
-}
-func (s *scopedRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {
-	return s.inner.RulesForRoute()
 }
 func (s *scopedRateLimitCatalog) DeclareRule(rule core.RateLimitRule) error {
 	rule.Owner = s.owner

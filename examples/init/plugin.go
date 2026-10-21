@@ -7,6 +7,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/schema"
 	"github.com/MastewalB/behemoth/utils"
 )
@@ -107,14 +108,14 @@ func (p *ActivityPlugin) Register(reg core.HookRegistry) error {
 	return reg.OnFailed(hooks.HookSignInFailed, failed, nil)
 }
 
-func (p *ActivityPlugin) Middlewares() []core.Middleware { return nil }
+func (p *ActivityPlugin) Middlewares() []httpapi.Middleware { return nil }
 
 // Routes are mounted under BasePath + MountPath: GET /api/auth/activity/status.
-func (p *ActivityPlugin) Routes() []core.Route {
-	return []core.Route{{Method: http.MethodGet, Path: "/status", Handler: p.status}}
+func (p *ActivityPlugin) Routes() []httpapi.Route {
+	return []httpapi.Route{{Method: http.MethodGet, Path: "/status", Handler: p.status}}
 }
 
-func (p *ActivityPlugin) status(rctx *core.RequestContext) error {
+func (p *ActivityPlugin) status(rctx *httpapi.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{
 		"plugin":       "activity",
 		"auth_context": rctx.Auth != nil && rctx.Auth.SessionManager != nil,

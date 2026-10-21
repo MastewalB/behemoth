@@ -20,6 +20,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/keysource"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
@@ -67,7 +68,7 @@ func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg co
 	cfg := engine.BootConfig{
 		Crypto:  crypto.Config{Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1}},
 		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:  core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router:  httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		JWT:     jwtCfg,
 		Hooks:   hookFn,
 		HTTP:    app.mounted,
@@ -107,11 +108,11 @@ func (app *tokenApp) call(t *testing.T, method, path, body, raw string) answer {
 	if raw != "" {
 		req.Header.Set("Authorization", "Bearer "+raw)
 	}
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: app.ac}
-	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: app.ac}
+	rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 	w := httptest.NewRecorder()
 	if err := route.Handler(rctx); err != nil {
-		status, errBody := (&errs.DefaultErrorMapper{}).Map(err)
+		status, errBody := (&httpapi.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(errBody))
 	} else {
@@ -127,7 +128,7 @@ func (app *tokenApp) call(t *testing.T, method, path, body, raw string) answer {
 
 func (app *tokenApp) issue(t *testing.T, body string) answer {
 	t.Helper()
-	return app.call(t, http.MethodPost, "/api/auth"+core.PathSessionToken, body, app.raw)
+	return app.call(t, http.MethodPost, "/api/auth"+httpapi.PathSessionToken, body, app.raw)
 }
 
 // verifyElsewhere checks token the way another service does: with the keys
@@ -229,7 +230,7 @@ func TestSessionTokenIsVerifiedElsewhere(t *testing.T) {
 	assert.Error(t, err, "a service that is not the token's audience refuses it")
 
 	// The token is for other services: it is not a session of behemoth.
-	asSession := app.call(t, http.MethodPost, "/api/auth"+core.PathSessionToken, "", token)
+	asSession := app.call(t, http.MethodPost, "/api/auth"+httpapi.PathSessionToken, "", token)
 	assert.Equal(t, http.StatusUnauthorized, asSession.status)
 	assert.Equal(t, errs.CodeSessionInvalid, asSession.body["code"])
 }
@@ -263,7 +264,7 @@ func TestSessionTokenNeedsASignedInSession(t *testing.T) {
 	ctx := context.Background()
 	app, err := bootSessionTokens(t, sessionTokenConfig(), nil)
 	require.NoError(t, err)
-	path := "/api/auth" + core.PathSessionToken
+	path := "/api/auth" + httpapi.PathSessionToken
 
 	none := app.call(t, http.MethodPost, path, "", "")
 	assert.Equal(t, http.StatusUnauthorized, none.status)
@@ -354,7 +355,7 @@ func TestSessionTokensOff(t *testing.T) {
 	ctx := context.Background()
 	app, err := bootSessionTokens(t, crypto.JWTConfig{}, nil)
 	require.NoError(t, err)
-	assert.NotContains(t, app.mounted, "/api/auth"+core.PathSessionToken)
+	assert.NotContains(t, app.mounted, "/api/auth"+httpapi.PathSessionToken)
 	assert.NotContains(t, app.mounted, "/.well-known/jwks.json")
 
 	_, err = app.ac.SessionTokens.Issue(presenting(ctx, app.ac, app.raw), core.SessionTokenRequest{})

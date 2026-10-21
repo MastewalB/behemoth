@@ -13,7 +13,7 @@ This document explains how `plugins/emailpassword` fits into `Prepare` and `Boot
 | `Init` | checks `Options`, wraps the flows with `core.WithLifecycle`; with reset on, also requires a mail sender | runs in `Boot`, after the dispatcher exists |
 | `Routes` | sign-up, sign-in, sign-out, and the two reset routes when reset is on | reads the session manager, so it must run after `Init`; `Boot` guarantees that order |
 
-The sign-in route answers through `core.WriteSignIn`, which writes the body every sign-in route shares and delivers the session token by the configured delivery; see [`../sessions/token_delivery.md`](../sessions/token_delivery.md). The sign-up route answers `{"user": ...}` itself: it has no session.
+The sign-in route answers through `httpapi.WriteSignIn`, which writes the body every sign-in route shares and delivers the session token by the configured delivery; see [`../sessions/token_delivery.md`](../sessions/token_delivery.md). The sign-up route answers `{"user": ...}` itself: it has no session.
 
 `SignIn` returns a `*core.SignInResult`, the type every sign-in plugin hands to `auth.signIn.after`. `emailpassword.SignInResult` is an alias kept for callers. `Method` is `"emailpassword"`.
 
@@ -158,7 +158,7 @@ These limits apply:
 - `[Not built]` Password change for a signed-in user. It needs a way to re-check the current password; see *Nothing refreshes a session in place* in `docs/ongoing.md`.
 - `[Limit]` A reset consumes its token just before it writes the password, outside the write's transaction. If that write fails, the link is spent and the user asks for another. `docs/ongoing.md` has what consuming inside the transaction would need.
 - `[Not built]` Rehash on sign-in. `PasswordHasher.NeedsRehash` exists but sign-in does not call it.
-- Sign-up, sign-in, and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`errs.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `core.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
+- Sign-up, sign-in, and sign-out return every error to the router unchanged (`handleSignUp`, `handleSignIn`, `handleSignOut`), which maps it with `RouterConfig.ErrorMapper`. This is how a data hook's veto on `data.user.beforeCreate` reaches the client with its own status and message; `signUpBody` also fires `auth.signUp.failed` with `rejected_by_hook` for it (`errs.IsRejection`). See *Sign-in's refusals are typed* below. The session check in front of sign-out, `httpapi.RequireSession`, does the same: see *`RequireSession` returns its refusals* in [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
 - `Options.ValidateEmail` and `ValidatePassword` errors are replaced by `invalid email` and `invalid password` in the response, so a custom message does not reach the client. The function's error is the typed error's cause, for logs.
 
 ### The email and password rules belong to the plugin

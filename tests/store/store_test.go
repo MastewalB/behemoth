@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/MastewalB/behemoth/httpapi"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -521,8 +522,8 @@ type usernamePlugin struct{}
 func (usernamePlugin) Meta() core.PluginMeta                 { return core.PluginMeta{Name: "usernames"} }
 func (usernamePlugin) Version() string                       { return "0.0.0" }
 func (usernamePlugin) Init(*core.AuthContext) error          { return nil }
-func (usernamePlugin) Routes() []core.Route                  { return nil }
-func (usernamePlugin) Middlewares() []core.Middleware        { return nil }
+func (usernamePlugin) Routes() []httpapi.Route               { return nil }
+func (usernamePlugin) Middlewares() []httpapi.Middleware     { return nil }
 func (usernamePlugin) Declare(*core.PluginInitContext) error { return nil }
 func (usernamePlugin) Register(reg core.HookRegistry) error {
 	if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
@@ -697,9 +698,9 @@ func TestSecondHandlerOnAPointIsRejected(t *testing.T) {
 }
 
 // capturingDriver keeps the routes Boot mounts, so a test can call them.
-type capturingDriver struct{ routes []core.Route }
+type capturingDriver struct{ routes []httpapi.Route }
 
-func (d *capturingDriver) Mount(routes ...core.Route) error {
+func (d *capturingDriver) Mount(routes ...httpapi.Route) error {
 	d.routes = append(d.routes, routes...)
 	return nil
 }
@@ -712,11 +713,11 @@ type signupPlugin struct{ ac *core.AuthContext }
 func (p *signupPlugin) Meta() core.PluginMeta                 { return core.PluginMeta{Name: "signup"} }
 func (p *signupPlugin) Version() string                       { return "0.0.0" }
 func (p *signupPlugin) Init(ac *core.AuthContext) error       { p.ac = ac; return nil }
-func (p *signupPlugin) Middlewares() []core.Middleware        { return nil }
+func (p *signupPlugin) Middlewares() []httpapi.Middleware     { return nil }
 func (p *signupPlugin) Declare(*core.PluginInitContext) error { return nil }
 
-func (p *signupPlugin) Routes() []core.Route {
-	return []core.Route{{Method: http.MethodPost, Path: "/sign-up", Handler: func(rctx *core.RequestContext) error {
+func (p *signupPlugin) Routes() []httpapi.Route {
+	return []httpapi.Route{{Method: http.MethodPost, Path: "/sign-up", Handler: func(rctx *httpapi.RequestContext) error {
 		u := &models.User{Email: rctx.Request.URL.Query().Get("email")}
 		if err := p.ac.Store.CreateUser(rctx.Ctx, u); err != nil {
 			return err
@@ -727,7 +728,7 @@ func (p *signupPlugin) Routes() []core.Route {
 
 func (p *signupPlugin) Register(reg core.HookRegistry) error {
 	return reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
-		if rctx := core.RequestFrom(hctx.Ctx); rctx == nil {
+		if rctx := httpapi.RequestFrom(hctx.Ctx); rctx == nil {
 			row[models.UserFirstname] = "no-request"
 		} else {
 			row[models.UserFirstname] = rctx.Request.Header.Get("X-Username")
@@ -755,7 +756,7 @@ func TestDataHooksSeeTheRequestBeingHandled(t *testing.T) {
 	// the native request, with the request's own context.
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/sign-up?email=ada@example.com", nil)
 	req.Header.Set("X-Username", "from-header")
-	rctx := &core.RequestContext{Ctx: req.Context(), Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+	rctx := &httpapi.RequestContext{Ctx: req.Context(), Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}}
 	require.NoError(t, driver.routes[0].Handler(rctx))
 	w := httptest.NewRecorder()
 	rctx.Response.Flush(w)

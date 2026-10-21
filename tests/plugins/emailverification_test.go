@@ -16,6 +16,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
@@ -66,7 +67,7 @@ func bootVerification(t *testing.T, opts emailverification.Options, configure ..
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, TrustedOrigins: []string{"https://app.example.com"}},
+		Router:    httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}, TrustedOrigins: []string{"https://app.example.com"}},
 		Mail:      core.MailConfig{Sender: app.outbox},
 		Telemetry: tel,
 		HTTP:      app.mounted,
