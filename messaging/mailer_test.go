@@ -3,7 +3,9 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +59,35 @@ func TestMailerSendWaits(t *testing.T) {
 	for result, want := range map[string]int64{"sent": 1, "error": 1} {
 		if n := rec.Metrics.Count(telemetry.MetricMailSent, behemoth.M{telemetry.AttrKind: "magic_link", telemetry.AttrResult: result}); n != want {
 			t.Errorf("messages with result %q = %d, want %d", result, n, want)
+		}
+	}
+}
+
+// A message's code is the sender's alone: a failed background send is
+// logged with the message's kind, and no log line carries the code.
+func TestMailerKeepsTheCodeOutOfTheLog(t *testing.T) {
+	const code = "493027"
+	tel, rec := telemetrytest.New()
+	m := NewMailer(core.MailConfig{Sender: core.MailSenderFunc(func(context.Context, core.MailMessage) error {
+		return errors.New("smtp down")
+	})}, tel)
+	if err := m.SendAsync(context.Background(), core.MailMessage{Kind: core.MailTwoFactorCode, To: "ada@example.com", Code: code}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	lines := rec.Logger.At(slog.LevelError)
+	if len(lines) != 1 || lines[0].Fields["kind"] != string(core.MailTwoFactorCode) {
+		t.Fatalf("error lines = %+v, want one for the failed send, with its kind", lines)
+	}
+	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+		for _, line := range rec.Logger.At(level) {
+			if strings.Contains(fmt.Sprintf("%s %v", line.Message, line.Fields), code) {
+				t.Errorf("a log line carries the code: %+v", line)
+			}
 		}
 	}
 }

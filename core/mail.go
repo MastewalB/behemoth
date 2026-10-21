@@ -29,6 +29,12 @@ const (
 	// has no link: URL, Token and ExpiresAt are empty
 	// (plugins/emailpassword).
 	MailPasswordChanged MailKind = "password_changed"
+	// MailTwoFactorSetup carries the code that confirms an address a user
+	// sets up as a second factor. MailTwoFactorCode carries a code that
+	// completes a sign-in waiting for a second factor. Both have the code in
+	// Code and no link: URL and Token are empty.
+	MailTwoFactorSetup MailKind = "two_factor_setup"
+	MailTwoFactorCode  MailKind = "two_factor_code"
 )
 
 // MailMessage is one message a plugin wants delivered: everything the
@@ -43,7 +49,11 @@ type MailMessage struct {
 	// Token is the raw token, for an application that builds its own URL.
 	// It is a credential: do not log it.
 	Token string
-	// ExpiresAt is when the link stops working.
+	// Code is the one-time code to put in the message, for a kind that
+	// carries a code for the person to type instead of a link. URL and Token
+	// are empty then. It is a credential: do not log it.
+	Code string
+	// ExpiresAt is when the link, or the code, stops working.
 	ExpiresAt time.Time
 	// User is the account the message is about.
 	User *models.User
