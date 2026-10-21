@@ -39,15 +39,19 @@ type RequestContext struct {
 	Params map[string]string // path params, populated by the driver before Handler runs
 }
 
+// Set stores val under key in Values.
 func (rc *RequestContext) Set(key string, val any) {
 	rc.Values[key] = val
 }
 
+// Get returns the value Values holds under key.
 func (rc *RequestContext) Get(key string) (any, bool) {
 	v, ok := rc.Values[key]
 	return v, ok
 }
 
+// Param returns the path parameter name, such as "id" in "/users/{id}", or
+// "" when the route has none of that name.
 func (rc *RequestContext) Param(name string) string { return rc.Params[name] }
 
 // ResponseRecorder buffers status code, headers, and body so the plugin
@@ -60,6 +64,7 @@ type ResponseRecorder struct {
 	body    *bytes.Buffer
 }
 
+// NewResponseRecorder returns an empty response with the status 200.
 func NewResponseRecorder() *ResponseRecorder {
 	return &ResponseRecorder{
 		Code:    http.StatusOK,
@@ -118,6 +123,8 @@ func (r *ResponseRecorder) Redirect(code int, url string) {
 	r.Headers.Set("Location", url)
 }
 
+// Error writes {"error": err} with code. A handler that fails returns its
+// error instead, for the router's error mapping to answer.
 func (r *ResponseRecorder) Error(code int, err string) error {
 	return r.JSON(code, map[string]string{"error": err})
 }
@@ -137,6 +144,8 @@ func (r *ResponseRecorder) Flush(w http.ResponseWriter) {
 	r.body.WriteTo(w)
 }
 
+// HandlerFunc handles one request: it writes the response into
+// ctx.Response, or returns an error, which the router maps to a response.
 type HandlerFunc func(ctx *RequestContext) error
 
 // Middleware is a named function that wraps a HandlerFunc.

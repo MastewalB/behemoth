@@ -39,6 +39,7 @@ import (
 	"github.com/MastewalB/behemoth/storage/adapters/postgres"
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/engine"
+	"github.com/MastewalB/behemoth/httpapi"
 	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
 )
 

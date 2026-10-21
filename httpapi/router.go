@@ -25,6 +25,9 @@ import (
 	"github.com/MastewalB/behemoth/telemetry"
 )
 
+// RouterConfig configures the HTTP side of behemoth: where the routes are
+// mounted, how errors are answered, which origins and proxies are trusted,
+// and how the session token travels. It is BootConfig.Router.
 type RouterConfig struct {
 	BasePath    string      // default "/api/auth"
 	ErrorMapper ErrorMapper // default DefaultErrorMapper{}
@@ -64,6 +67,10 @@ type RouterConfig struct {
 	Carrier TokenCarrierConfig
 }
 
+// Router is behemoth's route table. Boot mounts the plugins' routes and
+// core's own, applies authentication and the route rate limits, and Build
+// wraps every route in the request pipeline and hands the table to a
+// FrameworkDriver.
 type Router struct {
 	basePath        string
 	routes          []mountedRoute

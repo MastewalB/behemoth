@@ -76,6 +76,7 @@ func DeclareRouteRules(catalog core.RateLimitCatalog, owner string, rules []Rout
 	return declared, nil
 }
 
+// SplitPath returns the segments of p, without empty ones at its ends.
 func SplitPath(p string) []string {
 	p = strings.Trim(p, "/")
 	if p == "" {
@@ -85,6 +86,9 @@ func SplitPath(p string) []string {
 	return strings.Split(p, "/")
 }
 
+// MatchesPath reports whether path matches pattern, a route rule's Path:
+// "*" matches one segment, and a last segment "**" any number of segments,
+// or none.
 func MatchesPath(pattern, path string) bool {
 	pSegments, rSegments := SplitPath(pattern), SplitPath(path)
 	for i, ps := range pSegments {
@@ -105,6 +109,8 @@ func MatchesPath(pattern, path string) bool {
 	return len(pSegments) == len(rSegments)
 }
 
+// MatchesMethod reports whether method matches a route rule's Method: the
+// same verb in any case, or "*".
 func MatchesMethod(ruleMethod, method string) bool {
 	return ruleMethod == "*" || strings.EqualFold(ruleMethod, method)
 }
@@ -157,6 +163,8 @@ func moreSpecific(a, b specificity) bool {
 	return a.segmentCount > b.segmentCount
 }
 
+// BestRouteMatch returns the most specific of rules that match method and
+// path (see specificity), and false when none does.
 func BestRouteMatch(rules []RouteRateLimitRule, method, path string) (RouteRateLimitRule, bool) {
 	var bestRule RouteRateLimitRule
 	var bestScore specificity
