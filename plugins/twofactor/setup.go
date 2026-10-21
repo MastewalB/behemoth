@@ -45,11 +45,16 @@ type Status struct {
 	Methods []MethodStatus
 	// RecoveryCodesLeft is the number of recovery codes not used yet.
 	RecoveryCodesLeft int
+	// Locked says that Options.MaxFailures second factors failed in a row:
+	// until a recovery code passes, or an admin resets the user, only a
+	// recovery code signs in. The user should change their password, which
+	// someone else has.
+	Locked bool
 }
 
-// Status returns the methods that are on for the caller's account, and how
-// many recovery codes are left. The caller needs PermissionRead
-// (Access.RequireUser).
+// Status returns the methods that are on for the caller's account, how many
+// recovery codes are left, and whether the lock is on. The caller needs
+// PermissionRead (Access.RequireUser).
 func (p *Plugin) Status(ctx context.Context) (*Status, error) {
 	const op = "twofactor.Status"
 	if err := p.ready(op); err != nil {
@@ -74,6 +79,9 @@ func (p *Plugin) Status(ctx context.Context) (*Status, error) {
 		return nil, err
 	}
 	status.RecoveryCodesLeft = int(left)
+	if status.Locked, err = p.locked(ctx, userID); err != nil {
+		return nil, err
+	}
 	return status, nil
 }
 
@@ -487,9 +495,9 @@ type DisableRequest struct {
 type DisableResult struct {
 	UserID string
 	Method Method
-	Reason string // why the method went: ReasonUserDisabled
+	Reason string // why the method went: ReasonUserDisabled, or ReasonAdminReset with no Method
 	// Off says that no method is left on: the plugin is off for the user,
-	// and the recovery codes are gone.
+	// and the recovery codes and the failure count are gone.
 	Off bool
 }
 
@@ -518,8 +526,9 @@ func (in *disableInput) ToMap() (map[string]any, error) {
 func (in *disableInput) FromMap(map[string]any) error { return nil }
 
 // Disable turns a method of the caller's account off, a setup in progress
-// included. When no method is left on, the recovery codes go too, and a
-// sign-in of the user no longer waits for a second factor. A method that
+// included. When no method is left on, the recovery codes and the failure
+// count go too, and a sign-in of the user no longer waits for a second
+// factor. A method that
 // Options.Methods no longer offers can still be turned off.
 //
 // The caller needs PermissionManage and a fresh session. A method that is
@@ -565,7 +574,12 @@ func (p *Plugin) disableBody(hctx *core.HookContext, in disableInput) (*DisableR
 			return nil
 		}
 		result.Off = true
-		return db.DeleteMany(ctx, &recoveryCodeRow{}, byUser(in.userID))
+		for _, model := range []behemoth.Model{&recoveryCodeRow{}, &failureRow{}} {
+			if err := db.DeleteMany(ctx, model, byUser(in.userID)); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if errs.IsNotFound(err) {
 		if failErr := p.failed(hctx, HookDisableFailed, "not_enabled", nil, in.userID); failErr != nil {

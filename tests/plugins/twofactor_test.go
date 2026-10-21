@@ -278,11 +278,12 @@ func TestTwoFactorFirstMethodEndsOtherSessions(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int{"": 1, twofactor.SessionRevokedEnabled: 1}, reasons)
 
-	app.signIn(t, "ada@example.com")
+	app.signIn(t, "ada@example.com") // pending now: TOTP is on
 	later := app.lastToken
 	app.enableTOTP(t, confirming) // a new secret: TOTP was on already
-	_, err = app.ac.SessionManager.Validate(ctx, later)
-	assert.NoError(t, err, "a method that is not the first ends no session")
+	session, err := app.ac.SessionManager.Get(ctx, later)
+	require.NoError(t, err, "a method that is not the first ends no session")
+	assert.Equal(t, models.SessionPending, session.State)
 }
 
 // Turning the last method off turns the plugin off for the user, and takes
@@ -411,10 +412,16 @@ func TestTwoFactorFailedSendRevokesTheCode(t *testing.T) {
 func TestTwoFactorRowsGoWithTheUser(t *testing.T) {
 	app := bootTwoFactor(t, twofactor.Options{Issuer: "Example"}, nil)
 	user, ctx, _ := app.signedIn(t, "ada@example.com")
-	app.enableTOTP(t, ctx)
+	secret, _ := app.enableTOTP(t, ctx)
+	_, pendingCtx := app.pendingSignIn(t, "ada@example.com")
+	_, err := app.plugin.Verify(pendingCtx, twofactor.VerifyRequest{Method: twofactor.MethodTOTP, Code: wrongTOTP(secret)})
+	require.True(t, invalidTwoFactorCode(err), "%v", err)
+	require.Equal(t, 1, app.rows(t, twofactor.FailureTable, "user_id = ?", user.ID))
+
 	require.NoError(t, app.ac.Store.DeleteUser(context.Background(), user.ID))
-	assert.Zero(t, app.rows(t, twofactor.MethodTable, "user_id = ?", user.ID))
-	assert.Zero(t, app.rows(t, twofactor.RecoveryCodeTable, "user_id = ?", user.ID))
+	for _, table := range []string{twofactor.MethodTable, twofactor.RecoveryCodeTable, twofactor.FailureTable} {
+		assert.Zero(t, app.rows(t, table, "user_id = ?", user.ID), table)
+	}
 }
 
 // Boot reports options that can't work.
@@ -423,12 +430,13 @@ func TestTwoFactorOptionsAreChecked(t *testing.T) {
 		opts      twofactor.Options
 		configure func(*engine.BootConfig)
 	}{
-		"TOTP without an issuer":    {opts: twofactor.Options{}},
-		"email without a sender":    {opts: twofactor.Options{Methods: []twofactor.Method{twofactor.MethodEmail}}, configure: func(cfg *engine.BootConfig) { cfg.Mail.Sender = nil }},
-		"SMS without a sender":      {opts: twofactor.Options{Methods: []twofactor.Method{twofactor.MethodSMS}}, configure: func(cfg *engine.BootConfig) { cfg.SMS.Sender = nil }},
-		"a method that is not one":  {opts: twofactor.Options{Methods: []twofactor.Method{"fax"}}},
-		"too many recovery codes":   {opts: twofactor.Options{Issuer: "Example", RecoveryCodes: 21}},
-		"a code too short to guard": {opts: twofactor.Options{Methods: []twofactor.Method{twofactor.MethodEmail}, CodeLength: 3}},
+		"TOTP without an issuer":         {opts: twofactor.Options{}},
+		"email without a sender":         {opts: twofactor.Options{Methods: []twofactor.Method{twofactor.MethodEmail}}, configure: func(cfg *engine.BootConfig) { cfg.Mail.Sender = nil }},
+		"SMS without a sender":           {opts: twofactor.Options{Methods: []twofactor.Method{twofactor.MethodSMS}}, configure: func(cfg *engine.BootConfig) { cfg.SMS.Sender = nil }},
+		"a method that is not one":       {opts: twofactor.Options{Methods: []twofactor.Method{"fax"}}},
+		"too many recovery codes":        {opts: twofactor.Options{Issuer: "Example", RecoveryCodes: 21}},
+		"a code too short to guard":      {opts: twofactor.Options{Methods: []twofactor.Method{twofactor.MethodEmail}, CodeLength: 3}},
+		"more failures than NIST allows": {opts: twofactor.Options{Issuer: "Example", MaxFailures: 101}},
 	} {
 		_, err := tryBootTwoFactor(t, tc.opts, tc.configure)
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%s: %v", name, err)

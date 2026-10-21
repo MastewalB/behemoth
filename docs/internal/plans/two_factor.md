@@ -2,7 +2,7 @@
 
 This document describes the design of the two-factor plugin. It covers the methods a user can turn on, how a sign-in waits for the second factor, the data the plugin keeps, the changes to core it needs, the threats and their controls, the decisions taken, and the order of the work.
 
-**Status:** in progress, as of 2026-10-22. Steps 1 to 6 are done. [`../plugins/twofactor.md`](../plugins/twofactor.md) describes what is built. [Implementation steps](#implementation-steps) lists the work. The package will be `plugins/twofactor`.
+**Status:** in progress, as of 2026-10-22. Steps 1 to 7 are done. [`../plugins/twofactor.md`](../plugins/twofactor.md) describes what is built. [Implementation steps](#implementation-steps) lists the work. The package will be `plugins/twofactor`.
 
 The documents it builds on are:
 
@@ -42,7 +42,7 @@ Core reserved a place for a second factor before any plugin used it:
 
 These gaps remain:
 
-- No plugin sets `requireStepUp`.
+- No plugin set `requireStepUp`. Step 7's checkpoint handler does.
 - `Promote` kept the pending session's token. Under the cookie deliveries the cookie still expired with the pending session, and the flow that verifies the second factor couldn't set it again: it never sees the raw token. Step 3 renews the token.
 - Nothing recorded how a session's first factor was proved, so a later request couldn't tell a magic-link sign-in from a password sign-in. Step 2 records it.
 - `MailMessage` has no field for a code. `SMSMessage` has one.
@@ -443,7 +443,7 @@ The work is done in this order. Each step ends with its tests and its docs, and 
 | 4 | `MailMessage.Code`, and the plugin's mail and SMS kinds. Docs: `docs/api/mail.md`. The API pages list the kinds once the plugin sends them, in steps 6 and 7. | Done |
 | 5 | `plugins/twofactor/totp`, tested with the RFC vectors. | Done |
 | 6 | The plugin and its setup: the options and their checks in `Init`, the methods and recovery code tables, the enable, disable, send, and regenerate points, their rules, the two self-service permissions, the user deletion handler, and `Status`, `Enroll`, `Confirm`, `Disable`, and `RegenerateRecoveryCodes`. The `sameRow` entries in `layout_test.go` for the plugin's imports of `totp` and `phonenumber`, and a row for the package in `CLAUDE.md`. Docs: `docs/internal/plugins/twofactor.md` and `docs/api/twofactor.md` start here. | Done |
-| 7 | The sign-in: the checkpoint handler, `Challenge`, `SendCode`, `Verify` with the failure table, the lock, and `Options.VerifyLimit` and `MaxFailures`, the verify points and rules, and `Reset` with its permission. The flows' tests run without HTTP. | Not started |
+| 7 | The sign-in: the checkpoint handler, `Challenge`, `SendCode`, `Verify` with the failure table, the lock, and `Options.VerifyLimit` and `MaxFailures`, the verify points and rules, and `Reset` with its permission. The flows' tests run without HTTP. | Done |
 | 8 | The routes and their tests, the plugin in the README and in an example application, and the API page completed. | Not started |
 
 Steps 2 and 3 change what a sign-in plugin passes and what `Promote` returns, so they land before a tagged release. A sign-in plugin written outside this repository passes its factor from step 2 on.

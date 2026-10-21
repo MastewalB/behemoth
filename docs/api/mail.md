@@ -24,7 +24,7 @@ A plugin that needs a sender (`magiclink`, `emailverification`, `emailpassword` 
 
 | Field | Content |
 | --- | --- |
-| `Kind` | what the message is for: `core.MailMagicLink`, `core.MailEmailVerification`, `core.MailEmailChange`, `core.MailEmailChangeNotice`, `core.MailPasswordReset`, `core.MailPasswordChanged`. Pick the subject and template by it. |
+| `Kind` | what the message is for: `core.MailMagicLink`, `core.MailEmailVerification`, `core.MailEmailChange`, `core.MailEmailChangeNotice`, `core.MailPasswordReset`, `core.MailPasswordChanged`, and the two-factor plugin's `core.MailTwoFactorSetup` and `core.MailTwoFactorCode`, which carry a code. Pick the subject and template by it. |
 | `To` | the address, trimmed and lowercased |
 | `URL` | the link to put in the message, with the token in it. Empty for `core.MailPasswordChanged`, a notice without a link, as are `Token` and `ExpiresAt`. |
 | `Token` | the raw token, if you build the URL yourself. It is a credential: don't log it. |
