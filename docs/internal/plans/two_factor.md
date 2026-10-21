@@ -2,7 +2,7 @@
 
 This document describes the design of the two-factor plugin. It covers the methods a user can turn on, how a sign-in waits for the second factor, the data the plugin keeps, the changes to core it needs, the threats and their controls, the decisions taken, and the order of the work.
 
-**Status:** planned, as of 2026-10-22. No step is built. [Implementation steps](#implementation-steps) lists the work. The package will be `plugins/twofactor`.
+**Status:** in progress, as of 2026-10-22. Step 1 is done. [Implementation steps](#implementation-steps) lists the work. The package will be `plugins/twofactor`.
 
 The documents it builds on are:
 
@@ -46,7 +46,7 @@ These gaps remain:
 - `Promote` keeps the pending session's token. Under the cookie deliveries the cookie still expires with the pending session, and the flow that verifies the second factor can't set it again: it never sees the raw token.
 - Nothing records how a session's first factor was proved, so a later request can't tell a magic-link sign-in from a password sign-in.
 - `MailMessage` has no field for a code. `SMSMessage` has one.
-- Pending sessions count toward `SessionConfig.MaxConcurrent`, and so do expired ones (M23 in `docs/ongoing.md`).
+- Pending sessions counted toward `SessionConfig.MaxConcurrent`, and so did expired ones. Step 1 fixed both.
 
 ## Goals
 
@@ -186,7 +186,7 @@ The plugin registers a handler on `auth.signIn.credentialsVerified`. It reads `u
 | 2 | check that the session may use the method | `two_factor_method_unavailable` |
 | 3 | for a method other than a recovery code, check the lock | `two_factor_locked` |
 | 4 | check the code and spend it, as listed below | `invalid_two_factor_code`, and the failure count goes up |
-| 5 | `Promote` the session with the method as its second factor: a new token | the session's error, when the session ended in the meantime |
+| 5 | `Promote` the session with the method as its second factor: a new token | the session's error: the session ended in the meantime, or, without `EvictOldestOnLimit`, the user reached the session limit |
 | 6 | delete the failure count, and run `auth.twoFactor.afterVerify` with the `core.SignInResult` | |
 
 Step 4 spends a code as follows:
@@ -326,7 +326,7 @@ type Options struct {
 
 | Change | Why | Step |
 | --- | --- | --- |
-| The session limit counts only active sessions that have not expired, and evicts only among them | A pending session evicted an active one in a test, and expired sessions refuse new sign-ins (M23). | 1 |
+| The session limit counts only active sessions that have not expired, and evicts only among them | A pending session could evict an active one, and expired sessions refused new sign-ins (M23). | 1 |
 | `sessions.factors`, `SessionMeta.Factor`, `SessionRef.Factors`, the factor names in `core`, and `factor` in the checkpoint payload. The four sign-in plugins pass their factor. | The channel rule, [ADR-0009](../decisions/0009-recording-the-factors-of-a-session.md) | 2 |
 | `hooks.HookValueRequireStepUp` replaces the string in four plugins | The key is a contract between plugins. | 2 |
 | `Promote(ctx, sessionID, factor)` returns a new raw token, and records the factor | [ADR-0008](../decisions/0008-renewing-the-session-token-on-promotion.md) | 3 |
@@ -436,7 +436,7 @@ The work is done in this order. Each step ends with its tests and its docs, and 
 
 | Step | Content | Status |
 | --- | --- | --- |
-| 1 | The session limit counts only active sessions that have not expired, and evicts only among them. It resolves M23 and removes its entry. | Not started |
+| 1 | The session limit counts only active sessions that have not expired, and evicts only among them. A sign-in whose session will be pending is checked against the limit and makes no room, and `Promote` applies the limit. The session manager takes every session time from the store's clock, in UTC, since the limit compares `expires_at` in the database. It resolves M23 and removes its entry. | Done |
 | 2 | [ADR-0009](../decisions/0009-recording-the-factors-of-a-session.md): `sessions.factors`, `SessionMeta.Factor`, `SessionRef.Factors`, the factor names in `core`, and `factor` in the checkpoint payload. The email/password, magic link, phone number, and OAuth sign-ins pass theirs. `hooks.HookValueRequireStepUp`. Docs: `docs/api/sessions.md`, `docs/api/hooks.md`, `docs/internal/models/models.md`. | Not started |
 | 3 | [ADR-0008](../decisions/0008-renewing-the-session-token-on-promotion.md): `Promote(ctx, sessionID, factor)` returns a new raw token and records the factor, in one write guarded on the pending state. Docs: `docs/api/sessions.md`, `docs/internal/sessions/token_delivery.md`. | Not started |
 | 4 | `MailMessage.Code`, and the plugin's mail and SMS kinds. Docs: `docs/api/mail.md`, `docs/api/sms.md`. | Not started |
@@ -451,7 +451,7 @@ Steps 2 and 3 change what a sign-in plugin passes and what `Promote` returns, so
 
 These entries in `docs/ongoing.md` affect the design:
 
-- **M23, "The session limit counts sessions that can't be used".** Step 1 resolves it.
+- **M23, "The session limit counts sessions that can't be used".** Step 1 resolved it, and removed the entry.
 - **L24, "Nothing refreshes a session in place".** A second factor for an active session waits for it.
 - **L6, "`ActionLockout` is declared but not built".** The lock here is the plugin's own count, and does not need it.
 - **M9, "A new core table has to be migrated before the version that needs it runs".** `sessions.factors` is the same case for a column: an application migrates before it deploys step 2.

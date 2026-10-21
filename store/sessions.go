@@ -37,14 +37,29 @@ func (s *Store) UpdateSession(ctx context.Context, id string, changes behemoth.M
 	return updated.(*models.Session), nil
 }
 
-// CountLiveSessions counts userID's sessions that aren't revoked — pending
-// ones included: an abandoned half-completed login still occupies a slot.
-func (s *Store) CountLiveSessions(ctx context.Context, userID string) (int64, error) {
-	return s.db.Count(ctx, &models.Session{}, liveSessionsOf(userID, ""))
+// CountActiveSessions counts userID's sessions that are active and have not
+// expired: the sessions SessionConfig.MaxConcurrent limits. A session that
+// waits for a second factor is not counted, and neither is one past its
+// expiry that nothing revoked.
+//
+// The expiry is compared with the store's clock (Now) in the database. On
+// SQLite, which stores a time as text with its zone, a session whose expiry
+// was written in a zone other than UTC can be counted wrongly; the session
+// manager writes expiries from Now.
+func (s *Store) CountActiveSessions(ctx context.Context, userID string) (int64, error) {
+	return s.db.Count(ctx, &models.Session{}, s.activeSessionsOf(userID))
 }
 
-// ListLiveSessions lists userID's sessions that aren't revoked, oldest
-// first, except exceptID ("" for none). limit <= 0 means no limit.
+// ListActiveSessions lists the sessions CountActiveSessions counts, oldest
+// first. limit <= 0 means no limit.
+func (s *Store) ListActiveSessions(ctx context.Context, userID string, limit int) ([]*models.Session, error) {
+	return s.findSessions(ctx, s.activeSessionsOf(userID),
+		&behemoth.QueryOptions{OrderBy: behemoth.Order{Field: models.SessionCreatedAt, Direction: behemoth.Asc}, Limit: limit})
+}
+
+// ListLiveSessions lists userID's sessions that aren't revoked, pending and
+// expired ones included, oldest first, except exceptID ("" for none).
+// limit <= 0 means no limit.
 func (s *Store) ListLiveSessions(ctx context.Context, userID, exceptID string, limit int) ([]*models.Session, error) {
 	return s.findSessions(ctx, liveSessionsOf(userID, exceptID),
 		&behemoth.QueryOptions{OrderBy: behemoth.Order{Field: models.SessionCreatedAt, Direction: behemoth.Asc}, Limit: limit})
@@ -66,6 +81,14 @@ func liveSessionsOf(userID, exceptID string) clause.Expression {
 		conds = append(conds, clause.Condition{Field: models.SessionID, Operator: clause.OpNotEqual, Value: exceptID})
 	}
 	return clause.Expression{Conditions: conds, Logic: clause.OpAnd}
+}
+
+func (s *Store) activeSessionsOf(userID string) clause.Expression {
+	return clause.Expression{Logic: clause.OpAnd, Conditions: []clause.Condition{
+		{Field: models.SessionUserID, Operator: clause.OpEqual, Value: userID},
+		{Field: models.SessionStateColumn, Operator: clause.OpEqual, Value: string(models.SessionActive)},
+		{Field: models.SessionExpiresAt, Operator: clause.OpGreaterThan, Value: s.now()},
+	}}
 }
 
 func (s *Store) findSession(ctx context.Context, where clause.Expression) (*models.Session, error) {

@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/core"
@@ -42,6 +41,12 @@ func cacheKey(lookupHash string) string { return "session:" + lookupHash }
 // A new session's IP address and user agent come from the caller on the
 // context Create is given (see requestMeta), so a session records the
 // address the transport resolved.
+//
+// The manager takes every session time from the store's clock (st.Now), in
+// UTC, both what it writes and what it compares. The session limit compares
+// expires_at in the database, and SQLite stores a time as text with its zone:
+// expiries stamped in local time would compare wrongly with the store's
+// clock there.
 func NewSessionManager(
 	st *store.Store,
 	kv behemoth.KeyValueStorage,
@@ -100,22 +105,8 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta co
 		return nil, "", errs.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
 	}
 
-	// MaxConcurrent enforcement (SessionConfig)
-	if sm.cfg.MaxConcurrent > 0 {
-		count, err := sm.st.CountLiveSessions(ctx, fmt.Sprint(userID))
-		if err != nil {
-			return nil, "", errs.WrapOp(op, "session", err)
-		}
-		if count >= int64(sm.cfg.MaxConcurrent) {
-			if sm.cfg.EvictOldestOnLimit {
-				if err := sm.evictOldest(ctx, userID); err != nil {
-					return nil, "", err
-				}
-			} else {
-				return nil, "", errs.NewSessionError(op, errs.CodeSessionLimitReached, nil)
-
-			}
-		}
+	if err := sm.makeRoom(ctx, op, fmt.Sprint(userID), meta.State == models.SessionActive); err != nil {
+		return nil, "", err
 	}
 
 	// Token generation & hashing
@@ -140,7 +131,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta co
 		ip, ua = "", ""
 	}
 
-	now := time.Now()
+	now := sm.st.Now()
 	payload, err := sm.disp.RunBefore(hookContext(ctx, sm.auth, hooks.HookSessionBeforeCreate, core.BeforeHookPhase), hooks.HookSessionBeforeCreate, behemoth.M{
 		hooks.HookValueUserID: fmt.Sprint(userID), hooks.HookValueState: string(meta.State),
 		hooks.HookValueIPAddress: ip, hooks.HookValueUserAgent: ua,
@@ -188,8 +179,34 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta co
 
 }
 
-func (sm *DefaultSessionManager) evictOldest(ctx context.Context, userID any) error {
-	oldest, err := sm.st.ListLiveSessions(ctx, fmt.Sprint(userID), "", 1)
+// makeRoom applies SessionConfig.MaxConcurrent before a session of userID is
+// created, or promoted. The limit counts the sessions the user can use:
+// active ones that have not expired (Store.CountActiveSessions). At the
+// limit, the oldest of them is revoked with EvictOldestOnLimit, and the new
+// session is refused without it.
+//
+// evict is false for a session that will be pending. It is refused at the
+// limit without eviction as an active one is, so that the user is not asked
+// for a second factor that can't complete. It never makes room: whoever has
+// only the password must not end the user's sessions. Promote makes room
+// once the second factor has passed.
+func (sm *DefaultSessionManager) makeRoom(ctx context.Context, op, userID string, evict bool) error {
+	if sm.cfg.MaxConcurrent <= 0 {
+		return nil
+	}
+	count, err := sm.st.CountActiveSessions(ctx, userID)
+	if err != nil {
+		return errs.WrapOp(op, "session", err)
+	}
+	switch {
+	case count < int64(sm.cfg.MaxConcurrent):
+		return nil
+	case !sm.cfg.EvictOldestOnLimit:
+		return errs.NewSessionError(op, errs.CodeSessionLimitReached, nil)
+	case !evict:
+		return nil
+	}
+	oldest, err := sm.st.ListActiveSessions(ctx, userID, 1)
 	if err != nil || len(oldest) == 0 {
 		return err
 	}
@@ -234,7 +251,7 @@ func (sm *DefaultSessionManager) get(ctx context.Context, rawToken string) (*mod
 		sm.countValidated(ctx, fromCache, err)
 		return nil, err
 	}
-	if time.Now().After(m.ExpiresAt) {
+	if sm.st.Now().After(m.ExpiresAt) {
 		err := errs.NewSessionError(op, errs.CodeSessionExpired, nil)
 		sm.countValidated(ctx, fromCache, err)
 		return nil, err
@@ -304,13 +321,16 @@ func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) 
 		return nil, errs.NewSessionError(op, "invalid_state_transition",
 			fmt.Errorf("only a Pending session can be promoted (was %q)", m.State))
 	}
-	if time.Now().After(m.ExpiresAt) {
+	if sm.st.Now().After(m.ExpiresAt) {
 		// An abandoned pending session (2FA never completed in time) cannot
 		// be resurrected by promotion; it must re-authenticate from scratch.
 		return nil, errs.NewSessionError(op, errs.CodeSessionExpired, nil)
 	}
+	if err := sm.makeRoom(ctx, op, m.UserID, true); err != nil {
+		return nil, err
+	}
 
-	now := time.Now()
+	now := sm.st.Now()
 	// Promotion resets to the FULL Active expiry window.
 	promoted, err := sm.st.UpdateSession(ctx, sessionID, behemoth.M{
 		models.SessionStateColumn: string(models.SessionActive),
@@ -351,7 +371,7 @@ func (sm *DefaultSessionManager) Touch(ctx context.Context, session *models.Sess
 		return nil, nil
 	}
 
-	now := time.Now()
+	now := sm.st.Now()
 	ttl := sm.cfg.ExpiresIn
 	if m.State == models.SessionPending {
 		ttl = sm.cfg.PendingExpiresIn
@@ -375,7 +395,7 @@ func (sm *DefaultSessionManager) extensionDue(m *models.Session) bool {
 	if sm.cfg.UpdateAge <= 0 {
 		return false
 	}
-	return !time.Now().Before(m.ExpiresAt.Add(-sm.cfg.UpdateAge))
+	return !sm.st.Now().Before(m.ExpiresAt.Add(-sm.cfg.UpdateAge))
 }
 
 // ListForUser implements [core.SessionManager].
@@ -431,7 +451,7 @@ func (sm *DefaultSessionManager) IsFresh(session *models.Session) bool {
 	if session == nil || session.State != models.SessionActive || session.FreshAt.IsZero() {
 		return false
 	}
-	return time.Since(session.FreshAt) <= sm.cfg.FreshAge
+	return sm.st.Now().Sub(session.FreshAt) <= sm.cfg.FreshAge
 }
 
 // Evict implements [core.SessionManager].
@@ -446,7 +466,7 @@ func (sm *DefaultSessionManager) Evict(ctx context.Context, sessions []*models.S
 // although no row holds that state: the row is gone. sessions is not
 // modified.
 func (sm *DefaultSessionManager) Discard(ctx context.Context, sessions []*models.Session, reason string) error {
-	now := time.Now()
+	now := sm.st.Now()
 	for _, m := range sessions {
 		sm.cacheDelete(ctx, m.LookupHash)
 		if m.State == models.SessionRevoked {
@@ -481,7 +501,7 @@ func (sm *DefaultSessionManager) revokeModel(ctx context.Context, m *models.Sess
 		return err
 	}
 
-	now := time.Now()
+	now := sm.st.Now()
 	revoked, err := sm.st.UpdateSession(ctx, m.ID, behemoth.M{
 		models.SessionStateColumn:   string(models.SessionRevoked),
 		models.SessionRevokedAt:     now,
@@ -529,7 +549,7 @@ func (sm *DefaultSessionManager) cacheSet(ctx context.Context, m *models.Session
 	if err != nil {
 		return
 	}
-	ttl := int(time.Until(m.ExpiresAt).Seconds())
+	ttl := int(m.ExpiresAt.Sub(sm.st.Now()).Seconds())
 	if ttl <= 0 {
 		return
 	}
