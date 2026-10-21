@@ -204,3 +204,74 @@ func TestOnlyAuthBuildsSignedInCallers(t *testing.T) {
 		})
 	}
 }
+
+// serverSideHTTP are the names of net/http that serve a request: what an
+// HTTP handler, a router, or a cookie on a response is made of. The packages
+// below httpapi know no transport, so they name none of them. A prefix ends
+// in "*".
+var serverSideHTTP = []string{
+	"Request", "ResponseWriter", "Handler", "HandlerFunc", "ServeMux", "NewServeMux",
+	"Server", "Serve", "ServeTLS", "ListenAndServe", "ListenAndServeTLS",
+	"Cookie", "SetCookie", "SameSite*", "Redirect", "Error", "NotFound", "NotFoundHandler",
+	"StripPrefix", "FileServer", "ServeFile", "ServeContent", "MaxBytesReader", "TimeoutHandler",
+	"Flusher", "Hijacker", "Pusher", "ResponseController", "NewResponseController", "ErrAbortHandler",
+}
+
+// clientRequests are the packages below httpapi that send requests to other
+// services, and so may name http.Request for the requests they build. They
+// name no other name of serverSideHTTP.
+var clientRequests = map[string]bool{"outbound": true}
+
+// TestNoServerSideHTTPBelowHTTPAPI checks the import rule of
+// docs/internal/guidelines/transport_neutral_flows.md: no package in a row
+// before httpapi's uses the server side of net/http (serverSideHTTP). The
+// client side, such as http.Client, is allowed. Test files are left out.
+func TestNoServerSideHTTPBelowHTTPAPI(t *testing.T) {
+	httpRow, _ := rowOf("httpapi")
+	for _, path := range goFiles(t) {
+		dir := filepath.ToSlash(filepath.Dir(path))
+		if row, _ := rowOf(dir); row < 0 || row >= httpRow {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		local := "" // the name the file imports net/http by
+		for _, spec := range f.Imports {
+			if p, _ := strconv.Unquote(spec.Path.Value); p == "net/http" {
+				local = "http"
+				if spec.Name != nil {
+					local = spec.Name.Name
+				}
+			}
+		}
+		if local == "" {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			id, ok := sel.X.(*ast.Ident)
+			if !ok || id.Name != local || !isServerSideHTTP(sel.Sel.Name) {
+				return true
+			}
+			if sel.Sel.Name == "Request" && clientRequests[dir] {
+				return true
+			}
+			t.Errorf("%s uses http.%s: only httpapi and the packages after it serve HTTP", path, sel.Sel.Name)
+			return true
+		})
+	}
+}
+
+func isServerSideHTTP(name string) bool {
+	for _, s := range serverSideHTTP {
+		if prefix, ok := strings.CutSuffix(s, "*"); ok && strings.HasPrefix(name, prefix) || name == s {
+			return true
+		}
+	}
+	return false
+}

@@ -52,7 +52,7 @@ A gRPC method for sign-in would be the same three steps with other types.
 
 A flow gives the same guarantees however it is reached: its rate limits, its hook points, its audit events, and what a client may learn from its answer.
 
-"The package does not import `net/http`" is a weaker statement. A flow can avoid the import and still leave its protection to the HTTP handler, and then a second wrapper is less safe than the first.
+"The package does not import `net/http`" is a weaker statement. A flow can avoid the import and still leave its protection to the HTTP handler, and then a second wrapper is less safe than the first. `layout_test.go` checks the weaker statement for the packages below `httpapi`: `TestNoServerSideHTTPBelowHTTPAPI` fails when one of them names the server side of `net/http`, such as `http.Request` or `http.ResponseWriter`.
 
 A question to ask for a small decision: if this flow were called from a gRPC method tomorrow, would that method have to copy anything from the HTTP handler to be as safe and as correct? What it would have to copy belongs in the flow.
 
@@ -124,7 +124,7 @@ A flow's guarantees are tested by calling the flow: the limit that refuses the e
 Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted:
 
 - The handlers of the link request, verification send, email change and reset request routes hide whether an account exists. "Hiding whether an account exists is done by the HTTP handlers".
-- The stages around a handler are built in `httpapi.Router.Build`, so a second transport builds its own. A plugin's handlers are in the plugin's package, which imports `net/http` and `httpapi`, so an import rule can cover the packages below `httpapi` and not a plugin's flows. Step 13 of [`../plans/package_layout.md`](../plans/package_layout.md) adds the rule. "The request pipeline lives in the HTTP router, and a plugin's handlers share its package".
+- The stages around a handler are built in `httpapi.Router.Build`, so a second transport builds its own. A plugin's handlers are in the plugin's package, which imports `net/http` and `httpapi`, so the import rule covers the packages below `httpapi` and not a plugin's flows. "The request pipeline lives in the HTTP router, and a plugin's handlers share its package".
 - The verify, confirm, and revert handlers refuse a missing token themselves, and several flows take positional arguments that no input type checks. "Some flows take loose arguments instead of a request type".
 
 ## Design decisions
@@ -151,4 +151,4 @@ Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted titl
 - *No `net/http` import below the wrappers.* A tool can check it. It says nothing about a rate limit that is declared on a path, or an answer that the handler softens: both pass the check and both are missing on a second transport.
 - *The same guarantees however a flow is reached.* It covers those cases. A tool can't check it, so it needs tests that call the flow without HTTP.
 
-**Decision:** the second is the goal. The import rule is added as a check once the HTTP types and the handlers are in packages of their own.
+**Decision:** the second is the goal. The import rule is a check: `TestNoServerSideHTTPBelowHTTPAPI` applies it to the packages below `httpapi`, since part 2 of [`../plans/package_layout.md`](../plans/package_layout.md) gave the HTTP types a package of their own. A plugin's handlers still share the plugin's package, so the check does not reach a plugin's flows.
