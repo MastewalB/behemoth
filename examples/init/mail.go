@@ -25,9 +25,9 @@ func appURL() string {
 // msg.Kind says which one it is. A real sender picks a template by the kind
 // and gives the message to SMTP, a provider's API or a queue.
 //
-// This one prints the message, so the link can be copied from the server's
-// output. The link holds the raw token, which is a credential: a real
-// application never logs it.
+// This one prints the message, so the link or the code can be copied from
+// the server's output. Both are credentials: a real application never logs
+// them.
 func printMail(_ context.Context, msg core.MailMessage) error {
 	switch msg.Kind {
 	case core.MailMagicLink:
@@ -37,6 +37,11 @@ func printMail(_ context.Context, msg core.MailMessage) error {
 	case core.MailPasswordChanged:
 		// A notice without a link, sent after a reset went through.
 		log.Printf("[mail] to=%s  Your password was changed. If this was not you, contact support.", msg.To)
+	case core.MailTwoFactorSetup:
+		// A code without a link: the user types it back.
+		log.Printf("[mail] to=%s  Your code to turn on two-step verification (until %s): %s", msg.To, msg.ExpiresAt.Format("15:04:05"), msg.Code)
+	case core.MailTwoFactorCode:
+		log.Printf("[mail] to=%s  Your sign-in code (until %s): %s", msg.To, msg.ExpiresAt.Format("15:04:05"), msg.Code)
 	default:
 		// An error for a kind without a template makes a missing one
 		// visible: the mailer logs it and counts it.

@@ -2,7 +2,7 @@
 
 The `twofactor` plugin lets a user turn on a second factor: a code from an authenticator app (TOTP), or a code sent by email or by text message. A user gets recovery codes with the first method. A sign-in of that user then waits for the second factor, whichever plugin checked the first: a password, a magic link, a phone code, or an OAuth provider.
 
-`Experimental:` the plugin has no routes yet: call its flows from your own code. Its API can still change.
+`Experimental:` the plugin is new, and its API can still change.
 
 ## Setup
 
@@ -93,6 +93,29 @@ The sign-in follows these rules:
 
 An admin turns every method of a user off with `Reset`, for a user who lost every method and every recovery code. It requires `twofactor.PermissionReset` (`user:reset_two_factor`), which only a system caller holds.
 
+## Routes
+
+The routes sit directly under the router's base path, and each path is a constant of the package (`twofactor.PathEnroll` and the others). Request bodies are JSON objects, and every answer is marked `Cache-Control: no-store`.
+
+| Route | Caller | Body | Answer |
+| --- | --- | --- | --- |
+| `GET /two-factor` | signed in | | `{"methods": [{"method": "totp", "confirmed_at": "..."}, {"method": "email", "destination": "ada@example.com", "confirmed_at": "..."}], "recovery_codes_left": 8, "locked": false}` |
+| `POST /two-factor/enroll` | a fresh session | `method`; `phone_number` for `sms`; `metadata` for your sender | for `totp`: `{"secret": "...", "uri": "otpauth://..."}`. For `email` and `sms`: `{"status": "code_sent"}` |
+| `POST /two-factor/confirm` | a fresh session | `method`, `code` | `{"status": "enabled"}`, with `recovery_codes` when it is the user's first method |
+| `POST /two-factor/disable` | a fresh session | `method` | `{"status": "disabled"}` |
+| `POST /two-factor/recovery-codes` | a fresh session | none | `{"recovery_codes": [...]}` |
+| `GET /two-factor/challenge` | the pending session | | `{"methods": [{"method": "sms", "destination": "+1******0123"}, {"method": "recovery_code"}], "locked": false}` |
+| `POST /two-factor/send-otp` | the pending session | `method`: `email` or `sms`; `metadata` | `{"status": "code_sent"}` |
+| `POST /two-factor/verify` | the pending session | `method`, `code` | the body of a finished sign-in, `{"user": {...}}`, and the new session token by the configured delivery |
+
+The pending session is the one a sign-in route answered `requires_second_factor` for: send its token the way the session token travels. A client then:
+
+1. calls `GET /two-factor/challenge` and shows the methods;
+2. calls `POST /two-factor/send-otp` for `email` or `sms`;
+3. posts the code to `POST /two-factor/verify`, and keeps the new token from its answer.
+
+A field of the wrong type is a `400` named after the field, such as `method_invalid_input`, and a body that is not JSON a `400` with `request_validation_error`. The plugin's other rejections are under [Errors](#errors).
+
 ## Call the flows from code
 
 Each flow acts on the caller's own account, which it reads from `ctx`. The setup flows need a fresh session: a session signed in within `SessionConfig.FreshAge`, 15 minutes by default.
@@ -178,7 +201,6 @@ The rules are on the flows' before points, so they hold for the flows called fro
 
 The plugin has these limits:
 
-- The plugin mounts no routes yet.
 - TOTP and sent codes can be phished by a site that relays them in real time. A passkey would not be, and no plugin offers one yet.
 - A request that still carries the pending token when the second factor passes finds no session. Under the cookie deliveries its answer can remove the new cookie, so send the second factor once the other requests have returned.
 - One sign-in code per user and channel is live: two sign-ins of one user replace each other's codes.
