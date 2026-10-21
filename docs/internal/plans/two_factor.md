@@ -2,7 +2,7 @@
 
 This document describes the design of the two-factor plugin. It covers the methods a user can turn on, how a sign-in waits for the second factor, the data the plugin keeps, the changes to core it needs, the threats and their controls, the decisions taken, and the order of the work.
 
-**Status:** in progress, as of 2026-10-22. Steps 1 and 2 are done. [Implementation steps](#implementation-steps) lists the work. The package will be `plugins/twofactor`.
+**Status:** in progress, as of 2026-10-22. Steps 1 to 3 are done. [Implementation steps](#implementation-steps) lists the work. The package will be `plugins/twofactor`.
 
 The documents it builds on are:
 
@@ -43,7 +43,7 @@ Core reserved a place for a second factor before any plugin used it:
 These gaps remain:
 
 - No plugin sets `requireStepUp`.
-- `Promote` keeps the pending session's token. Under the cookie deliveries the cookie still expires with the pending session, and the flow that verifies the second factor can't set it again: it never sees the raw token.
+- `Promote` kept the pending session's token. Under the cookie deliveries the cookie still expired with the pending session, and the flow that verifies the second factor couldn't set it again: it never sees the raw token. Step 3 renews the token.
 - Nothing recorded how a session's first factor was proved, so a later request couldn't tell a magic-link sign-in from a password sign-in. Step 2 records it.
 - `MailMessage` has no field for a code. `SMSMessage` has one.
 - Pending sessions counted toward `SessionConfig.MaxConcurrent`, and so did expired ones. Step 1 fixed both.
@@ -429,6 +429,7 @@ The session already has a token, a short expiry, and a state that every other fl
 - A confirmed method that `Options.Methods` no longer allows can't be used. Recovery codes and the admin reset remain.
 - The lock does not end by itself.
 - The session that confirms the first method keeps its single factor in `Session.Factors`.
+- A request that still carries the pending token when the second factor passes finds no session. Under the cookie deliveries its answer can remove the new cookie, so a client sends the second factor once its other challenge requests have returned. [`../sessions/token_delivery.md`](../sessions/token_delivery.md) has the details.
 
 ## Implementation steps
 
@@ -438,7 +439,7 @@ The work is done in this order. Each step ends with its tests and its docs, and 
 | --- | --- | --- |
 | 1 | The session limit counts only active sessions that have not expired, and evicts only among them. A sign-in whose session will be pending is checked against the limit and makes no room, and `Promote` applies the limit. The session manager takes every session time from the store's clock, in UTC, since the limit compares `expires_at` in the database. It resolves M23 and removes its entry. | Done |
 | 2 | [ADR-0009](../decisions/0009-recording-the-factors-of-a-session.md): `sessions.factors`, `SessionMeta.Factor`, `SessionRef.Factors`, the factor names in `core`, and `factor` in the checkpoint payload. The email/password, magic link, phone number, and OAuth sign-ins pass theirs. `hooks.HookValueRequireStepUp`. Docs: `docs/api/sessions.md`, `docs/api/hooks.md`, `docs/internal/models/models.md`. | Done |
-| 3 | [ADR-0008](../decisions/0008-renewing-the-session-token-on-promotion.md): `Promote(ctx, sessionID, factor)` returns a new raw token and records the factor, in one write guarded on the pending state. Docs: `docs/api/sessions.md`, `docs/internal/sessions/token_delivery.md`. | Not started |
+| 3 | [ADR-0008](../decisions/0008-renewing-the-session-token-on-promotion.md): `Promote(ctx, sessionID, factor)` returns a new raw token and records the factor, in one write guarded on the pending state. Docs: `docs/api/sessions.md`, `docs/internal/sessions/token_delivery.md`. | Done |
 | 4 | `MailMessage.Code`, and the plugin's mail and SMS kinds. Docs: `docs/api/mail.md`, `docs/api/sms.md`. | Not started |
 | 5 | `plugins/twofactor/totp`, tested with the RFC vectors. | Not started |
 | 6 | The plugin and its setup: the options and their checks in `Init`, the three tables, the points, rules, and permissions, the user deletion handler, and `Status`, `Enroll`, `Confirm`, `Disable`, and `RegenerateRecoveryCodes`. The `sameRow` entries in `layout_test.go` for the plugin's imports of `totp` and `phonenumber`, and a row for the package in `CLAUDE.md`. Docs: `docs/internal/plugins/twofactor.md` and `docs/api/twofactor.md` start here. | Not started |

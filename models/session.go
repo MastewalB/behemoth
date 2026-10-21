@@ -57,7 +57,7 @@ type Session struct {
 	ExpiresAt      time.Time    `db:"expires_at"`
 	LastActiveAt   time.Time    `db:"last_active_at"` // drives the updateAge throttle; deliberately separated from UpdatedAt
 	FreshAt        time.Time    `db:"fresh_at"`       // last full credential re-check; step-up auth compares against this
-	Factors        []string     `db:"factors"`        // what the sign-in proved, in order, starting with core.SessionMeta.Factor. Stored separated by spaces; nil when none was recorded
+	Factors        []string     `db:"factors"`        // what the sign-in proved, in order: core.SessionMeta.Factor, and the second factor once promoted. Stored separated by spaces; nil when none was recorded
 	IPAddress      string       `db:"ip_address"`
 	UserAgent      string       `db:"user_agent"`
 	ImpersonatorID any          `db:"impersonator_id"` // nullable; set when an admin is impersonating this session's user
@@ -117,14 +117,20 @@ func (s *Session) FromMap(m map[string]any) error {
 	return nil
 }
 
+// SessionFactorsValue returns the stored form of factors: the names separated
+// by spaces, or nil (NULL) when there are none. ToMap writes it, and an
+// update of the factors column passes it.
+func SessionFactorsValue(factors []string) any {
+	if len(factors) == 0 {
+		return nil
+	}
+	return strings.Join(factors, " ")
+}
+
 func (s *Session) ToMap() (map[string]any, error) {
 	var revokedAt any
 	if s.RevokedAt != nil {
 		revokedAt = *s.RevokedAt
-	}
-	var factors any // NULL when none was recorded
-	if len(s.Factors) > 0 {
-		factors = strings.Join(s.Factors, " ")
 	}
 
 	return s.mergeExtras(map[string]any{
@@ -137,7 +143,7 @@ func (s *Session) ToMap() (map[string]any, error) {
 		SessionExpiresAt:      s.ExpiresAt,
 		SessionLastActiveAt:   s.LastActiveAt,
 		SessionFreshAt:        s.FreshAt,
-		SessionFactors:        factors,
+		SessionFactors:        SessionFactorsValue(s.Factors),
 		SessionIPAddress:      s.IPAddress,
 		SessionUserAgent:      s.UserAgent,
 		SessionImpersonatorID: s.ImpersonatorID,

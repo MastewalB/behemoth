@@ -127,6 +127,7 @@ The response follows these rules:
 
 - A plugin can add fields of its own next to these. The magic link plugin adds `redirect_url`.
 - A pending session's token is delivered like any other. The client presents it together with the second factor.
+- When the second factor passes, the answer carries a new token, delivered the same way, and the pending token stops working. Send the second factor once the client's other requests with the pending token have returned: under the cookie deliveries, a late answer to such a request would remove the new cookie.
 - The response has `Cache-Control: no-store`.
 - Sign-up answers `{"user": {...}}` too. It creates no session, so it has no token.
 
@@ -304,7 +305,7 @@ To tell another service who a request is from, exchange the session for a short-
 
 ### What a session proved
 
-A session records the factor its sign-in checked, in `Session.Factors`. A flow reads it on the caller's session, `identity.CallerFrom(ctx).Session()`.
+A session records the factor its sign-in checked, in `Session.Factors`, and a session that passes a second factor records its name after the first. A flow reads them on the caller's session, `identity.CallerFrom(ctx).Session()`.
 
 | Factor | What the sign-in checked |
 | --- | --- |

@@ -28,11 +28,24 @@ type SessionManager interface {
 	Get(ctx context.Context, rawToken string) (*models.Session, error)
 
 	// Promote transitions Pending -> Active, once the caller has verified a
-	// second factor. SessionConfig.MaxConcurrent applies as when an active
-	// session is created: at the limit the user's oldest active session is
-	// revoked, or, without EvictOldestOnLimit, the promotion is refused with
+	// second factor, and records factor, the second factor's name, after
+	// the first (models.Session.Factors). factor is a Factor constant or a
+	// plugin's own name, in lowercase snake case.
+	//
+	// The session gets a new token, which Promote returns with it: the
+	// pending token stops working, so that a token copied before the second
+	// factor never authenticates the active session. The caller delivers
+	// the new token as a sign-in delivers its own (httpapi.WriteSignIn
+	// sets the cookie again with the active session's expiry). The state
+	// and the token change in one write that requires the session to be
+	// pending, so of two promotions of one session one succeeds, and the
+	// other gets a session error with errs.CodeInvalidSessionState.
+	//
+	// SessionConfig.MaxConcurrent applies as when an active session is
+	// created: at the limit the user's oldest active session is revoked, or,
+	// without EvictOldestOnLimit, the promotion is refused with
 	// errs.CodeSessionLimitReached and the session stays pending.
-	Promote(ctx context.Context, sessionID string) (*models.Session, error)
+	Promote(ctx context.Context, sessionID, factor string) (*models.Session, string /* raw token */, error)
 
 	// Touch applies the rolling expiration: it extends a session in use
 	// once less than SessionConfig.UpdateAge is left of it. The

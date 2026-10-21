@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/core"
@@ -113,16 +114,9 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta co
 		return nil, "", err
 	}
 
-	// Token generation & hashing
-	rawToken, err := sm.crypto.Random.SecureRandomString(32)
+	rawToken, lookupHash, tokenHash, keyVersion, err := sm.newToken(op)
 	if err != nil {
-		return nil, "", errs.NewSecurityError(op, "random_generation_failed", err)
-	}
-	lookupHash := utils.LookupHashOf(rawToken)
-
-	tokenHash, keyVersion, err := sm.crypto.Secrets.Hash(rawToken)
-	if err != nil {
-		return nil, "", err // already classified (CategorySecurity) by SecretHasher/KeyManager
+		return nil, "", err
 	}
 
 	// SessionConfig: expiry selection, IP/UA capture toggle
@@ -182,6 +176,21 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta co
 
 	return m, rawToken, nil
 
+}
+
+// newToken returns a new raw session token with the two hashes a session row
+// stores: the unkeyed lookup hash it is found by, and the keyed hash, with
+// its key version, that verifies it.
+func (sm *DefaultSessionManager) newToken(op string) (rawToken, lookupHash, tokenHash string, keyVersion int, err error) {
+	rawToken, err = sm.crypto.Random.SecureRandomString(32)
+	if err != nil {
+		return "", "", "", 0, errs.NewSecurityError(op, "random_generation_failed", err)
+	}
+	tokenHash, keyVersion, err = sm.crypto.Secrets.Hash(rawToken)
+	if err != nil {
+		return "", "", "", 0, err // already classified (CategorySecurity) by SecretHasher/KeyManager
+	}
+	return rawToken, utils.LookupHashOf(rawToken), tokenHash, keyVersion, nil
 }
 
 // maxFactorLength bounds a factor name, so that a session's factors fit
@@ -344,42 +353,65 @@ func (sm *DefaultSessionManager) Validate(ctx context.Context, rawToken string) 
 	return session, nil
 }
 
-func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID string) (*models.Session, error) {
+// Promote implements [core.SessionManager]. The session gets a new token, so
+// that one copied while it was pending never authenticates it. See ADR-0008.
+func (sm *DefaultSessionManager) Promote(ctx context.Context, sessionID, factor string) (*models.Session, string, error) {
 	const op = "SessionManager.Promote"
+	if !isFactorName(factor) {
+		return nil, "", errs.NewConfigurationError(op, fmt.Sprintf(
+			"the second factor %q is not a factor name: lowercase letters, digits and underscores, starting with a letter, at most %d", factor, maxFactorLength), nil)
+	}
 	m, err := sm.st.FindSessionByID(ctx, sessionID)
 	if err != nil {
-		return nil, errs.WrapOp(op, "session", err)
+		return nil, "", errs.WrapOp(op, "session", err)
 	}
 
 	// Transition rule enforcement
 	if m.State == models.SessionRevoked {
-		return nil, errs.NewSessionError(op, errs.CodeSessionRevoked, nil) // Revoked never transitions anywhere
+		return nil, "", errs.NewSessionError(op, errs.CodeSessionRevoked, nil) // Revoked never transitions anywhere
 	}
 	if m.State != models.SessionPending {
-		return nil, errs.NewSessionError(op, "invalid_state_transition",
+		return nil, "", errs.NewSessionError(op, errs.CodeInvalidSessionState,
 			fmt.Errorf("only a Pending session can be promoted (was %q)", m.State))
 	}
 	if sm.st.Now().After(m.ExpiresAt) {
 		// An abandoned pending session (2FA never completed in time) cannot
 		// be resurrected by promotion; it must re-authenticate from scratch.
-		return nil, errs.NewSessionError(op, errs.CodeSessionExpired, nil)
+		return nil, "", errs.NewSessionError(op, errs.CodeSessionExpired, nil)
 	}
 	if err := sm.makeRoom(ctx, op, m.UserID, true); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
+	rawToken, lookupHash, tokenHash, keyVersion, err := sm.newToken(op)
+	if err != nil {
+		return nil, "", err
+	}
 	now := sm.st.Now()
-	// Promotion resets to the FULL Active expiry window.
-	promoted, err := sm.st.UpdateSession(ctx, sessionID, behemoth.M{
+	// The new token and the new state are one write, guarded on the pending
+	// state: no request finds the active session under the pending token, and
+	// of two promotions of one session one wins. Promotion resets to the FULL
+	// Active expiry window.
+	promoted, err := sm.st.UpdateSessionIn(ctx, sessionID, models.SessionPending, behemoth.M{
 		models.SessionStateColumn: string(models.SessionActive),
+		models.SessionLookupHash:  lookupHash,
+		models.SessionTokenHash:   tokenHash,
+		models.SessionKeyVersion:  keyVersion,
+		models.SessionFactors:     models.SessionFactorsValue(append(slices.Clone(m.Factors), factor)),
 		models.SessionFreshAt:     now,
 		models.SessionExpiresAt:   now.Add(sm.cfg.ExpiresIn),
 	})
-	if err != nil {
-		return nil, errs.WrapOp(op, "session", err)
+	if errs.IsNotFound(err) {
+		return nil, "", errs.NewSessionError(op, errs.CodeInvalidSessionState,
+			fmt.Errorf("the session stopped being pending while it was promoted"))
 	}
+	if err != nil {
+		return nil, "", errs.WrapOp(op, "session", err)
+	}
+	// The pending token no longer works, so its cache entry goes.
+	sm.cacheDelete(ctx, m.LookupHash)
 	sm.cacheSet(ctx, promoted)
-	return promoted, nil
+	return promoted, rawToken, nil
 }
 
 // Touch implements [core.SessionManager]. It returns the session only when
