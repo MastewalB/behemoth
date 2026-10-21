@@ -9,6 +9,9 @@ import (
 	"github.com/MastewalB/behemoth/errs"
 )
 
+// ClientIPConfig says which peers may name the client in a header: the
+// trusted proxies and the header they set. NewClientConfig builds it, from
+// RouterConfig.TrustedProxies and ClientIPHeader, and ClientIP reads it.
 type ClientIPConfig struct {
 	trustedNets []*net.IPNet
 	header      string
@@ -33,6 +36,7 @@ func NewClientConfig(trustedProxies []string, header string) (*ClientIPConfig, e
 	return &ClientIPConfig{trustedNets: nets, header: header}, nil
 }
 
+// IsTrusted reports whether ipStr is the address of a trusted proxy.
 func (c *ClientIPConfig) IsTrusted(ipStr string) bool {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
