@@ -2,7 +2,7 @@
 
 This document describes the design of the two-factor plugin. It covers the methods a user can turn on, how a sign-in waits for the second factor, the data the plugin keeps, the changes to core it needs, the threats and their controls, the decisions taken, and the order of the work.
 
-**Status:** in progress, as of 2026-10-22. Steps 1 to 4 are done. [Implementation steps](#implementation-steps) lists the work. The package will be `plugins/twofactor`.
+**Status:** in progress, as of 2026-10-22. Steps 1 to 5 are done. [Implementation steps](#implementation-steps) lists the work. The package will be `plugins/twofactor`.
 
 The documents it builds on are:
 
@@ -441,7 +441,7 @@ The work is done in this order. Each step ends with its tests and its docs, and 
 | 2 | [ADR-0009](../decisions/0009-recording-the-factors-of-a-session.md): `sessions.factors`, `SessionMeta.Factor`, `SessionRef.Factors`, the factor names in `core`, and `factor` in the checkpoint payload. The email/password, magic link, phone number, and OAuth sign-ins pass theirs. `hooks.HookValueRequireStepUp`. Docs: `docs/api/sessions.md`, `docs/api/hooks.md`, `docs/internal/models/models.md`. | Done |
 | 3 | [ADR-0008](../decisions/0008-renewing-the-session-token-on-promotion.md): `Promote(ctx, sessionID, factor)` returns a new raw token and records the factor, in one write guarded on the pending state. Docs: `docs/api/sessions.md`, `docs/internal/sessions/token_delivery.md`. | Done |
 | 4 | `MailMessage.Code`, and the plugin's mail and SMS kinds. Docs: `docs/api/mail.md`. The API pages list the kinds once the plugin sends them, in steps 6 and 7. | Done |
-| 5 | `plugins/twofactor/totp`, tested with the RFC vectors. | Not started |
+| 5 | `plugins/twofactor/totp`, tested with the RFC vectors. | Done |
 | 6 | The plugin and its setup: the options and their checks in `Init`, the three tables, the points, rules, and permissions, the user deletion handler, and `Status`, `Enroll`, `Confirm`, `Disable`, and `RegenerateRecoveryCodes`. The `sameRow` entries in `layout_test.go` for the plugin's imports of `totp` and `phonenumber`, and a row for the package in `CLAUDE.md`. Docs: `docs/internal/plugins/twofactor.md` and `docs/api/twofactor.md` start here. | Not started |
 | 7 | The sign-in: the checkpoint handler, `Challenge`, `SendCode`, `Verify` with the failure count and the lock, and `Reset`. The flows' tests run without HTTP. | Not started |
 | 8 | The routes and their tests, the plugin in the README and in an example application, and the API page completed. | Not started |
