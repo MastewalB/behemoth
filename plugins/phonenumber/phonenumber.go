@@ -931,19 +931,20 @@ func (p *Plugin) signInBody(hctx *core.HookContext, in signInInput) (*core.SignI
 		return nil, errInvalidCode(op)
 	}
 
-	// The seam a 2FA plugin hooks, as in the email/password sign-in.
+	// The seam a 2FA plugin hooks, as in the email/password sign-in. The
+	// payload names the factor this sign-in checked. See ADR-0009.
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
-		behemoth.M{hooks.HookValueUserID: user.ID})
+		behemoth.M{hooks.HookValueUserID: user.ID, hooks.HookValueFactor: core.FactorSMS})
 	if err != nil {
 		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
 			core.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
 	state := models.SessionActive
-	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
+	if requireStepUp, _ := checkpoint[hooks.HookValueRequireStepUp].(bool); requireStepUp {
 		state = models.SessionPending
 	}
 
-	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state})
+	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state, Factor: core.FactorSMS})
 	if err != nil {
 		return nil, err
 	}

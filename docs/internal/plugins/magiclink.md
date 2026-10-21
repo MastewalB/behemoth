@@ -82,7 +82,7 @@ The response time still differs: a known email pays for the token writes, and wi
 | 2 | `Store.FindUserByID(token.Subject)` | `Fail` with `user_not_found` |
 | 3 | compare the email in the token's metadata with the user's | `Fail` with `email_changed` |
 | 4 | set `email_verified` if it is not set (`Store.UpdateUser`), unless `Options.LeaveEmailUnverified` | the error is returned |
-| 5 | `RunBefore(auth.signIn.credentialsVerified)`; `requireStepUp` makes the session pending | `FailIfRejected`: `Fail` with `rejected_by_hook` for a rejection |
+| 5 | `RunBefore(auth.signIn.credentialsVerified)` with the factor `email`; `requireStepUp` makes the session pending | `FailIfRejected`: `Fail` with `rejected_by_hook` for a rejection |
 | 6 | `SessionManager.Create` | the error is returned |
 | 7 | return a `*core.SignInResult` with `Method: "magiclink"` | |
 

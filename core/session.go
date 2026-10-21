@@ -95,4 +95,24 @@ type SessionMeta struct {
 	IPAddress string
 	UserAgent string
 	State     models.SessionState // Active or Pending: set by the caller (SignIn passes Active or Pending depending on whether 2FA is required)
+	// Factor names what the sign-in checked: one of the Factor constants, or
+	// a name of a plugin's own in lowercase snake case, at most 32
+	// characters. The session records it as its first factor
+	// (models.Session.Factors), which a flow reads on the caller's session.
+	// Empty records none, for a session that no credential check created,
+	// such as one in a test.
+	Factor string
 }
+
+// The factors Behemoth's plugins record on a session: what a credential
+// proved, named by its channel, so that the same name means the same proof
+// whichever plugin records it. A sign-in passes its factor in SessionMeta
+// and in the payload of auth.signIn.credentialsVerified.
+const (
+	FactorPassword     = "password"      // a password
+	FactorEmail        = "email"         // control of a mailbox, such as a magic link
+	FactorSMS          = "sms"           // control of a phone number, by a code sent in a text message
+	FactorOAuth        = "oauth"         // the answer of an OAuth or OpenID Connect provider
+	FactorTOTP         = "totp"          // a code from an authenticator app
+	FactorRecoveryCode = "recovery_code" // a recovery code
+)

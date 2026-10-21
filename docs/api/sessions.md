@@ -302,16 +302,49 @@ Nothing refreshes a session in place. Signing in again is how a user gets a fres
 
 To tell another service who a request is from, exchange the session for a short-lived JWT. See [Session tokens](session-tokens.md).
 
+### What a session proved
+
+A session records the factor its sign-in checked, in `Session.Factors`. A flow reads it on the caller's session, `identity.CallerFrom(ctx).Session()`.
+
+| Factor | What the sign-in checked |
+| --- | --- |
+| `password` | a password, whether the user was named by email, username, or phone number |
+| `email` | control of a mailbox: a magic link |
+| `sms` | control of a phone number: a code sent by text message |
+| `oauth` | the answer of an OAuth or OpenID Connect provider |
+
+The names are constants in `core`, such as `core.FactorPassword`. Each names a channel, whichever plugin checked it. A plugin may record a name of its own, in lowercase snake case. A session that code created without naming a factor has none.
+
 ## Write a sign-in route
 
-A plugin that signs users in builds a `core.SignInResult` and hands it to `httpapi.WriteSignIn`:
+A sign-in flow passes core's checkpoint, `auth.signIn.credentialsVerified`, once the credential checks out and before it creates the session. A handler there can refuse the sign-in, or ask for a second factor, and the session is then pending. Name the factor your flow checked, in the payload and in `SessionMeta`:
 
 ```go
-session, rawToken, err := ac.SessionManager.Create(rctx.Ctx, user.ID, core.SessionMeta{State: models.SessionActive})
+checkpoint, err := ac.Dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
+	behemoth.M{hooks.HookValueUserID: user.ID, hooks.HookValueFactor: core.FactorEmail})
+if err != nil {
+	return nil, err // a handler refused the sign-in
+}
+state := models.SessionActive
+if stepUp, _ := checkpoint[hooks.HookValueRequireStepUp].(bool); stepUp {
+	state = models.SessionPending
+}
+session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state, Factor: core.FactorEmail})
+if err != nil {
+	return nil, err
+}
+return &core.SignInResult{User: user, Session: session, RawToken: rawToken, Method: "myplugin"}, nil
+```
+
+`hctx` is the `core.HookContext` of your sign-in, and `core.FactorEmail` stands for what your flow checked (see [What a session proved](#what-a-session-proved)). Behemoth's sign-in plugins also fire `auth.signIn.before`, `.after`, and `.failed` around the flow with `core.WithLifecycle`, so that rate limits, hook handlers, and the audit log see every sign-in.
+
+The route hands the result to `httpapi.WriteSignIn`:
+
+```go
+result, err := p.SignIn(rctx.Ctx, creds) // the flow above
 if err != nil {
 	return err
 }
-result := &core.SignInResult{User: user, Session: session, RawToken: rawToken, Method: "myplugin"}
 return httpapi.WriteSignIn(rctx, result, nil) // the body above, and the token by the configured delivery
 ```
 

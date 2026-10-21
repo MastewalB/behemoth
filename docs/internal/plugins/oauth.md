@@ -122,7 +122,7 @@ It then reads the state's token without consuming it (`TokenManager.Verify`). Th
 | 5 | `Store.Open(verifier_secret)`, then `Provider.Exchange` with the code, the redirect URI, the verifier, and the nonce | `Fail` with `oauth_exchange_refused` for `ErrExchangeRefused`. Any other error is returned. |
 | 6 | the identity has a subject | an error of the system: the provider's mistake, not the user's |
 | 7 | `resolveUser`: find or create the user | see below |
-| 8 | `RunBefore(auth.signIn.credentialsVerified)`; `requireStepUp` makes the session pending | `FailIfRejected`: `Fail` with `rejected_by_hook` for a rejection |
+| 8 | `RunBefore(auth.signIn.credentialsVerified)` with the factor `oauth`; `requireStepUp` makes the session pending | `FailIfRejected`: `Fail` with `rejected_by_hook` for a rejection |
 | 9 | `SessionManager.Create` | the error is returned |
 | 10 | return a `*core.SignInResult` with `Method: "oauth"` | |
 

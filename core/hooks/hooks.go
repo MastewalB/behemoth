@@ -62,6 +62,16 @@ const (
 	// so a rate-limit rule there can count each method apart.
 	HookValueMethod = "method"
 
+	// HookValueFactor is the factor a sign-in checked, one of core's Factor
+	// names such as core.FactorPassword, in the payload of
+	// auth.signIn.credentialsVerified. A handler reads it; nothing is read
+	// back.
+	HookValueFactor = "factor"
+	// HookValueRequireStepUp is the key a handler on
+	// auth.signIn.credentialsVerified sets to true in the payload it returns,
+	// to make the new session wait for a second factor.
+	HookValueRequireStepUp = "requireStepUp"
+
 	HookValueTokenID      = "tokenID"
 	HookValueTokenKind    = "kind"
 	HookValueTokenSubject = "subject"

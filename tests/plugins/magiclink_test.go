@@ -309,9 +309,11 @@ func TestMagicLinkRequestsAreLimitedPerEmail(t *testing.T) {
 func TestMagicLinkVerifyRefusalsAndSecondFactor(t *testing.T) {
 	ctx := context.Background()
 	stepUp := false
+	var factor any
 	app, user := bootMagicLink(t, magiclink.Options{WaitForSend: true}, func(reg core.HookRegistry) error {
 		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
-			payload["requireStepUp"] = stepUp
+			factor = payload[hooks.HookValueFactor]
+			payload[hooks.HookValueRequireStepUp] = stepUp
 			return payload, nil
 		}, nil)
 	})
@@ -326,6 +328,8 @@ func TestMagicLinkVerifyRefusalsAndSecondFactor(t *testing.T) {
 	result, err := p.Verify(ctx, link().Token)
 	require.NoError(t, err)
 	assert.Equal(t, models.SessionPending, result.Session.State, "a second factor is still asked for")
+	assert.Equal(t, core.FactorEmail, factor, "the checkpoint names the factor")
+	assert.Equal(t, []string{core.FactorEmail}, result.Session.Factors)
 	stepUp = false
 
 	// The email changes after the link was sent.

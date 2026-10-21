@@ -580,23 +580,24 @@ func (p *Plugin) signInBody(hctx *core.HookContext, creds IdentifierCredentials)
 	// payload - this is the mechanism by which SignIn decides Pending vs Active
 	// without knowing anything about TOTP, backup codes, etc. Any plugin may
 	// refuse the sign-in here, so a refusal is reported as one by a hook and
-	// not as a second factor's. See ADR-0001.
+	// not as a second factor's. See ADR-0001. The payload names the factor this
+	// sign-in checked, which a second factor must not repeat. See ADR-0009.
 	checkpoint, err := dispatcher.RunBefore(hctx, hooks.HookSignInCredentialsVerified,
-		behemoth.M{hooks.HookValueUserID: user.ID})
+		behemoth.M{hooks.HookValueUserID: user.ID, hooks.HookValueFactor: core.FactorPassword})
 	if err != nil {
 		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
 			core.FailureReason{SubjectType: models.UserTable, SubjectID: user.ID})
 	}
 
 	state := models.SessionActive
-	if requireStepUp, _ := checkpoint["requireStepUp"].(bool); requireStepUp {
+	if requireStepUp, _ := checkpoint[hooks.HookValueRequireStepUp].(bool); requireStepUp {
 		state = models.SessionPending
 	}
 
 	// The session manager reads the IP address and user agent from the
 	// request on hctx.Ctx, so sign-in also works without one (a job, another
 	// plugin calling in).
-	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state})
+	session, rawToken, err := ac.SessionManager.Create(hctx.Ctx, user.ID, core.SessionMeta{State: state, Factor: core.FactorPassword})
 	if err != nil {
 		return nil, err
 	}

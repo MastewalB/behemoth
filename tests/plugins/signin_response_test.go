@@ -248,9 +248,11 @@ func TestRefusedSignOutKeepsTheCookie(t *testing.T) {
 // needs it to present the second factor.
 func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 	ctx := context.Background()
+	var factor any
 	stepUp := func(reg core.HookRegistry) error {
 		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
-			payload["requireStepUp"] = true
+			factor = payload[hooks.HookValueFactor]
+			payload[hooks.HookValueRequireStepUp] = true
 			return payload, nil
 		}, nil)
 	}
@@ -278,6 +280,8 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 		session, err := ac.SessionManager.Get(ctx, token)
 		require.NoError(t, err, delivery)
 		assert.Equal(t, models.SessionPending, session.State, delivery)
+		assert.Equal(t, core.FactorPassword, factor, "%s: the checkpoint names the factor", delivery)
+		assert.Equal(t, []string{core.FactorPassword}, session.Factors, delivery)
 		if delivery == httpapi.DeliveryHeader {
 			assert.NotContains(t, body, "token", "under the header delivery the body has no token")
 		}

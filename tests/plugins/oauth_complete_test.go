@@ -424,12 +424,14 @@ func TestOAuthCompletePassesTheSecondFactorPoint(t *testing.T) {
 	ctx := context.Background()
 	var trace signInTrace
 	answer := "stepUp"
+	var factor any
 	app, err := bootOAuth(t, oauth.Options{}, trace.register(func(reg core.HookRegistry) error {
 		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, payload behemoth.M) (behemoth.M, error) {
+			factor = payload[hooks.HookValueFactor]
 			if answer == "refuse" {
 				return nil, errs.NewUnauthorized("test", "account_suspended", "account suspended")
 			}
-			payload["requireStepUp"] = true
+			payload[hooks.HookValueRequireStepUp] = true
 			return payload, nil
 		}, nil)
 	}))
@@ -439,6 +441,8 @@ func TestOAuthCompletePassesTheSecondFactorPoint(t *testing.T) {
 	result, err := app.plugin.Complete(ctx, app.begin(t, app.google, ""))
 	require.NoError(t, err)
 	assert.Equal(t, models.SessionPending, result.Session.State, "a second factor is still asked for")
+	assert.Equal(t, core.FactorOAuth, factor, "the checkpoint names the factor")
+	assert.Equal(t, []string{core.FactorOAuth}, result.Session.Factors)
 	_, err = app.ac.SessionManager.Validate(ctx, result.RawToken)
 	assert.Error(t, err, "a pending session does not authenticate")
 

@@ -46,6 +46,7 @@ func SessionTableSchema() schema.Table {
 			{Name: SessionExpiresAt, Type: schema.ColTypeTimestamp},
 			{Name: SessionLastActiveAt, Type: schema.ColTypeTimestamp},
 			{Name: SessionFreshAt, Type: schema.ColTypeTimestamp},
+			{Name: SessionFactors, Type: schema.ColTypeString, Length: 255, Nullable: true},
 			{Name: SessionIPAddress, Type: schema.ColTypeString, Length: 64, Nullable: true},
 			{Name: SessionUserAgent, Type: schema.ColTypeText, Nullable: true},
 			{Name: SessionImpersonatorID, Type: schema.ColTypeString, Length: 36, Nullable: true},

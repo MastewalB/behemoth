@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"slices"
 
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
@@ -79,6 +80,7 @@ func sessionRef(s *models.Session) identity.SessionRef {
 		State:     string(s.State),
 		ExpiresAt: s.ExpiresAt,
 		FreshAt:   s.FreshAt,
+		Factors:   slices.Clone(s.Factors),
 	}
 	if id, ok := s.ImpersonatorID.(string); ok {
 		ref.ImpersonatorID = id
