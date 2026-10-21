@@ -3,7 +3,6 @@ package ratelimit
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/MastewalB/behemoth"
@@ -169,31 +168,25 @@ func (rl *DefaultRateLimiter) CheckHookLimit(ctx context.Context, point core.Hoo
 	return nil
 }
 
-func (rl *DefaultRateLimiter) CheckRouteLimit(ctx context.Context, rule core.RouteRateLimitRule, r *http.Request, ipCfg *core.ClientIPConfig) error {
-	if rl.disabled[rule.Name] {
-		return nil // as a rule declared with Disabled: the route has no limit
+// CheckRule implements [core.RateLimiter].
+func (rl *DefaultRateLimiter) CheckRule(ctx context.Context, name, key, ip string) error {
+	rule, ok := rl.catalog.Rule(name)
+	if !ok {
+		return errs.NewConfigurationError("RateLimiter", fmt.Sprintf("no rule %q is declared", name), nil)
 	}
-	ip := core.ClientIP(r, ipCfg)
-	key := rule.Name + ":" + rule.KeyFunc(r, ip)
-	limiter, err := rl.limiterFor(rule.Name, rule.Algorithm, rule.Limiter)
+	if rule.Disabled || rl.disabled[name] {
+		return nil
+	}
+	limiter, err := rl.limiterFor(name, rule.Algorithm, rule.Limiter)
 	if err != nil {
 		return err
 	}
-	if err := rl.evaluate(ctx, rule.Name, key, ip, limiter, rl.limitOf(rule.Name, rule.Limit), rule.Action, rule.LockoutFor); err != nil {
-		return err // *errs.DomainError, CategoryRateLimited; ErrorMapper already maps this to 429 + Retry-After, no body parsing or session lookup ever ran
-	}
-
-	return nil
-}
-
-func (rl *DefaultRateLimiter) GetBestMatchforRoute(ctx context.Context, method, path string) (core.RouteRateLimitRule, bool) {
-	rules := rl.catalog.RulesForRoute()
-	return core.BestRouteMatch(rules, method, path)
+	return rl.evaluate(ctx, name, name+":"+key, ip, limiter, rl.limitOf(name, rule.Limit), rule.Action, rule.LockoutFor)
 }
 
 // evaluate is the shared core: it asks the rule's limiter and turns a
-// refusal into an audit event and a rate-limited error. Both the
-// point-scoped path and route-scoped path call through here, so there is
+// refusal into an audit event and a rate-limited error. Hook rules and the
+// rules a transport applies (CheckRule) both go through it, so there is
 // exactly one place that handles a refusal and a failing counter.
 //
 // Deferred: ActionLockout. No rule reaches here with it, because the catalog

@@ -11,8 +11,8 @@ import (
 
 // signup creates a user and signs them in without an HTTP request, by
 // calling the email/password plugin's exported flows. The same hook
-// handlers run as for the routes; they see HookContext.Request == nil, and
-// the session records no IP address or user agent. The command names itself
+// handlers run as for the routes; their caller has no transport, and the
+// session records no IP address or user agent. The command names itself
 // as the caller, so the audit log credits it by name.
 //
 // invite is passed as input, exactly like the route's "inviteCode" field.

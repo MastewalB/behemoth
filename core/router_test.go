@@ -154,14 +154,16 @@ func (c fixedRuleCatalog) DeclareHookRateLimitRule(HookRateLimitRule) error   { 
 func (c fixedRuleCatalog) RulesForHook(HookPoint) []HookRateLimitRule         { return nil }
 func (c fixedRuleCatalog) DeclareRouteRateLimitRule(RouteRateLimitRule) error { return nil }
 func (c fixedRuleCatalog) RulesForRoute() []RouteRateLimitRule                { return c.routes }
+func (c fixedRuleCatalog) DeclareRule(RateLimitRule) error                    { return nil }
+func (c fixedRuleCatalog) Rule(string) (RateLimitRule, bool)                  { return RateLimitRule{}, false }
 func (c fixedRuleCatalog) HasRule(string) bool                                { return false }
 
 // rejectingLimiter rejects every request and reports which rule fired.
 type rejectingLimiter struct{}
 
 func (rejectingLimiter) CheckHookLimit(context.Context, HookPoint, *HookContext) error { return nil }
-func (rejectingLimiter) CheckRouteLimit(_ context.Context, rule RouteRateLimitRule, _ *http.Request, _ *ClientIPConfig) error {
-	return errs.NewRateLimited("test", rule.Name, time.Second)
+func (rejectingLimiter) CheckRule(_ context.Context, name, _, _ string) error {
+	return errs.NewRateLimited("test", name, time.Second)
 }
 
 func TestApplyRateLimitingMatchesRelativeAndAbsolutePaths(t *testing.T) {
@@ -182,7 +184,7 @@ func TestApplyRateLimitingMatchesRelativeAndAbsolutePaths(t *testing.T) {
 	}
 
 	rule := func(name, method, path string) RouteRateLimitRule {
-		return RouteRateLimitRule{Name: name, Method: method, Path: path}
+		return RouteRateLimitRule{Name: name, Method: method, Path: path, KeyFunc: func(*http.Request, string) string { return "" }}
 	}
 	r.ApplyRateLimiting(rejectingLimiter{}, fixedRuleCatalog{routes: []RouteRateLimitRule{
 		rule("signin", http.MethodPost, "/sign-in/email"),            // relative to BasePath, no MountPath

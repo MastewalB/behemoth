@@ -315,15 +315,15 @@ result := &core.SignInResult{User: user, Session: session, RawToken: rawToken, M
 return core.WriteSignIn(rctx, result, nil) // the body above, and the token by the configured delivery
 ```
 
-`WriteSignIn` is what makes the token arrive. If you write the response yourself, call `ac.TokenCarrier.Write(rctx, rawToken, session.ExpiresAt)`. It sets the cookie or the header. It returns `true` when the delivery is the body, and then putting the token in your JSON is up to you.
+`WriteSignIn` is what makes the token arrive. If you write the response yourself, call `rctx.TokenCarrier.Write(rctx, rawToken, session.ExpiresAt)`. It sets the cookie or the header. It returns `true` when the delivery is the body, and then putting the token in your JSON is up to you.
 
 A flow called from code, such as `emailpassword.Plugin.SignIn`, returns the raw token in its result and delivers nothing. The caller decides what to do with it.
 
-A route that gives the client a value of its own, to be sent back later, can deliver it the way the session token travels. `ac.TokenCarrier.Config()` returns the carrier's settings with their defaults applied: `Delivery`, and the cookie's `CookieSameSite` and `CookieInsecure`. The OAuth plugin does this with its binding value. See [OAuth](oauth.md#build-the-callback-page).
+A route that gives the client a value of its own, to be sent back later, can deliver it the way the session token travels. `rctx.TokenCarrier.Config()` returns the carrier's settings with their defaults applied: `Delivery`, and the cookie's `CookieSameSite` and `CookieInsecure`. The OAuth plugin does this with its binding value. See [OAuth](oauth.md#build-the-callback-page).
 
 ## Write a route that ends the session
 
-A route that ends its caller's own session takes the token back afterwards with `ac.TokenCarrier.Clear`, the counterpart of `Write`. With a cookie delivery it removes the cookie the request presented its token in, and it does nothing for the other deliveries.
+A route that ends its caller's own session takes the token back afterwards with `rctx.TokenCarrier.Clear`, the counterpart of `Write`. With a cookie delivery it removes the cookie the request presented its token in, and it does nothing for the other deliveries.
 
 ```go
 func signOutEverywhere(rctx *core.RequestContext) error {
@@ -331,7 +331,7 @@ func signOutEverywhere(rctx *core.RequestContext) error {
 	if err := rctx.Auth.SessionManager.RevokeAllForUser(rctx.Ctx, session.UserID, "signed_out_everywhere", ""); err != nil {
 		return err
 	}
-	rctx.Auth.TokenCarrier.Clear(rctx) // after the revoke succeeded
+	rctx.TokenCarrier.Clear(rctx) // after the revoke succeeded
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})
 }
 ```

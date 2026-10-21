@@ -22,7 +22,8 @@ import (
 // routeAnswer is a route's response, with its JSON body decoded.
 type routeAnswer struct {
 	*http.Response
-	body behemoth.M
+	body    behemoth.M
+	carrier *core.TokenCarrier // the carrier the router handed to the request
 }
 
 // post calls a mounted route of the plugin the way the router does, with
@@ -49,7 +50,7 @@ func (app *oauthApp) post(t *testing.T, path, body string, cookies ...*http.Cook
 	resp := w.Result()
 	raw, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	answer := routeAnswer{Response: resp}
+	answer := routeAnswer{Response: resp, carrier: rctx.TokenCarrier}
 	require.NoError(t, json.Unmarshal(raw, &answer.body), "the body is JSON: %s", raw)
 	return answer
 }
@@ -275,10 +276,9 @@ func TestOAuthRoutesAreRateLimited(t *testing.T) {
 func TestOAuthRoutesReadTheCarrierDefaults(t *testing.T) {
 	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(""))
 	require.NoError(t, err)
-	assert.Equal(t, core.DeliveryCookie, app.ac.TokenCarrier.Config().Delivery)
-	assert.Equal(t, core.DefaultSessionCookieName, app.ac.TokenCarrier.Config().CookieName)
-
 	begun := app.post(t, oauth.PathBegin, `{"provider":"google"}`)
+	assert.Equal(t, core.DeliveryCookie, begun.carrier.Config().Delivery)
+	assert.Equal(t, core.DefaultSessionCookieName, begun.carrier.Config().CookieName)
 	assert.NotContains(t, begun.body, "binding")
 	assert.NotNil(t, begun.cookie(t, "__Host-"+oauth.BindingCookiePrefix))
 }

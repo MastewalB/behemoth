@@ -562,9 +562,8 @@ func hookContext(ctx context.Context, auth *core.AuthContext, point core.HookPoi
 	}
 	return &core.HookContext{
 		Ctx: ctx, Point: point, Phase: phase,
-		Auth:    auth,
-		Values:  values,
-		Request: core.RequestFrom(ctx),
+		Auth:   auth,
+		Values: values,
 	}
 }
 

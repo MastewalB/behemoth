@@ -174,9 +174,9 @@ func (c TokenCarrierConfig) Validate() error {
 // user in or out join the two. Another transport would carry the token its
 // own way and call the same manager.
 //
-// Boot builds one from RouterConfig.Carrier and puts it on
-// AuthContext.TokenCarrier. It holds only its settings, so it is safe for
-// concurrent use.
+// The router builds one from RouterConfig.Carrier and hands it to every
+// handler as RequestContext.TokenCarrier. It holds only its settings, so it
+// is safe for concurrent use.
 type TokenCarrier struct {
 	cfg TokenCarrierConfig
 }

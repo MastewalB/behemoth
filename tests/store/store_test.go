@@ -727,10 +727,10 @@ func (p *signupPlugin) Routes() []core.Route {
 
 func (p *signupPlugin) Register(reg core.HookRegistry) error {
 	return reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
-		if hctx.Request == nil {
+		if rctx := core.RequestFrom(hctx.Ctx); rctx == nil {
 			row[models.UserFirstname] = "no-request"
 		} else {
-			row[models.UserFirstname] = hctx.Request.Request.Header.Get("X-Username")
+			row[models.UserFirstname] = rctx.Request.Header.Get("X-Username")
 		}
 		return row, nil
 	}, nil)

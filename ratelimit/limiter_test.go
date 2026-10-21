@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -23,27 +21,26 @@ import (
 // rejects a name nothing builds and a limit that can't be counted, and the
 // rate limiter resolves the name to the Limiter Boot built.
 func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
-	keyFunc := func(*http.Request, string) string { return "k" }
-	declare := func(rule core.RouteRateLimitRule) error {
-		rule.Method, rule.Path, rule.KeyFunc, rule.Owner = http.MethodPost, "/x", keyFunc, "test"
-		return NewRateLimitCatalog(dispatch.NewDefaultHookCatalog()).DeclareRouteRateLimitRule(rule)
+	declare := func(rule core.RateLimitRule) error {
+		rule.Owner = "test"
+		return NewRateLimitCatalog(dispatch.NewDefaultHookCatalog()).DeclareRule(rule)
 	}
 	limit := core.Limit{Max: 5, Window: time.Minute}
 	for name, tc := range map[string]struct {
-		rule core.RouteRateLimitRule
+		rule core.RateLimitRule
 		ok   bool
 	}{
-		"the default algorithm":         {core.RouteRateLimitRule{Name: "a", Limit: limit}, true},
-		"fixed window by name":          {core.RouteRateLimitRule{Name: "b", Limit: limit, Algorithm: core.AlgorithmFixedWindow}, true},
-		"an unknown algorithm":          {core.RouteRateLimitRule{Name: "c", Limit: limit, Algorithm: "token_bucket"}, false},
-		"no limit":                      {core.RouteRateLimitRule{Name: "d"}, false},
-		"no window":                     {core.RouteRateLimitRule{Name: "e", Limit: core.Limit{Max: 5}}, false},
-		"its own limiter, any limit":    {core.RouteRateLimitRule{Name: "f", Limiter: fixedLimiter{allowed: true}}, true},
-		"disabled rules are not judged": {core.RouteRateLimitRule{Name: "g", Disabled: true}, true},
-		"reject by name":                {core.RouteRateLimitRule{Name: "h", Limit: limit, Action: core.ActionReject}, true},
-		"lockout is not built":          {core.RouteRateLimitRule{Name: "i", Limit: limit, Action: core.ActionLockout, LockoutFor: time.Hour}, false},
-		"lockout with its own limiter":  {core.RouteRateLimitRule{Name: "j", Limiter: fixedLimiter{allowed: true}, Action: core.ActionLockout}, false},
-		"an unknown action":             {core.RouteRateLimitRule{Name: "k", Limit: limit, Action: "ban"}, false},
+		"the default algorithm":         {core.RateLimitRule{Name: "a", Limit: limit}, true},
+		"fixed window by name":          {core.RateLimitRule{Name: "b", Limit: limit, Algorithm: core.AlgorithmFixedWindow}, true},
+		"an unknown algorithm":          {core.RateLimitRule{Name: "c", Limit: limit, Algorithm: "token_bucket"}, false},
+		"no limit":                      {core.RateLimitRule{Name: "d"}, false},
+		"no window":                     {core.RateLimitRule{Name: "e", Limit: core.Limit{Max: 5}}, false},
+		"its own limiter, any limit":    {core.RateLimitRule{Name: "f", Limiter: fixedLimiter{allowed: true}}, true},
+		"disabled rules are not judged": {core.RateLimitRule{Name: "g", Disabled: true}, true},
+		"reject by name":                {core.RateLimitRule{Name: "h", Limit: limit, Action: core.ActionReject}, true},
+		"lockout is not built":          {core.RateLimitRule{Name: "i", Limit: limit, Action: core.ActionLockout, LockoutFor: time.Hour}, false},
+		"lockout with its own limiter":  {core.RateLimitRule{Name: "j", Limiter: fixedLimiter{allowed: true}, Action: core.ActionLockout}, false},
+		"an unknown action":             {core.RateLimitRule{Name: "k", Limit: limit, Action: "ban"}, false},
 	} {
 		if err := declare(tc.rule); (err == nil) != tc.ok {
 			t.Errorf("%s: Declare = %v, want ok=%v", name, err, tc.ok)
@@ -178,7 +175,8 @@ func (l limitRecorder) Allow(_ context.Context, key string, limit core.Limit) (b
 }
 
 // RateLimitConfig.Limits replaces a rule's limit and Disabled turns a rule
-// off, for hook and route rules alike. A name no rule has, or a limit that
+// off, for hook rules and the rules a transport applies, such as route
+// rules, alike. A name no rule has, or a limit that
 // can't be counted, is a configuration error.
 func TestRateLimitConfigChangesRulesByName(t *testing.T) {
 	const point = core.HookPoint("test.thing.before")
@@ -197,9 +195,8 @@ func TestRateLimitConfigChangesRulesByName(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"route.tuned", "route.off"} {
-		if err := catalog.DeclareRouteRateLimitRule(core.RouteRateLimitRule{
-			Name: name, Method: http.MethodPost, Path: "/" + name, KeyFunc: func(*http.Request, string) string { return "" },
-			Limit: declared, Limiter: recorder, Owner: "test",
+		if err := catalog.DeclareRule(core.RateLimitRule{
+			Name: name, Limit: declared, Limiter: recorder, Owner: "test",
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -218,8 +215,8 @@ func TestRateLimitConfigChangesRulesByName(t *testing.T) {
 	if err := rl.CheckHookLimit(ctx, point, &core.HookContext{Ctx: ctx}); err != nil {
 		t.Fatal(err)
 	}
-	for _, rule := range catalog.RulesForRoute() {
-		if err := rl.CheckRouteLimit(ctx, rule, httptest.NewRequest(http.MethodPost, rule.Path, nil), &core.ClientIPConfig{}); err != nil {
+	for _, name := range []string{"route.tuned", "route.off"} {
+		if err := rl.CheckRule(ctx, name, "", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -252,5 +249,46 @@ func TestRateLimitRefusalOmitsTheAddressWhenConfigured(t *testing.T) {
 	events := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
 	if len(events) != 1 || events[0].IPAddress != "" || events[0].Metadata["key"] != nil || events[0].Metadata["rule"] != "signin" {
 		t.Errorf("audit events = %+v, want one event with the rule and without the address or the key", events)
+	}
+}
+
+// CheckRule counts a call against a rule declared with DeclareRule, under
+// the rule's name and the key the transport passes, and records the
+// transport's address in the event of a refusal. A rule declared Disabled
+// counts nothing, and an undeclared name is a mistake in the transport.
+func TestCheckRuleCountsWhatTheTransportPasses(t *testing.T) {
+	catalog := NewRateLimitCatalog(dispatch.NewDefaultHookCatalog())
+	var keys []string
+	for _, rule := range []core.RateLimitRule{
+		{Name: "transport.counted", Limiter: keyRecorder{&keys}, Owner: "test"},
+		{Name: "transport.refused", Limiter: fixedLimiter{allowed: false}, Owner: "test"},
+		{Name: "transport.exempt", Disabled: true, Owner: "test"},
+	} {
+		if err := catalog.DeclareRule(rule); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tel, rec := telemetrytest.New()
+	rl := &DefaultRateLimiter{catalog: catalog, tel: tel}
+	ctx := context.Background()
+
+	if err := rl.CheckRule(ctx, "transport.counted", "203.0.113.7", "203.0.113.7"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"transport.counted:203.0.113.7"}; !slices.Equal(keys, want) {
+		t.Errorf("keys counted = %q, want %q", keys, want)
+	}
+	err := rl.CheckRule(ctx, "transport.refused", "k", "203.0.113.7")
+	if !errs.IsCategory(err, errs.CategoryRateLimited) {
+		t.Errorf("a refusal returned %v, want a rate-limited error", err)
+	}
+	if events := rec.Audit.OfType(telemetry.AuditRateLimitExceeded); len(events) != 1 || events[0].IPAddress != "203.0.113.7" {
+		t.Errorf("audit events = %+v, want one with the transport's address", events)
+	}
+	if err := rl.CheckRule(ctx, "transport.exempt", "k", ""); err != nil {
+		t.Errorf("a disabled rule returned %v", err)
+	}
+	if err := rl.CheckRule(ctx, "no.such.rule", "k", ""); !errs.IsCategory(err, errs.CategoryConfiguration) {
+		t.Errorf("an undeclared rule returned %v, want a configuration error", err)
 	}
 }

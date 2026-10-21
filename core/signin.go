@@ -78,7 +78,7 @@ func WriteSignIn(rctx *RequestContext, result *SignInResult, extra behemoth.M) e
 		}
 		body[SignInUserKey] = user
 	}
-	if rctx.Auth.TokenCarrier.Write(rctx, result.RawToken, result.Session.ExpiresAt) {
+	if rctx.TokenCarrier.Write(rctx, result.RawToken, result.Session.ExpiresAt) {
 		body[SignInTokenKey] = result.RawToken
 	}
 	rctx.Response.SetHeader("Cache-Control", "no-store")

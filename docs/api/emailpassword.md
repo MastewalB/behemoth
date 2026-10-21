@@ -135,7 +135,7 @@ Both flows follow these rules:
 - They fire the same hook points as the routes, with the same payloads.
 - `SignUp` stores `email`, `password`, and the profile fields listed above. Other keys in the input are not stored, but handlers on `auth.signUp.before` see them, which is how a plugin accepts a field of its own (an invite code, for example).
 - `Extra` is not stored, and a key in it named `email` or `password` is ignored: the struct's fields are used.
-- Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `hctx.Request` is nil and the session has neither.
+- Pass the context of the request you are handling when there is one. Hook handlers get the request from it, and the session records its IP address and user agent. With any other context, `core.RequestFrom(hctx.Ctx)` is nil and the session has neither.
 - `SignIn` returns a `*emailpassword.SignInResult`, which is `core.SignInResult`: the user, the session, the raw token, and `Method` (`"emailpassword"`). Handlers on `auth.signIn.after` receive the same value.
 - `SignIn` returns the raw session token and delivers nothing. From a route of your own, hand the result to `core.WriteSignIn`, which is what the plugin's route does. See [Write a sign-in route](sessions.md#write-a-sign-in-route).
 - Called before `Boot`, both return a configuration error.
@@ -200,7 +200,7 @@ Both behave as follows:
 
 - **The caller is the one the router put on the request's context**, or the one another transport put there. A caller that is not signed in gets the reason as a `401` session error, as from `core.RequireSession`.
 - **It ends the caller's own session only.** A job that acts for a user (`identity.System("job").For(userID)`) has no session, and gets `session_missing`. To end another session from code, call `ac.SessionManager.Revoke`.
-- **It writes nothing to a response,** so the session's cookie stays with its browser. A route of yours that calls it removes the cookie afterwards with `ac.TokenCarrier.Clear(rctx)`; see [Sessions](sessions.md#write-a-route-that-ends-the-session).
+- **It writes nothing to a response,** so the session's cookie stays with its browser. A route of yours that calls it removes the cookie afterwards with `rctx.TokenCarrier.Clear(rctx)`; see [Sessions](sessions.md#write-a-route-that-ends-the-session).
 
 ## Reject a sign-up from a hook
 
