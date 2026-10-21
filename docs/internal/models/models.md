@@ -27,7 +27,7 @@ What each one is for:
 
 - **`users`**: who signs in: id, unique email, profile fields, `email_verified`. It holds no credential.
 - **`accounts`**: how a user signs in. One row per `(provider_id, account_id)`: the `"credential"` provider carries the password hash, an OAuth provider carries its tokens.
-- **`sessions`**: one row per issued session, looked up by the hash of its token. The session manager takes every session time from the store's clock (`Store.Now`), in UTC. The session limit compares `expires_at` in the database, and SQLite stores a time as text with its zone, so expiries stamped in local time would compare wrongly there.
+- **`sessions`**: one row per issued session, looked up by the hash of its token. `factors` holds what its sign-in proved, separated by spaces ([ADR-0009](../decisions/0009-recording-the-factors-of-a-session.md)). The session manager takes every session time from the store's clock (`Store.Now`), in UTC. The session limit compares `expires_at` in the database, and SQLite stores a time as text with its zone, so expiries stamped in local time would compare wrongly there.
 - **`tokens`**: the verification table. It is generic by `Kind` (email verification, password reset, magic link, API key), so there is no separate `verifications` table.
 - **`rate_limits`**: fixed-window counters, used only when rate limiting has no key-value store to count in.
 

@@ -512,11 +512,12 @@ func sessionsContract(t *testing.T, st *store.Store) {
 	sm := auth.NewSessionManager(st, nil, testCrypto(t),
 		core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute}, &passDispatcher{}, nil, nil)
 
-	sess, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
+	sess, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending, Factor: core.FactorPassword})
 	require.NoError(t, err)
 	got, err := sm.Get(ctx, raw)
 	require.NoError(t, err)
 	assert.Equal(t, sess.ID, got.ID)
+	assert.Equal(t, []string{core.FactorPassword}, got.Factors, "the factors column round-trips")
 	promoted, err := sm.Promote(ctx, sess.ID)
 	require.NoError(t, err)
 	assert.Equal(t, models.SessionActive, promoted.State)

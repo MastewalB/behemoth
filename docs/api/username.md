@@ -150,7 +150,7 @@ The plugin declares no points. A sign-in by username fires the `auth.signIn.*` p
 | Point | What a handler sees |
 | --- | --- |
 | `auth.signIn.before` | `username` in its stored form, the plaintext `password`, and the other fields of the request. The returned payload becomes the sign-in's input. |
-| `auth.signIn.credentialsVerified` | the user's id, as for an email sign-in. A second-factor plugin and `emailverification`'s `RequireVerified` apply here. |
+| `auth.signIn.credentialsVerified` | the user's id, and the factor `password`, as for an email sign-in. A second-factor plugin and `emailverification`'s `RequireVerified` apply here. |
 | `auth.signIn.after` | a `*core.SignInResult` with `Method` `"username"` |
 | `auth.signIn.failed` | codes `user_not_found` (with the username in the audit event's metadata), `no_credential_account`, `invalid_credentials`, `rejected_by_hook` |
 

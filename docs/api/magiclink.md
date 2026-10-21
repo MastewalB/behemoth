@@ -147,7 +147,7 @@ Verifying a link is a sign-in. It fires the same points as a password sign-in, s
 | Point | What the handler gets |
 | --- | --- |
 | `auth.signIn.before` | payload `method` (`"magiclink"`) and, when the token names one, `email`. Veto only. The token is not in the payload. |
-| `auth.signIn.credentialsVerified` | `HookValueUserID`. Set `requireStepUp` to make the session pending. |
+| `auth.signIn.credentialsVerified` | `HookValueUserID`, and `HookValueFactor` with the value `email`. Set `HookValueRequireStepUp` to make the session pending. |
 | `auth.signIn.after` | a `*core.SignInResult` with `Method` set to `"magiclink"` |
 | `auth.signIn.failed` | codes `invalid_magic_link`, `user_not_found`, `email_changed`, `rejected_by_hook` |
 

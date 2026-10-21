@@ -383,9 +383,11 @@ func TestUsernameRoutes(t *testing.T) {
 // A second factor asked for at the shared checkpoint applies to a sign-in
 // by username too: the password check is the email/password plugin's.
 func TestUsernameSignInPassesTheSecondFactorCheckpoint(t *testing.T) {
+	var factor any
 	app := bootUsernames(t, username.Options{}, func(reg core.HookRegistry) error {
 		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) {
-			p["requireStepUp"] = true
+			factor = p[hooks.HookValueFactor]
+			p[hooks.HookValueRequireStepUp] = true
 			return p, nil
 		}, nil)
 	})
@@ -393,6 +395,8 @@ func TestUsernameSignInPassesTheSecondFactorCheckpoint(t *testing.T) {
 	result, err := app.names.SignIn(context.Background(), username.Credentials{Username: "ada", Password: "correct horse"})
 	require.NoError(t, err)
 	assert.Equal(t, models.SessionPending, result.Session.State)
+	assert.Equal(t, core.FactorPassword, factor)
+	assert.Equal(t, []string{core.FactorPassword}, result.Session.Factors)
 }
 
 // An application's rule per username counts sign-ins by username, from the

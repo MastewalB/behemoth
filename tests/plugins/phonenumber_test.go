@@ -419,12 +419,15 @@ func TestPhoneNumberSignIn(t *testing.T) {
 }
 
 // A second factor asked for at the shared checkpoint applies to a sign-in
-// by code.
+// by code. The two sign-ins by number name different factors: a code proves
+// the phone, a password does not.
 func TestPhoneCodeSignInPassesTheSecondFactorCheckpoint(t *testing.T) {
 	ctx := context.Background()
+	var factor any
 	app := bootPhones(t, waited(phonenumber.Options{}), func(reg core.HookRegistry) error {
 		return reg.OnBefore(hooks.HookSignInCredentialsVerified, func(_ *core.HookContext, p behemoth.M) (behemoth.M, error) {
-			p["requireStepUp"] = true
+			factor = p[hooks.HookValueFactor]
+			p[hooks.HookValueRequireStepUp] = true
 			return p, nil
 		}, nil)
 	})
@@ -434,6 +437,13 @@ func TestPhoneCodeSignInPassesTheSecondFactorCheckpoint(t *testing.T) {
 	result, err := app.phones.SignInWithCode(ctx, adaNumber, app.sms.last(t, 2).Code)
 	require.NoError(t, err)
 	assert.Equal(t, models.SessionPending, result.Session.State)
+	assert.Equal(t, core.FactorSMS, factor)
+	assert.Equal(t, []string{core.FactorSMS}, result.Session.Factors)
+
+	result, err = app.phones.SignIn(ctx, phonenumber.Credentials{PhoneNumber: adaNumber, Password: password})
+	require.NoError(t, err)
+	assert.Equal(t, core.FactorPassword, factor, "a sign-in by number and password checks a password")
+	assert.Equal(t, []string{core.FactorPassword}, result.Session.Factors)
 }
 
 // Only the plugin's flows set a number. A direct write is refused, except

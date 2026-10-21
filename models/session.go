@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"github.com/MastewalB/behemoth"
@@ -28,6 +29,7 @@ const (
 	SessionExpiresAt      = "expires_at"
 	SessionLastActiveAt   = "last_active_at"
 	SessionFreshAt        = "fresh_at"
+	SessionFactors        = "factors"
 	SessionIPAddress      = "ip_address"
 	SessionUserAgent      = "user_agent"
 	SessionImpersonatorID = "impersonator_id"
@@ -40,7 +42,7 @@ const (
 // sessionColumns are Session's own columns; any other column FromMap
 // receives is a contribution, kept in the Extension.
 var sessionColumns = columnSet(SessionID, SessionUserID, SessionLookupHash, SessionTokenHash,
-	SessionKeyVersion, SessionStateColumn, SessionExpiresAt, SessionLastActiveAt, SessionFreshAt,
+	SessionKeyVersion, SessionStateColumn, SessionExpiresAt, SessionLastActiveAt, SessionFreshAt, SessionFactors,
 	SessionIPAddress, SessionUserAgent, SessionImpersonatorID, SessionRevokedAt, SessionRevokedReason,
 	SessionCreatedAt, SessionUpdatedAt)
 
@@ -55,6 +57,7 @@ type Session struct {
 	ExpiresAt      time.Time    `db:"expires_at"`
 	LastActiveAt   time.Time    `db:"last_active_at"` // drives the updateAge throttle; deliberately separated from UpdatedAt
 	FreshAt        time.Time    `db:"fresh_at"`       // last full credential re-check; step-up auth compares against this
+	Factors        []string     `db:"factors"`        // what the sign-in proved, in order, starting with core.SessionMeta.Factor. Stored separated by spaces; nil when none was recorded
 	IPAddress      string       `db:"ip_address"`
 	UserAgent      string       `db:"user_agent"`
 	ImpersonatorID any          `db:"impersonator_id"` // nullable; set when an admin is impersonating this session's user
@@ -97,6 +100,10 @@ func (s *Session) FromMap(m map[string]any) error {
 	s.ExpiresAt, _ = m[SessionExpiresAt].(time.Time)
 	s.LastActiveAt, _ = m[SessionLastActiveAt].(time.Time)
 	s.FreshAt, _ = m[SessionFreshAt].(time.Time)
+	s.Factors = nil
+	if factors, _ := m[SessionFactors].(string); factors != "" {
+		s.Factors = strings.Fields(factors)
+	}
 	s.IPAddress, _ = m[SessionIPAddress].(string)
 	s.UserAgent, _ = m[SessionUserAgent].(string)
 	s.ImpersonatorID, _ = m[SessionImpersonatorID].(string)
@@ -115,6 +122,10 @@ func (s *Session) ToMap() (map[string]any, error) {
 	if s.RevokedAt != nil {
 		revokedAt = *s.RevokedAt
 	}
+	var factors any // NULL when none was recorded
+	if len(s.Factors) > 0 {
+		factors = strings.Join(s.Factors, " ")
+	}
 
 	return s.mergeExtras(map[string]any{
 		SessionID:             s.ID,
@@ -126,6 +137,7 @@ func (s *Session) ToMap() (map[string]any, error) {
 		SessionExpiresAt:      s.ExpiresAt,
 		SessionLastActiveAt:   s.LastActiveAt,
 		SessionFreshAt:        s.FreshAt,
+		SessionFactors:        factors,
 		SessionIPAddress:      s.IPAddress,
 		SessionUserAgent:      s.UserAgent,
 		SessionImpersonatorID: s.ImpersonatorID,

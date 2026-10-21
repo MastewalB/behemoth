@@ -295,7 +295,7 @@ The flows behave as follows:
 | Point | What the handler gets |
 | --- | --- |
 | `auth.signIn.before` | payload `method` (`"oauth"`) and `provider`. Veto only. The code, the state, and the binding value are not in the payload. |
-| `auth.signIn.credentialsVerified` | `HookValueUserID`. Set `requireStepUp` to make the session pending. |
+| `auth.signIn.credentialsVerified` | `HookValueUserID`, and `HookValueFactor` with the value `oauth`. Set `HookValueRequireStepUp` to make the session pending. |
 | `auth.signIn.after` | a `*core.SignInResult` with `Method` set to `"oauth"` |
 | `auth.signIn.failed` | codes `invalid_oauth_state`, `oauth_provider_mismatch`, `oauth_binding_mismatch`, `oauth_exchange_refused`, `user_not_found`, `email_not_provided`, `account_not_linked`, `rejected_by_hook`. The metadata has the provider. |
 | `auth.signUp.before` | payload `method`, `provider`, `email`, `email_verified`, `firstname`, `lastname`, and `image_url`. Veto only. |

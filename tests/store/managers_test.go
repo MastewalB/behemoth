@@ -35,7 +35,7 @@ const sessionsTokensSQLite = `
 CREATE TABLE sessions (
 	id TEXT PRIMARY KEY, user_id TEXT NOT NULL, lookup_hash TEXT NOT NULL UNIQUE, token_hash TEXT NOT NULL,
 	key_version INTEGER NOT NULL, state TEXT NOT NULL, expires_at TIMESTAMP NOT NULL, last_active_at TIMESTAMP,
-	fresh_at TIMESTAMP, ip_address TEXT, user_agent TEXT, impersonator_id TEXT, revoked_at TIMESTAMP,
+	fresh_at TIMESTAMP, factors TEXT, ip_address TEXT, user_agent TEXT, impersonator_id TEXT, revoked_at TIMESTAMP,
 	revoked_reason TEXT, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL);
 CREATE TABLE tokens (
 	id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT, lookup_hash TEXT NOT NULL, token_hash TEXT NOT NULL,
@@ -608,6 +608,43 @@ func TestSessionLimitCountsActiveSessionsOnly(t *testing.T) {
 		assert.True(t, errs.IsCode(err, errs.CodeSessionLimitReached), "%v", err)
 		assert.Equal(t, models.SessionPending, sessionStates(t, sm, "u1")[waiting.ID], "a refused promotion leaves the session pending")
 	})
+}
+
+// A session records the factor its sign-in checked, and keeps it in the
+// database, in the session cache, and on the caller, a pending caller
+// included. A name that is not lowercase snake case is refused: the column
+// holds the names separated by spaces.
+func TestSessionRecordsItsFirstFactor(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(sessionsTokensDB(t))
+	sm := auth.NewSessionManager(st, &memoryKV{entries: map[string]string{}}, testCrypto(t), core.SessionConfig{}, &passDispatcher{}, nil, managersAuth)
+	password := []string{core.FactorPassword}
+
+	created, raw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending, Factor: core.FactorPassword})
+	require.NoError(t, err)
+	assert.Equal(t, password, created.Factors)
+	cached, err := sm.Get(ctx, raw)
+	require.NoError(t, err)
+	assert.Equal(t, password, cached.Factors, "from the session cache")
+	stored, err := st.FindSessionByID(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, password, stored.Factors, "from the database")
+
+	caller, _ := auth.NewAuthenticator(sm, nil).Authenticate(ctx, &core.Credential{Kind: core.CredentialSession, Value: raw}, identity.Peer{})
+	ref, ok := caller.Session()
+	require.True(t, ok, "a pending session stays on the caller")
+	assert.Equal(t, password, ref.Factors)
+
+	none, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive})
+	require.NoError(t, err)
+	stored, err = st.FindSessionByID(ctx, none.ID)
+	require.NoError(t, err)
+	assert.Nil(t, stored.Factors, "without a factor none is recorded")
+
+	for _, name := range []string{"Password", "pass word", "pass-word", "2fa", strings.Repeat("a", 33)} {
+		_, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive, Factor: name})
+		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%q: %v", name, err)
+	}
 }
 
 // inZone sets the process's local time zone to zone for the rest of the

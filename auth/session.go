@@ -104,6 +104,10 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta co
 	if meta.State != models.SessionActive && meta.State != models.SessionPending {
 		return nil, "", errs.NewValidationError(op, "state", fmt.Errorf("SessionMeta.State must be Active or Pending"))
 	}
+	factors, err := firstFactor(op, meta.Factor)
+	if err != nil {
+		return nil, "", err
+	}
 
 	if err := sm.makeRoom(ctx, op, fmt.Sprint(userID), meta.State == models.SessionActive); err != nil {
 		return nil, "", err
@@ -163,6 +167,7 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta co
 		ExpiresAt:    now.Add(ttl),
 		LastActiveAt: now,
 		FreshAt:      now,
+		Factors:      factors,
 		IPAddress:    ip,
 		UserAgent:    ua,
 	}
@@ -177,6 +182,39 @@ func (sm *DefaultSessionManager) create(ctx context.Context, userID any, meta co
 
 	return m, rawToken, nil
 
+}
+
+// maxFactorLength bounds a factor name, so that a session's factors fit
+// their column.
+const maxFactorLength = 32
+
+// firstFactor returns the factors a new session records: the sign-in's
+// factor, or none. The column holds the names separated by spaces, so a name
+// that is not lowercase snake case is a configuration error: it would be
+// read back as other names. See ADR-0009.
+func firstFactor(op, factor string) ([]string, error) {
+	if factor == "" {
+		return nil, nil
+	}
+	if !isFactorName(factor) {
+		return nil, errs.NewConfigurationError(op, fmt.Sprintf(
+			"SessionMeta.Factor %q is not a factor name: lowercase letters, digits and underscores, starting with a letter, at most %d", factor, maxFactorLength), nil)
+	}
+	return []string{factor}, nil
+}
+
+// isFactorName reports whether name is lowercase snake case, starts with a
+// letter, and is at most maxFactorLength long.
+func isFactorName(name string) bool {
+	if name == "" || len(name) > maxFactorLength || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // makeRoom applies SessionConfig.MaxConcurrent before a session of userID is

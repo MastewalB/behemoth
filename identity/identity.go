@@ -41,6 +41,7 @@ type SessionRef struct {
 	State          string // "active", or "pending" while a second factor is outstanding
 	ExpiresAt      time.Time
 	FreshAt        time.Time // when the user last proved a credential
+	Factors        []string  // what the session's sign-in proved, in order: core's Factor names, such as "password"
 	ImpersonatorID string    // the user who impersonates UserID, if any
 }
 
