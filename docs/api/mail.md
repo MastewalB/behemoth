@@ -28,7 +28,8 @@ A plugin that needs a sender (`magiclink`, `emailverification`, `emailpassword` 
 | `To` | the address, trimmed and lowercased |
 | `URL` | the link to put in the message, with the token in it. Empty for `core.MailPasswordChanged`, a notice without a link, as are `Token` and `ExpiresAt`. |
 | `Token` | the raw token, if you build the URL yourself. It is a credential: don't log it. |
-| `ExpiresAt` | when the link stops working |
+| `Code` | the one-time code of a kind that carries one, for the person to type. `URL` and `Token` are empty then. It is a credential: don't log it. |
+| `ExpiresAt` | when the link, or the code, stops working |
 | `User` | the `*models.User` the message is about |
 | `Data` | what the plugin adds for the text beyond the link. The two email change messages carry the old and the new address here. The other kinds leave it empty. |
 | `Metadata` | whatever the request carried under `metadata`: a locale, a template name |

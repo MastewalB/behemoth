@@ -22,6 +22,11 @@ const (
 	// SMSPasswordReset carries the code that lets a user set a new password
 	// (plugins/phonenumber).
 	SMSPasswordReset SMSKind = "password_reset"
+	// SMSTwoFactorSetup carries the code that confirms a number a user sets
+	// up as a second factor. SMSTwoFactorCode carries a code that completes
+	// a sign-in waiting for a second factor.
+	SMSTwoFactorSetup SMSKind = "two_factor_setup"
+	SMSTwoFactorCode  SMSKind = "two_factor_code"
 )
 
 // SMSMessage is one text message a plugin wants delivered: everything the
