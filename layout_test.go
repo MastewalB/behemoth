@@ -39,6 +39,7 @@ var sameRow = map[string][]string{
 	"storage/adapters/*":  {"storage/adapters", "migration"},
 	"plugins/username":    {"plugins/emailpassword"},
 	"plugins/phonenumber": {"plugins/emailpassword"},
+	"plugins/twofactor":   {"plugins/twofactor/totp", "plugins/phonenumber"},
 	"cli":                 {"engine"},
 	"cmd/*":               {"cli", "engine"},
 }
