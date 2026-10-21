@@ -70,6 +70,10 @@ A route that hands the client a value of its own reads `rctx.TokenCarrier.Config
 
 A pending session's token is delivered like an active one's. The client needs it to present the second factor, and `SessionManager.Get` resolves a pending session by its token.
 
+When the session passes its second factor, `SessionManager.Promote` gives it a new token ([ADR-0008](../decisions/0008-renewing-the-session-token-on-promotion.md)). The flow returns the token in a `SignInResult`, and its route answers with `WriteSignIn`. That delivers the token the configured way and, under the cookie deliveries, sets the cookie again with the active session's expiry: the pending cookie was set to expire with the pending session.
+
+The pending token stops working at once. A request that still carries it finds no session, and the authentication stage takes the token back as it does for a session that is gone. Under the cookie deliveries, if that answer reaches the browser after the answer to the second factor, its `Set-Cookie` removes the new cookie, since both have the cookie's name. A client therefore sends the second factor once its other requests with the pending token have returned.
+
 A flow called from code (`Plugin.SignIn`, `Plugin.Verify`) returns the raw token in its `SignInResult` and writes nothing. There is no response to write to.
 
 ## Taking the token back

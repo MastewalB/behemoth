@@ -37,6 +37,20 @@ func (s *Store) UpdateSession(ctx context.Context, id string, changes behemoth.M
 	return updated.(*models.Session), nil
 }
 
+// UpdateSessionIn is UpdateSession for a session that is in state when the
+// change is written. The state is checked in the write itself (UpdateOne
+// re-checks its expression), so of several calls that move one session out
+// of a state at once, one does. A session in another state gets a NotFound
+// error, as a missing one does.
+func (s *Store) UpdateSessionIn(ctx context.Context, id string, state models.SessionState, changes behemoth.M) (*models.Session, error) {
+	updated, err := s.update(ctx, &models.Session{}, id, changes, models.SessionUpdatedAt, nil,
+		clause.Condition{Field: models.SessionStateColumn, Operator: clause.OpEqual, Value: string(state)})
+	if err != nil {
+		return nil, err
+	}
+	return updated.(*models.Session), nil
+}
+
 // CountActiveSessions counts userID's sessions that are active and have not
 // expired: the sessions SessionConfig.MaxConcurrent limits. A session that
 // waits for a second factor is not counted, and neither is one past its

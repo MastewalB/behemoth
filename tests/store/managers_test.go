@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -199,15 +200,15 @@ func TestSessionLifecycle(t *testing.T) {
 	_, err = sm.Validate(ctx, raw)
 	assert.True(t, errs.IsCode(err, errs.CodeSessionPending), "%v", err)
 
-	promoted, err := sm.Promote(ctx, sess.ID)
+	promoted, promotedRaw, err := sm.Promote(ctx, sess.ID, core.FactorTOTP)
 	require.NoError(t, err)
 	assert.Equal(t, models.SessionActive, promoted.State)
 	assert.True(t, promoted.UpdatedAt.After(sess.UpdatedAt) || promoted.UpdatedAt.Equal(sess.UpdatedAt), "updated_at stamped")
-	_, err = sm.Validate(ctx, raw)
+	_, err = sm.Validate(ctx, promotedRaw)
 	require.NoError(t, err)
 
 	require.NoError(t, sm.Revoke(ctx, sess.ID, "user_logout"))
-	_, err = sm.Get(ctx, raw)
+	_, err = sm.Get(ctx, promotedRaw)
 	assert.True(t, errs.IsCode(err, errs.CodeSessionRevoked), "%v", err)
 	listed, err := sm.ListForUser(ctx, "u1")
 	require.NoError(t, err)
@@ -588,7 +589,7 @@ func TestSessionLimitCountsActiveSessionsOnly(t *testing.T) {
 			first.ID: models.SessionActive, waiting.ID: models.SessionPending,
 		}, sessionStates(t, sm, "u1"), "a pending session evicts nothing")
 
-		_, err = sm.Promote(ctx, waiting.ID)
+		_, _, err = sm.Promote(ctx, waiting.ID, core.FactorTOTP)
 		require.NoError(t, err)
 		assert.Equal(t, map[string]models.SessionState{
 			first.ID: models.SessionRevoked, waiting.ID: models.SessionActive,
@@ -604,7 +605,7 @@ func TestSessionLimitCountsActiveSessionsOnly(t *testing.T) {
 
 		_, _, err = sm.Create(ctx, "u1", pending)
 		assert.True(t, errs.IsCode(err, errs.CodeSessionLimitReached), "refused before the second factor: %v", err)
-		_, err = sm.Promote(ctx, waiting.ID)
+		_, _, err = sm.Promote(ctx, waiting.ID, core.FactorTOTP)
 		assert.True(t, errs.IsCode(err, errs.CodeSessionLimitReached), "%v", err)
 		assert.Equal(t, models.SessionPending, sessionStates(t, sm, "u1")[waiting.ID], "a refused promotion leaves the session pending")
 	})
@@ -645,6 +646,56 @@ func TestSessionRecordsItsFirstFactor(t *testing.T) {
 		_, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionActive, Factor: name})
 		assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%q: %v", name, err)
 	}
+}
+
+// Promotion gives the session a new token and records the second factor.
+// The pending token stops working, from the database and from the session
+// cache, so a copy taken before the second factor never authenticates the
+// active session. Of several promotions of one session, one wins.
+func TestSessionPromotionRenewsTheToken(t *testing.T) {
+	ctx := context.Background()
+	sm := auth.NewSessionManager(store.New(sessionsTokensDB(t)), &memoryKV{entries: map[string]string{}}, testCrypto(t), core.SessionConfig{}, &passDispatcher{}, nil, managersAuth)
+	both := []string{core.FactorPassword, core.FactorTOTP}
+
+	pending, pendingRaw, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending, Factor: core.FactorPassword})
+	require.NoError(t, err)
+	promoted, raw, err := sm.Promote(ctx, pending.ID, core.FactorTOTP)
+	require.NoError(t, err)
+	assert.NotEqual(t, pendingRaw, raw)
+	assert.Equal(t, pending.ID, promoted.ID, "the same session")
+	assert.Equal(t, both, promoted.Factors)
+	assert.True(t, promoted.ExpiresAt.After(pending.ExpiresAt), "the active session's expiry")
+
+	_, err = sm.Get(ctx, pendingRaw)
+	assert.True(t, errs.IsNotFound(err), "the pending token stops working, in the cache too: %v", err)
+	caller, outcome := auth.NewAuthenticator(sm, nil).Authenticate(ctx, &core.Credential{Kind: core.CredentialSession, Value: pendingRaw}, identity.Peer{})
+	assert.True(t, errs.IsCode(caller.AuthError(), errs.CodeSessionInvalid), "%v", caller.AuthError())
+	assert.True(t, outcome.Ended, "a client takes the pending token back")
+	active, err := sm.Validate(ctx, raw)
+	require.NoError(t, err)
+	assert.Equal(t, both, active.Factors)
+
+	_, _, err = sm.Promote(ctx, pending.ID, core.FactorTOTP)
+	assert.True(t, errs.IsCode(err, errs.CodeInvalidSessionState), "an active session is not promoted again: %v", err)
+
+	racing, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending, Factor: core.FactorPassword})
+	require.NoError(t, err)
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if _, _, err := sm.Promote(ctx, racing.ID, core.FactorTOTP); err == nil {
+				wins.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	assert.Equal(t, int32(1), wins.Load(), "the write is guarded on the pending state")
+
+	waiting, _, err := sm.Create(ctx, "u1", core.SessionMeta{State: models.SessionPending})
+	require.NoError(t, err)
+	_, _, err = sm.Promote(ctx, waiting.ID, "TOTP")
+	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "the second factor's name is checked like the first's: %v", err)
 }
 
 // inZone sets the process's local time zone to zone for the rest of the
@@ -1028,7 +1079,7 @@ func TestSessionFreshness(t *testing.T) {
 	assert.True(t, errs.IsCode(err, errs.CodeSessionMissing), "without a session it answers as RequireSession does: %v", err)
 	assert.Equal(t, 1, reached, "neither request reached the handler")
 
-	promoted, err := sm.Promote(ctx, pending.ID)
+	promoted, _, err := sm.Promote(ctx, pending.ID, core.FactorTOTP)
 	require.NoError(t, err)
 	assert.True(t, sm.IsFresh(promoted), "passing the second factor is a credential check")
 
