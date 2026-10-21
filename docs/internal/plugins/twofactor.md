@@ -2,7 +2,7 @@
 
 This document explains how `plugins/twofactor` works: what it stores, how a method is set up and turned off, how a sign-in waits for and passes its second factor, and how the flows stay correct under concurrent calls. [`../plans/two_factor.md`](../plans/two_factor.md) has the design, the threats, and the decisions; this page describes what is built.
 
-**Status:** steps 1 to 7 of the plan are built, as of 2026-10-22. The routes are step 8.
+**Status:** built, as of 2026-10-22: every step of the plan is done. The API page, [`../../api/twofactor.md`](../../api/twofactor.md), still marks the plugin experimental.
 
 It rests on the code manager ([`../codes/codes.md`](../codes/codes.md)) for the codes it sends, on `Store.Seal` for the TOTP secret, and on the TOTP engine in `plugins/twofactor/totp`.
 
@@ -14,6 +14,7 @@ It rests on the code manager ([`../codes/codes.md`](../codes/codes.md)) for the 
 | `Declare` | three tables, fourteen points, five hook rules, two self-service permissions and one admin permission | codes are core's, so no token kind |
 | `Register` | handlers on `auth.signIn.credentialsVerified` and `data.user.beforeDelete` | every sign-in passes the first; the user's rows go in the delete's transaction |
 | `Init` | checks the options against what each offered method needs, and wraps `Disable` and `Reset` with `WithLifecycle` | |
+| `Routes` | eight routes under `/two-factor`, one per flow but `Reset` | no admin principal exists yet, so `Reset` has no route |
 
 The plugin imports `phonenumber` for `Parse` only: an SMS method's number is the user's input, confirmed by its own code, and not the phone number plugin's column. `layout_test.go` allows the import and the one of `totp` in `sameRow`.
 
@@ -103,6 +104,15 @@ An empty list refuses the sign-in with `two_factor_same_channel`; the sign-in fl
 
 `Reset` is an admin operation (`RequireAdmin`, `user:reset_two_factor`). It deletes the user's rows of the three tables in one transaction, revokes the setup and sign-in codes of both channels, and fires the disable points with `admin_reset` and no method.
 
+## Routes
+
+`routes.go` holds the routes, and each handler decodes, calls one flow, and encodes, as [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md) asks:
+
+- **The input types decode themselves** (`EnrollRequest.FromMap` and the others), so a field of the wrong type is refused the same way from any transport that hands the flow a map.
+- **No route has a session middleware.** Each flow reads the caller: `Access` for the setup flows, `pending` for the challenge flows. The answers for a missing, pending, or stale session are the flows' own errors.
+- **`POST /two-factor/verify` answers with `httpapi.WriteSignIn`,** so a client reads the body of a finished sign-in and gets the new token by the configured delivery. Under the cookie deliveries, that sets the cookie again with the active session's expiry.
+- **Every answer is marked `Cache-Control: no-store`,** since each is about one account and some carry a secret, recovery codes, or a token.
+
 ## Tests
 
 | Test | File | Covers |
@@ -124,5 +134,7 @@ An empty list refuses the sign-in with `two_factor_same_channel`; the sign-in fl
 | `TestTwoFactorLock` | same | the lock across sign-ins, a recovery code passing it and clearing the count |
 | `TestTwoFactorVerifiesAreLimitedPerUser` | same | the rule per user across pending sessions |
 | `TestTwoFactorReset` | same | the admin permission, everything deleted, a sign-in by password alone afterwards |
+| `TestTwoFactorRoutes` | `tests/plugins/twofactor_routes_test.go` | every route's body and status, the decoding errors, the sign-in route's pending answer, the new token, `no-store` |
+| `TestTwoFactorEmailRoutes` | same | the email method's setup and sign-in over the routes, the masked address |
 
 The plugin tests create their tables from the prepared application's registry (`testutils.MigrateApp`), so they run against the plugin's own declarations.

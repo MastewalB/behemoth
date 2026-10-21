@@ -11,10 +11,10 @@
 // Every sign-in passes core's checkpoint, auth.signIn.credentialsVerified,
 // once its first factor checked out. The plugin's handler there makes the
 // session of a user with a method pending, and Challenge, SendCode, and
-// Verify complete the sign-in.
+// Verify complete the sign-in. Each flow has a route (routes.go) and can be
+// called from code.
 //
-// Experimental: the plugin has no routes yet; call its flows from your own
-// code. Its API can still change.
+// Experimental: the plugin is new, and its API can still change.
 package twofactor
 
 import (

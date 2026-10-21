@@ -9,6 +9,7 @@ import (
 	"github.com/MastewalB/behemoth/migration"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/magiclink"
+	"github.com/MastewalB/behemoth/plugins/twofactor"
 	_ "github.com/lib/pq"
 )
 
@@ -31,7 +32,14 @@ func plugins() ([]core.Plugin, *emailpassword.Plugin) {
 	// Sign-in by a mailed link, next to sign-in by password. A user created
 	// by either plugin can use both.
 	ml := magiclink.New(magiclink.Options{LinkURL: appURL() + pathMagicPage})
-	return []core.Plugin{ep, ml, &ActivityPlugin{}}, ep
+	// A second factor for a user who turns one on: an authenticator app, or
+	// a code by email, which goes to the same sender as the links. Every
+	// sign-in of that user then waits for it, by password or by link.
+	tf := twofactor.New(twofactor.Options{
+		Issuer:  "Behemoth example",
+		Methods: []twofactor.Method{twofactor.MethodTOTP, twofactor.MethodEmail},
+	})
+	return []core.Plugin{ep, ml, tf, &ActivityPlugin{}}, ep
 }
 
 func prepareConfig() engine.PrepareConfig {
