@@ -2,13 +2,13 @@
 
 This document describes the layout Behemoth's packages move to: which package holds what, the order in which packages may import each other, and where each exported identifier of a moving package ends up. It also lists the steps of the move, which leaves behavior unchanged.
 
-**Status:** part 1 done, as of 2026-10-19. Part 2 started on 2026-10-21: steps 12a and 12b are done, and the HTTP types are in `httpapi`. [Implementation steps](#implementation-steps) lists the work, and [Decisions](#decisions) what part 2 settled.
+**Status:** part 1 done, as of 2026-10-19. Part 2 done, as of 2026-10-21: the HTTP types are in `httpapi`, and `layout_test.go` checks that no package below it serves HTTP. [Implementation steps](#implementation-steps) lists the work, and [Decisions](#decisions) what part 2 settled.
 
 The documents it builds on are:
 
 - [ADR-0007](../decisions/0007-layering-the-packages.md): the layout, and the options weighed against it.
 - [`caller.md`](caller.md): the caller plan. Its step 1 is part 1 of this move, and its step 3 removes what keeps the HTTP types in the contracts package.
-- [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md): the import rule, which a test can check once the HTTP types have a package of their own.
+- [`../guidelines/transport_neutral_flows.md`](../guidelines/transport_neutral_flows.md): the import rule, which `TestNoServerSideHTTPBelowHTTPAPI` checks now that the HTTP types have a package of their own.
 - [`../guidelines/service_ready_components.md`](../guidelines/service_ready_components.md): a new dependency gets a module of its own.
 
 ## Context
@@ -237,7 +237,7 @@ Step 12 is two commits. The first makes the changes that can be made in place, s
 | --- | --- | --- |
 | 12a | In place: `HookContext.Request` goes, and a handler reads the request with `RequestFrom(hctx.Ctx)`. The token carrier leaves `AuthContext`: the router builds it from `RouterConfig.Carrier` and hands it to every handler as `RequestContext.TokenCarrier`. The route half of the rate limiter counts through `RateLimiter.CheckRule`, against the `RateLimitRule` each route rule declares under its name, and `CheckRouteLimit` goes. | Done |
 | 12b | The HTTP types and their implementations move from `core` to `httpapi`, as the tables above list, with the routes of core's own features: the session token route and the key set route. `Plugin.Routes` and `Plugin.Middlewares` move to the optional `httpapi.Plugin`, and a plugin returns its route rules from the optional `httpapi.RouteRulesPlugin` in place of `DeclareRouteRateLimitRule`, which `Prepare` declares with `httpapi.DeclareRouteRules`. The table from categories to HTTP statuses and `DefaultErrorMapper` leave `errs`. `core` exports `ParseOrigin` and `OriginOf` for the origin check. `layout_test.go` gets the row of `httpapi`, which, like a plugin, does not import row 10. | Done |
-| 13 | The test of step 11 fails when a package of rows 1 to 10 uses the server side of `net/http`, such as `http.Request` or `http.ResponseWriter`. | Not started |
+| 13 | `TestNoServerSideHTTPBelowHTTPAPI`, next to the test of step 11, fails when a package of rows 1 to 10 uses the server side of `net/http`, such as `http.Request` or `http.ResponseWriter`. `outbound`, which sends requests to other services, may name `http.Request` for them. | Done |
 
 ## Decisions
 
@@ -286,5 +286,5 @@ The tables first moved `TrustedOrigins` and `NewTrustedOrigins` with the origin 
 These entries in `docs/ongoing.md` are resolved by this plan:
 
 - **"`types` mixes contracts, implementations and HTTP, and its layering forces aliases".** Part 1 resolved it and removed the entry. The HTTP types that remain in `core` are part 2, which the next entry tracks.
-- **"The request pipeline lives in the HTTP router, and a plugin's handlers share its package"**, which was "`Plugin` requires HTTP routes, and the request pipeline lives in the router". Step 12b made the routes optional and moved the HTTP types, and step 13 adds the check. The entry stays open for the stages of the pipeline and the plugins' handlers.
+- **"The request pipeline lives in the HTTP router, and a plugin's handlers share its package"**, which was "`Plugin` requires HTTP routes, and the request pipeline lives in the router". Step 12b made the routes optional and moved the HTTP types, and step 13 added the check. The entry stays open for the stages of the pipeline and the plugins' handlers.
 - **"Trusted origins match exactly".** Step 5 removes `CSRFProtector`, which the entry also covered. The point about wildcards stays open.
