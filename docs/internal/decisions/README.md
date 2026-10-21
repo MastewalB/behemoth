@@ -154,3 +154,5 @@ Keep this list current, newest last.
 | [0005](0005-treating-a-missing-caller-as-anonymous.md) | Treat a call without a caller as anonymous | Proposed |
 | [0006](0006-requiring-declared-permissions.md) | Require a declared permission in every self-service flow and admin operation | Proposed |
 | [0007](0007-layering-the-packages.md) | Lay out the packages in layers, with the plugin contracts in `core` | Proposed |
+| [0008](0008-renewing-the-session-token-on-promotion.md) | Renew the session token when a pending session becomes active | Proposed |
+| [0009](0009-recording-the-factors-of-a-session.md) | Record on each session the factors that authenticated it | Accepted |
