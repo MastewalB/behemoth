@@ -527,6 +527,22 @@ func sessionsContract(t *testing.T, st *store.Store) {
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.NotNil(t, listed[0].RevokedAt)
+
+	// The session limit compares expires_at with the store's clock in the
+	// database. An hour in the past keeps the case clear of the backends that
+	// store whole seconds.
+	limited := auth.NewSessionManager(st, nil, testCrypto(t),
+		core.SessionConfig{ExpiresIn: time.Hour, MaxConcurrent: 1}, &passDispatcher{}, nil, nil)
+	expired, _, err := limited.Create(ctx, "u2", core.SessionMeta{State: models.SessionActive})
+	require.NoError(t, err)
+	_, err = st.UpdateSession(ctx, expired.ID, behemoth.M{models.SessionExpiresAt: st.Now().Add(-time.Hour)})
+	require.NoError(t, err)
+	_, _, err = limited.Create(ctx, "u2", core.SessionMeta{State: models.SessionPending})
+	require.NoError(t, err)
+	_, _, err = limited.Create(ctx, "u2", core.SessionMeta{State: models.SessionActive})
+	require.NoError(t, err, "neither the expired nor the pending session counts")
+	_, _, err = limited.Create(ctx, "u2", core.SessionMeta{State: models.SessionActive})
+	assert.True(t, errs.IsCode(err, errs.CodeSessionLimitReached), "the active session counts: %v", err)
 }
 
 func tokensContract(t *testing.T, st *store.Store) {

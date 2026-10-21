@@ -24,8 +24,8 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 | `PendingExpiresIn` | 10 minutes | How long a session lasts while it waits for a second factor. |
 | `UpdateAge` | 0, off | Rolling expiration: a session in use is extended by `ExpiresIn` once less than `UpdateAge` is left of it. At zero a session ends `ExpiresIn` after its sign-in, however much it is used. Keep it well below `ExpiresIn`: a value that is not smaller extends the session, with a database write, on every request. See [Rolling expiration](#rolling-expiration). |
 | `FreshAge` | 15 minutes | How long after a sign-in a session counts as fresh. See [Fresh sessions](#fresh-sessions). |
-| `MaxConcurrent` | 0, no limit | Live sessions allowed per user. |
-| `EvictOldestOnLimit` | false | At the limit, end the oldest session to make room. When false, the new sign-in is refused. |
+| `MaxConcurrent` | 0, no limit | Sessions a user can use at once: active sessions that have not expired. A session that waits for a second factor doesn't count. |
+| `EvictOldestOnLimit` | false | At the limit, end the user's oldest active session to make room. A sign-in that waits for a second factor makes room once the second factor passes. When false, a sign-in at the limit is refused with `401` and the code `session_limit_reached`, before its second factor when it needs one. |
 | `CaptureIPAndAgent` | false | Record the client's IP address and user agent on the session. |
 
 `BootConfig.Router.Carrier`, a `httpapi.TokenCarrierConfig`:

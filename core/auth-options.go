@@ -49,9 +49,17 @@ type SessionConfig struct {
 	UpdateAge time.Duration
 	// FreshAge is how long after a sign-in a session counts as fresh
 	// (SessionManager.IsFresh). Default DefaultFreshAge, 15 minutes.
-	FreshAge           time.Duration
-	MaxConcurrent      int                      // default 0 (unlimited)
-	EvictOldestOnLimit bool                     // false = reject new session creation once MaxConcurrent is reached
+	FreshAge time.Duration
+	// MaxConcurrent limits the sessions a user can use at once: active ones
+	// that have not expired. A session that waits for a second factor does
+	// not count. Zero, the default, means no limit.
+	MaxConcurrent int
+	// EvictOldestOnLimit decides what happens at the limit: true ends the
+	// user's oldest active session to make room, false refuses the new
+	// session. A sign-in whose session waits for a second factor makes room
+	// only once the second factor has passed (SessionManager.Promote).
+	// Without eviction it is refused at once.
+	EvictOldestOnLimit bool
 	SecondaryStorage   behemoth.KeyValueStorage // nil = DB-only, no cache layer
 	CaptureIPAndAgent  bool
 }

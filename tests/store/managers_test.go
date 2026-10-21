@@ -532,6 +532,105 @@ func TestSessionRevokeAllAndEviction(t *testing.T) {
 	}, states(), "everything but the excepted session is revoked")
 }
 
+// The session limit counts the sessions a user can use: active ones that
+// have not expired. A pending session neither counts nor makes room, so
+// whoever has only the password can't end the user's sessions, and an
+// expired session leaves its place. The test runs east of UTC: SQLite stores
+// a time as text with its zone, so expiries stamped in local time would
+// compare wrongly with the store's clock.
+func TestSessionLimitCountsActiveSessionsOnly(t *testing.T) {
+	inZone(t, time.FixedZone("UTC+3", 3*60*60))
+	ctx := context.Background()
+	active := core.SessionMeta{State: models.SessionActive}
+	pending := core.SessionMeta{State: models.SessionPending}
+
+	t.Run("an expired session leaves its place", func(t *testing.T) {
+		sm, _ := newSessionManager(t, core.SessionConfig{MaxConcurrent: 1, ExpiresIn: 50 * time.Millisecond})
+		_, _, err := sm.Create(ctx, "u1", active)
+		require.NoError(t, err)
+		time.Sleep(100 * time.Millisecond)
+		_, _, err = sm.Create(ctx, "u1", active)
+		assert.NoError(t, err)
+	})
+
+	t.Run("eviction picks among the sessions that count", func(t *testing.T) {
+		// Two managers over one store: sessions of the first expire at once.
+		st := store.New(sessionsTokensDB(t))
+		brief := auth.NewSessionManager(st, nil, testCrypto(t), core.SessionConfig{ExpiresIn: 50 * time.Millisecond}, &passDispatcher{}, nil, managersAuth)
+		sm := auth.NewSessionManager(st, nil, testCrypto(t), core.SessionConfig{MaxConcurrent: 1, EvictOldestOnLimit: true}, &passDispatcher{}, nil, managersAuth)
+		expired, _, err := brief.Create(ctx, "u1", active)
+		require.NoError(t, err)
+		time.Sleep(100 * time.Millisecond)
+		oldest, _, err := sm.Create(ctx, "u1", active)
+		require.NoError(t, err)
+		newest, _, err := sm.Create(ctx, "u1", active)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]models.SessionState{
+			expired.ID: models.SessionActive, oldest.ID: models.SessionRevoked, newest.ID: models.SessionActive,
+		}, sessionStates(t, sm, "u1"), "the expired session doesn't count and is left alone")
+	})
+
+	t.Run("a pending session doesn't count", func(t *testing.T) {
+		sm, _ := newSessionManager(t, core.SessionConfig{MaxConcurrent: 1})
+		_, _, err := sm.Create(ctx, "u1", pending)
+		require.NoError(t, err)
+		_, _, err = sm.Create(ctx, "u1", active)
+		assert.NoError(t, err)
+	})
+
+	t.Run("a pending session makes no room, and its promotion does", func(t *testing.T) {
+		sm, _ := newSessionManager(t, core.SessionConfig{MaxConcurrent: 1, EvictOldestOnLimit: true})
+		first, _, err := sm.Create(ctx, "u1", active)
+		require.NoError(t, err)
+		waiting, _, err := sm.Create(ctx, "u1", pending)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]models.SessionState{
+			first.ID: models.SessionActive, waiting.ID: models.SessionPending,
+		}, sessionStates(t, sm, "u1"), "a pending session evicts nothing")
+
+		_, err = sm.Promote(ctx, waiting.ID)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]models.SessionState{
+			first.ID: models.SessionRevoked, waiting.ID: models.SessionActive,
+		}, sessionStates(t, sm, "u1"), "the promotion evicts the oldest active session")
+	})
+
+	t.Run("without eviction a full limit refuses a pending session and a promotion", func(t *testing.T) {
+		sm, _ := newSessionManager(t, core.SessionConfig{MaxConcurrent: 1})
+		waiting, _, err := sm.Create(ctx, "u1", pending)
+		require.NoError(t, err)
+		_, _, err = sm.Create(ctx, "u1", active)
+		require.NoError(t, err)
+
+		_, _, err = sm.Create(ctx, "u1", pending)
+		assert.True(t, errs.IsCode(err, errs.CodeSessionLimitReached), "refused before the second factor: %v", err)
+		_, err = sm.Promote(ctx, waiting.ID)
+		assert.True(t, errs.IsCode(err, errs.CodeSessionLimitReached), "%v", err)
+		assert.Equal(t, models.SessionPending, sessionStates(t, sm, "u1")[waiting.ID], "a refused promotion leaves the session pending")
+	})
+}
+
+// inZone sets the process's local time zone to zone for the rest of the
+// test, so that a time taken with time.Now carries it.
+func inZone(t *testing.T, zone *time.Location) {
+	t.Helper()
+	saved := time.Local
+	time.Local = zone
+	t.Cleanup(func() { time.Local = saved })
+}
+
+// sessionStates returns the state of each of userID's sessions, by id.
+func sessionStates(t *testing.T, sm core.SessionManager, userID string) map[string]models.SessionState {
+	t.Helper()
+	listed, err := sm.ListForUser(context.Background(), userID)
+	require.NoError(t, err)
+	states := map[string]models.SessionState{}
+	for _, s := range listed {
+		states[s.ID] = s.State
+	}
+	return states
+}
+
 // The manager's own hooks get a complete HookContext: the point and phase
 // being dispatched, the AuthContext, the request being handled, and Values
 // that last for one operation: a create's two points share a map, a revoke's

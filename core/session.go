@@ -27,8 +27,11 @@ type SessionManager interface {
 	// promoting it.
 	Get(ctx context.Context, rawToken string) (*models.Session, error)
 
-	// Promote transitions Pending -> Active. Only reachable from a hook
-	// handler that has actually verified a second factor.
+	// Promote transitions Pending -> Active, once the caller has verified a
+	// second factor. SessionConfig.MaxConcurrent applies as when an active
+	// session is created: at the limit the user's oldest active session is
+	// revoked, or, without EvictOldestOnLimit, the promotion is refused with
+	// errs.CodeSessionLimitReached and the session stays pending.
 	Promote(ctx context.Context, sessionID string) (*models.Session, error)
 
 	// Touch applies the rolling expiration: it extends a session in use
