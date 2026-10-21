@@ -1,4 +1,4 @@
-package auth
+package httpapi
 
 import (
 	"encoding/json"
@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 )
@@ -20,21 +19,21 @@ const keySetMaxAge = 5 * time.Minute
 // Behemoth's external JWTs, such as session tokens, against it. path is
 // absolute, and empty means crypto.DefaultJWKSPath. It returns nil when keys
 // is nil: external JWTs are off, and there is nothing to publish.
-func KeySetRoutes(keys crypto.KeySet, path string) []core.Route {
+func KeySetRoutes(keys crypto.KeySet, path string) []Route {
 	if keys == nil {
 		return nil
 	}
 	if path == "" {
 		path = crypto.DefaultJWKSPath
 	}
-	return []core.Route{{Method: http.MethodGet, Path: path, Handler: keySetHandler(keys)}}
+	return []Route{{Method: http.MethodGet, Path: path, Handler: keySetHandler(keys)}}
 }
 
 // keySetHandler answers with the public halves of keys. A key that
 // MarshalJWKSet can't write, such as a private key, is a security error, and
 // nothing is published.
-func keySetHandler(keys crypto.KeySet) core.HandlerFunc {
-	return func(rctx *core.RequestContext) error {
+func keySetHandler(keys crypto.KeySet) HandlerFunc {
+	return func(rctx *RequestContext) error {
 		published, err := keys.PublicKeys(rctx.Ctx)
 		if err != nil {
 			return err

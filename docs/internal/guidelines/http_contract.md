@@ -6,10 +6,11 @@ They are suggestions for new code and for changes. They do not describe a finish
 
 The code it refers to lives in:
 
-- `core/plugins.go`: `Route`, `RequestContext`, `ResponseRecorder`
-- `core/signin.go`: `WriteSignIn`, the body every sign-in answers with
+- `httpapi/request.go`: `Route`, `RequestContext`, `ResponseRecorder`
+- `httpapi/signin.go`: `WriteSignIn`, the body every sign-in answers with
 - `schema/public_view.go: the user a response carries
-- `errs/errors.go`, `errs/session.go`: `DomainError`, `DefaultErrorMapper`
+- `errs/errors.go`: `DomainError`
+- `httpapi/errors.go`: `DefaultErrorMapper`, and the status of each error category
 - `plugins/*`: each plugin's routes, body keys and error codes
 
 The other guideline documents are [`transport_neutral_flows.md`](transport_neutral_flows.md), about what belongs in a handler and what belongs in the flow behind it, and [`service_ready_components.md`](service_ready_components.md), about options, state, and background work in a component that may run in a standalone service.
@@ -24,7 +25,7 @@ A client never sees hooks, the store, migrations, or the router adapters. Those 
 | Request body keys | `email`, `password`, `redirect_url` | the input type's `FromMap` |
 | Response body | `{"user": {...}}`, `{"status": "ok"}` | the handler, `WriteSignIn`, `PublicView` |
 | Error status and code | `401` with `invalid_credentials` | the `DomainError`'s category and code, the error mapper |
-| The request's `Content-Type` | `application/json`; a form type is refused under the cookie deliveries | `core.RefuseFormContentTypes` |
+| The request's `Content-Type` | `application/json`; a form type is refused under the cookie deliveries | `httpapi.RefuseFormContentTypes` |
 | Response headers | `Set-Cookie`, `Set-Auth-Token`, `Retry-After`, `X-Request-ID` | the session manager, the router |
 | Where the session token travels | a cookie, a bearer token | `RouterConfig.Carrier.Delivery` |
 
@@ -60,7 +61,7 @@ A client ignores keys it does not know, so a new key is safe. A renamed or remov
 
 | Answer | Shape | Written by |
 | --- | --- | --- |
-| A finished sign-in | `{"user": {...}}`, or `{"status": "requires_second_factor"}`, with `token` under the body delivery | `core.WriteSignIn` |
+| A finished sign-in | `{"user": {...}}`, or `{"status": "requires_second_factor"}`, with `token` under the body delivery | `httpapi.WriteSignIn` |
 | A user | `{"user": {...}}`, the public columns | `AuthContext.Public.Of` |
 | An action with nothing to return | `{"status": "<what happened>"}` | the handler |
 | An error | `{"error": "<message>", "code": "<code>"}` | the router's error mapper |

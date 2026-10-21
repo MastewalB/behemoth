@@ -45,7 +45,7 @@ The signing keys are derived from your master secret (`crypto.Config.Secrets`), 
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `POST /session/token` (`core.PathSessionToken`), below the base path | empty, `{}`, or `{"audience": "..."}` with one of the configured audiences | `200` with `{"token": "...", "expires_at": "2026-10-14T10:15:00Z", "audience": "..."}`, sent with `Cache-Control: no-store` |
+| `POST /session/token` (`httpapi.PathSessionToken`), below the base path | empty, `{}`, or `{"audience": "..."}` with one of the configured audiences | `200` with `{"token": "...", "expires_at": "2026-10-14T10:15:00Z", "audience": "..."}`, sent with `Cache-Control: no-store` |
 | `GET /.well-known/jwks.json` | none | `200` with the public keys as a JWK set (RFC 7517), sent with `Cache-Control: public, max-age=300` |
 
 The token route requires an active session, sent the way `RouterConfig.Carrier.Delivery` says, and the permission `core.PermissionSessionTokenIssue` (`session_token:issue`), which a signed-in user holds. The flow checks both, and answers like every protected route when there is no session.

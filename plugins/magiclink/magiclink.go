@@ -22,6 +22,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -324,8 +325,8 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 	return nil
 }
 
-// Middlewares implements [core.Plugin]. The plugin has no middleware.
-func (p *Plugin) Middlewares() []core.Middleware {
+// Middlewares implements [httpapi.Plugin]. The plugin has no middleware.
+func (p *Plugin) Middlewares() []httpapi.Middleware {
 	return nil
 }
 
@@ -355,9 +356,9 @@ func (p *Plugin) Init(ac *core.AuthContext) error {
 	return nil
 }
 
-// Routes implements [core.Plugin].
-func (p *Plugin) Routes() []core.Route {
-	return []core.Route{
+// Routes implements [httpapi.Plugin].
+func (p *Plugin) Routes() []httpapi.Route {
+	return []httpapi.Route{
 		{Method: http.MethodPost, Path: PathRequest, Handler: p.handleRequest},
 		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify},
 	}
@@ -630,7 +631,7 @@ func publishEmail(hctx *core.HookContext, email string) {
 // issued and a failed send are all a 200. A validation error and a rate
 // limit are reported, since they do not depend on the account. Anything else
 // is a failure of the system and a 500 from the router.
-func (p *Plugin) handleRequest(rctx *core.RequestContext) error {
+func (p *Plugin) handleRequest(rctx *httpapi.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("magiclink.RequestLink", "request", err)
@@ -655,7 +656,7 @@ func (p *Plugin) handleRequest(rctx *core.RequestContext) error {
 // handleVerify returns Verify's error unchanged, and the router maps it: a
 // refused link is a typed unauthorized error (401), and a hook handler's
 // typed rejection keeps its own status.
-func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
+func (p *Plugin) handleVerify(rctx *httpapi.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("magiclink.Verify", "request", err)
@@ -672,7 +673,7 @@ func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
 
 	// The body every sign-in route answers with, plus the redirect, and
 	// the session token the way RouterConfig.Carrier says.
-	return core.WriteSignIn(rctx, result.SignInResult, behemoth.M{keyRedirectURL: result.RedirectURL})
+	return httpapi.WriteSignIn(rctx, result.SignInResult, behemoth.M{keyRedirectURL: result.RedirectURL})
 }
 
-var _ core.Plugin = (*Plugin)(nil)
+var _ httpapi.Plugin = (*Plugin)(nil)

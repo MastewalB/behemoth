@@ -59,8 +59,8 @@ ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
 	HTTP:   ginadapter.New(engine),
 	Session: core.SessionConfig{ExpiresIn: 24 * time.Hour},
 	// The session token travels in a header and comes back as a bearer token.
-	Router: core.RouterConfig{
-		Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader},
+	Router: httpapi.RouterConfig{
+		Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader},
 	},
 })
 if err != nil {

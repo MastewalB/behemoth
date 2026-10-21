@@ -19,6 +19,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
@@ -31,7 +32,7 @@ import (
 
 // bootPasswords boots the email/password plugin alone with session and the
 // token carrier's settings.
-func bootPasswords(t *testing.T, session core.SessionConfig, carrier core.TokenCarrierConfig, hookFn func(core.HookRegistry) error) (*core.AuthContext, mountedRoutes, error) {
+func bootPasswords(t *testing.T, session core.SessionConfig, carrier httpapi.TokenCarrierConfig, hookFn func(core.HookRegistry) error) (*core.AuthContext, mountedRoutes, error) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "signin.db"))
 	require.NoError(t, err)
@@ -47,7 +48,7 @@ func bootPasswords(t *testing.T, session core.SessionConfig, carrier core.TokenC
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session: session,
-		Router:  core.RouterConfig{Carrier: carrier},
+		Router:  httpapi.RouterConfig{Carrier: carrier},
 		HTTP:    mounted,
 		Hooks:   hookFn,
 	})
@@ -56,18 +57,18 @@ func bootPasswords(t *testing.T, session core.SessionConfig, carrier core.TokenC
 
 // callHeaders invokes a mounted route the way call does, with request
 // headers: the cookie or the bearer token of a signed-in client.
-func callHeaders(t *testing.T, ac *core.AuthContext, route core.Route, body string, headers map[string]string) *httptest.ResponseRecorder {
+func callHeaders(t *testing.T, ac *core.AuthContext, route httpapi.Route, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(body))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
-		status, body := (&errs.DefaultErrorMapper{}).Map(err)
+		status, body := (&httpapi.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(body))
 		return w
@@ -83,16 +84,16 @@ func callHeaders(t *testing.T, ac *core.AuthContext, route core.Route, body stri
 func TestSignInDeliversTheTokenByDelivery(t *testing.T) {
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
-		carrier core.TokenCarrierConfig
+		carrier httpapi.TokenCarrierConfig
 		cookie  string // the cookie's name when the token is in one
 		header  bool   // the token is in Set-Auth-Token
 		body    bool   // the token is in the JSON body
 	}{
-		"nothing set":   {core.TokenCarrierConfig{}, "session_token", false, false},
-		"cookie, named": {core.TokenCarrierConfig{Delivery: core.DeliveryCookie, CookieName: "sid"}, "sid", false, false},
-		"header":        {core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, "", true, false},
-		"body":          {core.TokenCarrierConfig{Delivery: core.DeliveryBody}, "", false, true},
-		"both":          {core.TokenCarrierConfig{Delivery: core.DeliveryBoth}, "session_token", true, false},
+		"nothing set":   {httpapi.TokenCarrierConfig{}, "session_token", false, false},
+		"cookie, named": {httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryCookie, CookieName: "sid"}, "sid", false, false},
+		"header":        {httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}, "", true, false},
+		"body":          {httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryBody}, "", false, true},
+		"both":          {httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryBoth}, "session_token", true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ac, mounted, err := bootPasswords(t, core.SessionConfig{}, tc.carrier, nil)
@@ -133,8 +134,8 @@ func TestSignInDeliversTheTokenByDelivery(t *testing.T) {
 				assert.True(t, cookies[0].HttpOnly)
 				fromCookie = cookies[0].Value
 			}
-			fromHeader := w.Header().Get(core.SessionTokenHeader)
-			assert.Equal(t, tc.header, fromHeader != "", "%s header", core.SessionTokenHeader)
+			fromHeader := w.Header().Get(httpapi.SessionTokenHeader)
+			assert.Equal(t, tc.header, fromHeader != "", "%s header", httpapi.SessionTokenHeader)
 			assert.Equal(t, tc.body, signedIn.Token != "", "token in the body: %s", w.Body.String())
 
 			// Wherever it arrived, it is the session's token, and the route
@@ -178,7 +179,7 @@ func TestSignInDeliversTheTokenByDelivery(t *testing.T) {
 				assert.Empty(t, gone[0].Value)
 				assert.Negative(t, gone[0].MaxAge, "Max-Age=0 deletes the cookie")
 			}
-			assert.Empty(t, out.Header().Get(core.SessionTokenHeader), "a sign-out hands out no token")
+			assert.Empty(t, out.Header().Get(httpapi.SessionTokenHeader), "a sign-out hands out no token")
 		})
 	}
 }
@@ -188,7 +189,7 @@ func TestSignInDeliversTheTokenByDelivery(t *testing.T) {
 // behind the session check is refused, and the refusal removes the cookie.
 func TestASessionEndedElsewhereLosesItsCookie(t *testing.T) {
 	ctx := context.Background()
-	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, core.TokenCarrierConfig{}, nil)
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, httpapi.TokenCarrierConfig{}, nil)
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -227,7 +228,7 @@ func TestRefusedSignOutKeepsTheCookie(t *testing.T) {
 			return nil, errs.NewInvalidInputError("test", "session", "not now", nil)
 		}, nil)
 	}
-	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, core.TokenCarrierConfig{}, refuse)
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{}, httpapi.TokenCarrierConfig{}, refuse)
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -253,16 +254,16 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 			return payload, nil
 		}, nil)
 	}
-	for delivery, read := range map[core.TokenDelivery]func(w *httptest.ResponseRecorder, body map[string]any) string{
-		core.DeliveryBody: func(_ *httptest.ResponseRecorder, body map[string]any) string {
+	for delivery, read := range map[httpapi.TokenDelivery]func(w *httptest.ResponseRecorder, body map[string]any) string{
+		httpapi.DeliveryBody: func(_ *httptest.ResponseRecorder, body map[string]any) string {
 			token, _ := body["token"].(string)
 			return token
 		},
-		core.DeliveryHeader: func(w *httptest.ResponseRecorder, _ map[string]any) string {
-			return w.Header().Get(core.SessionTokenHeader)
+		httpapi.DeliveryHeader: func(w *httptest.ResponseRecorder, _ map[string]any) string {
+			return w.Header().Get(httpapi.SessionTokenHeader)
 		},
 	} {
-		ac, mounted, err := bootPasswords(t, core.SessionConfig{}, core.TokenCarrierConfig{Delivery: delivery}, stepUp)
+		ac, mounted, err := bootPasswords(t, core.SessionConfig{}, httpapi.TokenCarrierConfig{Delivery: delivery}, stepUp)
 		require.NoError(t, err)
 		call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 		w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -277,7 +278,7 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 		session, err := ac.SessionManager.Get(ctx, token)
 		require.NoError(t, err, delivery)
 		assert.Equal(t, models.SessionPending, session.State, delivery)
-		if delivery == core.DeliveryHeader {
+		if delivery == httpapi.DeliveryHeader {
 			assert.NotContains(t, body, "token", "under the header delivery the body has no token")
 		}
 	}
@@ -287,7 +288,7 @@ func TestSignInPendingSecondFactorCarriesTheToken(t *testing.T) {
 // authentication stage extends the cookie of a rolling session that is due. The sign-out then removes that cookie. The
 // response sets it once, and what it sets is the removal.
 func TestSignOutOfARollingSessionSetsTheCookieOnce(t *testing.T) {
-	ac, mounted, err := bootPasswords(t, core.SessionConfig{ExpiresIn: time.Hour, UpdateAge: 2 * time.Hour}, core.TokenCarrierConfig{}, nil) // always due
+	ac, mounted, err := bootPasswords(t, core.SessionConfig{ExpiresIn: time.Hour, UpdateAge: 2 * time.Hour}, httpapi.TokenCarrierConfig{}, nil) // always due
 	require.NoError(t, err)
 	call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
@@ -308,7 +309,7 @@ func TestSignOutOfARollingSessionSetsTheCookieOnce(t *testing.T) {
 // A delivery Boot does not know stops it, instead of leaving sign-in
 // without a way to hand the token over.
 func TestBootRefusesAnUnknownTokenDelivery(t *testing.T) {
-	_, _, err := bootPasswords(t, core.SessionConfig{}, core.TokenCarrierConfig{Delivery: "Header"}, nil)
+	_, _, err := bootPasswords(t, core.SessionConfig{}, httpapi.TokenCarrierConfig{Delivery: "Header"}, nil)
 	require.Error(t, err)
 	assert.True(t, errs.IsCategory(err, errs.CategoryConfiguration), "%v", err)
 	assert.Contains(t, err.Error(), "RouterConfig.Carrier.Delivery")
@@ -325,11 +326,11 @@ var (
 // not, and fills them when a user is created.
 type visibilityPlugin struct{}
 
-func (visibilityPlugin) Meta() core.PluginMeta          { return core.PluginMeta{Name: "visibility"} }
-func (visibilityPlugin) Version() string                { return "0.0.0" }
-func (visibilityPlugin) Init(*core.AuthContext) error   { return nil }
-func (visibilityPlugin) Routes() []core.Route           { return nil }
-func (visibilityPlugin) Middlewares() []core.Middleware { return nil }
+func (visibilityPlugin) Meta() core.PluginMeta             { return core.PluginMeta{Name: "visibility"} }
+func (visibilityPlugin) Version() string                   { return "0.0.0" }
+func (visibilityPlugin) Init(*core.AuthContext) error      { return nil }
+func (visibilityPlugin) Routes() []httpapi.Route           { return nil }
+func (visibilityPlugin) Middlewares() []httpapi.Middleware { return nil }
 func (visibilityPlugin) Declare(ic *core.PluginInitContext) error {
 	for _, c := range []dbschema.ColumnContribution{
 		planField.Contribution(dbschema.Column{Type: dbschema.ColTypeString, Length: 32, Nullable: true, Public: true}),

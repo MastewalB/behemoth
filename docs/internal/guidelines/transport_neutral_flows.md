@@ -7,10 +7,13 @@ The guidelines are suggestions for new code and for changes. They do not describ
 The code it refers to lives in:
 
 - `plugins/*`: each plugin's flows (`Plugin.SignIn`, `Plugin.RequestLink`, ...) and their handlers
-- `core/plugins.go`: `RequestContext`, `HookContext`, `RequestFrom`
-- `core/session.go`: `SessionManager`, `RequireSession`
-- `core/ratelimit.go`: the route and hook rate-limit rules
-- `core/router.go`: the pipeline around a handler
+- `core/plugins.go`: `HookContext`
+- `httpapi/request.go`: `RequestContext`, `RequestFrom`
+- `core/session.go`: `SessionManager`
+- `httpapi/session.go`: `RequireSession`
+- `core/ratelimit.go`: the hook rate-limit rules, and `RateLimitRule`, which a transport counts its own rules with
+- `httpapi/ratelimit.go`: the route rate-limit rules
+- `httpapi/router.go`: the pipeline around a handler
 - `errs/errors.go`: `DomainError` and its categories
 
 The other guideline documents are [`http_contract.md`](http_contract.md), about what a client of the HTTP routes depends on, and [`service_ready_components.md`](service_ready_components.md), about options, state, and background work in a component that may run in a standalone service.
@@ -26,7 +29,7 @@ The other guideline documents are [`http_contract.md`](http_contract.md), about 
 The sign-in route shows the wrapper at its size:
 
 ```go
-func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
+func (p *Plugin) handleSignIn(rctx *httpapi.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("SignIn", "request", err)
@@ -39,7 +42,7 @@ func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return core.WriteSignIn(rctx, result, nil)
+	return httpapi.WriteSignIn(rctx, result, nil)
 }
 ```
 
@@ -98,7 +101,7 @@ The transport puts those facts on the context as the caller (`identity.CallerFro
 
 ### A hook handler reads the payload and `Values`
 
-`core.RequestFrom(hctx.Ctx)` is nil when the flow was not reached over HTTP. A handler that wants a captcha token reads it from the payload, where the body's extra fields arrive, and not from a header. A handler that does read the request checks it for nil first.
+`httpapi.RequestFrom(hctx.Ctx)` is nil when the flow was not reached over HTTP. A handler that wants a captcha token reads it from the payload, where the body's extra fields arrive, and not from a header. A handler that does read the request checks it for nil first.
 
 ### A result carries data, and the wrapper decides what to do with it
 
@@ -121,7 +124,7 @@ A flow's guarantees are tested by calling the flow: the limit that refuses the e
 Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted:
 
 - The handlers of the link request, verification send, email change and reset request routes hide whether an account exists. "Hiding whether an account exists is done by the HTTP handlers".
-- `core.Plugin` requires `Routes` and `Middlewares`. The stages around a handler are built in `Router.Build`. `core`, `errs`, `auth`, and each plugin's package import `net/http`, so no import rule checks any of this yet. [`../plans/package_layout.md`](../plans/package_layout.md) plans a package for the HTTP types, and the check. "`Plugin` requires HTTP routes, and the request pipeline lives in the router".
+- The stages around a handler are built in `httpapi.Router.Build`, so a second transport builds its own. A plugin's handlers are in the plugin's package, which imports `net/http` and `httpapi`, so an import rule can cover the packages below `httpapi` and not a plugin's flows. Step 13 of [`../plans/package_layout.md`](../plans/package_layout.md) adds the rule. "The request pipeline lives in the HTTP router, and a plugin's handlers share its package".
 - The verify, confirm, and revert handlers refuse a missing token themselves, and several flows take positional arguments that no input type checks. "Some flows take loose arguments instead of a request type".
 
 ## Design decisions

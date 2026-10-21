@@ -2,16 +2,13 @@
 // AuthContext a plugin receives, the hook system's types and the helpers flows
 // call over them, the interfaces of the managers, and the configuration
 // they take. The implementations live in other packages, and engine wires
-// them together. core also holds the HTTP types: the router, the request
-// context, and the middleware.
+// them together. core knows no transport: the HTTP types are in httpapi.
 package core
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"maps"
-	"net/http"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/errs"
@@ -20,6 +17,11 @@ import (
 	"github.com/MastewalB/behemoth/store"
 )
 
+// Plugin is what every plugin implements: it declares what it adds at
+// Prepare (Declare), registers its hook handlers, and receives behemoth's
+// services at Boot (Init). It knows no transport. A plugin that serves HTTP
+// routes also implements httpapi.Plugin, and one with route rate-limit
+// rules httpapi.RouteRulesPlugin.
 type Plugin interface {
 
 	// Meta returns the Plugin metadata
@@ -33,179 +35,10 @@ type Plugin interface {
 	// from it: telemetry.Named(ctx.Telemetry.Logger, <plugin name>).
 	Init(ctx *AuthContext) error
 
-	// Routes returns the HTTP endpoints this plugin wants to register.
-	// Returning an empty slice is valid (the plugin may only use hooks).
-	Routes() []Route
-
-	// Middlewares() returns middleware functions that the plugin wants to register.
-	Middlewares() []Middleware
-
 	// Declare lets the plugins declare hooks, tokens, and ratelimit rules it wants to get registered.
 	Declare(ic *PluginInitContext) error
 
 	Register(reg HookRegistry) error
-}
-
-// RequestContext is the normalized, framework-agnostic context every plugin
-// handler receives. It wraps the standard *http.Request (which every Go
-// framework exposes) and a ResponseRecorder that buffers the response until
-// the framework adapter flushes it to the real connection.
-type RequestContext struct {
-	Ctx context.Context
-
-	// The original http Request
-	Request *http.Request
-
-	// Custom ResponseRecorder for multiple plugins to write responses on
-	Response *ResponseRecorder
-
-	Auth *AuthContext
-
-	// TokenCarrier carries the session token over HTTP, the way
-	// RouterConfig.Carrier says: a sign-in route hands the token to the
-	// client through it (WriteSignIn), and a route that ends its caller's
-	// session takes the token back (Clear). A route that hands the client a
-	// value of its own reads TokenCarrier.Config to deliver it the same way.
-	// The router sets it, as it sets Auth.
-	TokenCarrier *TokenCarrier
-
-	// Per request map to store data (user ID, claims etc...)
-	Values behemoth.M
-
-	Params map[string]string // path params, populated by the driver before Handler runs
-}
-
-func (rc *RequestContext) Set(key string, val any) {
-	rc.Values[key] = val
-}
-
-func (rc *RequestContext) Get(key string) (any, bool) {
-	v, ok := rc.Values[key]
-	return v, ok
-}
-
-func (rc *RequestContext) Param(name string) string { return rc.Params[name] }
-
-// ResponseRecorder buffers status code, headers, and body so the plugin
-// handler can write a complete response without ever touching a framework type.
-// The framework adapter calls Flush() once the handler returns, copying
-// everything onto the real http.ResponseWriter and sending it over the wire.
-type ResponseRecorder struct {
-	Code    int
-	Headers http.Header
-	body    *bytes.Buffer
-}
-
-func NewResponseRecorder() *ResponseRecorder {
-	return &ResponseRecorder{
-		Code:    http.StatusOK,
-		Headers: make(http.Header),
-		body:    new(bytes.Buffer),
-	}
-}
-
-// SetHeader sets an arbitrary response header.
-// Call before JSON/Text/Redirect so the value is included on Flush.
-func (r *ResponseRecorder) SetHeader(key, value string) {
-	r.Headers.Set(key, value)
-}
-
-// JSON serialises v, sets Content-Type, and writes into the buffer.
-// Nothing is sent over the network until Flush() is called.
-func (r *ResponseRecorder) JSON(code int, v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	r.Code = code
-	r.Headers.Set("Content-Type", "application/json")
-	r.body.Write(data)
-	return nil
-}
-
-// Status sets only the status code (useful for 204 No Content, etc.).
-func (r *ResponseRecorder) Status(code int) {
-	r.Code = code
-}
-
-// Text writes a plain-text body.
-func (r *ResponseRecorder) Text(code int, body string) {
-	r.Code = code
-	r.Headers.Set("Content-Type", "text/plain; charset=utf-8")
-	r.body.WriteString(body)
-}
-
-// Cookie queues an http.Cookie to be sent with the response.
-// The cookie is serialised by the stdlib and added as a Set-Cookie header,
-// so the full cookie spec (MaxAge, HttpOnly, SameSite, ...) is supported.
-func (r *ResponseRecorder) Cookie(cookie *http.Cookie) {
-	// http.Header.Add keeps existing Set-Cookie lines - multiple cookies work.
-	r.Headers.Add("Set-Cookie", cookie.String())
-}
-
-// Redirect sets a 3xx status and a Location header.
-// The body is intentionally empty; browsers follow the Location immediately.
-func (r *ResponseRecorder) Redirect(code int, url string) {
-	if code < 300 || code > 399 {
-		// Guard against a common mistake; fall back to 302.
-		code = http.StatusFound
-	}
-	r.Code = code
-	r.Headers.Set("Location", url)
-}
-
-func (r *ResponseRecorder) Error(code int, err string) error {
-	return r.JSON(code, map[string]string{"error": err})
-}
-
-// Flush copies the buffered response onto the real http.ResponseWriter.
-// Called once by the framework adapter after the plugin handler returns.
-func (r *ResponseRecorder) Flush(w http.ResponseWriter) {
-
-	// type Header map[string][]string
-	for k, vals := range r.Headers {
-		for _, v := range vals {
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(r.Code)
-	r.body.WriteTo(w)
-}
-
-type HandlerFunc func(ctx *RequestContext) error
-
-// Middleware is a named function that wraps a HandlerFunc.
-// It receives the RequestContext and a `next` function to call the next
-// handler in the chain. Not calling next short-circuits the chain (useful
-// for auth guards that want to reject a request early).
-//
-// Example: a minimal logger middleware:
-//
-//	plugin.Middleware{
-//	    Name: "logger",
-//	    Handle: func(rc *plugin.RequestContext, next plugin.HandlerFunc) error {
-//	        log.Printf("--> %s %s", rc.Request.Method, rc.Request.URL.Path)
-//	        err := next(rc)
-//	        log.Printf("<-- %d", rc.Response.Code)
-//	        return err
-//	    },
-//	}
-//
-//	type Middleware struct {
-//		Name   string
-//		Handle func(rc *RequestContext, next HandlerFunc) error
-//	}
-type Middleware func(next HandlerFunc) HandlerFunc
-
-// Route describes a single HTTP endpoint a plugin wants to expose.
-// The Handler receives a framework-agnostic RequestContext and writes its
-// response into rc.Response
-type Route struct {
-	Method      string       // "GET", "POST", "PUT", "DELETE" ...
-	Path        string       // "/plugin-name/some-action"
-	Handler     HandlerFunc  // the core logic for this route
-	Middlewares []Middleware // optional, run left-to-right before Handler
 }
 
 type HookPoint string
@@ -224,12 +57,12 @@ type HookRegistry interface {
 }
 
 // HookContext is the normalized context passed to every lifecycle hook handler
-// (both Tier 1 data hooks and Tier 2 semantic flow hooks). Unlike RequestContext,
+// (both Tier 1 data hooks and Tier 2 semantic flow hooks). Unlike httpapi.RequestContext,
 // it makes no assumption about transport; a hook may fire from an HTTP request,
 // a CLI command, a background job, or a plugin calling another plugin's service
 // method directly. What a handler may know about where the call came from is
 // on the caller (Caller): its transport, address and user agent. A handler
-// that needs the HTTP request itself reads it with RequestFrom(Ctx), which
+// that needs the HTTP request itself reads it with httpapi.RequestFrom(Ctx), which
 // returns nil outside a request.
 type HookContext struct {
 	Ctx context.Context
@@ -266,7 +99,7 @@ type HookContext struct {
 	// sign-up) begins with a copy of the outer operation's Values: its
 	// handlers read the outer notes, and what they write stays their own.
 	// See ContextWithHookValues. It is distinct from the payload, which the
-	// firing site reads back, and from RequestContext.Values, which lasts
+	// firing site reads back, and from httpapi.RequestContext.Values, which lasts
 	// for the HTTP request and exists only when there is one.
 	Values behemoth.M
 }
@@ -276,26 +109,6 @@ type HookContext struct {
 // no copy, so a handler always sees the caller the dispatch runs with.
 func (h *HookContext) Caller() identity.Caller { return identity.CallerFrom(h.Ctx) }
 
-type requestContextKey struct{}
-
-// ContextWithRequest returns ctx carrying rc, the request being handled. The
-// router sets it once per request (Router.Build), so code reached while
-// handling it — including layers that never see rc, like the store's data
-// hooks — can still attribute work to the request (IP, user agent, headers).
-// Outside a request (a CLI, a job) there is none, and RequestFrom says so.
-//
-// Only the request travels this way: it is request-scoped by definition.
-// Anything else a callee needs is passed explicitly.
-func ContextWithRequest(ctx context.Context, rc *RequestContext) context.Context {
-	return context.WithValue(ctx, requestContextKey{}, rc)
-}
-
-// RequestFrom returns the request ctx carries, or nil outside one.
-func RequestFrom(ctx context.Context) *RequestContext {
-	rc, _ := ctx.Value(requestContextKey{}).(*RequestContext)
-	return rc
-}
-
 type hookValuesKey struct{}
 
 // ContextWithHookValues returns ctx carrying values, the HookContext.Values
@@ -304,7 +117,7 @@ type hookValuesKey struct{}
 // copy of it (NestedHookValues). This is how the data hooks of a user write
 // see what a sign-up's handlers left, without the store knowing about hooks.
 //
-// Like the request (ContextWithRequest), the values travel in the context
+// Like the request (httpapi.ContextWithRequest), the values travel in the context
 // because the code in between, the store and the managers, takes only a
 // context. A callee that is handed a fresh context starts without them.
 func ContextWithHookValues(ctx context.Context, values behemoth.M) context.Context {

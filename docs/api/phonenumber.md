@@ -170,7 +170,7 @@ The flows behave as follows:
 - `SendCode` and `RequestPasswordReset` tell a caller in code what the routes hide. `sent.Sent` is false when no code went out, and `sent.Reason` is `phonenumber.ReasonNoAccount`, `ReasonNumberTaken`, `ReasonAlreadySet`, or `ReasonSendFailed`. Their only errors are a number that is not E.164, a rate limit, a hook's rejection, and a failure of the system.
 - `SendCode` and `Verify` read the caller on `ctx`, as the routes do. For a caller that acts for a user they add a number to that user, and require `phonenumber.PermissionPhoneChange` (`phone:change`), which a signed-in user holds. For an anonymous caller they sign in. A caller whose session token failed gets the reason, and a system caller that names no user is a configuration error.
 - `Verify(ctx, VerifyRequest{...})` is `AddNumber` for the caller's user, and `SignInWithCode` for an anonymous caller. The route calls it.
-- `SignIn` and `SignInWithCode` return the raw session token and deliver nothing. From a route of your own, hand the result to `core.WriteSignIn`.
+- `SignIn` and `SignInWithCode` return the raw session token and deliver nothing. From a route of your own, hand the result to `httpapi.WriteSignIn`.
 - `AddNumber` and `SetPhoneNumber` are admin operations. They require `phonenumber.PermissionAddPhone` (`user:add_phone`) and `phonenumber.PermissionSetPhone` (`user:set_phone`), which only a system caller holds: a signed-in user gets `403` with the code `insufficient_scope`.
 - Before `Boot`, the flows return a configuration error.
 

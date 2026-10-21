@@ -13,10 +13,9 @@ type DefaultRateLimitCatalog struct {
 	mu          sync.RWMutex
 	hookCatalog core.HookCatalog // read-only reference, for cross-validating Point at Declare time
 
-	rules      map[core.HookPoint][]core.HookRateLimitRule
-	routeRules []core.RouteRateLimitRule
-	declared   map[string]core.RateLimitRule // the rules of DeclareRule, by name
-	names      map[string]bool
+	rules    map[core.HookPoint][]core.HookRateLimitRule
+	declared map[string]core.RateLimitRule // the rules of DeclareRule, by name
+	names    map[string]bool
 }
 
 func NewRateLimitCatalog(hooks core.HookCatalog) *DefaultRateLimitCatalog {
@@ -71,26 +70,6 @@ func (c *DefaultRateLimitCatalog) RulesForHook(point core.HookPoint) []core.Hook
 	return c.rules[point] // safe to return directly post-boot
 }
 
-// DeclareRouteRateLimitRule implements [core.RateLimitCatalog]. It declares
-// the rule's counting part under its name, as DeclareRule does, and keeps
-// the rule for RulesForRoute.
-func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule core.RouteRateLimitRule) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if rule.Path == "" {
-		return fmt.Errorf("ratelimitcatalog: route rule %q missing Path", rule.Name)
-	}
-	if rule.Method == "" {
-		rule.Method = "*"
-	}
-	if err := c.declareRule(rule.RateLimitRule()); err != nil {
-		return err
-	}
-	c.routeRules = append(c.routeRules, rule)
-	return nil
-}
-
 // DeclareRule implements [core.RateLimitCatalog].
 func (c *DefaultRateLimitCatalog) DeclareRule(rule core.RateLimitRule) error {
 	c.mu.Lock()
@@ -128,12 +107,6 @@ func (c *DefaultRateLimitCatalog) Rule(name string) (core.RateLimitRule, bool) {
 	defer c.mu.RUnlock()
 	rule, ok := c.declared[name]
 	return rule, ok
-}
-
-func (c *DefaultRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.routeRules // safe to hand out directly post-freeze
 }
 
 // HasRule implements [core.RateLimitCatalog].

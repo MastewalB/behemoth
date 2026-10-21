@@ -16,6 +16,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/identity"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
@@ -113,9 +114,9 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 	return nil
 }
 
-// Middlewares implements [core.Plugin]. The plugin has no middleware that
+// Middlewares implements [httpapi.Plugin]. The plugin has no middleware that
 // should run on every route of the application.
-func (p *Plugin) Middlewares() []core.Middleware {
+func (p *Plugin) Middlewares() []httpapi.Middleware {
 	return nil
 }
 
@@ -219,10 +220,10 @@ func (p *Plugin) validatePassword(password string) error {
 	return nil
 }
 
-// Routes implements [core.Plugin]. The two reset routes are added only when
+// Routes implements [httpapi.Plugin]. The two reset routes are added only when
 // reset is enabled.
-func (p *Plugin) Routes() []core.Route {
-	routes := []core.Route{
+func (p *Plugin) Routes() []httpapi.Route {
+	routes := []httpapi.Route{
 		{Method: http.MethodPost, Path: "/sign-up/email", Handler: p.handleSignUp},
 		{Method: http.MethodPost, Path: "/sign-in/email", Handler: p.handleSignIn},
 		// No session middleware: SignOut requires the caller itself.
@@ -230,8 +231,8 @@ func (p *Plugin) Routes() []core.Route {
 	}
 	if p.opts.Reset.enabled() {
 		routes = append(routes,
-			core.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
-			core.Route{Method: http.MethodPost, Path: PathResetConfirm, Handler: p.handleResetConfirm},
+			httpapi.Route{Method: http.MethodPost, Path: PathResetRequest, Handler: p.handleResetRequest},
+			httpapi.Route{Method: http.MethodPost, Path: PathResetConfirm, Handler: p.handleResetConfirm},
 		)
 	}
 	return routes
@@ -781,7 +782,7 @@ func (p *Plugin) SignOut(ctx context.Context) error {
 // password, a conflict (409) for an email that is taken. A hook handler's
 // typed rejection keeps its own status. Anything else is a failure of the
 // system: the router answers 500 without the error's text and logs it.
-func (p *Plugin) handleSignUp(rctx *core.RequestContext) error {
+func (p *Plugin) handleSignUp(rctx *httpapi.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("emailpassword.SignUp", "request", err)
@@ -797,7 +798,7 @@ func (p *Plugin) handleSignUp(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusCreated, behemoth.M{core.SignInUserKey: view})
+	return rctx.Response.JSON(http.StatusCreated, behemoth.M{httpapi.SignInUserKey: view})
 }
 
 // handleSignIn returns the flow's error unchanged, and the router maps and
@@ -805,7 +806,7 @@ func (p *Plugin) handleSignUp(rctx *core.RequestContext) error {
 // unauthorized error (401), and a hook handler's typed rejection keeps its
 // own status. Anything else is a failure of the system: the router answers
 // 500 without the error's text and logs it at Error.
-func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
+func (p *Plugin) handleSignIn(rctx *httpapi.RequestContext) error {
 	// The body is decoded as a map so that fields other than the email and
 	// password reach the before handlers, in creds.Extra.
 	var body behemoth.M
@@ -824,7 +825,7 @@ func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 
 	// The body every sign-in route answers with, and the session token the
 	// way RouterConfig.Carrier says.
-	return core.WriteSignIn(rctx, result, nil)
+	return httpapi.WriteSignIn(rctx, result, nil)
 }
 
 // handleSignOut returns SignOut's error unchanged, like handleSignIn. A typed
@@ -832,7 +833,7 @@ func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 // longer exists). A failed revoke is a 500 from the router, which does not
 // send the error's text. After a sign-out that went through, it takes the
 // session token back from the client.
-func (p *Plugin) handleSignOut(rctx *core.RequestContext) error {
+func (p *Plugin) handleSignOut(rctx *httpapi.RequestContext) error {
 	if err := p.SignOut(rctx.Ctx); err != nil {
 		return err
 	}
@@ -844,4 +845,4 @@ func (p *Plugin) handleSignOut(rctx *core.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})
 }
 
-var _ core.Plugin = (*Plugin)(nil)
+var _ httpapi.Plugin = (*Plugin)(nil)

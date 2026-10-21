@@ -1,4 +1,4 @@
-package auth
+package httpapi
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/stretchr/testify/assert"
@@ -30,10 +29,10 @@ func (s staticKeySet) PublicKey(_ context.Context, kid string) (crypto.Published
 func (s staticKeySet) PublicKeys(context.Context) ([]crypto.PublishedKey, error) { return s, nil }
 
 // serve runs the one route of routes and returns what it answered.
-func serve(t *testing.T, routes []core.Route) (*httptest.ResponseRecorder, error) {
+func serve(t *testing.T, routes []Route) (*httptest.ResponseRecorder, error) {
 	t.Helper()
 	require.Len(t, routes, 1)
-	rctx := &core.RequestContext{Ctx: context.Background(), Response: core.NewResponseRecorder()}
+	rctx := &RequestContext{Ctx: context.Background(), Response: NewResponseRecorder()}
 	err := routes[0].Handler(rctx)
 	w := httptest.NewRecorder()
 	rctx.Response.Flush(w)

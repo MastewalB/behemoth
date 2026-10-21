@@ -86,7 +86,7 @@ The response time still differs: a known email pays for the token writes, and wi
 | 6 | `SessionManager.Create` | the error is returned |
 | 7 | return a `*core.SignInResult` with `Method: "magiclink"` | |
 
-The route hands the result to `core.WriteSignIn` with the redirect URL as an extra field, so its response and the delivery of the session token are the ones of every sign-in route ([`../sessions/token_delivery.md`](../sessions/token_delivery.md)).
+The route hands the result to `httpapi.WriteSignIn` with the redirect URL as an extra field, so its response and the delivery of the session token are the ones of every sign-in route ([`../sessions/token_delivery.md`](../sessions/token_delivery.md)).
 
 Steps 1 to 3 all answer with `errInvalidLink`, one typed unauthorized error with the code `invalid_magic_link`. The audit event of `auth.signIn.failed` has the real code.
 

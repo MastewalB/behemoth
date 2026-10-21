@@ -7,7 +7,7 @@ A metric says that sign-in is slow. A trace says where one slow sign-in spent it
 The code lives in:
 
 - `telemetry/tracer.go`: `Tracer`, `Span`, `NoOpTracer`, `WithTracer`, the span names, `Telemetry.StartSpan`, `SpanFrom`, `FinishSpan`, `IsSystemFailure`
-- `core/router.go`: `Router.withTracing`
+- `httpapi/router.go`: `Router.withTracing`
 - `store/instrument.go`: `WithTelemetry`, `instrumentedDB`
 - `dispatch/dispatcher.go`: `DefaultDispatcher.chainSpan`, `handlerSpan`
 - `ratelimit/limiter.go`: the span in `DefaultRateLimiter.evaluate`

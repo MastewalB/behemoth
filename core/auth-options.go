@@ -28,7 +28,7 @@ const (
 // what its comment says zero means.
 //
 // How the session token travels over HTTP, and the session cookie, are the
-// token carrier's settings (RouterConfig.Carrier).
+// token carrier's settings (httpapi.RouterConfig.Carrier).
 type SessionConfig struct {
 	// ExpiresIn is how long an active session lasts. Default 7 days.
 	ExpiresIn time.Duration

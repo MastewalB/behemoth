@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -208,10 +207,8 @@ func refusedWith(t *testing.T, err error, code string, msgAndArgs ...any) {
 	case errs.CodeJWTUnknownKind, errs.CodeJWTExternalNotConfigured:
 		assert.Equal(t, errs.CategoryConfiguration, de.Category, "a mistake of the caller's setup, not a refused token")
 	default:
-		assert.Equal(t, errs.CategoryToken, de.Category, "a refused token")
-		status, body := (&errs.DefaultErrorMapper{}).Map(err)
-		assert.Equal(t, http.StatusUnauthorized, status, "a route answers a refused token with 401")
-		assert.Equal(t, "invalid or expired token", body["error"], "the message does not say which check failed")
+		assert.Equal(t, errs.CategoryToken, de.Category, "a refused token, which a route answers with 401")
+		assert.Equal(t, "invalid or expired token", de.PublicMessage, "the message does not say which check failed")
 	}
 }
 

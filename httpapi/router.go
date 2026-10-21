@@ -1,4 +1,12 @@
-package core
+// Package httpapi serves Behemoth over HTTP: the router and its request
+// pipeline, the request context a handler receives, the token carrier that
+// moves the session token, the origin check, the route rate-limit rules,
+// and the routes of core's own features, the session token exchange and the
+// key set. A handler decodes a request, calls one flow of a plugin or of
+// core, and encodes the result; the rules and protections live in the
+// flow, so that another transport can call it with the same guarantees.
+// FrameworkDriver connects the routes to an HTTP framework.
+package httpapi
 
 import (
 	"context"
@@ -12,6 +20,7 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 )
@@ -60,7 +69,7 @@ type Router struct {
 	routes          []mountedRoute
 	errorMapper     ErrorMapper
 	routeOwners     map[routeKey]string
-	auth            *AuthContext
+	auth            *core.AuthContext
 	carrier         *TokenCarrier
 	requestIDHeader string
 	log             telemetry.Logger
@@ -84,12 +93,12 @@ type mountedRoute struct {
 // as RequestContext.Auth, and the carrier of cfg.Carrier as
 // RequestContext.TokenCarrier, so adapters never need to know about either.
 // cfg.Carrier is not validated here: Boot calls its Validate first.
-func NewRouter(cfg RouterConfig, auth *AuthContext) *Router {
+func NewRouter(cfg RouterConfig, auth *core.AuthContext) *Router {
 	if cfg.BasePath == "" {
 		cfg.BasePath = "/api/auth"
 	}
 	if cfg.ErrorMapper == nil {
-		cfg.ErrorMapper = &errs.DefaultErrorMapper{}
+		cfg.ErrorMapper = &DefaultErrorMapper{}
 	}
 	if cfg.RequestIDHeader == "" {
 		cfg.RequestIDHeader = telemetry.DefaultRequestIDHeader
@@ -321,11 +330,11 @@ func (r *Router) requestID(ctx context.Context, rctx *RequestContext) string {
 // ApplyRateLimiting resolves, for each mounted route, its single most-specific matching RouteRateLimitRule once,
 // and wraps that route's handler accordingly. Rules are matched against a
 // mounted route's path below BasePath, and an absolute route's full path
-// (see mountedRoute).
-// It should run after every Mount/MountAbsolute call and after the rate-limit catalog has frozen
+// (see mountedRoute). rules are the route rules Prepare declared
+// (DeclareRouteRules), whose counting part rl knows by name.
+// It should run after every Mount/MountAbsolute call,
 // ideally making it the last step before Build hands routes to a FrameworkDriver
-func (r *Router) ApplyRateLimiting(rl RateLimiter, catalog RateLimitCatalog, ipCfg *ClientIPConfig) {
-	rules := catalog.RulesForRoute()
+func (r *Router) ApplyRateLimiting(rl core.RateLimiter, rules []RouteRateLimitRule, ipCfg *ClientIPConfig) {
 	for i, rt := range r.routes {
 		rule, ok := BestRouteMatch(rules, rt.Method, rt.matchPath)
 		if !ok || rule.Disabled {
@@ -363,7 +372,7 @@ func (r *Router) Build(driver FrameworkDriver, globalMiddleware ...Middleware) e
 // FrameworkDriver is the only seam between behemoth's plugin system and a
 // concrete HTTP framework. Each framework (gin, echo, chi, fiber, ...) ships
 // its own thin implementation, built around the application's own framework
-// instance. The core never imports gin or echo directly. The driver for the
+// instance. Behemoth never imports gin or echo directly. The driver for the
 // standard library's http.ServeMux needs no such import, so it is the one
 // adapter in this module (plugins/adapters/nethttp).
 //
@@ -394,7 +403,7 @@ type FrameworkDriver interface {
 // KeyFunc returns for it. A refusal is an *errs.DomainError of
 // CategoryRateLimited, which error mapping answers with 429 and
 // Retry-After before the body is read or a session looked up.
-func rateLimitWrap(next HandlerFunc, rule RouteRateLimitRule, rl RateLimiter, ipCfg *ClientIPConfig) HandlerFunc {
+func rateLimitWrap(next HandlerFunc, rule RouteRateLimitRule, rl core.RateLimiter, ipCfg *ClientIPConfig) HandlerFunc {
 	return func(rctx *RequestContext) error {
 		ip := ClientIP(rctx.Request, ipCfg)
 		if err := rl.CheckRule(rctx.Ctx, rule.Name, rule.KeyFunc(rctx.Request, ip), ip); err != nil {

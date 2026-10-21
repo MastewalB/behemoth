@@ -24,6 +24,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/schema"
@@ -192,10 +193,10 @@ func (p *Plugin) Version() string {
 //     plugin can still insert users;
 //   - the display username column (DisplayColumn), nullable for the same
 //     reasons;
-//   - with Options.AvailabilityRoute, a rate-limit rule per client address
-//     on availability checks. Sign-in attempts are counted by core's rule
-//     per address and method;
 //   - the admin permission PermissionSetUsername.
+//
+// Sign-in attempts are counted by core's rule per address and method. The
+// availability route has a rule of its own (RouteRateLimitRules).
 //
 // It declares no hook points, no token kind and no rule per username. A
 // limit per username would let anyone keep a user out by failing on purpose;
@@ -212,19 +213,23 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 	})); err != nil {
 		return err
 	}
-	if err := ic.Schemas.ExtendColumn(DisplayColumn.Contribution(schema.Column{
+	return ic.Schemas.ExtendColumn(DisplayColumn.Contribution(schema.Column{
 		Type: schema.ColTypeString, Length: MaxColumnLength, Nullable: true, Public: true,
-	})); err != nil {
-		return err
-	}
+	}))
+}
+
+// RouteRateLimitRules implements [httpapi.RouteRulesPlugin]: with
+// Options.AvailabilityRoute, a rule per client address on availability
+// checks, which fire no hook point a hook rule could count.
+func (p *Plugin) RouteRateLimitRules() []httpapi.RouteRateLimitRule {
 	if !p.opts.AvailabilityRoute {
 		return nil
 	}
 	// More generous than sign-in: a form checks as the user types.
-	return ic.RateLimits.DeclareRouteRateLimitRule(core.RouteRateLimitRule{
+	return []httpapi.RouteRateLimitRule{{
 		Name: RuleAvailableRoute, Method: http.MethodPost, Path: PathAvailable,
 		KeyFunc: func(_ *http.Request, ip string) string { return ip }, Limit: core.Limit{Max: 30, Window: time.Minute},
-	})
+	}}
 }
 
 // Register implements [core.Plugin]. The rules are applied where a user row
@@ -248,8 +253,8 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 	return reg.OnBefore(hooks.HookUserBeforeUpdate, p.onUserUpdate, nil)
 }
 
-// Middlewares implements [core.Plugin]. The plugin has no middleware.
-func (p *Plugin) Middlewares() []core.Middleware {
+// Middlewares implements [httpapi.Plugin]. The plugin has no middleware.
+func (p *Plugin) Middlewares() []httpapi.Middleware {
 	return nil
 }
 
@@ -268,14 +273,14 @@ func (p *Plugin) Init(ac *core.AuthContext) error {
 	return nil
 }
 
-// Routes implements [core.Plugin]. The availability route is added only
+// Routes implements [httpapi.Plugin]. The availability route is added only
 // with Options.AvailabilityRoute.
-func (p *Plugin) Routes() []core.Route {
-	routes := []core.Route{
+func (p *Plugin) Routes() []httpapi.Route {
+	routes := []httpapi.Route{
 		{Method: http.MethodPost, Path: PathSignIn, Handler: p.handleSignIn},
 	}
 	if p.opts.AvailabilityRoute {
-		routes = append(routes, core.Route{Method: http.MethodPost, Path: PathAvailable, Handler: p.handleAvailable})
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Path: PathAvailable, Handler: p.handleAvailable})
 	}
 	return routes
 }
@@ -647,9 +652,9 @@ func (p *Plugin) SetUsername(ctx context.Context, userID, username string) (*mod
 }
 
 // handleSignIn decodes the body, calls SignIn and answers the way every
-// sign-in route does (core.WriteSignIn). It returns the flow's error
+// sign-in route does (httpapi.WriteSignIn). It returns the flow's error
 // unchanged, and the router maps it.
-func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
+func (p *Plugin) handleSignIn(rctx *httpapi.RequestContext) error {
 	// The body is decoded as a map so that fields other than the username
 	// and password reach the before handlers, in creds.Extra.
 	var body behemoth.M
@@ -664,13 +669,13 @@ func (p *Plugin) handleSignIn(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return core.WriteSignIn(rctx, result, nil)
+	return httpapi.WriteSignIn(rctx, result, nil)
 }
 
 // handleAvailable decodes the body, calls Available and answers
 // {"available": true} or {"available": false}. A username that is not a
 // string or breaks the rules is the flow's validation error.
-func (p *Plugin) handleAvailable(rctx *core.RequestContext) error {
+func (p *Plugin) handleAvailable(rctx *httpapi.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("username.Available", "request", err)
@@ -686,4 +691,7 @@ func (p *Plugin) handleAvailable(rctx *core.RequestContext) error {
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{keyAvailable: available})
 }
 
-var _ core.Plugin = (*Plugin)(nil)
+var (
+	_ httpapi.Plugin           = (*Plugin)(nil)
+	_ httpapi.RouteRulesPlugin = (*Plugin)(nil)
+)

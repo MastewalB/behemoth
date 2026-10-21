@@ -136,7 +136,7 @@ shown, ok, err := username.DisplayColumn.Get(user) // "Ada.L"
 
 The flows behave as follows:
 
-- `SignIn` is the flow behind the route. It returns the raw session token and delivers nothing. From a route of your own, hand the result to `core.WriteSignIn`.
+- `SignIn` is the flow behind the route. It returns the raw session token and delivers nothing. From a route of your own, hand the result to `httpapi.WriteSignIn`.
 - `SetUsername` applies the rules and returns the same typed errors as sign-up (`username.ErrorCodeInvalidUsername`, `username.ErrorCodeUsernameTaken`). It is an admin operation: it requires `username.PermissionSetUsername` (`user:set_username`), which only a system caller holds, so your code names itself with `identity.System(name)`. A signed-in user gets `403` with the code `insufficient_scope`. The old username is free for another user at once.
 - To give usernames to users you had before adding the plugin, call `SetUsername` for each of them from a job, and handle the two errors for names that break the rules or collide.
 - `Available` returns false for a taken or reserved username, and a validation error for one that breaks a rule of length or characters.

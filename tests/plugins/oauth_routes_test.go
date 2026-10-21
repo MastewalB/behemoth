@@ -12,7 +12,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/stretchr/testify/assert"
@@ -23,7 +23,7 @@ import (
 type routeAnswer struct {
 	*http.Response
 	body    behemoth.M
-	carrier *core.TokenCarrier // the carrier the router handed to the request
+	carrier *httpapi.TokenCarrier // the carrier the router handed to the request
 }
 
 // post calls a mounted route of the plugin the way the router does, with
@@ -37,11 +37,11 @@ func (app *oauthApp) post(t *testing.T, path, body string, cookies ...*http.Cook
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
 	}
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: app.ac}
-	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: app.ac}
+	rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 	w := httptest.NewRecorder()
 	if err := route.Handler(rctx); err != nil {
-		status, errBody := (&errs.DefaultErrorMapper{}).Map(err)
+		status, errBody := (&httpapi.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(errBody))
 	} else {
@@ -79,7 +79,7 @@ func stateOf(t *testing.T, begun routeAnswer) string {
 	return state
 }
 
-func withDelivery(delivery core.TokenDelivery) func(*engine.BootConfig) {
+func withDelivery(delivery httpapi.TokenDelivery) func(*engine.BootConfig) {
 	return func(cfg *engine.BootConfig) { cfg.Router.Carrier.Delivery = delivery }
 }
 
@@ -95,7 +95,7 @@ func completeBodyFor(provider, state string, extra ...string) string {
 // an HttpOnly cookie of the sign-in, and the complete route reads it from
 // there. The answer is the one every sign-in route gives.
 func TestOAuthRoutesUnderTheCookieDelivery(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(core.DeliveryCookie))
+	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(httpapi.DeliveryCookie))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -129,7 +129,7 @@ func TestOAuthRoutesUnderTheCookieDelivery(t *testing.T) {
 	assert.Equal(t, "ada@example.com", user["email"])
 	assert.Equal(t, "/dashboard", done.body["redirect_url"])
 	assert.NotContains(t, done.body, "token", "the session token is in the cookie")
-	assert.NotEmpty(t, done.cookie(t, core.DefaultSessionCookieName).Value)
+	assert.NotEmpty(t, done.cookie(t, httpapi.DefaultSessionCookieName).Value)
 	cleared := done.cookie(t, binding.Name)
 	assert.Empty(t, cleared.Value)
 	assert.Equal(t, -1, cleared.MaxAge, "the used binding cookie is removed")
@@ -141,7 +141,7 @@ func TestOAuthRoutesUnderTheCookieDelivery(t *testing.T) {
 // Two sign-ins started in one browser, from two tabs, keep a cookie each.
 // Either one can be completed.
 func TestOAuthRoutesKeepACookiePerSignIn(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(core.DeliveryCookie))
+	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(httpapi.DeliveryCookie))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -161,7 +161,7 @@ func TestOAuthRoutesKeepACookiePerSignIn(t *testing.T) {
 // A client that keeps the session token itself gets the binding value in
 // the body and sends it back in the body. No cookie is set.
 func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
-	for _, delivery := range []core.TokenDelivery{core.DeliveryHeader, core.DeliveryBody} {
+	for _, delivery := range []httpapi.TokenDelivery{httpapi.DeliveryHeader, httpapi.DeliveryBody} {
 		t.Run(string(delivery), func(t *testing.T) {
 			app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(delivery))
 			require.NoError(t, err)
@@ -179,8 +179,8 @@ func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
 			done := app.post(t, oauth.PathComplete, completeBody(stateOf(t, begun), `,"binding":"`+binding+`"`))
 			require.Equal(t, http.StatusOK, done.StatusCode, done.body)
 			assert.Empty(t, done.Cookies())
-			if delivery == core.DeliveryHeader {
-				assert.NotEmpty(t, done.Header.Get(core.SessionTokenHeader))
+			if delivery == httpapi.DeliveryHeader {
+				assert.NotEmpty(t, done.Header.Get(httpapi.SessionTokenHeader))
 			} else {
 				assert.NotEmpty(t, done.body["token"])
 			}
@@ -191,7 +191,7 @@ func TestOAuthRoutesForAClientWithoutCookies(t *testing.T) {
 // Under DeliveryBoth the binding value goes both ways, as the session token
 // does, and either way back works.
 func TestOAuthRoutesUnderDeliveryBoth(t *testing.T) {
-	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(core.DeliveryBoth))
+	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(httpapi.DeliveryBoth))
 	require.NoError(t, err)
 	app.google.identity = ada
 
@@ -212,7 +212,7 @@ func TestOAuthRoutesUnderDeliveryBoth(t *testing.T) {
 func TestOAuthBindingCookieFollowsTheSessionCookie(t *testing.T) {
 	t.Run("a front end on another site", func(t *testing.T) {
 		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) {
-			cfg.Router.Carrier.Delivery, cfg.Router.Carrier.CookieSameSite = core.DeliveryCookie, core.SameSiteNone
+			cfg.Router.Carrier.Delivery, cfg.Router.Carrier.CookieSameSite = httpapi.DeliveryCookie, httpapi.SameSiteNone
 			cfg.Router.BaseURL = "https://auth.example.com"
 		})
 		require.NoError(t, err)
@@ -222,7 +222,7 @@ func TestOAuthBindingCookieFollowsTheSessionCookie(t *testing.T) {
 	})
 	t.Run("development over plain HTTP", func(t *testing.T) {
 		app, err := bootOAuth(t, oauth.Options{}, nil, func(cfg *engine.BootConfig) {
-			cfg.Router.Carrier.Delivery, cfg.Router.Carrier.CookieInsecure = core.DeliveryCookie, true
+			cfg.Router.Carrier.Delivery, cfg.Router.Carrier.CookieInsecure = httpapi.DeliveryCookie, true
 		})
 		require.NoError(t, err)
 		app.google.identity = ada
@@ -277,8 +277,8 @@ func TestOAuthRoutesReadTheCarrierDefaults(t *testing.T) {
 	app, err := bootOAuth(t, oauth.Options{}, nil, withDelivery(""))
 	require.NoError(t, err)
 	begun := app.post(t, oauth.PathBegin, `{"provider":"google"}`)
-	assert.Equal(t, core.DeliveryCookie, begun.carrier.Config().Delivery)
-	assert.Equal(t, core.DefaultSessionCookieName, begun.carrier.Config().CookieName)
+	assert.Equal(t, httpapi.DeliveryCookie, begun.carrier.Config().Delivery)
+	assert.Equal(t, httpapi.DefaultSessionCookieName, begun.carrier.Config().CookieName)
 	assert.NotContains(t, begun.body, "binding")
 	assert.NotNil(t, begun.cookie(t, "__Host-"+oauth.BindingCookiePrefix))
 }

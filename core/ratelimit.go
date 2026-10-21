@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 )
@@ -75,7 +74,7 @@ type RateLimitConfig struct {
 }
 
 // RateLimitRule is a rule that a transport applies itself, such as an HTTP
-// route rule (RouteRateLimitRule): what the rate limiter counts with, under
+// route rule (httpapi.RouteRateLimitRule): what the rate limiter counts with, under
 // the name RateLimitConfig changes it by. The transport decides which calls
 // the rule applies to and what each is counted per, and asks
 // RateLimiter.CheckRule. It is declared with RateLimitCatalog.DeclareRule.
@@ -84,7 +83,7 @@ type RateLimitRule struct {
 	Limit     Limit
 	Algorithm RateLimitAlgorithm // empty means AlgorithmFixedWindow
 	// Limiter, if set, is used instead of the one Boot builds for Algorithm
-	// (see RouteRateLimitRule).
+	// (see httpapi.RouteRateLimitRule).
 	Limiter    Limiter
 	Action     RateLimitAction // empty means ActionReject; ActionLockout is rejected at declaration (not built)
 	LockoutFor time.Duration   // reserved for ActionLockout; not read
@@ -94,35 +93,6 @@ type RateLimitRule struct {
 	// through, and the rule needs no Limit.
 	Disabled bool
 	Owner    string // set by the catalog the declarer receives
-}
-
-type RouteRateLimitRule struct {
-	Name   string
-	Method string // exact verb, or "*" to match any method
-	Path   string // canonical pattern: literal segments, "*" (exactly one segment), "**" (trailing, zero or more, must be the last segment)
-
-	KeyFunc func(r *http.Request, ip string) string
-	Limit   Limit
-	// Algorithm names the strategy. Empty means AlgorithmFixedWindow.
-	Algorithm RateLimitAlgorithm
-	// Limiter, if set, is used instead of the one Boot builds for Algorithm.
-	// It is for a strategy core does not have; it has to bring its own
-	// storage, since it exists before Boot.
-	Limiter    Limiter
-	Action     RateLimitAction // empty means ActionReject; ActionLockout is rejected at declaration (not built)
-	LockoutFor time.Duration   // reserved for ActionLockout; not read
-
-	Disabled bool // true = explicitly exempt this pattern from broader rule that would otherwise match
-	Owner    string
-}
-
-// RateLimitRule returns the part of r the rate limiter counts with, which
-// the catalog declares under r's name.
-func (r RouteRateLimitRule) RateLimitRule() RateLimitRule {
-	return RateLimitRule{
-		Name: r.Name, Limit: r.Limit, Algorithm: r.Algorithm, Limiter: r.Limiter,
-		Action: r.Action, LockoutFor: r.LockoutFor, Disabled: r.Disabled, Owner: r.Owner,
-	}
 }
 
 type HookRateLimitRule struct {
@@ -143,7 +113,7 @@ type HookRateLimitRule struct {
 	KeyFunc    func(hctx *HookContext) (key string, ok bool)
 	Limit      Limit
 	Algorithm  RateLimitAlgorithm // which strategy this rule uses; empty means AlgorithmFixedWindow
-	Limiter    Limiter            // optional: the rule's own limiter, used instead of Algorithm's (see RouteRateLimitRule)
+	Limiter    Limiter            // optional: the rule's own limiter, used instead of Algorithm's (see httpapi.RouteRateLimitRule)
 	Action     RateLimitAction
 	LockoutFor time.Duration // reserved for ActionLockout, which the catalog rejects (not built); not read
 
@@ -203,18 +173,16 @@ func KeyByValues(keys ...string) func(hctx *HookContext) (string, bool) {
 }
 
 // RateLimitCatalog holds the declared rate-limit rules: hook rules by the
-// point they guard, and route rules. Plugins declare into it at Prepare,
-// and the rate limiter reads it.
+// point they guard, and the rules transports apply themselves, such as
+// httpapi's route rules. Plugins declare into it at Prepare, and the rate
+// limiter reads it.
 type RateLimitCatalog interface {
 	DeclareHookRateLimitRule(rule HookRateLimitRule) error
 	RulesForHook(point HookPoint) []HookRateLimitRule
 
-	DeclareRouteRateLimitRule(rule RouteRateLimitRule) error
-	RulesForRoute() []RouteRateLimitRule
-
 	// DeclareRule declares a rule that a transport applies itself. Its name
-	// is unique among every rule, hook rules included. A route rule
-	// declares one under its own name.
+	// is unique among every rule, hook rules included. Prepare declares one
+	// for each route rule a plugin returns (httpapi.RouteRulesPlugin).
 	DeclareRule(rule RateLimitRule) error
 	// Rule returns the rule declared under name with DeclareRule.
 	Rule(name string) (RateLimitRule, bool)
@@ -222,104 +190,6 @@ type RateLimitCatalog interface {
 	// HasRule reports whether a rule of any kind is declared under name.
 	// Boot checks RateLimitConfig's names with it.
 	HasRule(name string) bool
-}
-
-func SplitPath(p string) []string {
-	p = strings.Trim(p, "/")
-	if p == "" {
-		return nil
-	}
-
-	return strings.Split(p, "/")
-}
-
-func MatchesPath(pattern, path string) bool {
-	pSegments, rSegments := SplitPath(pattern), SplitPath(path)
-	for i, ps := range pSegments {
-		if ps == "**" {
-			return true // matches regardless of what remains, including nothing
-		}
-		if i >= len(rSegments) {
-			return false
-		}
-		if ps == "*" {
-			continue
-		}
-		if ps != rSegments[i] {
-			return false
-		}
-	}
-
-	return len(pSegments) == len(rSegments)
-}
-
-func MatchesMethod(ruleMethod, method string) bool {
-	return ruleMethod == "*" || strings.EqualFold(ruleMethod, method)
-}
-
-// specificity produces a comparable score so that when multiple declared
-// rules match the same request, the most deliberately-targeted one wins;
-//
-//	a specific custom Rule overrides the broader default for that path, rather than both
-//
-// applying and stacking. Compared as a tuple, most significant first:
-//  1. exact method match beats "*" (a method-specific rule is clearly more deliberate)
-//  2. more literal path segments wins (fewer wildcards = more specific)
-//  3. presence of "**" loses to any pattern without one (trailing wildcard is the least specific construct)
-//  4. longer pattern (more segments) wins as the final tiebreak
-type specificity struct {
-	exactMethod   bool
-	literalCount  int
-	hasDoubleStar bool
-	segmentCount  int
-}
-
-func scoreOf(rule RouteRateLimitRule) specificity {
-	sgmts := SplitPath(rule.Path)
-	s := specificity{exactMethod: rule.Method != "*", segmentCount: len(sgmts)}
-	for _, sg := range sgmts {
-		switch sg {
-		case "**":
-			s.hasDoubleStar = true
-		case "*":
-			// wildcard segment: contributes to segmentCount only, not literalCount
-		default:
-			s.literalCount++
-		}
-	}
-	return s
-}
-
-// moreSpecific reports whether a should be preferred over b when both match.
-func moreSpecific(a, b specificity) bool {
-	if a.exactMethod != b.exactMethod {
-		return a.exactMethod
-	}
-	if a.literalCount != b.literalCount {
-		return a.literalCount > b.literalCount
-	}
-
-	if a.hasDoubleStar != b.hasDoubleStar {
-		return !a.hasDoubleStar
-	}
-	return a.segmentCount > b.segmentCount
-}
-
-func BestRouteMatch(rules []RouteRateLimitRule, method, path string) (RouteRateLimitRule, bool) {
-	var bestRule RouteRateLimitRule
-	var bestScore specificity
-	found := false
-
-	for _, r := range rules {
-		if !MatchesMethod(r.Method, method) || !MatchesPath(r.Path, path) {
-			continue
-		}
-		score := scoreOf(r)
-		if !found || moreSpecific(score, bestScore) {
-			bestRule, bestScore, found = r, score, true
-		}
-	}
-	return bestRule, found
 }
 
 // AtomicIncrementer is a fixed-window counter: the storage behind

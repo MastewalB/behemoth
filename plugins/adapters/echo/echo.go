@@ -10,7 +10,7 @@ import (
 	"regexp"
 
 	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/labstack/echo/v5"
 )
 
@@ -29,8 +29,8 @@ func toEchoPath(path string) string {
 	return pathParam.ReplaceAllString(path, ":$1")
 }
 
-// Mount implements [core.FrameworkDriver].
-func (ed *EchoDriver) Mount(routes ...core.Route) error {
+// Mount implements [httpapi.FrameworkDriver].
+func (ed *EchoDriver) Mount(routes ...httpapi.Route) error {
 	for _, rt := range routes {
 		handler := rt.Handler
 		_, err := ed.e.AddRoute(echo.Route{
@@ -54,19 +54,19 @@ func (ed *EchoDriver) Mount(routes ...core.Route) error {
 	return nil
 }
 
-func buildRequestContext(c *echo.Context) *core.RequestContext {
+func buildRequestContext(c *echo.Context) *httpapi.RequestContext {
 	params := make(map[string]string)
 	for _, p := range c.PathValues() {
 		params[p.Name] = p.Value
 	}
 
-	return &core.RequestContext{
+	return &httpapi.RequestContext{
 		Ctx:      c.Request().Context(),
 		Request:  c.Request(),
-		Response: core.NewResponseRecorder(),
+		Response: httpapi.NewResponseRecorder(),
 		Values:   make(behemoth.M),
 		Params:   params,
 	}
 }
 
-var _ core.FrameworkDriver = (*EchoDriver)(nil)
+var _ httpapi.FrameworkDriver = (*EchoDriver)(nil)

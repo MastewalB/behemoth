@@ -2,12 +2,8 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
 	"slices"
-	"time"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/core"
@@ -20,7 +16,7 @@ import (
 
 // DefaultSessionTokens is the SessionTokens of behemoth: it signs external
 // JWTs with the JWT provider, for the session a request comes with. The
-// route that exposes it is POST /session/token (Routes).
+// route that exposes it is POST /session/token (httpapi.SessionTokenRoutes).
 type DefaultSessionTokens struct {
 	jwt  crypto.JWTProvider
 	disp core.Dispatcher
@@ -121,43 +117,6 @@ func (s *DefaultSessionTokens) Issue(ctx context.Context, req core.SessionTokenR
 		return nil, err
 	}
 	return result, nil
-}
-
-// Routes returns POST /session/token, behind RequireSession. It is nil when
-// session tokens are off.
-func (s *DefaultSessionTokens) Routes() []core.Route {
-	if !s.cfg.ExternalEnabled() {
-		return nil
-	}
-	// No session middleware: Issue requires the caller itself.
-	return []core.Route{{Method: http.MethodPost, Path: core.PathSessionToken, Handler: s.handleIssue}}
-}
-
-// handleIssue answers with the token, its expiry and its audience. The body
-// is optional: an empty one asks for the default audience.
-//
-//	{"token": "...", "expires_at": "2026-10-14T10:15:00Z", "audience": "https://api.example.com"}
-func (s *DefaultSessionTokens) handleIssue(rctx *core.RequestContext) error {
-	const op = "SessionTokens.Issue"
-	var body behemoth.M
-	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		return errs.NewValidationError(op, "request", err)
-	}
-	audience, ok := body[core.SessionTokenAudienceKey].(string)
-	if !ok && body[core.SessionTokenAudienceKey] != nil {
-		return errs.NewInvalidInputError(op, core.SessionTokenAudienceKey, "audience must be a string", nil)
-	}
-	issued, err := s.Issue(rctx.Ctx, core.SessionTokenRequest{Audience: audience})
-	if err != nil {
-		return err
-	}
-	// The body is a credential.
-	rctx.Response.SetHeader("Cache-Control", "no-store")
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{
-		"token":                      issued.Token,
-		"expires_at":                 issued.ExpiresAt.UTC().Format(time.RFC3339),
-		core.SessionTokenAudienceKey: issued.Audience,
-	})
 }
 
 var _ core.SessionTokens = (*DefaultSessionTokens)(nil)

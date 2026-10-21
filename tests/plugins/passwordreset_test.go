@@ -17,6 +17,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -68,7 +69,7 @@ func bootReset(t *testing.T, opts emailpassword.ResetOptions, hookFn func(reg co
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router:    httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		Mail:      core.MailConfig{Sender: app.outbox},
 		Telemetry: tel,
 		HTTP:      app.mounted,
@@ -265,7 +266,7 @@ func TestPasswordResetRoutes(t *testing.T) {
 	w = call(t, app.ac, confirm, `{"token":"`+link.Token+`","password":"`+resetNewPassword+`"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.JSONEq(t, `{"status":"password_reset"}`, w.Body.String())
-	assert.Empty(t, w.Header().Get(core.SessionTokenHeader), "a reset does not sign the user in")
+	assert.Empty(t, w.Header().Get(httpapi.SessionTokenHeader), "a reset does not sign the user in")
 	_, err := app.signIn(resetNewPassword)
 	require.NoError(t, err)
 

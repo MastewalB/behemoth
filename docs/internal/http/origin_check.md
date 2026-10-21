@@ -4,10 +4,10 @@ This document explains how behemoth protects cookie-authenticated routes from cr
 
 The code lives in:
 
-- `core/origin_check.go`: `OriginCheck`, `NewOriginCheck`, the refusal reasons, `RefuseFormContentTypes`
-- `core/origins.go`: `TrustedOrigins`, `parseOrigin`, `originOf`
-- `core/router.go`: `RouterConfig.BaseURL`, `RouterConfig.TrustedOrigins`
-- `core/token_carrier.go`: `TokenDelivery.ReadsCookie`, `TokenCarrierConfig` (`RouterConfig.Carrier`)
+- `httpapi/origin_check.go`: `OriginCheck`, `NewOriginCheck`, the refusal reasons, `RefuseFormContentTypes`
+- `core/origins.go`: `TrustedOrigins`, `ParseOrigin`, `OriginOf`
+- `httpapi/router.go`: `RouterConfig.BaseURL`, `RouterConfig.TrustedOrigins`
+- `httpapi/token_carrier.go`: `TokenDelivery.ReadsCookie`, `TokenCarrierConfig` (`RouterConfig.Carrier`)
 - `engine/init.go`: `Boot`, which builds the check and decides whether it runs
 - `engine/init.go`: `checkCookieAgainstBaseURL`, which ties the cookie's attributes to the base URL
 - `errs/origin.go`: `CodeUntrustedOrigin`, `CodeUnsupportedContentType`
@@ -44,7 +44,7 @@ Every refusal is one error for a client: a `CategoryForbidden` error with the co
 
 ### Behemoth's own origin
 
-`RouterConfig.BaseURL` names it: a scheme, a host and an optional port, without `BasePath`. `NewOriginCheck` parses it with `parseOrigin`, the function behind `NewTrustedOrigins`, so both settings accept and refuse the same values. `Boot` returns a malformed one as a configuration error, whatever the transport.
+`RouterConfig.BaseURL` names it: a scheme, a host and an optional port, without `BasePath`. `NewOriginCheck` parses it with `core.ParseOrigin`, the function behind `NewTrustedOrigins`, so both settings accept and refuse the same values. `Boot` returns a malformed one as a configuration error, whatever the transport.
 
 With `BaseURL` empty, the check builds the own origin for each request from the request's `Host` header and the scheme the `Origin` header named. Only the host and the port are compared this way. `logBootSummary` writes a Warn line when `BaseURL` is empty, a cookie delivery is on and `BootConfig.HTTP` is set. A process that mounts no routes gets no warning.
 
@@ -189,10 +189,10 @@ These parts are deferred:
 
 | Test | File | Covers |
 | --- | --- | --- |
-| `TestOriginCheck` | `core/origin_check_test.go` | every row of the table above, with and without a base URL |
-| `TestNewOriginCheckRefusesABadBaseURL` | `core/origin_check_test.go` | the values `NewOriginCheck` refuses |
-| `TestOriginCheckMiddlewareInThePipeline` | `core/origin_check_test.go` | the `403` body, and that a refused request reaches no later stage |
-| `TestRefuseFormContentTypes` | `core/origin_check_test.go` | the three refused types, the types that pass, and a `GET` |
+| `TestOriginCheck` | `httpapi/origin_check_test.go` | every row of the table above, with and without a base URL |
+| `TestNewOriginCheckRefusesABadBaseURL` | `httpapi/origin_check_test.go` | the values `NewOriginCheck` refuses |
+| `TestOriginCheckMiddlewareInThePipeline` | `httpapi/origin_check_test.go` | the `403` body, and that a refused request reaches no later stage |
+| `TestRefuseFormContentTypes` | `httpapi/origin_check_test.go` | the three refused types, the types that pass, and a `GET` |
 | `TestBootInstallsTheOriginCheckForCookieDeliveries` | `tests/plugins/origin_check_test.go` | both middlewares per delivery, on the sign-in route |
 | `TestBootChecksTheSessionCookieAgainstTheBaseURL` | `tests/plugins/origin_check_test.go` | `SameSiteNone` without a base URL, and a domain that does not cover the host |
 | `TestBootRefusesAMalformedBaseURL` | `tests/plugins/origin_check_test.go` | the configuration error |

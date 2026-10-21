@@ -19,6 +19,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -125,7 +126,7 @@ func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg core.HookRegist
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ab", 32)}, Current: 1},
 		},
 		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:  core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, TrustedOrigins: []string{"https://app.example.com"}},
+		Router:  httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}, TrustedOrigins: []string{"https://app.example.com"}},
 		Hooks:   hookFn,
 		HTTP:    app.mounted,
 	}

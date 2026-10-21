@@ -27,7 +27,7 @@ var layoutRows = [][]string{
 	{"core"},
 	{"core/hooks"},
 	{"auth", "dispatch", "ratelimit", "messaging"},
-	{"web"},
+	{"httpapi"},
 	{"plugins/*"},
 	{"engine", "cli", "cmd/*"},
 	{"examples/*", "tests", "tests/*"},
@@ -44,9 +44,9 @@ var sameRow = map[string][]string{
 }
 
 // noImport lists the rows a row may not import although they come earlier:
-// a plugin reaches the implementations only through the contracts in core,
-// so that an application can replace an implementation.
-var noImport = map[int][]int{11: {9}}
+// httpapi and a plugin reach the implementations only through the contracts
+// in core, so that an application can replace an implementation.
+var noImport = map[int][]int{10: {9}, 11: {9}}
 
 const modulePath = "github.com/MastewalB/behemoth"
 

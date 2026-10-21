@@ -193,7 +193,7 @@ The same link therefore cancels a change that is pending and undoes one that was
 | Addition | Where | Why |
 | --- | --- | --- |
 | `TokenManager.ListForSubject(kind, subject)` | `core/token.go`, `auth/token.go`, `Store.ListTokensForSubject` | step 2 of the revert revokes some of a user's revert tokens and not all. It returns the usable tokens of a kind, oldest first; a key-value kind can't be listed |
-| `SessionManager.IsFresh(session)` and `core.RequireFreshSession` | `core/session.go`, `auth/session.go` | `SessionConfig.FreshAge` and `Session.FreshAt` existed and nothing read them. A session is fresh when it is active and `FreshAt` is within `FreshAge` (`DefaultFreshAge`, 15 minutes, when zero). `FreshAt` is set by `Create` and `Promote` |
+| `SessionManager.IsFresh(session)` and `httpapi.RequireFreshSession` | `core/session.go`, `auth/session.go`, `httpapi/session.go` | `SessionConfig.FreshAge` and `Session.FreshAt` existed and nothing read them. A session is fresh when it is active and `FreshAt` is within `FreshAge` (`DefaultFreshAge`, 15 minutes, when zero). `FreshAt` is set by `Create` and `Promote` |
 | `MailMessage.Data`, two mail kinds | `core/mail.go` | the notice has to name the new address, which nothing else on the message carries |
 
 `RequireFreshSession` wraps `RequireSession` and then checks `IsFresh`. A stale session gets a typed session error, `session_not_fresh`, which maps to `401`.

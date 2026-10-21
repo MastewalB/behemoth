@@ -174,10 +174,10 @@ You can put a fresh-session check on a route of your own ([Sessions](sessions.md
 
 ```go
 {Method: http.MethodPost, Path: "/account/delete", Handler: deleteAccount,
-	Middlewares: []core.Middleware{core.RequireFreshSession(ac.SessionManager)}},
+	Middlewares: []httpapi.Middleware{httpapi.RequireFreshSession(ac.SessionManager)}},
 ```
 
-It does what `core.RequireSession` does first, so use it alone.
+It does what `httpapi.RequireSession` does first, so use it alone.
 
 ### What the revert link does
 

@@ -179,7 +179,7 @@ func IsRetryable(err error) bool {
 // WrapOp re-contextualizes an already-classified low level *DomainError at a higher
 // call boundary: e.g. an adapter's generic "Count"/"sessions" becoming
 // "SessionManager.Create"/"session" without losing Category, Original error, or
-// Retryable flag, since the ErrorMapper and IsRetryable() checks depend on those
+// Retryable flag, since the httpapi.ErrorMapper and IsRetryable() checks depend on those
 // surviving unchanged regardless of how many layers an error passes through.
 //
 // PublicMessage handling is deliberately asymmetric by category:

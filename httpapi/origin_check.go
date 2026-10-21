@@ -1,4 +1,4 @@
-package core
+package httpapi
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/telemetry"
 )
@@ -37,8 +38,8 @@ const (
 // fallback, and X-Forwarded-Host for an application that leaves BaseURL
 // unset behind a proxy.
 type OriginCheck struct {
-	own     string // behemoth's origin as originOf writes it; "" compares with the request's Host
-	trusted OriginValidator
+	own     string // behemoth's origin as core.OriginOf writes it; "" compares with the request's Host
+	trusted core.OriginValidator
 }
 
 // NewOriginCheck returns the check for a behemoth served at baseURL, an
@@ -49,12 +50,12 @@ type OriginCheck struct {
 // Origin with its Host header and ignores the scheme. That refuses every
 // browser request when a proxy in front rewrites Host, so an application
 // behind one sets baseURL. A nil trusted trusts no further origin.
-func NewOriginCheck(baseURL string, trusted OriginValidator) (*OriginCheck, error) {
+func NewOriginCheck(baseURL string, trusted core.OriginValidator) (*OriginCheck, error) {
 	c := &OriginCheck{trusted: trusted}
 	if strings.TrimSpace(baseURL) == "" {
 		return c, nil
 	}
-	own, err := parseOrigin(baseURL)
+	own, err := core.ParseOrigin(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("base URL %w", err)
 	}
@@ -103,7 +104,7 @@ func (c *OriginCheck) refusal(r *http.Request) string {
 	if err != nil {
 		return OriginRefusedMalformed
 	}
-	origin, ok := originOf(u)
+	origin, ok := core.OriginOf(u)
 	if !ok || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return OriginRefusedMalformed
 	}
@@ -125,7 +126,7 @@ func (c *OriginCheck) ownOrigin(scheme, host string) string {
 	if err != nil {
 		return ""
 	}
-	own, _ := originOf(u)
+	own, _ := core.OriginOf(u)
 	return own
 }
 

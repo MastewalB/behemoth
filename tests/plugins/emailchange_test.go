@@ -16,6 +16,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -290,18 +291,18 @@ func TestEmailChangeNeedsItsNotice(t *testing.T) {
 }
 
 // callAs invokes a mounted route the way call does, with a session token.
-func callAs(t *testing.T, ac *core.AuthContext, route core.Route, body, rawSession string) *httptest.ResponseRecorder {
+func callAs(t *testing.T, ac *core.AuthContext, route httpapi.Route, body, rawSession string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(body))
 	if rawSession != "" {
 		req.Header.Set("Authorization", "Bearer "+rawSession)
 	}
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
-	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
-		status, body := (&errs.DefaultErrorMapper{}).Map(err)
+		status, body := (&httpapi.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(body))
 		return w

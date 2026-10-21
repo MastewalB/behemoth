@@ -4,10 +4,11 @@ This document explains how rate limiting works: how a rule becomes a check, the 
 
 The code lives in:
 
-- `core/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `Limit`, the rule types, `KeyByValues`, `KeyByClientIP`, `RateLimitConfig`, `AtomicIncrementer`, `RateLimiter`
+- `core/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `Limit`, `RateLimitRule`, `HookRateLimitRule`, `KeyByValues`, `KeyByClientIP`, `RateLimitConfig`, `AtomicIncrementer`, `RateLimiter`
+- `httpapi/ratelimit.go`: `RouteRateLimitRule`, `DeclareRouteRules`, `BestRouteMatch`
 - `ratelimit/fixed_window.go`: `FixedWindow`, the one algorithm
 - `ratelimit/limiter.go`, `ratelimit/catalog.go`: `DefaultRateLimiter`, `NewDefaultRateLimiter`, `DefaultRateLimitCatalog`, `resolveRateLimitStore`, `dbCounterStore`
-- `core/router.go`: `Router.ApplyRateLimiting` and `rateLimitWrap`, which apply route rules
+- `httpapi/router.go`: `Router.ApplyRateLimiting` and `rateLimitWrap`, which apply route rules
 - `engine/init.go`: `CoreDeclareRateLimitRules`
 - `store/rate_limits.go`: `IncrementRateLimit`, `PurgeExpiredRateLimits`
 - `storage/adapters/redis/redis.go`: `RedisAdapter.Increment`
@@ -36,7 +37,7 @@ The code lives in:
 
 A check passes through these steps:
 
-1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). A route rule declares its counting part, a `RateLimitRule`, under its name (see *A transport counts its own rules*). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
+1. A rule is declared at `Prepare` time: a `HookRateLimitRule` (attached to a before-phase hook point), which a plugin declares in `Declare`, or an `httpapi.RouteRateLimitRule` (matched by method and path), which a plugin returns from `httpapi.RouteRulesPlugin`. `Prepare` declares a route rule's counting part, a `RateLimitRule`, under its name (`httpapi.DeclareRouteRules`; see *A transport counts its own rules*). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
 2. At `Boot`, `NewDefaultRateLimiter` checks the names in `RateLimitConfig.Limits` and `Disabled` against the catalog (`HasRule`), picks the counter storage (`resolveRateLimitStore`), and builds one `Limiter` per algorithm over it (`newLimiters`).
 3. At request time `DefaultRateLimiter` (`CheckHookLimit`, or `CheckRule` for a route rule) skips a rule `Disabled` names, builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.address:1.2.3.4|emailpassword`, and `limiterFor` picks the rule's limiter. The limit is the one `Limits` sets for the rule, else the declared one (`limitOf`). A hook rule's `KeyFunc` also returns whether the rule applies; when it does not, the rule is skipped and the steps below don't run for it.
 4. `evaluate` calls `limiter.Allow(ctx, key, limit)`.
@@ -66,7 +67,7 @@ Rule(name string) (RateLimitRule, bool)               // RateLimitCatalog
 CheckRule(ctx context.Context, name, key, ip string) error // RateLimiter
 ```
 
-- **Declaring a route rule declares its `RateLimitRule`** (`RouteRateLimitRule.RateLimitRule`) under the same name, so names stay unique across hook and route rules, and `HasRule` and `RateLimitConfig` know every rule.
+- **`httpapi.DeclareRouteRules` declares each route rule's `RateLimitRule`** (`RouteRateLimitRule.RateLimitRule`) under the same name, so names stay unique across hook and route rules, and `HasRule` and `RateLimitConfig` know every rule. `Prepare` keeps the route rules on `PreparedApp.RouteRules` for the router.
 - **`rateLimitWrap` resolves the client's address, calls `KeyFunc`, and passes the rule's name, the key and the address to `CheckRule`.** `CheckRule` looks the rule up, skips it when it is declared `Disabled` or named in `RateLimitConfig.Disabled`, and evaluates it like a hook rule. An undeclared name is a configuration error.
 - **The address is passed for the audit event.** A route rule runs before the authentication stage, so the request has no caller yet to read it from.
 
@@ -437,7 +438,7 @@ These limits apply:
 - *Keep `CheckRouteLimit`, and move the rate limiter's route half to the HTTP package.* The HTTP package would repeat the counting: the limiter per algorithm, `RateLimitConfig`, the failure mode, the metric, and the audit event.
 - *A counting call that takes a rule's name and a key.* The router matches the request and computes the key, and the rate limiter counts as it does for hook rules. The rule's counting part is declared under its name, so names, `HasRule`, and `RateLimitConfig` cover every rule.
 
-**Decision:** the second: `RateLimitRule`, `RateLimitCatalog.DeclareRule` and `Rule`, and `RateLimiter.CheckRule`. Part 2 of [`../plans/package_layout.md`](../plans/package_layout.md) moves the route rules to the HTTP package, which declares their counting part through `DeclareRule`.
+**Decision:** the second: `RateLimitRule`, `RateLimitCatalog.DeclareRule` and `Rule`, and `RateLimiter.CheckRule`. Part 2 of [`../plans/package_layout.md`](../plans/package_layout.md) moved the route rules to `httpapi`, which declares their counting part through `DeclareRule`.
 
 **Revisit if:** a transport needs a key that the rate limiter computes, such as one that reads the counter store. Today every transport has its key before it counts.
 

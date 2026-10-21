@@ -26,6 +26,7 @@ import (
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/core/hooks"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
@@ -504,8 +505,8 @@ func (p *Plugin) sendTo(ctx context.Context, user *models.User) error {
 	return err
 }
 
-// Middlewares implements [core.Plugin]. The plugin has no middleware.
-func (p *Plugin) Middlewares() []core.Middleware {
+// Middlewares implements [httpapi.Plugin]. The plugin has no middleware.
+func (p *Plugin) Middlewares() []httpapi.Middleware {
 	return nil
 }
 
@@ -557,12 +558,12 @@ func withToken(page *url.URL, rawToken string) string {
 	return link.String()
 }
 
-// Routes implements [core.Plugin]. The send and verify routes need no
+// Routes implements [httpapi.Plugin]. The send and verify routes need no
 // session: with Options.RequireVerified a user who has to verify can't sign
 // in to get one. With the email change flow on, its three routes are added
 // (changeRoutes).
-func (p *Plugin) Routes() []core.Route {
-	routes := []core.Route{
+func (p *Plugin) Routes() []httpapi.Route {
+	routes := []httpapi.Route{
 		{Method: http.MethodPost, Path: PathSend, Handler: p.handleSend},
 		{Method: http.MethodPost, Path: PathVerify, Handler: p.handleVerify},
 	}
@@ -838,7 +839,7 @@ func publishEmail(hctx *core.HookContext, email string) {
 // queued are all a 200, so the response does not tell which addresses have
 // an account. A validation error and a rate limit are reported, since they
 // do not depend on the account.
-func (p *Plugin) handleSend(rctx *core.RequestContext) error {
+func (p *Plugin) handleSend(rctx *httpapi.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("emailverification.SendVerification", "request", err)
@@ -862,7 +863,7 @@ func (p *Plugin) handleSend(rctx *core.RequestContext) error {
 
 // handleVerify returns Verify's error unchanged, and the router maps it: a
 // refused link is a typed unauthorized error (401).
-func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
+func (p *Plugin) handleVerify(rctx *httpapi.RequestContext) error {
 	var body behemoth.M
 	if err := json.NewDecoder(rctx.Request.Body).Decode(&body); err != nil {
 		return errs.NewValidationError("emailverification.Verify", "request", err)
@@ -880,7 +881,7 @@ func (p *Plugin) handleVerify(rctx *core.RequestContext) error {
 	if err != nil {
 		return err
 	}
-	return rctx.Response.JSON(http.StatusOK, behemoth.M{core.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
+	return rctx.Response.JSON(http.StatusOK, behemoth.M{httpapi.SignInUserKey: user, keyRedirectURL: result.RedirectURL})
 }
 
-var _ core.Plugin = (*Plugin)(nil)
+var _ httpapi.Plugin = (*Plugin)(nil)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,12 +16,12 @@ type permissionPlugin struct {
 	perms []core.PermissionDef
 }
 
-func (p *permissionPlugin) Meta() core.PluginMeta            { return core.PluginMeta{Name: p.name} }
-func (p *permissionPlugin) Version() string                  { return "test" }
-func (p *permissionPlugin) Init(*core.AuthContext) error     { return nil }
-func (p *permissionPlugin) Routes() []core.Route             { return nil }
-func (p *permissionPlugin) Middlewares() []core.Middleware   { return nil }
-func (p *permissionPlugin) Register(core.HookRegistry) error { return nil }
+func (p *permissionPlugin) Meta() core.PluginMeta             { return core.PluginMeta{Name: p.name} }
+func (p *permissionPlugin) Version() string                   { return "test" }
+func (p *permissionPlugin) Init(*core.AuthContext) error      { return nil }
+func (p *permissionPlugin) Routes() []httpapi.Route           { return nil }
+func (p *permissionPlugin) Middlewares() []httpapi.Middleware { return nil }
+func (p *permissionPlugin) Register(core.HookRegistry) error  { return nil }
 func (p *permissionPlugin) Declare(ic *core.PluginInitContext) error {
 	for _, def := range p.perms {
 		if err := ic.Permissions.Declare(def); err != nil {

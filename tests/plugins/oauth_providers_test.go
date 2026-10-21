@@ -7,6 +7,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/MastewalB/behemoth/crypto"
+	"github.com/MastewalB/behemoth/engine"
+	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
+	"github.com/MastewalB/behemoth/outbound"
+	"github.com/MastewalB/behemoth/plugins/oauth"
+	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -15,18 +26,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/outbound"
-	"github.com/MastewalB/behemoth/plugins/oauth"
-	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // fakeIssuer stands in for a provider over TLS: an OpenID Connect issuer
@@ -175,7 +174,7 @@ func TestOAuthWithAnOIDCProvider(t *testing.T) {
 	app, err := bootOAuth(t, oauth.Options{
 		Providers:  []oauth.ProviderConfig{{Kind: oauth.KindOIDC, ID: "acme", Issuer: fake.srv.URL, ClientID: "client-1", ClientSecret: secret}},
 		HTTPClient: fake.client(),
-	}, nil, withDelivery(core.DeliveryCookie))
+	}, nil, withDelivery(httpapi.DeliveryCookie))
 	require.NoError(t, err)
 
 	signIn := func(iss string) routeAnswer {

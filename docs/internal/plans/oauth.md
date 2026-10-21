@@ -33,7 +33,7 @@ Core already has the pieces a sign-in plugin needs:
 - **Accounts.** `accounts` is unique on `(provider_id, account_id)`. The store seals `access_token`, `refresh_token`, and `id_token` (`store/seal.go`).
 - **Single-use tokens.** `TokenManager.Consume` checks and invalidates a token in one step.
 - **Redirect checks.** `core.TrustedRedirect` accepts a path on the application's site, or a URL whose origin is in `RouterConfig.TrustedOrigins`.
-- **One sign-in answer.** `core.WriteSignIn` answers every sign-in route, and delivers the session token by whichever delivery is configured.
+- **One sign-in answer.** `httpapi.WriteSignIn` answers every sign-in route, and delivers the session token by whichever delivery is configured.
 - **Sign-in points.** Core declares `auth.signIn.*` and `auth.signUp.*`, and `SignInResult.Method` names the plugin that signed the user in.
 
 `core.TokenKindOAuthState` exists as a constant only. No plugin declares the kind yet.
@@ -43,7 +43,7 @@ Core already has the pieces a sign-in plugin needs:
 The first version includes:
 
 - sign-in and sign-up through a generic OpenID Connect provider, Google, and GitHub
-- every token delivery, because the sign-in is answered through `core.WriteSignIn`
+- every token delivery, because the sign-in is answered through `httpapi.WriteSignIn`
 - explicit linking of a provider account to an existing user
 
 The first version leaves out:
@@ -106,7 +106,7 @@ The plugin has two flows:
 
 Both follow `transport_neutral_flows.md`. They take a context and typed input, and they set no cookie and no header.
 
-Each flow has one route, and both routes are JSON calls. The route of `Complete` answers through `core.WriteSignIn`, with the redirect target as an extra key, as the magic link plugin's verify route does.
+Each flow has one route, and both routes are JSON calls. The route of `Complete` answers through `httpapi.WriteSignIn`, with the redirect target as an extra key, as the magic link plugin's verify route does.
 
 The binding value ties the two calls to one client. How the client keeps it depends on the token delivery:
 

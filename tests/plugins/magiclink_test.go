@@ -20,6 +20,7 @@ import (
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/magiclink"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
@@ -102,7 +103,7 @@ func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg core.Ho
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, TrustedOrigins: []string{"https://app.example.com"}},
+		Router:    httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}, TrustedOrigins: []string{"https://app.example.com"}},
 		Mail:      core.MailConfig{Sender: app.outbox},
 		Telemetry: tel,
 		HTTP:      app.mounted,
@@ -271,8 +272,8 @@ func TestMagicLinkRoutes(t *testing.T) {
 	assert.Equal(t, "/dashboard", body.RedirectURL)
 	// The route answers like every sign-in: the session token travels by
 	// the configured delivery, here the response header.
-	session, err := app.ac.SessionManager.Validate(context.Background(), w.Header().Get(core.SessionTokenHeader))
-	require.NoError(t, err, "the %s header carries the session token", core.SessionTokenHeader)
+	session, err := app.ac.SessionManager.Validate(context.Background(), w.Header().Get(httpapi.SessionTokenHeader))
+	require.NoError(t, err, "the %s header carries the session token", httpapi.SessionTokenHeader)
 	assert.Equal(t, user.ID, session.UserID)
 	assert.NotContains(t, w.Body.String(), `"token"`, "and the body does not")
 

@@ -31,7 +31,7 @@ plugin := magiclink.New(magiclink.Options{
 app, err := engine.Prepare([]core.Plugin{plugin}, engine.PrepareConfig{})
 // ...
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Router: core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+	Router: httpapi.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
 	Mail: core.MailConfig{
 		Sender: core.MailSenderFunc(func(ctx context.Context, msg core.MailMessage) error {
 			return mailQueue.Enqueue(ctx, msg.To, "Your sign-in link", msg.URL)
@@ -136,7 +136,7 @@ signIn, err := plugin.Verify(ctx, rawToken)
 The flows behave as follows:
 
 - `RequestLink` reports what the route hides. It returns `magiclink.ErrNoAccount` for an unknown email (check with `errors.Is`), and the error of a failed issue or send.
-- `Verify` returns the raw session token and delivers nothing. From a route of your own, hand `signIn.SignInResult` to `core.WriteSignIn`, which is what the plugin's route does.
+- `Verify` returns the raw session token and delivers nothing. From a route of your own, hand `signIn.SignInResult` to `httpapi.WriteSignIn`, which is what the plugin's route does.
 - Pass the context of the request being handled when there is one, so sessions record the client's address and handlers get the request.
 - Called before `Boot`, both return a configuration error.
 

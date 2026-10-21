@@ -44,7 +44,7 @@ plugin := oauth.New(oauth.Options{
 app, err := engine.Prepare([]core.Plugin{plugin}, engine.PrepareConfig{})
 // ...
 ac, err := engine.Boot(ctx, app, db, engine.BootConfig{
-	Router: core.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
+	Router: httpapi.RouterConfig{TrustedOrigins: []string{"https://app.example.com"}},
 	// ...
 })
 ```
@@ -284,7 +284,7 @@ signIn, err := plugin.Complete(ctx, oauth.CompleteRequest{
 The flows behave as follows:
 
 - **You keep the binding value.** `Begin` returns it, and `Complete` needs it. Keep it with the client that started the sign-in, and never in a URL. A caller that stores it on its own server, looked up by the state, removes the protection it gives.
-- **`Complete` delivers nothing.** It returns the raw session token. From a route of your own, hand `signIn.SignInResult` to `core.WriteSignIn`, which is what the plugin's route does.
+- **`Complete` delivers nothing.** It returns the raw session token. From a route of your own, hand `signIn.SignInResult` to `httpapi.WriteSignIn`, which is what the plugin's route does.
 - **Pass the context of the request being handled** when there is one, so the session records the client's address and handlers get the request.
 - **Called before `Boot`,** both return a configuration error.
 

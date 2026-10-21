@@ -34,6 +34,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/MastewalB/behemoth/httpapi"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -107,14 +108,14 @@ func authContext(t *testing.T) *core.AuthContext {
 // headerCarrier is the token carrier of the header delivery, which the
 // tests that call a plugin's routes without a router hand to each request,
 // as the router would.
-var headerCarrier = core.NewTokenCarrier(core.TokenCarrierConfig{Delivery: core.DeliveryHeader})
+var headerCarrier = httpapi.NewTokenCarrier(httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader})
 
 // mountedRoutes is a FrameworkDriver that keeps the routes Boot mounts, by
 // path. They arrive wrapped by the router, so calling one runs the router's
 // error mapping and logging, which a plugin's own route does not.
-type mountedRoutes map[string]core.Route
+type mountedRoutes map[string]httpapi.Route
 
-func (m mountedRoutes) Mount(routes ...core.Route) error {
+func (m mountedRoutes) Mount(routes ...httpapi.Route) error {
 	for _, r := range routes {
 		m[r.Path] = r
 	}
@@ -122,23 +123,23 @@ func (m mountedRoutes) Mount(routes ...core.Route) error {
 }
 
 // call invokes a plugin route the way the router does.
-func call(t *testing.T, ac *core.AuthContext, route core.Route, body string) *httptest.ResponseRecorder {
+func call(t *testing.T, ac *core.AuthContext, route httpapi.Route, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	return callWith(t, context.Background(), ac, route, body)
 }
 
 // callWith is call for a request whose context is ctx, with the caller ctx
 // carries.
-func callWith(t *testing.T, ctx context.Context, ac *core.AuthContext, route core.Route, body string) *httptest.ResponseRecorder {
+func callWith(t *testing.T, ctx context.Context, ac *core.AuthContext, route httpapi.Route, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, route.Path, strings.NewReader(body))
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
-	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
+	rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
 	if err != nil {
 		// The router's error mapping, with its default mapper.
-		status, body := (&errs.DefaultErrorMapper{}).Map(err)
+		status, body := (&httpapi.DefaultErrorMapper{}).Map(err)
 		w.Code = status
 		require.NoError(t, json.NewEncoder(w.Body).Encode(body))
 		return w
@@ -152,7 +153,7 @@ func TestEmailPasswordSignUpAndSignInThroughTheStore(t *testing.T) {
 	ac := authContext(t)
 	p := emailpassword.New(emailpassword.Options{})
 	require.NoError(t, p.Init(ac))
-	routes := map[string]core.Route{}
+	routes := map[string]httpapi.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -223,7 +224,7 @@ func TestEmailPasswordSignInAndSignOutErrors(t *testing.T) {
 	ac := authContext(t)
 	p := emailpassword.New(emailpassword.Options{})
 	require.NoError(t, p.Init(ac))
-	routes := map[string]core.Route{}
+	routes := map[string]httpapi.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -312,7 +313,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session: core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:  core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router:  httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		Hooks: func(reg core.HookRegistry) error {
 			for _, point := range []core.HookPoint{hooks.HookSignUpAfter, hooks.HookSignInAfter, hooks.HookSignOutAfter} {
 				if err := reg.OnAfter(point, observe(point), nil); err != nil {
@@ -327,7 +328,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	routes := map[string]core.Route{}
+	routes := map[string]httpapi.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -348,19 +349,19 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	for i := len(routes["/sign-out"].Middlewares) - 1; i >= 0; i-- {
 		signOut = routes["/sign-out"].Middlewares[i](signOut)
 	}
-	signOut = core.AuthenticateRequests(ac.Authenticator, headerCarrier, nil)(signOut)
+	signOut = httpapi.AuthenticateRequests(ac.Authenticator, headerCarrier, nil)(signOut)
 	signOutWith := func(token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
-		rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+		rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
+		rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 		rec := httptest.NewRecorder()
 		if err := signOut(rctx); err != nil {
 			// The session check returns its refusal for the router to
 			// answer; this is its error mapping, with the default mapper.
-			status, body := (&errs.DefaultErrorMapper{}).Map(err)
+			status, body := (&httpapi.DefaultErrorMapper{}).Map(err)
 			rec.Code = status
 			require.NoError(t, json.NewEncoder(rec.Body).Encode(body))
 			return rec
@@ -417,19 +418,19 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var signUp core.Route
+	var signUp httpapi.Route
 	for _, r := range p.Routes() {
 		if r.Path == "/sign-up/email" {
 			signUp = r
 		}
 	}
 	req := httptest.NewRequest(http.MethodPost, signUp.Path, strings.NewReader(`{"email":"eve@blocked.example","password":"correct horse"}`))
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
-	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
+	rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 
 	err = signUp.Handler(rctx)
 	assert.ErrorIs(t, err, veto, "the handler's own error, for the router to map")
-	status, body := (&errs.DefaultErrorMapper{}).Map(err)
+	status, body := (&httpapi.DefaultErrorMapper{}).Map(err)
 	assert.Equal(t, http.StatusBadRequest, status)
 	assert.Equal(t, "this email domain is not allowed", body["error"])
 
@@ -482,7 +483,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 		for k, v := range hctx.Values {
 			values[k] = v
 		}
-		log = append(log, seen{hctx.Point, hctx.Phase, values, core.RequestFrom(hctx.Ctx) != nil})
+		log = append(log, seen{hctx.Point, hctx.Phase, values, httpapi.RequestFrom(hctx.Ctx) != nil})
 	}
 	before := func(note string) core.BeforeHookFunc {
 		return func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
@@ -576,8 +577,8 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	// Called with a request's context, the same flow gives handlers the request.
 	log = nil
 	req := httptest.NewRequest(http.MethodPost, "/sign-in/email", nil)
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
-	_, err = p.SignIn(core.ContextWithRequest(req.Context(), rctx),
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}}
+	_, err = p.SignIn(httpapi.ContextWithRequest(req.Context(), rctx),
 		emailpassword.EmailAndPasswordCredentials{Email: "ada@example.com", Password: "correct horse"})
 	require.NoError(t, err)
 	for _, s := range log {
@@ -687,7 +688,7 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router:    httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		Telemetry: tel,
 		HTTP:      mounted,
 	})
@@ -698,7 +699,7 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 	attempt := func(remoteAddr string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, signIn.Path, strings.NewReader(`{"email":"nobody@example.com","password":"a wrong password"}`))
 		req.RemoteAddr = remoteAddr
-		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, signIn.Handler(rctx))
 		w := httptest.NewRecorder()
 		rctx.Response.Flush(w)
@@ -724,7 +725,7 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 		body := fmt.Sprintf(`{"email":"user%d@example.com","password":"correct horse"}`, i)
 		req := httptest.NewRequest(http.MethodPost, signUp.Path, strings.NewReader(body))
 		req.RemoteAddr = "203.0.113.7:50002"
-		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, signUp.Handler(rctx))
 		w := httptest.NewRecorder()
 		rctx.Response.Flush(w)
@@ -824,12 +825,12 @@ type limitsPlugin struct{}
 
 const kindInvite models.TokenKind = "limits.invite"
 
-func (limitsPlugin) Meta() core.PluginMeta            { return core.PluginMeta{Name: "limits"} }
-func (limitsPlugin) Version() string                  { return "0.0.0" }
-func (limitsPlugin) Init(*core.AuthContext) error     { return nil }
-func (limitsPlugin) Routes() []core.Route             { return nil }
-func (limitsPlugin) Middlewares() []core.Middleware   { return nil }
-func (limitsPlugin) Register(core.HookRegistry) error { return nil }
+func (limitsPlugin) Meta() core.PluginMeta             { return core.PluginMeta{Name: "limits"} }
+func (limitsPlugin) Version() string                   { return "0.0.0" }
+func (limitsPlugin) Init(*core.AuthContext) error      { return nil }
+func (limitsPlugin) Routes() []httpapi.Route           { return nil }
+func (limitsPlugin) Middlewares() []httpapi.Middleware { return nil }
+func (limitsPlugin) Register(core.HookRegistry) error  { return nil }
 func (limitsPlugin) Declare(ic *core.PluginInitContext) error {
 	if err := ic.Tokens.Declare(core.TokenKindDef{Kind: kindInvite, DefaultTTL: time.Hour, Backend: core.TokenBackendDB}); err != nil {
 		return err
@@ -1020,7 +1021,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 		},
 		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
 		Telemetry: tel,
-		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}, ClientIPHeader: "X-Real-IP"}, // no TrustedProxies: the header is ignored
+		Router:    httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}, ClientIPHeader: "X-Real-IP"}, // no TrustedProxies: the header is ignored
 		HTTP:      mounted,
 	})
 	require.NoError(t, err)
@@ -1043,7 +1044,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 	assert.Equal(t, true, boot[0].Fields["routes_mounted"])
 	require.Len(t, find(slog.LevelWarn, "boot"), 1, "ClientIPHeader without TrustedProxies is warned about")
 
-	routes := map[string]core.Route{}
+	routes := map[string]httpapi.Route{}
 	for _, r := range p.Routes() {
 		routes[r.Path] = r
 	}
@@ -1068,7 +1069,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 	require.NotNil(t, signIn.Handler)
 	viaRouter := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, signIn.Path, strings.NewReader(body))
-		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, signIn.Handler(rctx))
 		w := httptest.NewRecorder()
 		rctx.Response.Flush(w)
@@ -1116,7 +1117,7 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router:    httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		Telemetry: tel,
 		HTTP:      mounted,
 	})
@@ -1126,7 +1127,7 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 		call(t, ac, mounted["/api/auth/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`).Code)
 	w := call(t, ac, mounted["/api/auth/sign-in/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	token := w.Header().Get(core.SessionTokenHeader)
+	token := w.Header().Get(httpapi.SessionTokenHeader)
 	require.NotEmpty(t, token)
 
 	signOut := mounted["/api/auth/sign-out"]
@@ -1135,7 +1136,7 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}}
+		rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}}
 		require.NoError(t, signOut.Handler(rctx), "the router maps the middleware's error to a response")
 		w := httptest.NewRecorder()
 		rctx.Response.Flush(w)
@@ -1167,7 +1168,7 @@ func TestSessionCheckThroughTheRouter(t *testing.T) {
 
 // auditApp boots the email/password plugin over a fresh database and returns
 // what an audit test needs. tel == nil boots with the default telemetry.
-func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.HookRegistry) error) (*core.AuthContext, map[string]core.Route) {
+func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.HookRegistry) error) (*core.AuthContext, map[string]httpapi.Route) {
 	t.Helper()
 	ac, _, routes := bootedPlugin(t, tel, appHooks)
 	return ac, routes
@@ -1175,7 +1176,7 @@ func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.Hoo
 
 // bootedPlugin is auditApp that also returns the plugin, for tests that call
 // its flows from code.
-func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.HookRegistry) error) (*core.AuthContext, *emailpassword.Plugin, map[string]core.Route) {
+func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.HookRegistry) error) (*core.AuthContext, *emailpassword.Plugin, map[string]httpapi.Route) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-audit.db"))
 	require.NoError(t, err)
@@ -1191,15 +1192,15 @@ func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core
 			Secrets: crypto.StaticSecretSource{Secrets: map[int]string{1: strings.Repeat("ef", 32)}, Current: 1},
 		},
 		Session:   core.SessionConfig{ExpiresIn: time.Hour, PendingExpiresIn: time.Minute},
-		Router:    core.RouterConfig{Carrier: core.TokenCarrierConfig{Delivery: core.DeliveryHeader}},
+		Router:    httpapi.RouterConfig{Carrier: httpapi.TokenCarrierConfig{Delivery: httpapi.DeliveryHeader}},
 		Telemetry: tel,
 		Hooks:     appHooks,
 	})
 	require.NoError(t, err)
 	// Each route as the router runs it, without the router's other stages:
 	// the authentication stage, then the route's middlewares.
-	stage := core.AuthenticateRequests(ac.Authenticator, headerCarrier, nil)
-	routes := map[string]core.Route{}
+	stage := httpapi.AuthenticateRequests(ac.Authenticator, headerCarrier, nil)
+	routes := map[string]httpapi.Route{}
 	for _, r := range p.Routes() {
 		h := r.Handler
 		for i := len(r.Middlewares) - 1; i >= 0; i-- {
@@ -1286,8 +1287,8 @@ func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 	signOut := routes["/sign-out"].Handler
 	req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
 	req.Header.Set("Authorization", "Bearer "+rawToken)
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
-	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
+	rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 	require.NoError(t, signOut(rctx))
 	require.Equal(t, http.StatusOK, rctx.Response.Code)
 	signedOut := one(string(hooks.HookSignOutAfter))
@@ -1304,7 +1305,7 @@ func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 	ac, routes := auditApp(t, nil, func(reg core.HookRegistry) error {
 		// Runs after the user row is inserted, inside its transaction.
 		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, _ any) error {
-			if rctx := core.RequestFrom(hctx.Ctx); rctx != nil && rctx.Request.Header.Get("X-Veto") != "" {
+			if rctx := httpapi.RequestFrom(hctx.Ctx); rctx != nil && rctx.Request.Header.Get("X-Veto") != "" {
 				return veto
 			}
 			return nil
@@ -1314,8 +1315,8 @@ func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 	route := routes["/sign-up/email"]
 	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(`{"email":"ada@example.com","password":"correct horse"}`))
 	req.Header.Set("X-Veto", "1")
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
-	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
+	rctx := &httpapi.RequestContext{Request: req, Response: httpapi.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
+	rctx.Ctx = httpapi.ContextWithRequest(req.Context(), rctx)
 	require.ErrorIs(t, route.Handler(rctx), veto)
 
 	_, err := ac.Store.FindUserByEmail(ctx, "ada@example.com")
@@ -1342,7 +1343,7 @@ func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 // auditing off, and a MultiRecorder feeds both the table and another sink.
 func TestAuditRecorderChoices(t *testing.T) {
 	ctx := context.Background()
-	signUp := func(ac *core.AuthContext, routes map[string]core.Route) {
+	signUp := func(ac *core.AuthContext, routes map[string]httpapi.Route) {
 		t.Helper()
 		w := call(t, ac, routes["/sign-up/email"], `{"email":"ada@example.com","password":"correct horse"}`)
 		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
@@ -1373,7 +1374,7 @@ func TestAuditRecorderChoices(t *testing.T) {
 	t.Run("table and another sink", func(t *testing.T) {
 		sink := &telemetrytest.AuditRecorder{}
 		var ac *core.AuthContext
-		var routes map[string]core.Route
+		var routes map[string]httpapi.Route
 		// The database recorder needs the database, which auditApp opens;
 		// lateRecorder forwards to it once it exists.
 		late := &lateRecorder{}

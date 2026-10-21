@@ -7,13 +7,13 @@ import (
 )
 
 // OriginValidator answers whether an origin is one of
-// RouterConfig.TrustedOrigins. AuthContext.Origins is one.
+// httpapi.RouterConfig.TrustedOrigins. AuthContext.Origins is one.
 type OriginValidator interface {
 	IsTrusted(origin string) bool
 }
 
 // TrustedOrigins is the OriginValidator Boot builds from
-// RouterConfig.TrustedOrigins and puts on AuthContext.Origins. It answers
+// httpapi.RouterConfig.TrustedOrigins and puts on AuthContext.Origins. It answers
 // whether a browser may be sent to an origin, which is what a plugin asks
 // before it accepts a redirect URL from a request (TrustedRedirect).
 //
@@ -30,7 +30,7 @@ type TrustedOrigins struct {
 func NewTrustedOrigins(origins []string) (*TrustedOrigins, error) {
 	t := &TrustedOrigins{origins: make(map[string]bool, len(origins))}
 	for _, raw := range origins {
-		origin, err := parseOrigin(raw)
+		origin, err := ParseOrigin(raw)
 		if err != nil {
 			return nil, fmt.Errorf("trusted origin %w", err)
 		}
@@ -50,7 +50,7 @@ func (t *TrustedOrigins) IsTrusted(origin string) bool {
 	if err != nil {
 		return false
 	}
-	normalized, ok := originOf(u)
+	normalized, ok := OriginOf(u)
 	return ok && (u.Path == "" || u.Path == "/") && t.origins[normalized]
 }
 
@@ -76,29 +76,32 @@ func TrustedRedirect(v OriginValidator, target string) bool {
 	if u.Scheme == "" && u.Host == "" {
 		return strings.HasPrefix(target, "/") && !strings.HasPrefix(target, "//")
 	}
-	origin, ok := originOf(u)
+	origin, ok := OriginOf(u)
 	return ok && v != nil && v.IsTrusted(origin)
 }
 
-// parseOrigin returns raw in the form trusted origins are stored in. raw is
-// a setting: it may carry spaces around it and a lone "/" as its path, and
-// anything else that is not an http or https origin is an error.
-func parseOrigin(raw string) (string, error) {
+// ParseOrigin returns raw, an origin from a setting such as
+// httpapi.RouterConfig.BaseURL, in the form OriginOf writes. It may carry
+// spaces around it and a lone "/" as its path; anything else that is not an
+// http or https origin is an error.
+func ParseOrigin(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return "", fmt.Errorf("%q: %w", raw, err)
 	}
-	origin, ok := originOf(u)
+	origin, ok := OriginOf(u)
 	if !ok || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 		return "", fmt.Errorf("%q: want a scheme and a host, such as https://app.example.com", raw)
 	}
 	return origin, nil
 }
 
-// originOf returns u's origin in the form trusted origins are stored in:
-// lowercased, without the scheme's default port. ok is false when u is not
-// an http or https URL with a host, or carries credentials.
-func originOf(u *url.URL) (origin string, ok bool) {
+// OriginOf returns u's origin in the form trusted origins are stored and
+// compared in: lowercased, without the scheme's default port. ok is false
+// when u is not an http or https URL with a host, or carries credentials.
+// It ignores u's path, so a caller that wants a bare origin checks the path
+// itself.
+func OriginOf(u *url.URL) (origin string, ok bool) {
 	scheme := strings.ToLower(u.Scheme)
 	if (scheme != "http" && scheme != "https") || u.Hostname() == "" || u.User != nil {
 		return "", false
