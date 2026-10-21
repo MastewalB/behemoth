@@ -41,7 +41,7 @@ A session has two halves. The session manager (`SessionManager`) creates, resolv
 
 The authentication stage and the sign-in and sign-out routes join the two. A transport other than HTTP would carry the token its own way and call the same session manager, through the authenticator.
 
-`Boot` builds the carrier from `RouterConfig.Carrier`, with its defaults applied, and puts it on `AuthContext.TokenCarrier`. It is a struct and not an interface: what it does follows from its settings alone, and it holds no state besides them.
+The router builds the carrier from `RouterConfig.Carrier`, with its defaults applied, and hands it to every handler as `RequestContext.TokenCarrier`, as it hands over the `AuthContext`. `Boot` validates the settings first. It is a struct and not an interface: what it does follows from its settings alone, and it holds no state besides them.
 
 ## Who writes what
 
@@ -64,7 +64,7 @@ Write(rctx *RequestContext, rawToken string, expiresAt time.Time) (inBody bool)
 | `POST /magic-link/verify` | `core.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
 | `POST /oauth/complete` | `core.WriteSignIn(rctx, result.SignInResult, behemoth.M{"redirect_url": ...})` |
 
-A route that hands the client a value of its own reads `AuthContext.TokenCarrier.Config()`, the carrier's settings with their defaults, to deliver it the same way. The OAuth plugin's binding value is the one case ([`../plugins/oauth.md`](../plugins/oauth.md)).
+A route that hands the client a value of its own reads `rctx.TokenCarrier.Config()`, the carrier's settings with their defaults, to deliver it the same way. The OAuth plugin's binding value is the one case ([`../plugins/oauth.md`](../plugins/oauth.md)).
 
 A pending session's token is delivered like an active one's. The client needs it to present the second factor, and `SessionManager.Get` resolves a pending session by its token.
 

@@ -366,7 +366,7 @@ func (p *Plugin) resolveUser(hctx *core.HookContext, providerID string, identity
 
 		// The sign-up is an operation of its own, nested under the sign-in:
 		// its points get a copy of the sign-in's Values.
-		user, err := p.signUp(&core.HookContext{Ctx: hctx.Ctx, Auth: ac, Request: hctx.Request}, signUpInput{
+		user, err := p.signUp(&core.HookContext{Ctx: hctx.Ctx, Auth: ac}, signUpInput{
 			provider: providerID,
 			subject:  identity.Subject,
 			user:     newUser(identity, email),

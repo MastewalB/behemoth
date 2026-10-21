@@ -726,10 +726,9 @@ func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, e
 		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	return &core.HookContext{
-		Ctx:     ctx,
-		Auth:    p.authContext,
-		Values:  core.NestedHookValues(ctx),
-		Request: core.RequestFrom(ctx),
+		Ctx:    ctx,
+		Auth:   p.authContext,
+		Values: core.NestedHookValues(ctx),
 	}, nil
 }
 
@@ -841,7 +840,7 @@ func (p *Plugin) handleSignOut(rctx *core.RequestContext) error {
 	// its token up: with a cookie delivery the response removes the cookie.
 	// A refused sign-out returned above and leaves the token in place, since
 	// its session is still live.
-	rctx.Auth.TokenCarrier.Clear(rctx)
+	rctx.TokenCarrier.Clear(rctx)
 	return rctx.Response.JSON(http.StatusOK, behemoth.M{"status": "signed_out"})
 }
 

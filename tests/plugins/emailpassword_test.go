@@ -101,9 +101,13 @@ func authContext(t *testing.T) *core.AuthContext {
 		SessionManager: sm,
 		Access:         auth.NewAccess(permissions, sm.IsFresh),
 		Authenticator:  auth.NewAuthenticator(sm, nil),
-		TokenCarrier:   core.NewTokenCarrier(core.TokenCarrierConfig{Delivery: core.DeliveryHeader}),
 	}
 }
+
+// headerCarrier is the token carrier of the header delivery, which the
+// tests that call a plugin's routes without a router hand to each request,
+// as the router would.
+var headerCarrier = core.NewTokenCarrier(core.TokenCarrierConfig{Delivery: core.DeliveryHeader})
 
 // mountedRoutes is a FrameworkDriver that keeps the routes Boot mounts, by
 // path. They arrive wrapped by the router, so calling one runs the router's
@@ -128,7 +132,7 @@ func call(t *testing.T, ac *core.AuthContext, route core.Route, body string) *ht
 func callWith(t *testing.T, ctx context.Context, ac *core.AuthContext, route core.Route, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, route.Path, strings.NewReader(body))
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
 	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	err := route.Handler(rctx)
 	w := httptest.NewRecorder()
@@ -344,13 +348,13 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	for i := len(routes["/sign-out"].Middlewares) - 1; i >= 0; i-- {
 		signOut = routes["/sign-out"].Middlewares[i](signOut)
 	}
-	signOut = core.AuthenticateRequests(ac.Authenticator, ac.TokenCarrier, nil)(signOut)
+	signOut = core.AuthenticateRequests(ac.Authenticator, headerCarrier, nil)(signOut)
 	signOutWith := func(token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+		rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
 		rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 		rec := httptest.NewRecorder()
 		if err := signOut(rctx); err != nil {
@@ -420,7 +424,7 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 		}
 	}
 	req := httptest.NewRequest(http.MethodPost, signUp.Path, strings.NewReader(`{"email":"eve@blocked.example","password":"correct horse"}`))
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
 	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 
 	err = signUp.Handler(rctx)
@@ -478,7 +482,7 @@ func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 		for k, v := range hctx.Values {
 			values[k] = v
 		}
-		log = append(log, seen{hctx.Point, hctx.Phase, values, hctx.Request != nil})
+		log = append(log, seen{hctx.Point, hctx.Phase, values, core.RequestFrom(hctx.Ctx) != nil})
 	}
 	before := func(note string) core.BeforeHookFunc {
 		return func(hctx *core.HookContext, payload behemoth.M) (behemoth.M, error) {
@@ -1194,7 +1198,7 @@ func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core
 	require.NoError(t, err)
 	// Each route as the router runs it, without the router's other stages:
 	// the authentication stage, then the route's middlewares.
-	stage := core.AuthenticateRequests(ac.Authenticator, ac.TokenCarrier, nil)
+	stage := core.AuthenticateRequests(ac.Authenticator, headerCarrier, nil)
 	routes := map[string]core.Route{}
 	for _, r := range p.Routes() {
 		h := r.Handler
@@ -1282,7 +1286,7 @@ func TestAuditLogRecordsTheAuthFlows(t *testing.T) {
 	signOut := routes["/sign-out"].Handler
 	req := httptest.NewRequest(http.MethodPost, "/sign-out", nil)
 	req.Header.Set("Authorization", "Bearer "+rawToken)
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
 	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	require.NoError(t, signOut(rctx))
 	require.Equal(t, http.StatusOK, rctx.Response.Code)
@@ -1300,7 +1304,7 @@ func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 	ac, routes := auditApp(t, nil, func(reg core.HookRegistry) error {
 		// Runs after the user row is inserted, inside its transaction.
 		return reg.OnAfter(hooks.HookUserAfterCreate, func(hctx *core.HookContext, _ any) error {
-			if hctx.Request != nil && hctx.Request.Request.Header.Get("X-Veto") != "" {
+			if rctx := core.RequestFrom(hctx.Ctx); rctx != nil && rctx.Request.Header.Get("X-Veto") != "" {
 				return veto
 			}
 			return nil
@@ -1310,7 +1314,7 @@ func TestAuditEventRollsBackWithTheWrite(t *testing.T) {
 	route := routes["/sign-up/email"]
 	req := httptest.NewRequest(http.MethodPost, route.Path, strings.NewReader(`{"email":"ada@example.com","password":"correct horse"}`))
 	req.Header.Set("X-Veto", "1")
-	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac}
+	rctx := &core.RequestContext{Request: req, Response: core.NewResponseRecorder(), Values: behemoth.M{}, Auth: ac, TokenCarrier: headerCarrier}
 	rctx.Ctx = core.ContextWithRequest(req.Context(), rctx)
 	require.ErrorIs(t, route.Handler(rctx), veto)
 

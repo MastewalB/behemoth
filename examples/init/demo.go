@@ -25,11 +25,12 @@ func trace(owner string, hctx *core.HookContext, msg string) {
 		owner, hctx.Point, hctx.Phase, source(hctx), strings.Join(keys, " "), msg)
 }
 
-// source says how the operation was started. HookContext.Request is nil for
-// the signup command, which calls the flows without an HTTP request.
+// source says how the operation was started: the transport on its caller,
+// which the signup command, calling the flows without an HTTP request, does
+// not set.
 func source(hctx *core.HookContext) string {
-	if hctx.Request == nil {
-		return "cli"
+	if transport := hctx.Caller().Peer().Transport; transport != "" {
+		return transport
 	}
-	return "http"
+	return "cli"
 }

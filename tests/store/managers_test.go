@@ -552,7 +552,7 @@ func TestSessionHooksGetACompleteContext(t *testing.T) {
 	for _, h := range d.seen {
 		got = append(got, dispatch{h.Point, h.Phase})
 		assert.Same(t, managersAuth, h.Auth, "%s", h.Point)
-		assert.Same(t, rc, h.Request, "%s", h.Point)
+		assert.Same(t, rc, core.RequestFrom(h.Ctx), "%s", h.Point)
 		assert.Nil(t, h.Tx, "%s: a Tier 2 point has no transaction", h.Point)
 		require.NotNil(t, h.Values, "%s: a handler writing Values must not panic", h.Point)
 		assert.Equal(t, "sign-in", h.Values["flow"], "%s: the caller's operation is visible", h.Point)
@@ -700,7 +700,7 @@ func TestTokenHooksGetACompleteContext(t *testing.T) {
 		got = append(got, dispatch{h.Point, h.Phase})
 		assert.Same(t, managersAuth, h.Auth, "%s", h.Point)
 		assert.NotNil(t, h.Values, "%s", h.Point)
-		assert.Nil(t, h.Request, "%s: no request outside one", h.Point)
+		assert.Nil(t, core.RequestFrom(h.Ctx), "%s: no request outside one", h.Point)
 	}
 	assert.Equal(t, []dispatch{
 		{hooks.HookTokenBeforeIssue, core.BeforeHookPhase}, {hooks.HookTokenAfterIssue, core.AfterHookPhase},

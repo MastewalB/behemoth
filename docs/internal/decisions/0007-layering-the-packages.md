@@ -119,7 +119,7 @@ The names follow driver 3. None of them needs an import alias in Behemoth's code
 ## Revisit when
 
 - `core` grows past what a reader can hold, and a group of its contracts turns out to be referred to by nothing in the hub. That group can then leave, as `identity` does.
-- A second protocol's package appears beside `web`, and the two share code that belongs in neither.
+- A second protocol's package appears beside `httpapi`, and the two share code that belongs in neither.
 - An application needs to replace an implementation that `AuthContext` names as a concrete type, such as `*store.Store`.
 
 ## References

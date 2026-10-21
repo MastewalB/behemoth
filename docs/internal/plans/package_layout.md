@@ -2,7 +2,7 @@
 
 This document describes the layout Behemoth's packages move to: which package holds what, the order in which packages may import each other, and where each exported identifier of a moving package ends up. It also lists the steps of the move, which leaves behavior unchanged.
 
-**Status:** part 1 done, as of 2026-10-19. The caller plan, which part 2 waited for, is built as of 2026-10-20, so part 2 can start. [Implementation steps](#implementation-steps) lists the work.
+**Status:** part 1 done, as of 2026-10-19. Part 2 started on 2026-10-21: step 12a is done. [Implementation steps](#implementation-steps) lists the work, and [Decisions](#decisions) what part 2 settled.
 
 The documents it builds on are:
 
@@ -67,7 +67,7 @@ The table lists the packages in the order they may import each other. A package 
 | 8 | `core` | earlier rows |
 | 9 | `core/hooks` | `core` and earlier rows |
 | 10 | `auth`, `dispatch`, `ratelimit`, `messaging` | rows 1 to 9 |
-| 11 | `web`, in part 2 | rows 1 to 9 |
+| 11 | `httpapi`, in part 2 | rows 1 to 9 |
 | 12 | `plugins/*`, the framework adapters included | rows 1 to 9 and 11. `plugins/username` and `plugins/phonenumber` also import `plugins/emailpassword`. |
 | 13 | `engine`, `cli`, `cmd/behemoth` | every earlier row. `cli` also imports `engine`, and `cmd/behemoth` imports `cli`. |
 | 14 | `examples/*`, `tests` | every earlier row |
@@ -90,7 +90,7 @@ A plugin imports no package of row 10. It reaches the implementations through th
 | `dispatch` | the hook catalog, the hook registry, the dispatcher, the data hooks, and the audit event builder | `types/init` |
 | `ratelimit` | the rate limiter, its catalog, and the fixed window | `types/init`, `types/ratelimit` |
 | `messaging` | the mailer, the SMS sender, and their send queue | `types/init` |
-| `web` | the HTTP types, their implementations, and the routes of core's own features | `core`, in part 2 |
+| `httpapi` | the HTTP types, their implementations, and the routes of core's own features | `core`, `errs`, and `auth`, in part 2 |
 | `engine` | `Prepare`, `Boot`, their configuration, and core's own declarations | `types/init` |
 
 `store.Hooks` stays where it is. It is an interface that the store declares for what it consumes, which is the Go convention. Its implementation moves out of `types/init` with the dispatcher.
@@ -104,15 +104,16 @@ An identifier keeps its name unless the new package makes the name stutter or co
 | Identifiers | Part 1 | Part 2 |
 | --- | --- | --- |
 | `AuthContext`, `PluginInitContext`, `PluginMeta`, `PluginDependency` | `core` | |
-| `Plugin` | `core` | `Routes` and `Middlewares` move to an optional `web.HTTPPlugin` |
+| `Plugin` | `core` | `Routes` and `Middlewares` move to the optional `httpapi.Plugin` |
 | `SessionConfig`, `SameSiteMode` and its values | `core` | |
 | `HookPoint`, `HookPhase` and its values, `HookRegistry`, `HookContext`, `HookCatalog`, `HookPointDef`, `HookOptions`, `HookPriority` and its values | `core` | |
 | `BeforeHookFunc`, `AfterHookFunc`, `FailedHookFunc`, `FailureReason`, `FailureRejectedByHook`, `Dispatcher`, `AuditSpec`, `AuditSubject` | `core` | |
 | `ContextWithHookValues`, `HookValuesFrom`, `NestedHookValues`, `BeginOperation`, `AsOperation`, `FailIfRejected`, `WithLifecycle` | `core` | |
-| `ContextWithRequest`, `RequestFrom` | `core` | `web`. The field `HookContext.Request` gives way to `web.RequestFrom(hctx.Ctx)`. |
-| `RequestContext`, `ResponseRecorder`, `NewResponseRecorder`, `HandlerFunc`, `Middleware`, `Route`, `RouterConfig`, `Router`, `NewRouter`, `FrameworkDriver`, `ErrorMapper` | `core` | `web` |
-| `OriginCheck`, `NewOriginCheck`, `RefuseFormContentTypes`, `TrustedOrigins`, `NewTrustedOrigins`, `ClientIPConfig`, `NewClientConfig`, `ClientIP` | `core` | `web` |
-| `TrustedRedirect` | `core` | |
+| `ContextWithRequest`, `RequestFrom` | `core` | `httpapi`. The field `HookContext.Request` is removed in step 12a: a handler reads the request with `RequestFrom(hctx.Ctx)`. |
+| `RequestContext`, `ResponseRecorder`, `NewResponseRecorder`, `HandlerFunc`, `Middleware`, `Route`, `RouterConfig`, `Router`, `NewRouter`, `FrameworkDriver`, `ErrorMapper` | `core` | `httpapi` |
+| `AuthenticateRequests`, `Router.ApplyAuthentication` | `core` | `httpapi`. `Credential`, `AuthOutcome`, and `Authenticator` stay. |
+| `OriginCheck`, `NewOriginCheck`, `RefuseFormContentTypes`, `ClientIPConfig`, `NewClientConfig`, `ClientIP` | `core` | `httpapi` |
+| `TrustedOrigins`, `NewTrustedOrigins`, `TrustedRedirect` | `core` | stay; see *`TrustedOrigins` stays in `core`* |
 | `KahnSort` | `utils` | |
 | `PublicView`, `NewPublicView` | `schema` | |
 | `Environment`, `EnvProduction`, `EnvDev` | the root package | |
@@ -124,15 +125,15 @@ An identifier keeps its name unless the new package makes the name stutter or co
 | `TokenBackend` and its values, `TokenKindDef`, `TokenConfig`, `TokenCatalog`, `TokenManager` | `core` | |
 | `SessionState` and its values | removed. Callers use `models.SessionState`. | |
 | `SessionManager`, `SessionMeta`, `SessionRevokedUserDeleted` | `core` | |
-| `TokenDelivery` and its values, `SameSiteMode` and its values, `DefaultSessionCookieName`, `TokenCarrierConfig`, `TokenCarrier` | `core` | `web` |
-| `SessionTokenHeader`, `RequireSession`, `RequireFreshSession` | `core` | `web` |
+| `TokenDelivery` and its values, `SameSiteMode` and its values, `DefaultSessionCookieName`, `TokenCarrierConfig`, `TokenCarrier` | `core` | `httpapi`. `AuthContext.TokenCarrier` gives way to `RequestContext.TokenCarrier` in step 12a. |
+| `SessionTokenHeader`, `RequireSession`, `RequireFreshSession` | `core` | `httpapi` |
 | `SessionTokenRequest`, `SessionToken`, `SessionTokens`, `SessionTokenAudienceKey`, `SessionTokenClaimsKey` | `core` | |
-| `PathSessionToken` | `core` | `web` |
+| `PathSessionToken` | `core` | `httpapi` |
 | `SignInResult` | `core` | |
-| `SignInUserKey`, `SignInTokenKey`, `SignInStatusKey`, `SignInStatusSecondFactor`, `WriteSignIn` | `core` | `web` |
+| `SignInUserKey`, `SignInTokenKey`, `SignInStatusKey`, `SignInStatusSecondFactor`, `WriteSignIn` | `core` | `httpapi` |
 | `RateLimitAlgorithm`, `AlgorithmFixedWindow`, `Limiter`, `Limit`, `RateLimitAction` and its values, `FailureMode` and its values, `RateLimitConfig`, `HookRateLimitRule`, `KeyByValues`, `AtomicIncrementer` | `core` | |
-| `RateLimitCatalog`, `RateLimiter` | `core` | Their route methods move to `web`. |
-| `RouteRateLimitRule`, `SplitPath`, `MatchesPath`, `MatchesMethod`, `BestRouteMatch` | `core` | `web` |
+| `RateLimitCatalog`, `RateLimiter` | `core` | Their route methods go. Step 12a replaces `CheckRouteLimit` with `CheckRule` and adds `RateLimitRule`, `DeclareRule`, and `Rule`; step 12b removes `DeclareRouteRateLimitRule` and `RulesForRoute`. See *Route rules are matched in `httpapi` and counted in `core`*. |
+| `RouteRateLimitRule`, `SplitPath`, `MatchesPath`, `MatchesMethod`, `BestRouteMatch` | `core` | `httpapi` |
 | the crypto aliases in `types/crypto.go` | removed. Callers use `crypto`. | |
 | `types/database.go`, `types/models.go` | deleted | |
 
@@ -156,7 +157,7 @@ No name in `types/cryptotypes` collides with a name in `crypto`. The file import
 
 | Identifiers | Destination |
 | --- | --- |
-| `JWTProviderImpl.HandleJWKS`, `JWTProviderImpl.Routes` | The key set route moves to `transport`, next to the session token route, as `KeySetRoutes`, which serves the key set's `PublicKeys`. It reaches `auth` with step 8, and `web` in part 2. |
+| `JWTProviderImpl.HandleJWKS`, `JWTProviderImpl.Routes` | The key set route moves to `transport`, next to the session token route, as `KeySetRoutes`, which serves the key set's `PublicKeys`. It reaches `auth` with step 8, and `httpapi` in part 2. |
 | the `Environment` field of its configuration | typed `behemoth.Environment` |
 | `New` | returns `crypto.Services` |
 
@@ -174,7 +175,7 @@ No name in `types/cryptotypes` collides with a name in `crypto`. The file import
 | --- | --- |
 | `PrepareConfig`, `PreparedApp`, `Prepare`, `BootConfig`, `IndexChecker`, `Boot`, `ResolvePluginOrder`, `DetectPluginNameConflicts`, `CoreDeclareHookPoints`, `CoreDeclareSchema`, `CoreDeclareRateLimitRules` | `engine` |
 | `DefaultHookCatalog`, `NewDefaultHookCatalog`, `DefaultHookRegistry`, `NewHookRegistry`, `DefaultDispatcher`, `NewDefaultDispatcher`, the data hooks of `datahooks.go`, and the audit event builder | `dispatch` |
-| `DefaultRateLimiter`, `DefaultRateLimitCatalog`, `NewRateLimitCatalog` | `ratelimit`. In part 2, the route half of `DefaultRateLimiter` moves to `web`. |
+| `DefaultRateLimiter`, `DefaultRateLimitCatalog`, `NewRateLimitCatalog` | `ratelimit`. In part 2, `DefaultRateLimiter.CheckRouteLimit` gives way to `CheckRule`, and the router keeps the route half: matching a request to a rule, and its key. |
 | `DefaultMailer`, `NewMailer`, `ErrMailQueueFull`, `ErrMailerClosed`, `DefaultSMS`, `NewSMS`, `ErrSMSQueueFull`, `ErrSMSClosed`, and the send queue | `messaging` |
 | `DefaultTokenCatalog`, `NewDefaultTokenCatalog` | `auth` |
 
@@ -183,7 +184,7 @@ No name in `types/cryptotypes` collides with a name in `crypto`. The file import
 | Identifiers | Destination |
 | --- | --- |
 | `DefaultSessionManager`, `NewSessionManager`, `DefaultTokenManager`, `NewDefaultTokenManager`, `DefaultSessionTokens`, `NewSessionTokens`, `DefaultCodeManager`, `NewCodeManager` | `auth` |
-| the session token route (`DefaultSessionTokens.Routes`) | `auth` in part 1, `web` in part 2 |
+| the session token route (`DefaultSessionTokens.Routes`) | `auth` in part 1, `httpapi` in part 2 |
 
 ### `errors`
 
@@ -192,7 +193,7 @@ No name in `types/cryptotypes` collides with a name in `crypto`. The file import
 | every identifier not listed below | `errs` |
 | `Is` | `errs.IsCategory`, since `errs.Is` next to `errors.Is` reads as the standard function |
 | the `ErrorCode...` constants | `errs.Code...`, such as `errs.CodeSessionMissing`. The values clients receive don't change. |
-| `DefaultErrorMapper`, and the table from categories to HTTP statuses | `errs` in part 1, `web` in part 2 |
+| `DefaultErrorMapper`, and the table from categories to HTTP statuses | `errs` in part 1, `httpapi` in part 2 |
 
 ### `migration/core`
 
@@ -230,15 +231,55 @@ To move code, use `git mv`, which keeps each file's history. Change import paths
 
 Part 2 waited for [`caller.md`](caller.md), which is built: `SessionManager` has no HTTP method any more, and the session manager, the audit log, and the rate limiter read the caller instead of the request. What still ties `core` to the HTTP types is `HookContext.Request`, the router and its stages, `TokenCarrier`, and `Plugin.Routes` and `Plugin.Middlewares`, which step 12 moves.
 
+Step 12 is two commits. The first makes the changes that can be made in place, so that the second only moves code and renames qualifiers, apart from the two optional interfaces that take the place of methods `core` can no longer name.
+
 | Step | Content | Status |
 | --- | --- | --- |
-| 12 | The HTTP types and their implementations move from `core` to `web`, as the tables above list, with the routes of core's own features: the session token route and the key set route. `HookContext.Request` gives way to `web.RequestFrom(hctx.Ctx)`, and `Plugin.Routes` and `Plugin.Middlewares` to the optional `web.HTTPPlugin`. The table from categories to HTTP statuses and `DefaultErrorMapper` leave `errs`, and the route halves of the rate limiter move. | Not started |
-| 13 | The test of step 11 adds `web`, and fails when a package of rows 1 to 10 uses the server side of `net/http`, such as `http.Request` or `http.ResponseWriter`. | Not started |
+| 12a | In place: `HookContext.Request` goes, and a handler reads the request with `RequestFrom(hctx.Ctx)`. The token carrier leaves `AuthContext`: the router builds it from `RouterConfig.Carrier` and hands it to every handler as `RequestContext.TokenCarrier`. The route half of the rate limiter counts through `RateLimiter.CheckRule`, against the `RateLimitRule` each route rule declares under its name, and `CheckRouteLimit` goes. | Done |
+| 12b | The HTTP types and their implementations move from `core` to `httpapi`, as the tables above list, with the routes of core's own features: the session token route and the key set route. `Plugin.Routes` and `Plugin.Middlewares` move to the optional `httpapi.Plugin`, and a plugin returns its route rules from the optional `httpapi.RateLimitedPlugin` in place of `DeclareRouteRateLimitRule`. The table from categories to HTTP statuses and `DefaultErrorMapper` leave `errs`. `layout_test.go` gets the row of `httpapi`. | Not started |
+| 13 | The test of step 11 fails when a package of rows 1 to 10 uses the server side of `net/http`, such as `http.Request` or `http.ResponseWriter`. | Not started |
 
-## Open questions
+## Decisions
 
-- `web` is the proposed name of the HTTP package, to confirm when part 2 starts.
-- How a plugin's HTTP handlers are registered once `web` exists. Either the plugin type keeps `Routes` and imports `web`, and the import check allows a plugin to do so, or a type in a package of the plugin's own adds the routes and the application registers that type. The second keeps a plugin's flows free of HTTP types, and changes how an application sets a plugin up.
+### The HTTP package is `httpapi`
+
+**Context:** the plan called it `web`, to be confirmed when part 2 started. Plugin and application code name it on every handler signature.
+
+**Options considered:**
+
+- *`web`.* Short. It suggests browsers and HTML, while the routes also serve mobile apps, command line tools, and other servers, and many applications have a `web` package of their own, which would force an import alias.
+- *`router`.* Matches `RouterConfig` and the router adapters. `router.Router` stutters, a variable named `router` is common and hides the package, and the package also holds the token carrier, the origin check, and `WriteSignIn`.
+- *`httpx`, `server`, `behemothhttp`.* The first says nothing, the second is wrong, since behemoth never owns the server, and the third is long.
+- *`httpapi`.* Says what it holds: the HTTP API behemoth serves. No standard library package and no common variable has the name.
+
+**Decision:** `httpapi`. `web.HTTPPlugin` becomes `httpapi.Plugin`, which reads without the stutter.
+
+### A plugin keeps its routes, behind an optional interface
+
+**Context:** `Plugin` required `Routes` and `Middlewares`, whose types move to `httpapi`, which imports `core`.
+
+**Options considered:**
+
+- *The plugin type implements `httpapi.Plugin`, and imports `httpapi`.* An application sets a plugin up as today. A plugin's package still imports `net/http`, so the import check of step 13 covers rows 1 to 10, and not the plugins.
+- *A type in a package of the plugin's own adds the routes, and the application registers that type.* A plugin's flows would be free of HTTP types, which a check could enforce. Every plugin splits in two, and an application registers two values per plugin. Moving each plugin's handlers is a non-goal of this plan.
+
+**Decision:** the first. Boot mounts the routes of each plugin that implements `httpapi.Plugin`, and a plugin with no routes leaves both methods out.
+
+**Revisit if:** a second transport is built, or a check that a flow does not depend on HTTP is wanted for the plugins too.
+
+### Route rules are matched in `httpapi` and counted in `core`
+
+**Context:** a route rule's `KeyFunc` takes the `*http.Request`, so the rule moves to `httpapi`. Plugins declared route rules through `PluginInitContext.RateLimits`, which `core` defines and which can't name an `httpapi` type, and `ratelimit`, which counts them, can't import `httpapi`.
+
+**Decision:** step 12a splits a route rule into the part the router needs, the method, the path, and the key, and the part the rate limiter counts with, a `core.RateLimitRule` declared under the rule's name. The router counts a request through `RateLimiter.CheckRule`. In step 12b, a plugin returns its route rules from the optional `httpapi.RateLimitedPlugin`, and `Prepare` declares each rule's counting part with `DeclareRule`, so names stay unique across hook and route rules and `RateLimitConfig` changes either kind by name. The reasoning is under *The route half counts through `CheckRule`* in [`../ratelimit/rate_limiter.md`](../ratelimit/rate_limiter.md).
+
+### The token carrier belongs to the router
+
+`AuthContext` is in `core`, so it can't hold the `httpapi.TokenCarrier`. The router builds the carrier from `RouterConfig.Carrier`, the settings it already holds, and hands it to every handler as `RequestContext.TokenCarrier`, as it hands over `Auth`. Only route handlers used it.
+
+### `TrustedOrigins` stays in `core`
+
+The tables first moved `TrustedOrigins` and `NewTrustedOrigins` with the origin check. `TrustedOrigins` implements `core.OriginValidator`, holds no HTTP type, and shares its parsing of an origin with `TrustedRedirect`, which flows call and which stays. Step 12b exports that parsing for the origin check.
 
 ## Related entries
 

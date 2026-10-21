@@ -61,6 +61,14 @@ type RequestContext struct {
 
 	Auth *AuthContext
 
+	// TokenCarrier carries the session token over HTTP, the way
+	// RouterConfig.Carrier says: a sign-in route hands the token to the
+	// client through it (WriteSignIn), and a route that ends its caller's
+	// session takes the token back (Clear). A route that hands the client a
+	// value of its own reads TokenCarrier.Config to deliver it the same way.
+	// The router sets it, as it sets Auth.
+	TokenCarrier *TokenCarrier
+
 	// Per request map to store data (user ID, claims etc...)
 	Values behemoth.M
 
@@ -219,7 +227,10 @@ type HookRegistry interface {
 // (both Tier 1 data hooks and Tier 2 semantic flow hooks). Unlike RequestContext,
 // it makes no assumption about transport; a hook may fire from an HTTP request,
 // a CLI command, a background job, or a plugin calling another plugin's service
-// method directly.
+// method directly. What a handler may know about where the call came from is
+// on the caller (Caller): its transport, address and user agent. A handler
+// that needs the HTTP request itself reads it with RequestFrom(Ctx), which
+// returns nil outside a request.
 type HookContext struct {
 	Ctx context.Context
 
@@ -258,12 +269,6 @@ type HookContext struct {
 	// firing site reads back, and from RequestContext.Values, which lasts
 	// for the HTTP request and exists only when there is one.
 	Values behemoth.M
-
-	// Request is set only when this lifecycle was triggered from within an HTTP
-	// request; i.e. some plugin endpoint handler called into a service that fired
-	// this hook. Nil for CLI-triggered, job-triggered, or internal plugin-to-plugin calls.
-	// Handlers that don't care about transport (the common case) should never need to touch this.
-	Request *RequestContext
 }
 
 // Caller returns the caller of the operation, identity.CallerFrom(h.Ctx): who

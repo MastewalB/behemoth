@@ -271,9 +271,8 @@ func (h dataHooks) hookContext(ctx context.Context, tx *store.Store, point core.
 	}
 	return &core.HookContext{
 		Ctx: ctx, Point: point, Phase: phase,
-		Auth:    h.ac,
-		Tx:      tx,
-		Values:  values,
-		Request: core.RequestFrom(ctx),
+		Auth:   h.ac,
+		Tx:     tx,
+		Values: values,
 	}
 }

@@ -815,10 +815,9 @@ func (p *Plugin) operation(ctx context.Context, op string) (*core.HookContext, e
 		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	return &core.HookContext{
-		Ctx:     ctx,
-		Auth:    p.authContext,
-		Values:  core.NestedHookValues(ctx),
-		Request: core.RequestFrom(ctx),
+		Ctx:    ctx,
+		Auth:   p.authContext,
+		Values: core.NestedHookValues(ctx),
 	}, nil
 }
 

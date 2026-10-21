@@ -64,7 +64,7 @@ func (p *Plugin) handleBegin(rctx *core.RequestContext) error {
 		return err
 	}
 
-	cfg := rctx.Auth.TokenCarrier.Config()
+	cfg := rctx.TokenCarrier.Config()
 	answer := behemoth.M{keyAuthorizationURL: result.AuthorizationURL}
 	if cfg.Delivery.ReadsCookie() {
 		rctx.Response.Cookie(bindingCookie(cfg, result.State, result.Binding, time.Until(result.ExpiresAt)))
@@ -105,7 +105,7 @@ func (p *Plugin) handleComplete(rctx *core.RequestContext) error {
 		}
 	}
 
-	cfg := rctx.Auth.TokenCarrier.Config()
+	cfg := rctx.TokenCarrier.Config()
 	if req.Binding == "" && req.State != "" && cfg.Delivery.ReadsCookie() {
 		if cookie, err := rctx.Request.Cookie(bindingCookieName(cfg, req.State)); err == nil {
 			req.Binding = cookie.Value

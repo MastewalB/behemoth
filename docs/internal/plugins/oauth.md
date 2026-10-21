@@ -15,7 +15,7 @@ The code lives in:
 - `plugins/oauth/protocol.go`: what the built-in providers share: the HTTP client, the code exchange, client authentication
 - `plugins/oauth/oidc.go`: the OpenID Connect provider: discovery, the key set, the ID token
 - `plugins/oauth/github.go`: the GitHub provider
-- `core/token_carrier.go`: `TokenCarrier.Config`, which the routes read through `AuthContext.TokenCarrier`
+- `core/token_carrier.go`: `TokenCarrier.Config`, which the routes read through `RequestContext.TokenCarrier`
 - `store/seal.go`: `Store.Seal` and `Store.Open`, which `Begin` uses for the PKCE verifier
 
 ## What the plugin contributes
@@ -175,7 +175,7 @@ Each flow is limited per client address on its before point, 10 a minute: `oauth
 
 ### Where the binding value goes
 
-The handlers read `AuthContext.TokenCarrier.Config()`: `RouterConfig.Carrier` with its defaults applied. The binding value follows the session token:
+The handlers read `rctx.TokenCarrier.Config()`: `RouterConfig.Carrier` with its defaults applied. The binding value follows the session token:
 
 | `RouterConfig.Carrier.Delivery` | Begin's answer | Complete reads it from |
 | --- | --- | --- |
@@ -405,7 +405,7 @@ An ID token without a `kid` is checked against every key of the set that fits it
 
 **Decision:** the way the session token travels. `Boot` puts the session settings on `AuthContext` as `SessionConfig`. The settings and not only the transport, because the cookie also needs the session cookie's `SameSite` and `Secure`.
 
-The settings have since moved with the HTTP side of the session manager to the token carrier, as this decision expected. The handlers read them from `AuthContext.TokenCarrier.Config()`, and the transport is now called the delivery. See *The token travels with a carrier of its own* in [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
+The settings have since moved with the HTTP side of the session manager to the token carrier, as this decision expected. The handlers read them from `rctx.TokenCarrier.Config()`, and the transport is now called the delivery. See *The token travels with a carrier of its own* in [`../sessions/token_delivery.md`](../sessions/token_delivery.md).
 
 ### One binding cookie per sign-in
 

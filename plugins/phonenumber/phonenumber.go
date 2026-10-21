@@ -543,10 +543,9 @@ func (p *Plugin) operation(ctx context.Context, op, number string) (*core.HookCo
 		return nil, errs.NewConfigurationError(op, "the plugin is not initialized; pass it to Prepare and Boot first", nil)
 	}
 	hctx := &core.HookContext{
-		Ctx:     ctx,
-		Auth:    p.authContext,
-		Values:  core.NestedHookValues(ctx),
-		Request: core.RequestFrom(ctx),
+		Ctx:    ctx,
+		Auth:   p.authContext,
+		Values: core.NestedHookValues(ctx),
 	}
 	delete(hctx.Values, hooks.HookValueEmail) // an enclosing operation's, not this one's
 	hctx.Values[HookValuePhoneNumber] = number

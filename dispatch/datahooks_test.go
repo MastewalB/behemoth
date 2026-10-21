@@ -105,7 +105,7 @@ func TestDataHooksCarryTheRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := d.before[0]
-	if got.Request != rc {
+	if core.RequestFrom(got.Ctx) != rc {
 		t.Error("the request was not carried into the data hook")
 	}
 	if _, leaked := got.Values["request-only"]; leaked {
@@ -118,7 +118,7 @@ func TestDataHooksCarryTheRequest(t *testing.T) {
 	if _, err := h.BeforeCreate(context.Background(), nil, "users", behemoth.M{}); err != nil {
 		t.Fatal(err)
 	}
-	if d.before[1].Request != nil {
+	if core.RequestFrom(d.before[1].Ctx) != nil {
 		t.Error("a write outside any request must not have one")
 	}
 }

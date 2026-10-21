@@ -48,9 +48,10 @@ type RouterConfig struct {
 	RequestIDHeader string
 
 	// Carrier is where the session token travels over HTTP, and the
-	// attributes of the session cookie. Boot builds AuthContext.TokenCarrier
-	// from it. The zero value is an HttpOnly, Secure, SameSite=Lax cookie
-	// named DefaultSessionCookieName.
+	// attributes of the session cookie. The router builds its TokenCarrier
+	// from it and hands it to every handler as RequestContext.TokenCarrier.
+	// The zero value is an HttpOnly, Secure, SameSite=Lax cookie named
+	// DefaultSessionCookieName.
 	Carrier TokenCarrierConfig
 }
 
@@ -60,6 +61,7 @@ type Router struct {
 	errorMapper     ErrorMapper
 	routeOwners     map[routeKey]string
 	auth            *AuthContext
+	carrier         *TokenCarrier
 	requestIDHeader string
 	log             telemetry.Logger
 	tel             *telemetry.Telemetry // for request metrics; never nil
@@ -79,7 +81,9 @@ type mountedRoute struct {
 }
 
 // NewRouter returns an empty route table. auth is handed to every handler
-// as RequestContext.Auth, so adapters never need to know about it.
+// as RequestContext.Auth, and the carrier of cfg.Carrier as
+// RequestContext.TokenCarrier, so adapters never need to know about either.
+// cfg.Carrier is not validated here: Boot calls its Validate first.
 func NewRouter(cfg RouterConfig, auth *AuthContext) *Router {
 	if cfg.BasePath == "" {
 		cfg.BasePath = "/api/auth"
@@ -102,9 +106,14 @@ func NewRouter(cfg RouterConfig, auth *AuthContext) *Router {
 		errorMapper:     cfg.ErrorMapper,
 		routeOwners:     map[routeKey]string{},
 		auth:            auth,
+		carrier:         NewTokenCarrier(cfg.Carrier),
 		requestIDHeader: cfg.RequestIDHeader,
 	}
 }
+
+// TokenCarrier returns the carrier the router hands to every handler, built
+// from RouterConfig.Carrier with its defaults applied.
+func (r *Router) TokenCarrier() *TokenCarrier { return r.carrier }
 
 // Mount registers a plugin's endpoints under basePath + pluginMountPath +
 // endpoint.Path, wrapping each in its declared Middlewares (Middlewares[0]
@@ -265,9 +274,9 @@ func (r *Router) withMetrics(route Route, next HandlerFunc) HandlerFunc {
 }
 
 // withRequestScope prepares every request before anything else sees it: it
-// sets rctx.Auth, and puts rctx on rctx.Ctx (ContextWithRequest) so code that
-// only receives a context.Context — the store's data hooks — still knows the
-// request. Adapters always set Ctx; the fallbacks keep a bare RequestContext
+// sets rctx.Auth and rctx.TokenCarrier, and puts rctx on rctx.Ctx
+// (ContextWithRequest) so code that only receives a context.Context, such
+// as a hook handler, still knows the request. Adapters always set Ctx; the fallbacks keep a bare RequestContext
 // (tests, custom drivers) safe.
 //
 // It also gives the request its ID (see requestID), puts it on rctx.Ctx for
@@ -276,6 +285,7 @@ func (r *Router) withMetrics(route Route, next HandlerFunc) HandlerFunc {
 func (r *Router) withRequestScope(next HandlerFunc) HandlerFunc {
 	return func(rctx *RequestContext) error {
 		rctx.Auth = r.auth
+		rctx.TokenCarrier = r.carrier
 		ctx := rctx.Ctx
 		if ctx == nil && rctx.Request != nil {
 			ctx = rctx.Request.Context()
@@ -380,10 +390,14 @@ type FrameworkDriver interface {
 	Mount(routes ...Route) error
 }
 
+// rateLimitWrap counts each request to next against rule, per what rule's
+// KeyFunc returns for it. A refusal is an *errs.DomainError of
+// CategoryRateLimited, which error mapping answers with 429 and
+// Retry-After before the body is read or a session looked up.
 func rateLimitWrap(next HandlerFunc, rule RouteRateLimitRule, rl RateLimiter, ipCfg *ClientIPConfig) HandlerFunc {
 	return func(rctx *RequestContext) error {
-
-		if err := rl.CheckRouteLimit(rctx.Ctx, rule, rctx.Request, ipCfg); err != nil {
+		ip := ClientIP(rctx.Request, ipCfg)
+		if err := rl.CheckRule(rctx.Ctx, rule.Name, rule.KeyFunc(rctx.Request, ip), ip); err != nil {
 			return err
 		}
 		return next(rctx)

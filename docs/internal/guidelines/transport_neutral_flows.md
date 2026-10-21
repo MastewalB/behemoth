@@ -98,7 +98,7 @@ The transport puts those facts on the context as the caller (`identity.CallerFro
 
 ### A hook handler reads the payload and `Values`
 
-`HookContext.Request` is nil when the flow was not reached over HTTP. A handler that wants a captcha token reads it from the payload, where the body's extra fields arrive, and not from a header. A handler that does read `Request` checks it for nil first.
+`core.RequestFrom(hctx.Ctx)` is nil when the flow was not reached over HTTP. A handler that wants a captcha token reads it from the payload, where the body's extra fields arrive, and not from a header. A handler that does read the request checks it for nil first.
 
 ### A result carries data, and the wrapper decides what to do with it
 

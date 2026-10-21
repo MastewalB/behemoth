@@ -74,6 +74,28 @@ type RateLimitConfig struct {
 	Disabled []string
 }
 
+// RateLimitRule is a rule that a transport applies itself, such as an HTTP
+// route rule (RouteRateLimitRule): what the rate limiter counts with, under
+// the name RateLimitConfig changes it by. The transport decides which calls
+// the rule applies to and what each is counted per, and asks
+// RateLimiter.CheckRule. It is declared with RateLimitCatalog.DeclareRule.
+type RateLimitRule struct {
+	Name      string
+	Limit     Limit
+	Algorithm RateLimitAlgorithm // empty means AlgorithmFixedWindow
+	// Limiter, if set, is used instead of the one Boot builds for Algorithm
+	// (see RouteRateLimitRule).
+	Limiter    Limiter
+	Action     RateLimitAction // empty means ActionReject; ActionLockout is rejected at declaration (not built)
+	LockoutFor time.Duration   // reserved for ActionLockout; not read
+	// Disabled declares a rule that counts nothing: a transport's rule that
+	// exempts some calls from a broader one, such as a route rule for one
+	// path under a rule for a whole prefix. CheckRule lets every call
+	// through, and the rule needs no Limit.
+	Disabled bool
+	Owner    string // set by the catalog the declarer receives
+}
+
 type RouteRateLimitRule struct {
 	Name   string
 	Method string // exact verb, or "*" to match any method
@@ -92,6 +114,15 @@ type RouteRateLimitRule struct {
 
 	Disabled bool // true = explicitly exempt this pattern from broader rule that would otherwise match
 	Owner    string
+}
+
+// RateLimitRule returns the part of r the rate limiter counts with, which
+// the catalog declares under r's name.
+func (r RouteRateLimitRule) RateLimitRule() RateLimitRule {
+	return RateLimitRule{
+		Name: r.Name, Limit: r.Limit, Algorithm: r.Algorithm, Limiter: r.Limiter,
+		Action: r.Action, LockoutFor: r.LockoutFor, Disabled: r.Disabled, Owner: r.Owner,
+	}
 }
 
 type HookRateLimitRule struct {
@@ -181,8 +212,15 @@ type RateLimitCatalog interface {
 	DeclareRouteRateLimitRule(rule RouteRateLimitRule) error
 	RulesForRoute() []RouteRateLimitRule
 
-	// HasRule reports whether a hook or a route rule is declared under
-	// name. Boot checks RateLimitConfig's names with it.
+	// DeclareRule declares a rule that a transport applies itself. Its name
+	// is unique among every rule, hook rules included. A route rule
+	// declares one under its own name.
+	DeclareRule(rule RateLimitRule) error
+	// Rule returns the rule declared under name with DeclareRule.
+	Rule(name string) (RateLimitRule, bool)
+
+	// HasRule reports whether a rule of any kind is declared under name.
+	// Boot checks RateLimitConfig's names with it.
 	HasRule(name string) bool
 }
 
@@ -299,7 +337,20 @@ type AtomicIncrementer interface {
 	Increment(ctx context.Context, key string, ttl time.Duration) (count int64, resetAt time.Time, err error)
 }
 
+// RateLimiter checks the declared rules. AuthContext.RateLimiter is one.
 type RateLimiter interface {
+	// CheckHookLimit counts one call of point against every hook rule
+	// declared on it. The dispatcher calls it before the point's before
+	// chain.
 	CheckHookLimit(ctx context.Context, point HookPoint, hctx *HookContext) error
-	CheckRouteLimit(ctx context.Context, rule RouteRateLimitRule, r *http.Request, ipCfg *ClientIPConfig) error
+
+	// CheckRule counts one call against the rule declared under name with
+	// RateLimitCatalog.DeclareRule. key is what the transport counts the
+	// call per, such as the client's address. ip is the client's address,
+	// which the audit event of a refusal records; "" when the transport
+	// knows none. The rule's limit is the one RateLimitConfig.Limits sets
+	// for its name, if any, and a refusal is the same error as a hook
+	// rule's. A rule declared Disabled, or named in RateLimitConfig.Disabled,
+	// lets every call through. An undeclared name is a configuration error.
+	CheckRule(ctx context.Context, name, key, ip string) error
 }

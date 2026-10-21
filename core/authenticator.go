@@ -98,12 +98,12 @@ func AuthenticateRequests(authn Authenticator, carrier *TokenCarrier, ipCfg *Cli
 	}
 }
 
-// ApplyAuthentication wraps every mounted route in AuthenticateRequests.
-// Call it after the routes are mounted and before ApplyRateLimiting, so that
-// a route's rate limit runs first and a flood of requests is refused before
-// it costs a session lookup.
-func (r *Router) ApplyAuthentication(authn Authenticator, carrier *TokenCarrier, ipCfg *ClientIPConfig) {
-	stage := AuthenticateRequests(authn, carrier, ipCfg)
+// ApplyAuthentication wraps every mounted route in AuthenticateRequests, with
+// the router's carrier. Call it after the routes are mounted and before
+// ApplyRateLimiting, so that a route's rate limit runs first and a flood of
+// requests is refused before it costs a session lookup.
+func (r *Router) ApplyAuthentication(authn Authenticator, ipCfg *ClientIPConfig) {
+	stage := AuthenticateRequests(authn, r.carrier, ipCfg)
 	for i := range r.routes {
 		r.routes[i].Handler = stage(r.routes[i].Handler)
 	}

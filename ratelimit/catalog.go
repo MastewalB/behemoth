@@ -15,6 +15,7 @@ type DefaultRateLimitCatalog struct {
 
 	rules      map[core.HookPoint][]core.HookRateLimitRule
 	routeRules []core.RouteRateLimitRule
+	declared   map[string]core.RateLimitRule // the rules of DeclareRule, by name
 	names      map[string]bool
 }
 
@@ -22,6 +23,7 @@ func NewRateLimitCatalog(hooks core.HookCatalog) *DefaultRateLimitCatalog {
 	return &DefaultRateLimitCatalog{
 		hookCatalog: hooks,
 		rules:       map[core.HookPoint][]core.HookRateLimitRule{},
+		declared:    map[string]core.RateLimitRule{},
 		names:       map[string]bool{},
 	}
 }
@@ -69,19 +71,43 @@ func (c *DefaultRateLimitCatalog) RulesForHook(point core.HookPoint) []core.Hook
 	return c.rules[point] // safe to return directly post-boot
 }
 
+// DeclareRouteRateLimitRule implements [core.RateLimitCatalog]. It declares
+// the rule's counting part under its name, as DeclareRule does, and keeps
+// the rule for RulesForRoute.
 func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule core.RouteRateLimitRule) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.frozen {
-		return errors.New("ratelimitcatalog: cannot DeclareRouteRateLimitRule after boot has completed")
+	if rule.Path == "" {
+		return fmt.Errorf("ratelimitcatalog: route rule %q missing Path", rule.Name)
 	}
+	if rule.Method == "" {
+		rule.Method = "*"
+	}
+	if err := c.declareRule(rule.RateLimitRule()); err != nil {
+		return err
+	}
+	c.routeRules = append(c.routeRules, rule)
+	return nil
+}
 
+// DeclareRule implements [core.RateLimitCatalog].
+func (c *DefaultRateLimitCatalog) DeclareRule(rule core.RateLimitRule) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.declareRule(rule)
+}
+
+// declareRule checks and records rule. The caller holds c.mu.
+func (c *DefaultRateLimitCatalog) declareRule(rule core.RateLimitRule) error {
+	if c.frozen {
+		return errors.New("ratelimitcatalog: cannot declare a rule after boot has completed")
+	}
 	if rule.Name == "" {
-		return errors.New("ratelimitcatalog: route rule must have a Name")
+		return errors.New("ratelimitcatalog: rule must have a Name")
 	}
 	if rule.Owner == "" {
-		return fmt.Errorf("ratelimitcatalog: route rule %q missing Owner", rule.Name)
+		return fmt.Errorf("ratelimitcatalog: rule %q missing Owner", rule.Name)
 	}
 	if c.names[rule.Name] {
 		return fmt.Errorf("ratelimitcatalog: rule name %q already declared", rule.Name)
@@ -91,16 +117,17 @@ func (c *DefaultRateLimitCatalog) DeclareRouteRateLimitRule(rule core.RouteRateL
 			return err
 		}
 	}
-	if rule.Path == "" {
-		return fmt.Errorf("ratelimitcatalog: route rule %q missing Path", rule.Name)
-	}
-	if rule.Method == "" {
-		rule.Method = "*"
-	}
-
 	c.names[rule.Name] = true
-	c.routeRules = append(c.routeRules, rule)
+	c.declared[rule.Name] = rule
 	return nil
+}
+
+// Rule implements [core.RateLimitCatalog].
+func (c *DefaultRateLimitCatalog) Rule(name string) (core.RateLimitRule, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	rule, ok := c.declared[name]
+	return rule, ok
 }
 
 func (c *DefaultRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {

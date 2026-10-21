@@ -166,7 +166,7 @@ Things to know:
 - Some operations start with entries of their own, such as the email of a sign-in. [What a rule can key on](#what-a-rule-can-key-on) lists them. Don't overwrite them.
 - Prefix your keys with your plugin's name. All handlers of an operation share the map, and nested operations inherit it.
 - A value that the operation itself should act on goes in the payload, not in `Values`. The code that fires the point never reads `Values` back.
-- `hctx.Request.Values` lasts for the whole HTTP request and exists only when there is one. Check `hctx.Request` for nil before using it.
+- The `Values` of the HTTP request, `core.RequestFrom(hctx.Ctx).Values`, last for the whole request and exist only when there is one. `core.RequestFrom` returns nil outside a request, so check for nil before using it.
 - The outer values reach a nested operation through the `context.Context`. Code that calls the store or a manager with a new context (`context.Background()`) instead of the one it was given cuts the link, and the nested handlers see an empty map.
 
 ## Register handlers

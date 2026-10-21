@@ -7,6 +7,7 @@ The code lives in:
 - `core/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `Limit`, the rule types, `KeyByValues`, `KeyByClientIP`, `RateLimitConfig`, `AtomicIncrementer`, `RateLimiter`
 - `ratelimit/fixed_window.go`: `FixedWindow`, the one algorithm
 - `ratelimit/limiter.go`, `ratelimit/catalog.go`: `DefaultRateLimiter`, `NewDefaultRateLimiter`, `DefaultRateLimitCatalog`, `resolveRateLimitStore`, `dbCounterStore`
+- `core/router.go`: `Router.ApplyRateLimiting` and `rateLimitWrap`, which apply route rules
 - `engine/init.go`: `CoreDeclareRateLimitRules`
 - `store/rate_limits.go`: `IncrementRateLimit`, `PurgeExpiredRateLimits`
 - `storage/adapters/redis/redis.go`: `RedisAdapter.Increment`
@@ -35,14 +36,41 @@ The code lives in:
 
 A check passes through these steps:
 
-1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
+1. A rule is declared at `Prepare` time: a `RouteRateLimitRule` (matched by method and path) or a `HookRateLimitRule` (attached to a before-phase hook point). A route rule declares its counting part, a `RateLimitRule`, under its name (see *A transport counts its own rules*). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
 2. At `Boot`, `NewDefaultRateLimiter` checks the names in `RateLimitConfig.Limits` and `Disabled` against the catalog (`HasRule`), picks the counter storage (`resolveRateLimitStore`), and builds one `Limiter` per algorithm over it (`newLimiters`).
-3. At request time `DefaultRateLimiter` skips a rule `Disabled` names, builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.address:1.2.3.4|emailpassword`, and `limiterFor` picks the rule's limiter. The limit is the one `Limits` sets for the rule, else the declared one (`limitOf`). A hook rule's `KeyFunc` also returns whether the rule applies; when it does not, the rule is skipped and the steps below don't run for it.
+3. At request time `DefaultRateLimiter` (`CheckHookLimit`, or `CheckRule` for a route rule) skips a rule `Disabled` names, builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.address:1.2.3.4|emailpassword`, and `limiterFor` picks the rule's limiter. The limit is the one `Limits` sets for the rule, else the declared one (`limitOf`). A hook rule's `KeyFunc` also returns whether the rule applies; when it does not, the rule is skipped and the steps below don't run for it.
 4. `evaluate` calls `limiter.Allow(ctx, key, limit)`.
 5. If the attempt is not allowed, it records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) with the rule's name, the counter key, and the client address, and returns a `rate_limited` error with a retry-after: the time left in the window. The router answers `429` and sets `Retry-After` to that time in whole seconds, rounded up. With `AuditConfig.OmitIPAndAgent` the event has neither the address nor the key, which for a rule per address is the address.
 6. If `Allow` itself fails, `RateLimitConfig.FailureMode` decides: `FailOpen` (the default) lets the request through and logs a warning; `FailClosed` rejects it.
 
 Route rules and hook rules differ in one way. For a route, the single most specific matching rule applies. For a hook point, every declared rule is evaluated and all must pass.
+
+### A transport counts its own rules
+
+A route rule has two halves. Matching a request to a rule, and computing what the request counts per, need the request: the method, the path, and `KeyFunc(r, ip)`. Counting needs only the rule's name, its limit and strategy, and a key. The router does the first half and the rate limiter the second:
+
+```go
+type RateLimitRule struct { // core: what the rate limiter counts with
+	Name       string
+	Limit      Limit
+	Algorithm  RateLimitAlgorithm
+	Limiter    Limiter
+	Action     RateLimitAction
+	LockoutFor time.Duration
+	Disabled   bool
+	Owner      string
+}
+
+DeclareRule(rule RateLimitRule) error                 // RateLimitCatalog
+Rule(name string) (RateLimitRule, bool)               // RateLimitCatalog
+CheckRule(ctx context.Context, name, key, ip string) error // RateLimiter
+```
+
+- **Declaring a route rule declares its `RateLimitRule`** (`RouteRateLimitRule.RateLimitRule`) under the same name, so names stay unique across hook and route rules, and `HasRule` and `RateLimitConfig` know every rule.
+- **`rateLimitWrap` resolves the client's address, calls `KeyFunc`, and passes the rule's name, the key and the address to `CheckRule`.** `CheckRule` looks the rule up, skips it when it is declared `Disabled` or named in `RateLimitConfig.Disabled`, and evaluates it like a hook rule. An undeclared name is a configuration error.
+- **The address is passed for the audit event.** A route rule runs before the authentication stage, so the request has no caller yet to read it from.
+
+`ratelimit` holds no HTTP type, and another transport that limits calls by a rule of its own declares a `RateLimitRule` and calls `CheckRule` the same way.
 
 ### A rule names its algorithm
 
@@ -314,7 +342,7 @@ These limits apply:
 | Test | File | Covers |
 | --- | --- | --- |
 | `TestFixedWindow` | `ratelimit/fixed_window_test.go` | allowed up to `Max`, refused after, retry-after from the window's end and its caps, a failing counter |
-| `TestRateLimitRulesNameTheirAlgorithm` | `ratelimit/limiter_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on route and hook rules, also when the rule has its own `Limiter` |
+| `TestRateLimitRulesNameTheirAlgorithm` | `ratelimit/limiter_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on the rules of `DeclareRule` and on hook rules, also when the rule has its own `Limiter` |
 | `TestRateLimiterMetrics` | `ratelimit/limiter_test.go` | `evaluate`: the three results, the audit event |
 | `TestStoreContract/*/RateLimits` | `tests/store/contract_test.go` | the database counter on every backend: concurrent counts, the window's end, the reset |
 | `TestRedisIncrement` | `tests/storage/kv_storage_test.go` | the Redis counter: concurrent counts, the expiry, the reset, a counter without an expiry |
@@ -322,7 +350,8 @@ These limits apply:
 | `TestHookRuleIsSkippedWhenItDoesNotApply` | `ratelimit/limiter_test.go` | `CheckHookLimit`: a rule whose `KeyFunc` returns `false` is skipped and counted as `skipped`, the point's other rules still run, `"", true` is counted |
 | `TestKeyByValues` | `core/ratelimit_test.go` | the joined key, and `false` for a missing, nil or empty entry |
 | `TestKeyByClientIP` | same | the caller's address with the named entries, and `false` for a caller without an address or a missing entry |
-| `TestRateLimitConfigChangesRulesByName` | `ratelimit/limiter_test.go` | `Limits` replaces a hook and a route rule's limit, `Disabled` skips both, an unknown name or a limit that can't count is a configuration error |
+| `TestRateLimitConfigChangesRulesByName` | `ratelimit/limiter_test.go` | `Limits` replaces the limit of a hook rule and of a rule declared with `DeclareRule`, `Disabled` skips both, an unknown name or a limit that can't count is a configuration error |
+| `TestCheckRuleCountsWhatTheTransportPasses` | same | `CheckRule`: the key under the rule's name, the transport's address in the refusal's event, a rule declared `Disabled` counts nothing, an undeclared name is a configuration error |
 | `TestRateLimitRefusalOmitsTheAddressWhenConfigured` | same | with `AuditConfig.OmitIPAndAgent` the refusal's event has neither the address nor the key |
 | `TestSignInRouteIsRateLimited` | `tests/plugins/emailpassword_test.go` | sign-in and sign-up through the router: the 11th attempt is a `429` with `Retry-After`, another address is not affected, the two flows count separately, a refused sign-up creates nothing |
 | `TestSignInLimitsHoldForEveryTransport` | same | sign-in called with another transport's caller is refused at the 11th attempt, another method counts apart, a system caller is not counted, `Limits` and `Disabled` through `Boot`, an unknown name fails `Boot` |
@@ -398,6 +427,19 @@ These limits apply:
 **Decision:** hook rules, with `core.KeyByClientIP`, under names that end in `.address`. The old route rules are removed. A flow without a before point keeps its route rule (`username.available.route`). Sign-in has one core rule keyed by address and method in place of a route rule per plugin, so each method keeps a count of its own. Hook rules are cumulative and can't be overridden by a more specific rule, so `RateLimitConfig.Limits` and `Disabled` change any rule by name.
 
 **Revisit if:** the cost of decoding before the limit matters, such as a flood of large bodies. A route rule with a higher limit in front would bound it.
+
+### The route half counts through `CheckRule`
+
+**Context:** `RateLimiter.CheckRouteLimit` took a `RouteRateLimitRule` and the `*http.Request`, and resolved the client's address itself. The rate limiter's package depended on HTTP, and the router's types could not leave `core` while the rate limiter's contract named them. A second transport that wanted a limit of its own had no way to count against a named rule.
+
+**Options considered:**
+
+- *Keep `CheckRouteLimit`, and move the rate limiter's route half to the HTTP package.* The HTTP package would repeat the counting: the limiter per algorithm, `RateLimitConfig`, the failure mode, the metric, and the audit event.
+- *A counting call that takes a rule's name and a key.* The router matches the request and computes the key, and the rate limiter counts as it does for hook rules. The rule's counting part is declared under its name, so names, `HasRule`, and `RateLimitConfig` cover every rule.
+
+**Decision:** the second: `RateLimitRule`, `RateLimitCatalog.DeclareRule` and `Rule`, and `RateLimiter.CheckRule`. Part 2 of [`../plans/package_layout.md`](../plans/package_layout.md) moves the route rules to the HTTP package, which declares their counting part through `DeclareRule`.
+
+**Revisit if:** a transport needs a key that the rate limiter computes, such as one that reads the counter store. Today every transport has its key before it counts.
 
 ### Lockout is declared and rejected
 

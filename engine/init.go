@@ -380,8 +380,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	if err := cfg.Router.Carrier.Validate(); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
-	carrier := core.NewTokenCarrier(cfg.Router.Carrier)
-	if err := checkCookieAgainstBaseURL(carrier.Config(), cfg.Router.BaseURL); err != nil {
+	if err := checkCookieAgainstBaseURL(cfg.Router.Carrier.WithDefaults(), cfg.Router.BaseURL); err != nil {
 		return nil, errs.NewConfigurationError("Boot", err.Error(), err)
 	}
 	ac := &core.AuthContext{
@@ -397,7 +396,6 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		HTTPClient: outbound.NewClient(cfg.Outbound, tel),
 		// The session manager applies the same defaults to the same value.
 		SessionConfig: cfg.Session.WithDefaults(),
-		TokenCarrier:  carrier,
 		Mailer:        messaging.NewMailer(cfg.Mail, tel),
 		SMS:           messaging.NewSMS(cfg.SMS, tel),
 		Public:        schema.NewPublicView(app.Schemas.All()), // the registry was frozen by Prepare
@@ -453,7 +451,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// A bearer token is never sent by the browser on its own, so only the
 	// cookie deliveries need the origin check and the refusal of form
 	// bodies behind it. Both run before the plugins' middleware.
-	if carrier.Config().Delivery.ReadsCookie() {
+	if router.TokenCarrier().Config().Delivery.ReadsCookie() {
 		globalMiddleware = append(globalMiddleware, originCheck.Middleware(), core.RefuseFormContentTypes())
 	}
 	for _, name := range order {
@@ -476,7 +474,7 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 	// Route-scoped rate limiting is baked in once, before any driver sees the routes.
 	// Authentication wraps each route inside its rate limit, so that a refused
 	// request costs no session lookup.
-	router.ApplyAuthentication(ac.Authenticator, carrier, ipCfg)
+	router.ApplyAuthentication(ac.Authenticator, ipCfg)
 	router.ApplyRateLimiting(rateLimiter, app.RateLimits, ipCfg)
 
 	if cfg.HTTP != nil {
@@ -658,6 +656,13 @@ func (s *scopedRateLimitCatalog) DeclareRouteRateLimitRule(rule core.RouteRateLi
 }
 func (s *scopedRateLimitCatalog) RulesForRoute() []core.RouteRateLimitRule {
 	return s.inner.RulesForRoute()
+}
+func (s *scopedRateLimitCatalog) DeclareRule(rule core.RateLimitRule) error {
+	rule.Owner = s.owner
+	return s.inner.DeclareRule(rule)
+}
+func (s *scopedRateLimitCatalog) Rule(name string) (core.RateLimitRule, bool) {
+	return s.inner.Rule(name)
 }
 func (s *scopedRateLimitCatalog) HasRule(name string) bool { return s.inner.HasRule(name) }
 
