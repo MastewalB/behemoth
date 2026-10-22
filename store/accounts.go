@@ -22,17 +22,39 @@ func (s *Store) CreateAccount(ctx context.Context, a *models.Account) error {
 
 	access, refresh, id := a.AccessToken, a.RefreshToken, a.IDToken
 	defer func() { a.AccessToken, a.RefreshToken, a.IDToken = access, refresh, id }()
-	for _, secret := range []*string{&a.AccessToken, &a.RefreshToken, &a.IDToken} {
-		if *secret == "" {
+	for _, secret := range accountSecrets(a) {
+		if *secret.value == "" {
 			continue
 		}
-		sealed, err := s.seal(op, *secret)
+		sealed, err := s.seal(op, *secret.value, accountBinding(a.ID, secret.column))
 		if err != nil {
 			return err
 		}
-		*secret = sealed
+		*secret.value = sealed
 	}
 	return s.create(ctx, a, nil)
+}
+
+// accountSecret is a sealed column of an account and its field.
+type accountSecret struct {
+	column string
+	value  *string
+}
+
+// accountSecrets returns the sealed columns of a (models.AccountSecretColumns)
+// with their fields.
+func accountSecrets(a *models.Account) []accountSecret {
+	return []accountSecret{
+		{models.AccountAccessToken, &a.AccessToken},
+		{models.AccountRefreshToken, &a.RefreshToken},
+		{models.AccountIDToken, &a.IDToken},
+	}
+}
+
+// accountBinding binds a token to its account and its column, so that it
+// opens neither in another account's row nor as another of its tokens.
+func accountBinding(accountID, column string) SealBinding {
+	return SealBinding{Purpose: models.AccountTable + "." + column, Owner: accountID}
 }
 
 func (s *Store) FindAccountByID(ctx context.Context, id string) (*models.Account, error) {
@@ -83,7 +105,7 @@ func (s *Store) UpdateAccount(ctx context.Context, id string, changes behemoth.M
 			changes[col] = nil
 			continue
 		}
-		sealed, err := s.seal(op, plaintext)
+		sealed, err := s.seal(op, plaintext, accountBinding(id, col))
 		if err != nil {
 			return nil, err
 		}
@@ -117,15 +139,15 @@ func (s *Store) openAccount(found behemoth.Model, op string) (*models.Account, e
 		return nil, fmt.Errorf("store: unexpected %T in accounts", found)
 	}
 	a := *stored
-	for _, secret := range []*string{&a.AccessToken, &a.RefreshToken, &a.IDToken} {
-		if *secret == "" {
+	for _, secret := range accountSecrets(&a) {
+		if *secret.value == "" {
 			continue
 		}
-		plaintext, err := s.open(op, *secret)
+		plaintext, err := s.open(op, *secret.value, accountBinding(a.ID, secret.column))
 		if err != nil {
 			return nil, err
 		}
-		*secret = plaintext
+		*secret.value = plaintext
 	}
 	return &a, nil
 }

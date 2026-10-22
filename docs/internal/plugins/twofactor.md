@@ -28,7 +28,7 @@ The plugin imports `phonenumber` for `Parse` only: an SMS method's number is the
 
 A method row holds:
 
-- **`secret` and `pending_secret`** for TOTP, both sealed with `Store.Seal` (`v<version>:<base64>`). `Enroll` writes `pending_secret`; `Confirm` moves it to `secret`. A user with TOTP on keeps signing in with `secret` while a new setup is in progress.
+- **`secret` and `pending_secret`** for TOTP, both sealed with `Store.Seal` (`v<version>:<base64>`) and bound to the user: the purpose `twofactor.totp_secret`, the user's id as the owner (`secretBinding`). A secret copied into another user's row does not open. The binding names no column, because `Confirm` moves the sealed value from `pending_secret` to `secret`. A user with TOTP on keeps signing in with `secret` while a new setup is in progress.
 - **`destination`** for email and SMS: the address or number the setup code went to, read back from the code's metadata at `Confirm`.
 - **`last_step`**, the time step of the last TOTP code that passed. `Confirm` sets it to the confirming code's step, so the code that turned TOTP on can't also sign in.
 
@@ -134,6 +134,7 @@ An empty list refuses the sign-in with `two_factor_same_channel`; the sign-in fl
 | `TestTwoFactorLock` | same | the lock across sign-ins, a recovery code passing it and clearing the count |
 | `TestTwoFactorVerifiesAreLimitedPerUser` | same | the rule per user across pending sessions |
 | `TestTwoFactorReset` | same | the admin permission, everything deleted, a sign-in by password alone afterwards |
+| `TestTwoFactorTOTPSecretIsBoundToItsUser` | same | a sealed secret copied into another user's row does not open, and its codes don't finish that user's sign-in |
 | `TestTwoFactorRoutes` | `tests/plugins/twofactor_routes_test.go` | every route's body and status, the decoding errors, the sign-in route's pending answer, the new token, `no-store` |
 | `TestTwoFactorEmailRoutes` | same | the email method's setup and sign-in over the routes, the masked address |
 

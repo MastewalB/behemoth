@@ -165,7 +165,7 @@ func (p *Plugin) enrollTOTP(ctx context.Context, op string, user *models.User) (
 		return nil, errs.NewSecurityError(op, "random_generation_failed", err)
 	}
 	encoded := totp.EncodeSecret(secret)
-	sealed, err := p.ac.Store.Seal(encoded)
+	sealed, err := p.ac.Store.Seal(encoded, secretBinding(user.ID))
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +397,7 @@ func (p *Plugin) proven(hctx *core.HookContext, op, userID string, method Method
 	if row == nil || row.PendingSecret == "" {
 		return refuse(nil) // no setup in progress
 	}
-	secret, err := p.openSecret(row.PendingSecret)
+	secret, err := p.openSecret(row.PendingSecret, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -410,9 +410,16 @@ func (p *Plugin) proven(hctx *core.HookContext, op, userID string, method Method
 	return behemoth.M{colSecret: row.PendingSecret, colPendingSecret: nil, colLastStep: step}, nil
 }
 
-// openSecret returns the TOTP secret a sealed value holds.
-func (p *Plugin) openSecret(sealed string) ([]byte, error) {
-	encoded, err := p.ac.Store.Open(sealed)
+// secretBinding binds a TOTP secret to its user, so that a sealed secret
+// copied into another user's row does not open there. It names neither
+// column: Confirm moves the sealed value from pending_secret to secret.
+func secretBinding(userID string) store.SealBinding {
+	return store.SealBinding{Purpose: "twofactor.totp_secret", Owner: userID}
+}
+
+// openSecret returns the TOTP secret a sealed value of userID holds.
+func (p *Plugin) openSecret(sealed, userID string) ([]byte, error) {
+	encoded, err := p.ac.Store.Open(sealed, secretBinding(userID))
 	if err != nil {
 		return nil, err
 	}

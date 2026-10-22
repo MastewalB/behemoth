@@ -12,7 +12,7 @@ Every symmetric key Behemoth uses comes from one master secret per version, thro
 | `PollingWatcher` | `crypto/polling_watcher.go` | makes any source watchable by loading it every interval |
 | `NewSecretHasher` | `crypto/secret_hasher.go` | the hash of a token, a session token, a one-time code, or a recovery code |
 | `HMACSigner` | `crypto/signer.go` | signs internal JWTs (`jwt_sign`). `Services.CookieSign` (`cookie_sign`) is built, and no flow uses it yet |
-| `AESGCMEncryptor` | `crypto/encryptor.go` | seals OAuth tokens, the OAuth code verifier, and two-factor secrets, through `store.Seal` |
+| `AESGCMEncryptor` | `crypto/encryptor.go` | seals OAuth tokens, the OAuth code verifier, and two-factor secrets, through `store.Seal`, each bound to what it is and what it belongs to |
 | `DefaultRandomizer` | `crypto/randomizer.go` | random bytes and base64url strings from `crypto/rand` |
 | `New` | `crypto/config.go` | builds all of them over one key manager, as `Services` |
 
@@ -32,7 +32,7 @@ The purpose strings are `password_hash`, `token_hash`, `cookie_sign`, `encrypt_a
 | --- | --- | --- |
 | Secret hasher | `hex(HMAC-SHA256(key token_hash, secret))`: 64 lowercase hex characters | the key version, next to the hash |
 | Signer | `HMAC-SHA256(key of its purpose, payload)`: 32 bytes | the key version, as the JWT's `kid` |
-| Encryptor | `nonce (12 bytes) ‖ AES-256-GCM ciphertext ‖ tag (16 bytes)`, no associated data, a random nonce from the randomizer | the key version, in the sealed form `v<version>:<base64>` (`store/seal.go`) |
+| Encryptor | `nonce (12 bytes) ‖ AES-256-GCM ciphertext ‖ tag (16 bytes)`, a random nonce from the randomizer. The tag also covers the associated data the caller gives, which is not stored. | the key version, in the sealed form `v<version>:<base64>` (`store/seal.go`). The store's associated data is the value's binding, which the caller names again to open it. |
 | Randomizer | `n` bytes from `crypto/rand`; as a string, unpadded base64url | |
 
 Every comparison of a hash or a signature uses `hmac.Equal`. The secret hasher compares the hex strings, and the signer the raw bytes.
@@ -62,14 +62,15 @@ These formats are stored, in rows and in clients, so changing any of them breaks
 - **The purpose strings.** Each is part of the derivation.
 - **The secret hash**: HMAC-SHA256 as lowercase hex. A change makes every token, session, one-time code, and recovery code fail to verify.
 - **The signature**: HMAC-SHA256. A change makes every internal JWT fail to verify, and any value signed with the cookie signer.
-- **The ciphertext layout**: the nonce first, then the GCM output, with no associated data. A change makes every sealed value unreadable.
+- **The ciphertext layout**: the nonce first, then the GCM output over the plaintext and the associated data. A change makes every sealed value unreadable.
+- **The store's associated data**: `behemoth.seal.v1`, then the binding's purpose and owner, each after its length as four big-endian bytes, and the purposes the callers bind with (`accounts.<column>`, `twofactor.totp_secret`, `oauth.pkce_verifier`). A change makes every sealed value unreadable. `docs/internal/models/models.md` describes the binding.
 - **A version's secret never changes.** A key version names one secret; a new secret gets a new version. The key manager refuses an update that breaks this, so the keys it has derived always belong to the secrets it holds.
 
 The tests pin each of them with known answers computed outside the code under test.
 
 ## Limits
 
-- **A sealed value is not bound to where it is stored.** With no associated data, a value sealed for one row opens in any other. Someone who can write the database, without the secrets, can copy a two-factor secret from an account they control into another user's row. A password hash can be copied the same way.
+- **A sealed value is bound to its owner, not to its age.** A value copied into another user's row does not open, but an older value of the same user, written back, does. A password hash is not sealed, and can still be copied between rows.
 - **A changed secret is caught only by a process that is running.** Nothing records what a version's secret was, so a replica that starts after the change loads the new secret, and disagrees with the replicas that refused it. Their Error line is the sign. A fingerprint of each version, stored and checked at startup, would catch it.
 - **A refused update is logged at every poll** until the source is fixed, as an invalid one is.
 - **A polling watcher does not log a failed load.** A source that stays unreachable leaves the key manager on its current secrets without a line.
@@ -94,7 +95,8 @@ The tests pin each of them with known answers computed outside the code under te
 
 | Test | File | Covers |
 | --- | --- | --- |
-| `TestEncryptorKnownAnswer` | `crypto/encryptor_test.go` | the `encrypt_at_rest` key of a known secret, and the ciphertext of a known nonce and plaintext |
+| `TestEncryptorKnownAnswer` | `crypto/encryptor_test.go` | the `encrypt_at_rest` key of a known secret, and the ciphertext of a known nonce, plaintext, and associated data |
+| `TestEncryptorBindsTheAssociatedData` | same | a ciphertext opens only with its associated data: another, a changed byte, a cut or extended one, or none are refused |
 | `TestEncryptorRoundTrip` | same | plaintexts of any length come back, the length is 12 + n + 16, each ciphertext has its own nonce |
 | `TestEncryptorRefusesAChangedCiphertext` | same | any byte changed, every cut, a byte added, nothing: `invalid_payload` or `short_cipher_length` |
 | `TestEncryptorKeyVersions` | same | the old version opens what it sealed after a rotation, no other version does, an unknown version is refused |
@@ -120,5 +122,6 @@ The tests pin each of them with known answers computed outside the code under te
 | `TestDefaultKeyManager_CurrentDuringRotation` | `crypto/key_manager_test.go` | the key and the version `Current` returns agree while rotations run; with `-race`, no unlocked read |
 | `TestDefaultKeyManager_UpdateThatChangesNothing` | same | an update that changes nothing is neither logged nor audited |
 | `TestDefaultKeyManager_RefusesANewSecretForAHeldVersion` | same | an update that changes a held version's secret is refused whole, with an Error line that does not carry the secret, also when it adds a version or moves the current one |
+| `TestSealKnownAnswer`, `TestSealIsBoundToItsOwnerAndPurpose` | `tests/store/seal_test.go` | the sealed form of a known value and binding, which pins the encoding; another owner or purpose is refused; a binding without both fields is an error |
 
 The known answers were computed with Python's standard library (`hmac`, `hashlib`, and an HKDF checked against RFC 5869 test case 3) and its `cryptography` package for AES-GCM.

@@ -87,10 +87,18 @@ type SecretHasher interface {
 	Verify(secret, hash string, keyVersion int) (bool, error)
 }
 
-// Encryptor is an interface for encrypting and decrypting data at rest.
+// Encryptor encrypts and decrypts data at rest. The store seals secrets
+// with it (store.Seal).
 type Encryptor interface {
-	Encrypt(plaintext []byte) (ciphertext []byte, keyVersion int, err error)
-	Decrypt(ciphertext []byte, keyVersion int) (plaintext []byte, err error)
+	// Encrypt encrypts plaintext under the current key, bound to
+	// associatedData, and returns the version of the key. associatedData is
+	// authenticated and not stored: it names what the value is and where it
+	// belongs, so that the value opens there and nowhere else.
+	Encrypt(plaintext, associatedData []byte) (ciphertext []byte, keyVersion int, err error)
+	// Decrypt decrypts a ciphertext Encrypt returned, with the key of
+	// keyVersion. associatedData must be what Encrypt was given; any other
+	// fails as a changed ciphertext does.
+	Decrypt(ciphertext []byte, keyVersion int, associatedData []byte) (plaintext []byte, err error)
 }
 
 // SigningKey is a snapshot of key material fixed at the moment it was obtained.

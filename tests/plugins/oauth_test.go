@@ -23,6 +23,7 @@ import (
 	"github.com/MastewalB/behemoth/models"
 	"github.com/MastewalB/behemoth/plugins/oauth"
 	sqliteAdapter "github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,7 +209,7 @@ func TestOAuthBeginStartsASignIn(t *testing.T) {
 
 	// The verifier is kept sealed, and it is the one the challenge is of.
 	sealed, _ := meta["verifier_secret"].(string)
-	verifier, err := app.ac.Store.Open(sealed)
+	verifier, err := app.ac.Store.Open(sealed, store.SealBinding{Purpose: "oauth.pkce_verifier", Owner: utils.LookupHashOf(result.Binding)})
 	require.NoError(t, err)
 	assert.Len(t, verifier, 43, "a PKCE verifier is 43 to 128 characters")
 	assert.Equal(t, s256(verifier), sent.CodeChallenge)

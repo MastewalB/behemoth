@@ -357,7 +357,7 @@ func (p *Plugin) spend(ctx context.Context, session identity.SessionRef, method 
 		if err != nil {
 			return false, err
 		}
-		secret, err := p.openSecret(row.Secret)
+		secret, err := p.openSecret(row.Secret, session.UserID)
 		if err != nil {
 			return false, err
 		}

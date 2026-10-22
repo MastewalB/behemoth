@@ -146,15 +146,21 @@ A sealed value is a string:
 v<key version>:<base64 ciphertext>
 ```
 
-- `Store.seal` calls `Encryptor.Encrypt`, which returns the ciphertext and the version of the key it used, and writes both into that string. The base64 is `RawStdEncoding` (no padding).
-- `Store.open` splits the string, parses the version, and calls `Encryptor.Decrypt(ciphertext, version)`.
+- Every sealed value is bound to a `store.SealBinding`: a `Purpose` that names what the value is, and an `Owner` that names what it belongs to. Both are required.
+- `Store.seal` calls `Encryptor.Encrypt` with the binding as the associated data. It returns the ciphertext and the version of the key it used, and `seal` writes both into that string. The base64 is `RawStdEncoding` (no padding).
+- `Store.open` splits the string, parses the version, and calls `Encryptor.Decrypt(ciphertext, version, associated data)` with the binding the caller names. A value sealed with another binding fails like a changed one.
+- The associated data is `behemoth.seal.v1`, then the purpose and the owner, each after its length as four big-endian bytes. The lengths keep two bindings from encoding to the same bytes.
 - The ciphertext itself is the AES-256-GCM output of `crypto.AESGCMEncryptor`, with the nonce prepended. The key comes from the `KeyManager` under purpose `encrypt_at_rest`.
 - `store.SealedKeyVersion(sealed)` reads the version without decrypting.
-- `Store.Seal` and `Store.Open` are the exported pair, for a secret a plugin keeps outside `accounts`. The OAuth plugin seals the PKCE verifier of a started sign-in with them ([`../plugins/oauth.md`](../plugins/oauth.md)).
+- `Store.Seal` and `Store.Open` are the exported pair, for a secret a plugin keeps outside `accounts`. The OAuth plugin seals the PKCE verifier of a started sign-in with them ([`../plugins/oauth.md`](../plugins/oauth.md)), and the two-factor plugin the TOTP secret ([`../plugins/twofactor.md`](../plugins/twofactor.md)).
+
+An account's token is bound to the account and its column: the purpose is `accounts.<column>` and the owner is the account's id (`accountBinding`). It opens neither in another account's row nor in another column of its own row, so tokens can't be swapped between accounts, or an access token read as a refresh token. `CreateAccount` assigns the id before it seals.
 
 `[Decision]` The key version travels inside the value instead of in a `key_version` column. An account has three secrets written at different times: an access token refreshed after a key rotation sits next to a refresh token sealed under the previous key. One version column would be wrong for one of them; three columns, or re-encrypting every token on every write, would be the alternative. The cost is that key version cannot be indexed. A re-encryption sweep after a rotation selects with a starts-with match on `v<old>:` (`clause.OpStartsWith`).
 
 `[Not built]` No such sweep exists. Old key versions must stay available to the `KeyManager` for as long as rows sealed under them exist.
+
+`[Decision]` A sealed value is bound to its purpose and its owner, not to its table and column. The two-factor plugin moves a sealed TOTP secret from `pending_secret` to `secret` when the user confirms it, which a binding to the column would break. For accounts the purpose names the column, because their tokens never move. A binding to the row's primary key would also do for accounts, but not for the OAuth verifier, which is sealed before its token row exists. Before the binding, the `Encryptor` took no associated data, and a value copied between rows still opened. No release sealed anything without a binding, so nothing needs a migration.
 
 ### What each store operation does
 
@@ -179,7 +185,7 @@ These limits apply:
 
 - **Hooks do not fire for accounts today.** The store calls its hooks for every table, but `coreDataHookPoints` in `dispatch/datahooks.go` only maps `users` to hook points. The "hooks see the sealed form" rule takes effect when account points are declared.
 - **A hook that rewrites a token column on create is not reflected in the caller's model.** `CreateAccount` restores the caller's original plaintext after the insert.
-- **Ciphertext is not bound to its row.** The `Encryptor` interface takes no associated data, so a sealed value copied from one row or column to another still decrypts. Someone with write access to the table could swap tokens between accounts.
+- **A sealed value can be rolled back.** The binding stops a value from moving between owners and purposes, not an older value of the same owner from being written back. Someone with write access to the table could restore an account's earlier token.
 
 ---
 

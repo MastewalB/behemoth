@@ -296,3 +296,26 @@ func TestTwoFactorReset(t *testing.T) {
 	require.Len(t, disabled, 1)
 	assert.Equal(t, user.ID, disabled[0].SubjectID)
 }
+
+// A TOTP secret is sealed for its user. Copied into another user's row, as
+// someone who can write the database but lacks the secrets could do, it does
+// not open there: a code from the copied secret does not finish the other
+// user's sign-in, which fails as a sealed value that was changed does.
+func TestTwoFactorTOTPSecretIsBoundToItsUser(t *testing.T) {
+	app := bootTwoFactor(t, twofactor.Options{Issuer: "Example"}, nil)
+	eve, eveCtx, _ := app.signedIn(t, "eve@example.com")
+	eveSecret, _ := app.enableTOTP(t, eveCtx)
+	ada, adaCtx, _ := app.signedIn(t, "ada@example.com")
+	app.enableTOTP(t, adaCtx)
+
+	var sealed string
+	require.NoError(t, app.db.QueryRow(`SELECT secret FROM two_factor_methods WHERE user_id = ? AND method = ?`,
+		eve.ID, string(twofactor.MethodTOTP)).Scan(&sealed))
+	_, err := app.db.Exec(`UPDATE two_factor_methods SET secret = ? WHERE user_id = ? AND method = ?`,
+		sealed, ada.ID, string(twofactor.MethodTOTP))
+	require.NoError(t, err)
+
+	_, pendingCtx := app.pendingSignIn(t, "ada@example.com")
+	_, err = app.plugin.Verify(pendingCtx, twofactor.VerifyRequest{Method: twofactor.MethodTOTP, Code: totp.Code(eveSecret, time.Now())})
+	assert.True(t, errs.IsCode(err, "invalid_payload"), "%v", err)
+}
