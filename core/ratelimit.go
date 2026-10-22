@@ -27,9 +27,25 @@ const AlgorithmFixedWindow RateLimitAlgorithm = "fixed_window"
 // Limiter is one rate-limiting strategy: the implementation behind a
 // RateLimitAlgorithm, or a rule's own (the rules' Limiter field).
 type Limiter interface {
-	// Allow atomically checks-and-records one attempt against key.
-	// Returns allowed, and if not, a RetryAfter hint.
-	Allow(ctx context.Context, key string, limit Limit) (allowed bool, retryAfter time.Duration, err error)
+	// Allow atomically checks-and-records one attempt against key, and says
+	// whether it is allowed. An error means the attempt could not be
+	// counted; RateLimitConfig.FailureMode decides what happens to it.
+	Allow(ctx context.Context, key string, limit Limit) (LimitDecision, error)
+}
+
+// LimitDecision is a Limiter's answer for one attempt.
+type LimitDecision struct {
+	Allowed bool
+	// RetryAfter is how long a refused caller is told to wait. Zero when
+	// Allowed.
+	RetryAfter time.Duration
+	// FirstRefusal marks the first refused attempt for the key in the
+	// current window. The rate limiter records a ratelimit.exceeded audit
+	// event for it and for no other refusal, so a client that keeps trying
+	// past its limit adds one event per window and not one per attempt.
+	// Every refusal is still counted in behemoth.ratelimit.checks. A
+	// Limiter that never sets it gets no audit event for its refusals.
+	FirstRefusal bool
 }
 
 type Limit struct {

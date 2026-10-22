@@ -4,7 +4,7 @@ This document explains how rate limiting works: how a rule becomes a check, the 
 
 The code lives in:
 
-- `core/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `Limit`, `RateLimitRule`, `HookRateLimitRule`, `KeyByValues`, `KeyByClientIP`, `RateLimitConfig`, `AtomicIncrementer`, `RateLimiter`
+- `core/ratelimit.go`: `RateLimitAlgorithm`, `Limiter`, `LimitDecision`, `Limit`, `RateLimitRule`, `HookRateLimitRule`, `KeyByValues`, `KeyByClientIP`, `RateLimitConfig`, `AtomicIncrementer`, `RateLimiter`
 - `httpapi/ratelimit.go`: `RouteRateLimitRule`, `DeclareRouteRules`, `BestRouteMatch`
 - `ratelimit/fixed_window.go`: `FixedWindow`, the one algorithm
 - `ratelimit/limiter.go`, `ratelimit/catalog.go`: `DefaultRateLimiter`, `NewDefaultRateLimiter`, `DefaultRateLimitCatalog`, `resolveRateLimitStore`, `dbCounterStore`
@@ -21,7 +21,7 @@ The code lives in:
 | Piece | State |
 |---|---|
 | Rule declaration and matching (`RateLimitCatalog`, `BestRouteMatch`) | works |
-| `DefaultRateLimiter.evaluate`: refusal, failure mode | works |
+| `DefaultRateLimiter.evaluate`: refusal, failure mode, one audit event per window | works |
 | Fixed-window algorithm (`ratelimit.FixedWindow`) | works |
 | Database counter (`Store.IncrementRateLimit`) | works; used when no key-value storage can count |
 | Redis counter (`RedisAdapter.Increment`) | works; used when Redis is the configured key-value storage |
@@ -40,8 +40,8 @@ A check passes through these steps:
 1. A rule is declared at `Prepare` time: a `HookRateLimitRule` (attached to a before-phase hook point), which a plugin declares in `Declare`, or an `httpapi.RouteRateLimitRule` (matched by method and path), which a plugin returns from `httpapi.RouteRulesPlugin`. `Prepare` declares a route rule's counting part, a `RateLimitRule`, under its name (`httpapi.DeclareRouteRules`; see *A transport counts its own rules*). Each carries a `Limit{Max, Window}`, the name of an algorithm, and an action. The catalog rejects an unknown algorithm name, a limit without a positive `Max` and `Window`, and any action other than `ActionReject` (the empty value means `ActionReject`).
 2. At `Boot`, `NewDefaultRateLimiter` checks the names in `RateLimitConfig.Limits` and `Disabled` against the catalog (`HasRule`), picks the counter storage (`resolveRateLimitStore`), and builds one `Limiter` per algorithm over it (`newLimiters`).
 3. At request time `DefaultRateLimiter` (`CheckHookLimit`, or `CheckRule` for a route rule) skips a rule `Disabled` names, builds the key as `<rule name>:<KeyFunc result>`, for example `core.signin.address:1.2.3.4|emailpassword`, and `limiterFor` picks the rule's limiter. The limit is the one `Limits` sets for the rule, else the declared one (`limitOf`). A hook rule's `KeyFunc` also returns whether the rule applies; when it does not, the rule is skipped and the steps below don't run for it.
-4. `evaluate` calls `limiter.Allow(ctx, key, limit)`.
-5. If the attempt is not allowed, it records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) with the rule's name, the counter key, and the client address, and returns a `rate_limited` error with a retry-after: the time left in the window. The router answers `429` and sets `Retry-After` to that time in whole seconds, rounded up. With `AuditConfig.OmitIPAndAgent` the event has neither the address nor the key, which for a rule per address is the address.
+4. `evaluate` calls `limiter.Allow(ctx, key, limit)`, which returns a `core.LimitDecision`: whether the attempt is allowed, the retry-after, and whether it is the window's first refusal.
+5. If the attempt is not allowed, it returns a `rate_limited` error with a retry-after: the time left in the window. The router answers `429` and sets `Retry-After` to that time in whole seconds, rounded up. On the window's first refusal (`FirstRefusal`) it also records a `ratelimit.exceeded` audit event (outcome `denied`, best effort) with the rule's name, the counter key, and the client address. The later refusals of the window are counted in `behemoth.ratelimit.checks` and not recorded; see *One audit event per window*. With `AuditConfig.OmitIPAndAgent` the event has neither the address nor the key, which for a rule per address is the address.
 6. If `Allow` itself fails, `RateLimitConfig.FailureMode` decides: `FailOpen` (the default) lets the request through and logs a warning; `FailClosed` rejects it.
 
 Route rules and hook rules differ in one way. For a route, the single most specific matching rule applies. For a hook point, every declared rule is evaluated and all must pass.
@@ -91,7 +91,8 @@ A `Limiter` needs somewhere to count, and rules are declared before any connecti
 
 ```go
 count, resetAt, err := l.counter.Increment(ctx, key, limit.Window)
-// allowed while count <= limit.Max; otherwise retry after resetAt - now
+// allowed while count <= limit.Max; otherwise retry after resetAt - now,
+// and the attempt counted limit.Max+1 is the window's first refusal
 ```
 
 With a limit of 10 a minute, a client's attempts look like this:
@@ -100,12 +101,13 @@ With a limit of 10 a minute, a client's attempts look like this:
 | --- | --- | --- | --- | --- |
 | 0s | 1st | 1 | allowed; opens the window | |
 | 20s | 10th | 10 | allowed | |
-| 50s | 11th | 11 | refused | 10s |
+| 50s | 11th | 11 | refused; the first refusal, audited | 10s |
 | 55s | 12th | 12 | refused | 5s |
 | 61s | 13th | 1 | allowed; opens a new window | |
 
 - **A refused attempt is counted.** The count keeps rising, but the window ends when it was going to. A client that keeps trying is not punished with a longer wait, and does not get through earlier.
 - **Retry-after is the time left**, from the `resetAt` the counter returns. It is capped at the window's length and never negative, because the counter's clock may not be this process's.
+- **One attempt per key and window is the first refusal.** The database counter never returns the same count twice in a window (see *`IncrementRateLimit(ctx, key, ttl)`*), and Redis's `INCR` is atomic. So only one attempt sees `Max+1`, whichever replica counts it.
 
 ### The core rules
 
@@ -335,6 +337,9 @@ These limits apply:
 - **An empty key from a route rule is still one shared count.** Only a hook rule's `KeyFunc` can say it does not apply.
 - **A plugin can't add an algorithm by name.** `knownAlgorithms` is fixed. A rule's own `Limiter` is the extension point.
 - **Old database counters are not removed** unless the application schedules `PurgeExpiredRateLimits` (above).
+- **A refusal still writes the counter.** Only the audit event is limited to one per window. With the counters in the `rate_limits` table, each refused attempt is one update of the key's row, which does not grow the table.
+- **A rule's own `Limiter` decides what is audited.** One that never sets `FirstRefusal` gets no `ratelimit.exceeded` event; its refusals are still counted in the metric.
+- **A lower limit can skip a window's event.** When `RateLimitConfig.Limits` lowers a rule's `Max` at a restart, a key whose count in the current window is already past the new `Max+1` gets no event until that window ends.
 
 ---
 
@@ -342,9 +347,9 @@ These limits apply:
 
 | Test | File | Covers |
 | --- | --- | --- |
-| `TestFixedWindow` | `ratelimit/fixed_window_test.go` | allowed up to `Max`, refused after, retry-after from the window's end and its caps, a failing counter |
+| `TestFixedWindow` | `ratelimit/fixed_window_test.go` | allowed up to `Max`, refused after, only the attempt counted `Max+1` is the first refusal, retry-after from the window's end and its caps, a failing counter |
 | `TestRateLimitRulesNameTheirAlgorithm` | `ratelimit/limiter_test.go` | what the catalog accepts, and `limiterFor`. `ActionLockout` and an unknown action are rejected on the rules of `DeclareRule` and on hook rules, also when the rule has its own `Limiter` |
-| `TestRateLimiterMetrics` | `ratelimit/limiter_test.go` | `evaluate`: the three results, the audit event |
+| `TestRateLimiterMetrics` | `ratelimit/limiter_test.go` | `evaluate`: the three results, an audit event for the first refusal and none for a later one |
 | `TestStoreContract/*/RateLimits` | `tests/store/contract_test.go` | the database counter on every backend: concurrent counts, the window's end, the reset |
 | `TestRedisIncrement` | `tests/storage/kv_storage_test.go` | the Redis counter: concurrent counts, the expiry, the reset, a counter without an expiry |
 | `TestHookRateLimitRulesKeyOnPublishedValues` | `tests/plugins/emailpassword_test.go` | hook rules under a real `Boot`, without a request: per email on sign-up and sign-in (normalized, and not moved by a handler's rewrite), per user on session create, per kind and subject on token issue. A sign-in without an email and a token without a subject are not counted |
@@ -354,7 +359,7 @@ These limits apply:
 | `TestRateLimitConfigChangesRulesByName` | `ratelimit/limiter_test.go` | `Limits` replaces the limit of a hook rule and of a rule declared with `DeclareRule`, `Disabled` skips both, an unknown name or a limit that can't count is a configuration error |
 | `TestCheckRuleCountsWhatTheTransportPasses` | same | `CheckRule`: the key under the rule's name, the transport's address in the refusal's event, a rule declared `Disabled` counts nothing, an undeclared name is a configuration error |
 | `TestRateLimitRefusalOmitsTheAddressWhenConfigured` | same | with `AuditConfig.OmitIPAndAgent` the refusal's event has neither the address nor the key |
-| `TestSignInRouteIsRateLimited` | `tests/plugins/emailpassword_test.go` | sign-in and sign-up through the router: the 11th attempt is a `429` with `Retry-After`, another address is not affected, the two flows count separately, a refused sign-up creates nothing |
+| `TestSignInRouteIsRateLimited` | `tests/plugins/emailpassword_test.go` | sign-in and sign-up through the router: the 11th attempt is a `429` with `Retry-After`, another address is not affected, the two flows count separately, a refused sign-up creates nothing, three refusals in a window are one audit event and three counts in the metric |
 | `TestSignInLimitsHoldForEveryTransport` | same | sign-in called with another transport's caller is refused at the 11th attempt, another method counts apart, a system caller is not counted, `Limits` and `Disabled` through `Boot`, an unknown name fails `Boot` |
 
 ---
@@ -458,12 +463,26 @@ To build it:
 
 1. Give the counter storage a "set if absent, with expiry": `SET key value NX PX` on Redis, and on the database an insert into `rate_limits` that treats a duplicate key as "already locked" and replaces a row that has expired. A plain set would let every refused attempt push the end of the lockout further out.
 2. In `evaluate`, before `algo.Allow`: read `lockout:<key>`. If it is there, refuse with the time it has left and don't count.
-3. In `evaluate`, on a refusal: set `lockout:<key>` for `lockoutFor`, if absent.
+3. In `evaluate`, on the window's first refusal (`LimitDecision.FirstRefusal`): set `lockout:<key>` for `lockoutFor`, if absent.
 4. Remove the `ActionLockout` case from `checkRateLimitRule`, and require a positive `LockoutFor` there.
 
 The lockout sits in `evaluate` and not in a `Limiter`, so it also covers a rule that brings its own `Limiter`. That is why the check rejects the action before it accepts such a rule.
 
 **Revisit if:** a rule needs a penalty longer than its window. Decide the key with it: a lockout per account lets anyone lock a user out for the whole `LockoutFor`, which is worse than the same trade for a plain limit (see *What a hook rule can key on*).
+
+### One audit event per window
+
+**Context:** `evaluate` recorded a `ratelimit.exceeded` event for every refused attempt. With the database recorder, the default, that is one insert into `audit_log` per refused request. A client that kept sending past its limit made behemoth write at the rate it sent, which the limit was meant to prevent, and filled the table with identical rows. `behemoth.ratelimit.checks{result="limited"}` already counted every refusal.
+
+**Options considered:**
+
+- *Drop the event.* The metric counts refusals, but by rule only. The audit log would no longer say which address or account was limited, and when.
+- *Sample the refusals.* Fewer rows, but which ones are kept is chance, and a query can't tell a limited client from one that was not sampled.
+- *Record the first refusal of each window.* One row per rule, key, and window, however many attempts follow. The counter already tells: its count is `Max+1` exactly once per window, on every replica. `Limiter.Allow` returned only a boolean and a retry-after, so the answer needed a field for it.
+
+**Decision:** Record the first refusal of each window. `Allow` returns a `core.LimitDecision` with `FirstRefusal`, which `FixedWindow` sets when the count is `Max+1`. The signature changed before any release had the interface. The lockout, when it is built, sets its key on the same signal.
+
+**Revisit if:** an application needs the number of refusals per key, not per rule. The event could then carry the count when the window ends, which needs a sweep that nothing schedules today.
 
 ### `Increment` returns the end of the window
 See *Why it returns the window's end*. The alternative kept the interface and reported the whole window as the retry-after, which tells a client to wait up to a window too long.

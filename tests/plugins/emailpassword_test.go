@@ -670,7 +670,8 @@ func TestEmailAndPasswordCredentialsPayload(t *testing.T) {
 // Core limits sign-in, and sign-up, to ten attempts a minute per client
 // address. Through the router the eleventh is answered 429 with the time left
 // in the window, before the flow looks up the user. Another address is not
-// affected, and the two flows count separately.
+// affected, and the two flows count separately. Only the first refusal of a
+// window is an audit event; every refusal is counted in the metric.
 func TestSignInRouteIsRateLimited(t *testing.T) {
 	ctx := context.Background()
 	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-limit.db"))
@@ -715,6 +716,9 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 	require.NoError(t, err, "Retry-After: %q", w.Header().Get("Retry-After"))
 	assert.Greater(t, wait, 0)
 	assert.LessOrEqual(t, wait, 60, "the time left in the window")
+	for i := 1; i <= 2; i++ {
+		require.Equal(t, http.StatusTooManyRequests, attempt("203.0.113.7:50001").Code, "a refused address stays refused")
+	}
 
 	assert.Equal(t, http.StatusUnauthorized, attempt("198.51.100.9:50000").Code, "another address has its own count")
 
@@ -742,10 +746,12 @@ func TestSignInRouteIsRateLimited(t *testing.T) {
 
 	assert.Empty(t, rec.Logger.At(slog.LevelWarn), "the counter was reachable")
 	limited := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
-	require.Len(t, limited, 2)
+	require.Len(t, limited, 2, "one event per rule and window, not one per refusal")
 	assert.Equal(t, "203.0.113.7", limited[0].IPAddress)
 	assert.Equal(t, engine.RuleSignInAddress, limited[0].Metadata["rule"])
 	assert.Equal(t, engine.RuleSignUpAddress, limited[1].Metadata["rule"])
+	assert.EqualValues(t, 3, rec.Metrics.Count(telemetry.MetricRateLimitChecks,
+		behemoth.M{telemetry.AttrRule: engine.RuleSignInAddress, telemetry.AttrResult: "limited"}), "every refused sign-in is counted")
 }
 
 // The per-address limits are hook rules on the flows, so a flow called from

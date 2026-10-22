@@ -457,4 +457,4 @@ These entries in `docs/ongoing.md` affect the design:
 - **L6, "`ActionLockout` is declared but not built".** The lock here is the plugin's own count, and does not need it.
 - **M9, "A new core table has to be migrated before the version that needs it runs".** `sessions.factors` is the same case for a column: an application migrates before it deploys step 2.
 - **M10, "Nothing removes old sessions, tokens or rate-limit counters".** Every sign-in with a second factor writes a pending session, and an abandoned one stays until its user is deleted.
-- **H1, "Every rate-limit rejection writes an audit row".** The plugin's rules per user add rejections to it.
+- **H1, "Every rate-limit rejection writes an audit row".** The plugin's rules per user added rejections to it. It was resolved outside this plan: only the first refusal of a window is an audit event, and the entry is removed.

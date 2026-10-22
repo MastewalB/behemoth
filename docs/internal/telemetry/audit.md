@@ -96,7 +96,7 @@ An event recorded for a hook point is named after the point unless its `AuditSpe
 | `token.afterIssue` | token manager | success | best effort |
 | `token.consumed` | token manager | success | best effort |
 | `token.failed` | token manager | failure | best effort |
-| `ratelimit.exceeded` | rate limiter | denied | best effort |
+| `ratelimit.exceeded` | rate limiter, on the first refusal of a window | denied | best effort |
 | `migration.applied` | migration runner | success | best effort |
 | `crypto.secret.rotated` | key manager | success | best effort |
 
