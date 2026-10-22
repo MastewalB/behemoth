@@ -8,7 +8,10 @@ import (
 type hmacSecretHasher struct{ km KeyManager }
 
 // NewSecretHasher returns an HMAC-SHA256 SecretHasher keyed by km's
-// KeyPurposeTokenHash key.
+// KeyPurposeTokenHash key. Hash returns the HMAC as 64 lowercase hex
+// characters, and the version of the key; the same secret has the same hash
+// under one version. Verify compares in constant time, and a version km does
+// not hold is km's error.
 func NewSecretHasher(km KeyManager) SecretHasher {
 	return &hmacSecretHasher{km: km}
 }
