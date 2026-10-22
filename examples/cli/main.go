@@ -3,7 +3,7 @@
 //
 //	behemoth generate            # show the next migration
 //	behemoth generate -confirm   # write it to ./migrations
-//	psql "$DATABASE_URL" -f migrations/0001_create_accounts_and_7_more.sql
+//	psql "$DATABASE_URL" -f migrations/0001_create_accounts_and_8_more.sql
 //	behemoth generate            # now answers "No schema changes detected."
 //	go run .                     # Prepare + Boot, then serve HTTP
 //

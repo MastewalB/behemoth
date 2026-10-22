@@ -38,7 +38,10 @@ CREATE TABLE tokens (
 CREATE TABLE verification_codes (
 	id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT NOT NULL, code_hash TEXT NOT NULL,
 	key_version INTEGER NOT NULL, attempts_left INTEGER NOT NULL, metadata TEXT,
-	expires_at TIMESTAMP NOT NULL, created_at TIMESTAMP NOT NULL, UNIQUE (kind, subject));`
+	expires_at TIMESTAMP NOT NULL, created_at TIMESTAMP NOT NULL, UNIQUE (kind, subject));
+CREATE TABLE reserved_values (
+	id TEXT PRIMARY KEY, column_name TEXT NOT NULL, column_value TEXT NOT NULL, user_id TEXT NOT NULL,
+	expires_at TIMESTAMP NOT NULL, created_at TIMESTAMP NOT NULL, UNIQUE (column_name, column_value));`
 
 // outbox is a MailSender that keeps what it was asked to send, and fails
 // when told to. The lock is for background sends.

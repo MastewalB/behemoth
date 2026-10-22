@@ -88,7 +88,7 @@ The command resolves a relative `FolderPath` such as `"migrations"` against the 
 $ behemoth generate
 Migration 0001 ready (not yet written). Re-run with --confirm to write it to migrations.
 
-0001, 22 operation(s):
+0001, 30 operation(s):
   create table accounts
   add index idx_accounts_user_id on accounts
   add index uq_accounts_provider_account on accounts
@@ -96,6 +96,7 @@ Migration 0001 ready (not yet written). Re-run with --confirm to write it to mig
   create table users
   add foreign key fk_accounts_user on accounts
   add foreign key fk_notes_user on notes
+  add foreign key fk_reserved_values_user on reserved_values
   add foreign key fk_sessions_user on sessions
 ```
 
@@ -103,8 +104,8 @@ Without `-confirm`, the command writes nothing except the draft file described b
 
 | File | Holds |
 | --- | --- |
-| `0001_create_accounts_and_7_more.json` | The migration as Behemoth records it. Keep it in the folder, because the next migration's number comes from it. |
-| `0001_create_accounts_and_7_more.sql` | The same migration as a script for your database. Apply this one with your own tool, such as `psql`. |
+| `0001_create_accounts_and_8_more.json` | The migration as Behemoth records it. Keep it in the folder, because the next migration's number comes from it. |
+| `0001_create_accounts_and_8_more.sql` | The same migration as a script for your database. Apply this one with your own tool, such as `psql`. |
 
 The name after the number says what the migration does. Behemoth derives it from the schema operations:
 
@@ -112,7 +113,7 @@ The name after the number says what the migration does. Behemoth derives it from
 | --- | --- |
 | One operation | `0002_add_column_users_plan` |
 | Several operations on one table | `0003_alter_notes` |
-| New tables only | `0001_create_users_sessions_tokens`, or `0001_create_accounts_and_7_more` beyond three |
+| New tables only | `0001_create_users_sessions_tokens`, or `0001_create_accounts_and_8_more` beyond three |
 | Changes across tables | `0004_update_notes_users` |
 
 Only the number identifies a migration. You can't choose the name.

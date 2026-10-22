@@ -22,6 +22,7 @@ The rate limiter that writes `rate_limits` is described in [`../ratelimit/rate_l
 | `sessions` | `models.Session` | `models/session.go` | yes | `store/sessions.go` |
 | `tokens` | `models.Token` | `models/token.go` | yes | `store/tokens.go` |
 | `rate_limits` | `models.RateLimit` | `models/rate_limit.go` | yes | `store/rate_limits.go` |
+| `reserved_values` | `models.ReservedValue` | `models/reserved_value.go` | yes | `store/reserved_values.go` |
 
 What each one is for:
 
@@ -30,8 +31,9 @@ What each one is for:
 - **`sessions`**: one row per issued session, looked up by the hash of its token. `factors` holds what its sign-in proved, separated by spaces, and `Promote` appends the second factor ([ADR-0009](../decisions/0009-recording-the-factors-of-a-session.md)). The session manager takes every session time from the store's clock (`Store.Now`), in UTC. The session limit compares `expires_at` in the database, and SQLite stores a time as text with its zone, so expiries stamped in local time would compare wrongly there.
 - **`tokens`**: the verification table. It is generic by `Kind` (email verification, password reset, magic link, API key), so there is no separate `verifications` table.
 - **`rate_limits`**: fixed-window counters, used only when rate limiting has no key-value store to count in.
+- **`reserved_values`**: a value of a unique `users` column kept for the user who gave it up, until an expiry. One row per `(column_name, column_value)`. The email change flow keeps the old address there while its revert link works ([`../plugins/emailverification.md`](../plugins/emailverification.md)). The store does not check it on every write: the plugin that reserves a column's values refuses them from its data handlers with `Store.CheckReservedValue`, which answers the column's taken conflict. The table is generic over the column so that the username plugin can reserve released usernames the same way (`docs/ongoing.md`, L8).
 
-`sessions` and `accounts` each declare a cascading foreign key to `users`, so deleting a user removes both.
+`sessions`, `accounts`, and `reserved_values` each declare a cascading foreign key to `users`, so deleting a user removes them.
 
 ---
 
@@ -89,9 +91,9 @@ The flag works as follows:
 
 ### Declaration
 
-`CoreDeclareSchema` declares core's tables (`users`, `sessions`, `tokens`, `accounts`, `rate_limits`, `audit_log`, and `verification_codes`) under owner `"core"` during `Prepare`, before any plugin declares. `rate_limits` is declared whether or not a key-value store is configured, because `Prepare` runs without a live connection and cannot know. With a key-value store that counts natively, the table exists and stays empty.
+`CoreDeclareSchema` declares core's tables (`users`, `sessions`, `tokens`, `accounts`, `rate_limits`, `audit_log`, `verification_codes`, and `reserved_values`) under owner `"core"` during `Prepare`, before any plugin declares. `rate_limits` is declared whether or not a key-value store is configured, because `Prepare` runs without a live connection and cannot know. With a key-value store that counts natively, the table exists and stays empty.
 
-`[Reminder]` Adding a table to `CoreDeclareSchema`, or removing one, changes the name of the first migration of an application without plugins. `TestLauncherRunsAnApplication` (`cmd/behemoth/main_test.go`) checks that name, `0001_create_accounts_and_6_more.json` for the seven tables above: the first table and the count of the others. Update its `migrationName` and the list above in the same change.
+`[Reminder]` Adding a table to `CoreDeclareSchema`, or removing one, changes the name of the first migration of an application without plugins. `TestLauncherRunsAnApplication` (`cmd/behemoth/main_test.go`) checks that name, `0001_create_accounts_and_7_more.json` for the eight tables above: the first table and the count of the others. Update its `migrationName` and the list above in the same change. `cli/cli_test.go`, `docs/api/cli.md`, `README.md`, and `examples/cli/main.go` carry the name for an application with one table of its own (`0001_create_accounts_and_8_more`), and `docs/api/cli.md` the operation count of `examples/cli`: update them too.
 
 ### NULL versus empty
 

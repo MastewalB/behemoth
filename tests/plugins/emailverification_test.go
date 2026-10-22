@@ -34,6 +34,9 @@ type verificationApp struct {
 	outbox    *outbox
 	rec       *telemetrytest.Recorder
 	mounted   mountedRoutes
+	// gap is the database, which a test can open between a flow's lookup
+	// of a user and what the flow does next.
+	gap *lookupGap
 }
 
 // bootVerification boots the email/password plugin and the verification
@@ -75,7 +78,8 @@ func bootVerification(t *testing.T, opts emailverification.Options, configure ..
 	for _, fn := range configure {
 		fn(&cfg)
 	}
-	app.ac, err = engine.Boot(ctx, prepared, sqliteAdapter.NewSQLiteAdapter(db, nil), cfg)
+	app.gap = &lookupGap{Database: sqliteAdapter.NewSQLiteAdapter(db, nil)}
+	app.ac, err = engine.Boot(ctx, prepared, app.gap, cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { app.ac.Mailer.Close(context.Background()) })
 	return app

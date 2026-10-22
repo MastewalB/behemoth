@@ -12,7 +12,7 @@ Sessions and tokens also have managers, which sit above the store: `ac.SessionMa
 ## The convention
 
 - Your own tables: use the adapter. The store has no operations for them.
-- Behemoth's tables (`users`, `accounts`, `sessions`, `tokens`, `verification_codes`, `rate_limits`): use the store, and for sessions, tokens, and one-time codes the managers (`ac.Codes` for codes; see [SMS and one-time codes](sms.md)).
+- Behemoth's tables (`users`, `accounts`, `sessions`, `tokens`, `verification_codes`, `reserved_values`, `rate_limits`): use the store, and for sessions, tokens, and one-time codes the managers (`ac.Codes` for codes; see [SMS and one-time codes](sms.md)).
 
 Nothing enforces this. The adapter accepts any declared model, and a write to a core table through it succeeds. The adapter writes the row you give it and nothing else, so every step listed below becomes your job. The rest of this page lists those steps per table. If you write directly, do it knowing which ones you are taking over.
 
@@ -157,6 +157,28 @@ Use `ac.TokenManager`.
 `audit_log` holds the audit events. `Store.RecordAuditEvent` assigns the id that events are ordered and paged by. A row written directly with another kind of id appears out of order in `Store.QueryAuditEvents`. To record an event of your own, use `ac.Telemetry.RecordAudit`, which also fills in the request ID and redacts the metadata. See [Telemetry](telemetry.md#audit).
 
 The table is created by the migration engine like the other core tables. While Behemoth records to it, which is the default, writes to `users` fail if it is missing.
+
+## Reserved values
+
+`reserved_values` keeps a value of a unique column of `users` for the user who gave it up, until an expiry. Until then no other user is given the value. The email change flow of the [email verification plugin](emailverification.md) keeps an account's old address there while the link at it can put it back. A plugin that frees values of a unique column of its own can use the table the same way.
+
+Use the store:
+
+| Operation | What it does |
+| --- | --- |
+| `Store.ReserveValue(ctx, column, value, userID, until)` | Keeps `value` of `column` for `userID` until `until`. A longer reservation of the same user is kept, and another user's is replaced. |
+| `Store.CheckReservedValue(ctx, column, value, userID)` | Returns the error of a taken value (`409`, the column's code: see [A unique column you add](#a-unique-column-you-add)) when `value` is reserved for a user other than `userID` and the reservation has not expired. Pass an empty `userID` for a user being created. |
+| `Store.ReleaseReservedValue(ctx, column, value, userID)` | Removes the reservation of `value` if it is `userID`'s. |
+| `Store.FindReservedValue(ctx, column, value)` | Returns the reservation, expired or not. |
+| `Store.PurgeExpiredReservedValues(ctx)` | Removes the expired reservations. |
+
+A reservation behaves as follows:
+
+- **It refuses only where it is checked.** The store does not check reservations on every write. Call `CheckReservedValue` on `hctx.Tx` from your handlers on `data.user.beforeCreate` and `data.user.beforeUpdate`, for the column whose values you reserve. A reserved value then fails the write as a taken one does, and sign-up answers it as it answers a taken email.
+- **`column` is the column's canonical name**, and `value` is in the form the column stores.
+- **It goes with its user.** `Store.DeleteUser` removes the user's reservations.
+- **An expired reservation refuses nothing**, and its row stays until the purge runs. Nothing schedules `PurgeExpiredReservedValues`, so call it from a job, next to the other purges.
+- **The table is new in core.** Generate and apply a migration before you deploy a version that has it, whether or not you use the email change flow, because deleting a user clears the user's reservations from it.
 
 ## Read core tables directly
 

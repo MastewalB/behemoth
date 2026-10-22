@@ -421,6 +421,11 @@ func (p *Plugin) Declare(ic *core.PluginInitContext) error {
 //   - auth.signIn.credentialsVerified, with Options.RequireVerified: an
 //     unverified user's sign-in is refused.
 //
+// With the email change flow on, two more rules hold for every write: on
+// data.user.beforeCreate and in the data.user.beforeUpdate handler, an
+// address reserved for another user, which changed away from it and can
+// still take it back, is refused as a taken one (email_taken).
+//
 // The two sends run after the write has committed, and a failure there is
 // logged by the dispatcher: the user was created either way, and asks for a
 // link through the send route.
@@ -451,6 +456,11 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 		if store.NormalizeEmail(newEmail) == store.NormalizeEmail(current.Email) {
 			return nil, nil
 		}
+		if p.changeEnabled() {
+			if err := hctx.Tx.CheckReservedValue(hctx.Ctx, models.UserEmail, store.NormalizeEmail(newEmail), id); err != nil {
+				return nil, err
+			}
+		}
 		// An update that sets the flag itself is left alone: an admin
 		// screen that changes an address it has checked, for example.
 		if _, set := changes[models.UserEmailVerified]; !set {
@@ -460,6 +470,18 @@ func (p *Plugin) Register(reg core.HookRegistry) error {
 		return changes, nil
 	}, nil); err != nil {
 		return err
+	}
+
+	if p.changeEnabled() {
+		if err := reg.OnBefore(hooks.HookUserBeforeCreate, func(hctx *core.HookContext, row behemoth.M) (behemoth.M, error) {
+			email, ok := row[models.UserEmail].(string)
+			if !ok {
+				return nil, nil
+			}
+			return nil, hctx.Tx.CheckReservedValue(hctx.Ctx, models.UserEmail, store.NormalizeEmail(email), "")
+		}, nil); err != nil {
+			return err
+		}
 	}
 
 	if err := reg.OnAfter(hooks.HookUserUpdated, func(hctx *core.HookContext, result any) error {

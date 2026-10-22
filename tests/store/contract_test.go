@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -79,6 +80,7 @@ func coreSchemaWithForeignKeys(t *testing.T) ([]schema.Table, behemoth.SchemaRes
 	require.NoError(t, reg.Declare(&models.RateLimit{}, models.RateLimitTableSchema()))
 	require.NoError(t, reg.Declare(&models.AuditLog{}, models.AuditLogTableSchema()))
 	require.NoError(t, reg.Declare(&models.VerificationCode{}, models.VerificationCodeTableSchema()))
+	require.NoError(t, reg.Declare(&models.ReservedValue{}, models.ReservedValueTableSchema()))
 	tfa := twoFactorEnabled.Contribution(schema.Column{Type: schema.ColTypeBoolean, Default: false})
 	tfa.Owner = "two-factor"
 	require.NoError(t, reg.ExtendColumn(tfa))
@@ -94,7 +96,7 @@ func coreSchemaWithForeignKeys(t *testing.T) ([]schema.Table, behemoth.SchemaRes
 	resolver := migration.NewSchemaResolver()
 	resolver.Freeze(migration.BuildSchemaResolverTable(reg, migration.NewMigrationConfig(migration.MigrationConfig{})))
 	var tables []schema.Table
-	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable, models.AccountTable, models.RateLimitTable, models.AuditLogTable, models.VerificationCodeTable} {
+	for _, name := range []string{models.UserTable, models.SessionTable, models.TokenTable, models.AccountTable, models.RateLimitTable, models.AuditLogTable, models.VerificationCodeTable, models.ReservedValueTable} {
 		t, _ := reg.Lookup(name)
 		tables = append(tables, t)
 	}
@@ -249,6 +251,7 @@ func TestStoreContract(t *testing.T) {
 			t.Run("RateLimits", func(t *testing.T) { rateLimitsContract(t, db, resolver) })
 			t.Run("AuditLog", func(t *testing.T) { auditLogContract(t, st) })
 			t.Run("VerificationCodes", func(t *testing.T) { verificationCodesContract(t, st) })
+			t.Run("ReservedValues", func(t *testing.T) { reservedValuesContract(t, st) })
 			t.Run("UniqueKeys", func(t *testing.T) { uniqueKeysContract(t, st, db, resolver) })
 		})
 	}
@@ -560,6 +563,13 @@ func usersContract(t *testing.T, st *store.Store) {
 	require.NoError(t, err)
 	assert.True(t, on)
 
+	// A guarded update writes only while the email is the one given.
+	guarded, err := st.UpdateUserIfEmail(ctx, u.ID, u.Email, behemoth.M{models.UserFirstname: "Guarded"})
+	require.NoError(t, err)
+	assert.Equal(t, "Guarded", guarded.Firstname)
+	_, err = st.UpdateUserIfEmail(ctx, u.ID, "someone-else@example.com", behemoth.M{models.UserFirstname: "Stale"})
+	assert.True(t, errs.IsNotFound(err), "update guarded on another email: %v", err)
+
 	_, err = st.UpdateUser(ctx, "no-such-user", behemoth.M{models.UserFirstname: "x"})
 	assert.True(t, errs.IsNotFound(err), "update of a missing row: %v", err)
 	require.NoError(t, st.DeleteUser(ctx, u.ID))
@@ -645,7 +655,7 @@ func tokensContract(t *testing.T, st *store.Store) {
 	// the consumed and revoked columns have to hold on every backend.
 	keep, _, err := tm.Issue(ctx, kindReset, "u-list", behemoth.M{"n": 1})
 	require.NoError(t, err)
-	_, usedRaw, err := tm.Issue(ctx, kindReset, "u-list", nil)
+	used, usedRaw, err := tm.Issue(ctx, kindReset, "u-list", nil)
 	require.NoError(t, err)
 	gone, _, err := tm.Issue(ctx, kindReset, "u-list", nil)
 	require.NoError(t, err)
@@ -659,6 +669,21 @@ func tokensContract(t *testing.T, st *store.Store) {
 	require.Len(t, listed, 1, "the consumed and the revoked token are left out, and so is another subject's")
 	assert.Equal(t, keep.ID, listed[0].ID)
 	assert.EqualValues(t, 1, listed[0].MetadataJSON["n"], "with its metadata")
+
+	// The store's other listing keeps the consumed token, which can still
+	// be revoked.
+	unrevoked, err := st.ListUnrevokedTokensForSubject(ctx, kindReset, "u-list")
+	require.NoError(t, err)
+	var ids []string
+	for _, tok := range unrevoked {
+		ids = append(ids, tok.ID)
+	}
+	assert.ElementsMatch(t, []string{keep.ID, used.ID}, ids, "the revoked token and another subject's are left out")
+	require.NoError(t, tm.Revoke(ctx, used.ID))
+	unrevoked, err = st.ListUnrevokedTokensForSubject(ctx, kindReset, "u-list")
+	require.NoError(t, err)
+	require.Len(t, unrevoked, 1, "the consumed token was revoked")
+	assert.Equal(t, keep.ID, unrevoked[0].ID)
 }
 
 func accountsContract(t *testing.T, st *store.Store, db behemoth.Database) {
@@ -884,6 +909,82 @@ func auditLogContract(t *testing.T, st *store.Store) {
 	// Purge removes what was recorded before the cutoff and keeps the rest.
 	require.NoError(t, st.PurgeAuditEvents(ctx, base.Add(3*time.Minute)))
 	assert.Equal(t, 4, count(telemetry.AuditFilter{}), "minutes 3, 4, 5 and 10 remain")
+}
+
+// reservedValuesContract covers the reservations of user values: one row per
+// column and value, a reservation its user extends and never shortens and
+// another user replaces once it has expired, the conflict a reserved value
+// is refused with, and a user's reservations going with the user.
+func reservedValuesContract(t *testing.T, st *store.Store) {
+	ctx := context.Background()
+	soon := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	later := soon.Add(time.Hour)
+	past := time.Now().UTC().Add(-time.Hour)
+	expiresAt := func(value string) time.Time {
+		t.Helper()
+		found, err := st.FindReservedValue(ctx, models.UserEmail, value)
+		require.NoError(t, err)
+		return found.ExpiresAt
+	}
+	owner := &models.User{Email: "reserving@example.com"}
+	require.NoError(t, st.CreateUser(ctx, owner))
+
+	require.NoError(t, st.ReserveValue(ctx, models.UserEmail, "old@example.com", owner.ID, soon))
+	found, err := st.FindReservedValue(ctx, models.UserEmail, "old@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, owner.ID, found.UserID)
+	assert.True(t, found.ExpiresAt.Equal(soon), "expires_at %v, want %v", found.ExpiresAt, soon)
+	_, err = st.FindReservedValue(ctx, "username", "old@example.com")
+	assert.True(t, errs.IsNotFound(err), "another column: %v", err)
+
+	require.NoError(t, st.ReserveValue(ctx, models.UserEmail, "old@example.com", owner.ID, later))
+	assert.True(t, expiresAt("old@example.com").Equal(later), "the reservation is extended")
+	require.NoError(t, st.ReserveValue(ctx, models.UserEmail, "old@example.com", owner.ID, soon))
+	assert.True(t, expiresAt("old@example.com").Equal(later), "and not shortened")
+
+	// Another user is refused the value with the email's conflict, which
+	// holds a duplicate key on the email; its owner is not.
+	err = st.CheckReservedValue(ctx, models.UserEmail, "old@example.com", "someone-else")
+	de, ok := errors.AsType[*errs.DomainError](err)
+	require.True(t, ok, "%v", err)
+	assert.Equal(t, errs.CategoryConflict, de.Category)
+	assert.Equal(t, "email_taken", de.Code)
+	assert.True(t, errs.IsDuplicateKey(err))
+	assert.Equal(t, []string{models.UserEmail}, errs.DuplicateKeyColumns(err))
+	assert.NoError(t, st.CheckReservedValue(ctx, models.UserEmail, "old@example.com", owner.ID), "the owner")
+	assert.NoError(t, st.CheckReservedValue(ctx, models.UserEmail, "free@example.com", ""), "a value that is not reserved")
+
+	require.NoError(t, st.ReleaseReservedValue(ctx, models.UserEmail, "old@example.com", "someone-else"))
+	_, err = st.FindReservedValue(ctx, models.UserEmail, "old@example.com")
+	require.NoError(t, err, "another user's release leaves the reservation")
+	require.NoError(t, st.ReleaseReservedValue(ctx, models.UserEmail, "old@example.com", owner.ID))
+	_, err = st.FindReservedValue(ctx, models.UserEmail, "old@example.com")
+	assert.True(t, errs.IsNotFound(err), "the owner's release removes it: %v", err)
+
+	// An expired reservation refuses nothing, another user's reservation
+	// replaces it, and the purge removes the expired ones only.
+	other := &models.User{Email: "other-reserver@example.com"}
+	require.NoError(t, st.CreateUser(ctx, other))
+	require.NoError(t, st.ReserveValue(ctx, models.UserEmail, "expired@example.com", owner.ID, past))
+	assert.NoError(t, st.CheckReservedValue(ctx, models.UserEmail, "expired@example.com", "someone-else"))
+	require.NoError(t, st.ReserveValue(ctx, models.UserEmail, "expired@example.com", other.ID, soon))
+	found, err = st.FindReservedValue(ctx, models.UserEmail, "expired@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, other.ID, found.UserID)
+	assert.True(t, found.ExpiresAt.Equal(soon))
+	require.NoError(t, st.ReserveValue(ctx, models.UserEmail, "stale@example.com", owner.ID, past))
+	require.NoError(t, st.PurgeExpiredReservedValues(ctx))
+	_, err = st.FindReservedValue(ctx, models.UserEmail, "stale@example.com")
+	assert.True(t, errs.IsNotFound(err), "the expired reservation was purged: %v", err)
+	_, err = st.FindReservedValue(ctx, models.UserEmail, "expired@example.com")
+	require.NoError(t, err, "the live one was kept")
+
+	// A user's reservations go with the user.
+	require.NoError(t, st.ReserveValue(ctx, models.UserEmail, "owned@example.com", owner.ID, soon))
+	require.NoError(t, st.DeleteUser(ctx, owner.ID))
+	_, err = st.FindReservedValue(ctx, models.UserEmail, "owned@example.com")
+	assert.True(t, errs.IsNotFound(err), "the user's reservation went with the user: %v", err)
+	require.NoError(t, st.DeleteUser(ctx, other.ID))
 }
 
 // verificationCodesContract covers the store's one-time code operations: one

@@ -103,7 +103,7 @@ go run . signup -email ada@example.com -password 'correct horse'
 go install ./cmd/behemoth     # the launcher, once, from the repository root
 cd examples/cli
 behemoth generate -confirm    # write the next migration to ./migrations
-psql "$DATABASE_URL" -f migrations/0001_create_accounts_and_7_more.sql
+psql "$DATABASE_URL" -f migrations/0001_create_accounts_and_8_more.sql
 go run .                      # Prepare + Boot, then serve HTTP
 ```
 

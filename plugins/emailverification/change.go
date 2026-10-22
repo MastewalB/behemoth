@@ -29,6 +29,8 @@ import (
 //	request   the user, signed in recently, names a new address. Nothing in
 //	          users changes. The current address gets a notice with a link
 //	          that undoes the change, the new one a link that confirms it.
+//	          The current address is reserved for the user (reserved_values)
+//	          for as long as the first link works.
 //	confirm   the new address follows its link: email and email_verified are
 //	          written together.
 //	revert    the old address follows its link, before or after the confirm:
@@ -36,7 +38,9 @@ import (
 //	          every session of the user ends.
 //
 // No table or column holds the pending change. Both addresses travel in the
-// metadata of the two tokens.
+// metadata of the two tokens. The confirm and the revert write the address
+// guarded on the one they read, so that one of them that read the account
+// before the other wrote it does not undo the other.
 
 // The token kinds of the flow. Both are single use and kept in the
 // database, with the user's id as subject, so Store.DeleteUser removes them
@@ -432,6 +436,16 @@ func (p *Plugin) changeRequestBody(hctx *core.HookContext, req ChangeRequest) (*
 	if err != nil {
 		return nil, failed("issue_failed", err)
 	}
+	// The address is kept for the account for as long as this link can put
+	// it back, so that no other account takes it in the meantime. The
+	// account holds it until the confirm, so reserving it now leaves no
+	// moment in which it is free and not reserved. A request that fails
+	// later leaves the reservation to expire: an earlier request's link may
+	// need it.
+	if err := ac.Store.ReserveValue(hctx.Ctx, models.UserEmail, current, user.ID, revert.ExpiresAt); err != nil {
+		revoke(revert)
+		return nil, failed("issue_failed", err)
+	}
 	err = ac.Mailer.Send(hctx.Ctx, core.MailMessage{
 		Kind: core.MailEmailChangeNotice, To: current, URL: withToken(p.revertURL, rawRevert), Token: rawRevert,
 		ExpiresAt: revert.ExpiresAt, User: user, Data: data, Metadata: req.Metadata,
@@ -443,10 +457,17 @@ func (p *Plugin) changeRequestBody(hctx *core.HookContext, req ChangeRequest) (*
 
 	// Checked after the notice, so that a request for an address that is
 	// taken does the same work as one for a free address up to here. The
-	// address is not reserved: the confirm checks again, by writing it.
+	// new address is not reserved: the confirm checks again, by writing it.
+	// An address reserved for another account, which changed away from it
+	// and can still take it back, is taken too.
 	if _, err := ac.Store.FindUserByEmail(hctx.Ctx, newEmail); err == nil {
 		return nil, failed("email_taken", ErrEmailTaken)
 	} else if !errs.IsNotFound(err) {
+		return nil, err
+	}
+	if err := ac.Store.CheckReservedValue(hctx.Ctx, models.UserEmail, newEmail, user.ID); errs.IsDuplicateKey(err) {
+		return nil, failed("email_taken", ErrEmailTaken)
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -592,14 +613,26 @@ func (p *Plugin) changeConfirmBody(hctx *core.HookContext, in changeTokenInput) 
 	// Both columns in one write. The plugin's own data.user.beforeUpdate
 	// handler leaves an update that sets the flag alone, and its
 	// data.user.updated handler sends nothing to a verified user.
-	updated, err := ac.Store.UpdateUser(hctx.Ctx, user.ID, behemoth.M{models.UserEmail: to, models.UserEmailVerified: true})
-	if err != nil {
-		if errs.IsDuplicateKey(err) {
-			return nil, refuse("email_taken", err, userID, errEmailTaken(op))
-		}
-		return nil, err
+	//
+	// The write is guarded on the address that was read. A revert or another
+	// change that wrote the account since then gets this confirm the answer
+	// it would have got had it come after them.
+	//
+	// Deferred: a revert that finds the account at the address it restores
+	// writes nothing, so it does not change what the guard checks. A confirm
+	// of a change from that address, whose link was used before the revert
+	// revoked it, still writes after the revert. See docs/ongoing.md, "A
+	// confirm can still land after a revert that had nothing to write".
+	updated, err := ac.Store.UpdateUserIfEmail(hctx.Ctx, user.ID, user.Email, behemoth.M{models.UserEmail: to, models.UserEmailVerified: true})
+	switch {
+	case err == nil:
+		return updated, nil
+	case errs.IsDuplicateKey(err):
+		return nil, refuse("email_taken", err, userID, errEmailTaken(op))
+	case errs.IsNotFound(err): // the address changed since the read, or the user is gone
+		return nil, refuse("email_changed", nil, userID, errInvalidChangeLink(op))
 	}
-	return updated, nil
+	return nil, err
 }
 
 // RevertChange undoes an email change. rawToken is the "token" query
@@ -616,9 +649,11 @@ func (p *Plugin) changeConfirmBody(hctx *core.HookContext, in changeTokenInput) 
 //
 // It fires auth.emailChange.beforeRevert, .afterRevert and .revertFailed.
 // A link that is unknown, expired or used gets the error with the code
-// ErrorCodeInvalidChangeLink. When another account has taken the old
-// address since, it can't be put back: the sessions still end, and the error
-// is a conflict with the code ErrorCodeEmailTaken.
+// ErrorCodeInvalidChangeLink, and so does one that a revert by an older link
+// stops while it runs. The old address is reserved for the user while the
+// link works. When a write that bypassed the reservation gave it to another
+// account, it can't be put back: the sessions still end, and the error is a
+// conflict with the code ErrorCodeEmailTaken.
 //
 // It is the flow behind POST /email/change/revert.
 func (p *Plugin) RevertChange(ctx context.Context, rawToken string) (*models.User, error) {
@@ -649,8 +684,7 @@ func (p *Plugin) changeRevertBody(hctx *core.HookContext, in changeTokenInput) (
 	}
 	userID := fmt.Sprint(token.Subject)
 	restore, _ := token.MetadataJSON[keyRestore].(string)
-	user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
-	if err != nil {
+	if _, err := ac.Store.FindUserByID(hctx.Ctx, userID); err != nil {
 		if !errs.IsNotFound(err) {
 			return nil, err
 		}
@@ -661,51 +695,162 @@ func (p *Plugin) changeRevertBody(hctx *core.HookContext, in changeTokenInput) (
 	}
 
 	// A change that has not been confirmed yet is dropped.
-	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, TokenKindEmailChange, user.ID); err != nil {
+	if err := ac.TokenManager.RevokeAllForSubject(hctx.Ctx, TokenKindEmailChange, userID); err != nil {
 		return nil, err
 	}
-
-	// Revert links issued after this one belong to later requests. Left
-	// alive, the one sent to the address this revert removes would put
-	// that address back. Older links are kept: their addresses held the
-	// account before this one did, and a later link must not be able to
-	// cancel them. "Not before" and not "after", because some databases
-	// keep the creation time to the second.
-	links, err := ac.TokenManager.ListForSubject(hctx.Ctx, TokenKindEmailChangeRevert, user.ID)
+	released, err := p.revokeLaterReverts(hctx, token)
 	if err != nil {
 		return nil, err
 	}
-	for _, later := range links {
-		if later.ID == token.ID || later.CreatedAt.Before(token.CreatedAt) {
-			continue
-		}
-		if err := ac.TokenManager.Revoke(hctx.Ctx, later.ID); err != nil {
-			return nil, err
-		}
+
+	user, outcome, err := p.restoreAddress(hctx, token, restore)
+	if err != nil {
+		return nil, err
+	}
+	if outcome == restoreOvertaken {
+		// An older link ran while this one did, and revoked it. That revert
+		// put its own address back and ended the sessions.
+		return nil, refuse("invalid_link", nil, userID, errInvalidChangeLink(op))
+	}
+	if outcome == restoreGone {
+		return nil, refuse("user_not_found", nil, userID, errInvalidChangeLink(op))
 	}
 
-	taken := false
-	if store.NormalizeEmail(user.Email) != restore {
-		updated, err := ac.Store.UpdateUser(hctx.Ctx, user.ID, behemoth.M{models.UserEmail: restore, models.UserEmailVerified: true})
-		switch {
-		case err == nil:
-			user = updated
-		case errs.IsDuplicateKey(err):
-			taken = true // nothing reserves the old address; see docs/ongoing.md
-		default:
+	// The account holds the address again, so its reservation is not
+	// needed, and neither are those of the links this revert revoked.
+	if outcome == restored {
+		released = append(released, restore)
+	}
+	for _, address := range released {
+		if err := ac.Store.ReleaseReservedValue(hctx.Ctx, models.UserEmail, address, userID); err != nil {
 			return nil, err
 		}
 	}
 
 	// Whoever asked for the change had a session. All of them end, also
 	// when the address could not be put back.
-	if err := ac.SessionManager.RevokeAllForUser(hctx.Ctx, user.ID, SessionRevokedEmailChangeReverted, ""); err != nil {
+	if err := ac.SessionManager.RevokeAllForUser(hctx.Ctx, userID, SessionRevokedEmailChangeReverted, ""); err != nil {
 		return nil, err
 	}
-	if taken {
+	if outcome == restoreTaken {
 		return nil, refuse("email_taken", nil, userID, errEmailTaken(op))
 	}
 	return user, nil
+}
+
+// revokeLaterReverts revokes the revert links of token's user that were
+// issued after token. Left alive, the one sent to the address this revert
+// removes would put that address back. Older links are kept: their
+// addresses held the account before this one did, and a later link must not
+// be able to cancel them. "Not before" and not "after", because some
+// databases keep the creation time to the second.
+//
+// A link that was used is revoked too: its revert may be running right now,
+// and restoreAddress has it check, before each write, that its link was not
+// revoked. It returns the addresses that only the revoked links could have
+// put back, whose reservations can go.
+func (p *Plugin) revokeLaterReverts(hctx *core.HookContext, token *models.Token) ([]string, error) {
+	ac := hctx.Auth
+	userID := fmt.Sprint(token.Subject)
+	// From the store: the token manager lists the usable links only. The
+	// kind is kept in the database.
+	links, err := ac.Store.ListUnrevokedTokensForSubject(hctx.Ctx, TokenKindEmailChangeRevert, userID)
+	if err != nil {
+		return nil, err
+	}
+	kept := map[string]bool{}
+	var revoked []string
+	for _, link := range links {
+		if link.ID == token.ID {
+			continue
+		}
+		address, _ := link.MetadataJSON[keyRestore].(string)
+		if link.CreatedAt.Before(token.CreatedAt) {
+			if link.ConsumedAt == nil {
+				kept[address] = true
+			}
+			continue
+		}
+		if err := ac.TokenManager.Revoke(hctx.Ctx, link.ID); err != nil {
+			return nil, err
+		}
+		if link.ConsumedAt == nil { // a used link's address was released when it was used
+			revoked = append(revoked, address)
+		}
+	}
+	released := revoked[:0]
+	for _, address := range revoked {
+		if !kept[address] {
+			released = append(released, address)
+		}
+	}
+	return released, nil
+}
+
+// restoreOutcome is how restoreAddress ended.
+type restoreOutcome int
+
+const (
+	restored         restoreOutcome = iota // the account has the address, written now or already
+	restoreTaken                           // another account holds the address
+	restoreOvertaken                       // an older link revoked this one while it ran
+	restoreGone                            // the user was deleted while it ran
+)
+
+// restoreAttempts bounds the writes restoreAddress retries. Each retry means
+// another write to the account's address landed between a read and a write
+// of this revert; after the revert has revoked the pending changes and the
+// later links, only operations already running can do that.
+const restoreAttempts = 8
+
+// restoreAddress puts restore back on the account token's user, with
+// email_verified set: following the link shows who controls the address.
+//
+// Each attempt reads the user, checks that token has not been revoked, and
+// writes guarded on the address it read, so that a write made in between,
+// by a confirm or a revert that started before this one, is not
+// overwritten by a decision made without it. The check comes after the read:
+// an older revert revokes this link before it writes, so a read that sees
+// that write is followed by a check that sees the revocation.
+func (p *Plugin) restoreAddress(hctx *core.HookContext, token *models.Token, restore string) (*models.User, restoreOutcome, error) {
+	ac := hctx.Auth
+	userID := fmt.Sprint(token.Subject)
+	for range restoreAttempts {
+		user, err := ac.Store.FindUserByID(hctx.Ctx, userID)
+		if errs.IsNotFound(err) {
+			return nil, restoreGone, nil
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		own, err := ac.Store.FindTokenByID(hctx.Ctx, token.ID)
+		if err != nil {
+			return nil, 0, err
+		}
+		if own.RevokedAt != nil {
+			return nil, restoreOvertaken, nil
+		}
+		if store.NormalizeEmail(user.Email) == restore {
+			// Nothing to write. Deferred: so nothing trips the guard of a
+			// confirm of a change from this address that is still running;
+			// see changeConfirmBody.
+			return user, restored, nil
+		}
+		updated, err := ac.Store.UpdateUserIfEmail(hctx.Ctx, user.ID, user.Email, behemoth.M{models.UserEmail: restore, models.UserEmailVerified: true})
+		switch {
+		case err == nil:
+			return updated, restored, nil
+		case errs.IsDuplicateKey(err):
+			// The address was reserved for this account, so only a write
+			// that bypassed the reservation, or one made after it expired,
+			// took it.
+			return user, restoreTaken, nil
+		case !errs.IsNotFound(err):
+			return nil, 0, err
+		}
+		// The address changed since the read: read again.
+	}
+	return nil, 0, fmt.Errorf("emailverification: the address of user %s still changed under the revert after %d attempts", userID, restoreAttempts)
 }
 
 // handleChange decodes the request and calls RequestChange, which takes the

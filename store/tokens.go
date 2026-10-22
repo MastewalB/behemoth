@@ -87,12 +87,30 @@ func (s *Store) RevokeTokensForSubject(ctx context.Context, kind models.TokenKin
 // neither revoked nor consumed, oldest first. Expired ones are included: the
 // token manager decides what expired means.
 func (s *Store) ListTokensForSubject(ctx context.Context, kind models.TokenKind, subject string) ([]*models.Token, error) {
-	found, err := s.db.FindMany(ctx, &models.Token{}, clause.Expression{Conditions: []clause.Condition{
+	return s.listTokens(ctx, clause.Expression{Conditions: []clause.Condition{
 		{Field: models.TokenKindColumn, Operator: clause.OpEqual, Value: string(kind)},
 		{Field: models.TokenSubject, Operator: clause.OpEqual, Value: subject},
 		{Field: models.TokenRevokedAt, Operator: clause.OpIsNull},
 		{Field: models.TokenConsumedAt, Operator: clause.OpIsNull},
-	}, Logic: clause.OpAnd}, &behemoth.QueryOptions{OrderBy: behemoth.Order{Field: models.TokenCreatedAt, Direction: behemoth.Asc}})
+	}, Logic: clause.OpAnd})
+}
+
+// ListUnrevokedTokensForSubject lists the tokens of kind issued to subject
+// that are not revoked, oldest first: ListTokensForSubject with the consumed
+// ones included. A flow that revokes the tokens of operations still running
+// lists them with it, since such a token was consumed when its operation
+// began.
+func (s *Store) ListUnrevokedTokensForSubject(ctx context.Context, kind models.TokenKind, subject string) ([]*models.Token, error) {
+	return s.listTokens(ctx, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.TokenKindColumn, Operator: clause.OpEqual, Value: string(kind)},
+		{Field: models.TokenSubject, Operator: clause.OpEqual, Value: subject},
+		{Field: models.TokenRevokedAt, Operator: clause.OpIsNull},
+	}, Logic: clause.OpAnd})
+}
+
+// listTokens returns the tokens that match where, oldest first.
+func (s *Store) listTokens(ctx context.Context, where clause.Expression) ([]*models.Token, error) {
+	found, err := s.db.FindMany(ctx, &models.Token{}, where, &behemoth.QueryOptions{OrderBy: behemoth.Order{Field: models.TokenCreatedAt, Direction: behemoth.Asc}})
 	if err != nil {
 		return nil, err
 	}

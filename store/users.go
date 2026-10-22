@@ -65,9 +65,26 @@ func (s *Store) UpdateUser(ctx context.Context, id string, updates behemoth.M) (
 	return updated.(*models.User), nil
 }
 
+// UpdateUserIfEmail is UpdateUser for a user whose email is still email when
+// the change is written. email is compared as it is stored: pass the Email
+// of the user that was read. The email is checked in the write itself
+// (UpdateOne re-checks its expression), so a flow that read the user and
+// decided from its address writes only if no other write changed the
+// address since. A user with another email gets a NotFound error, as a
+// missing one does.
+func (s *Store) UpdateUserIfEmail(ctx context.Context, id, email string, updates behemoth.M) (*models.User, error) {
+	updated, err := s.update(ctx, &models.User{}, id, updates, models.UserUpdatedAt, normalizeUserRow,
+		clause.Condition{Field: models.UserEmail, Operator: clause.OpEqual, Value: email})
+	if err != nil {
+		return nil, err
+	}
+	return updated.(*models.User), nil
+}
+
 // DeleteUser deletes the user with id and everything that lets someone act
 // as that user: the user's sessions, accounts, database-backed tokens and
-// one-time codes. It returns a NotFound error when there is no such user.
+// one-time codes, and the values reserved for the user. It returns a
+// NotFound error when there is no such user.
 //
 // The deletes share one transaction, the caller's when s is bound to one,
 // and run children first, so they work whether or not the database enforces
@@ -76,7 +93,8 @@ func (s *Store) UpdateUser(ctx context.Context, id string, updates behemoth.M) (
 //  1. BeforeDelete (data.user.beforeDelete), which may refuse the delete
 //  2. the user's sessions, revoked ones included
 //  3. the user's accounts
-//  4. the tokens and the one-time codes whose subject is the user's id
+//  4. the tokens and the one-time codes whose subject is the user's id, and
+//     the user's reserved values
 //  5. the user
 //  6. AfterDelete (data.user.afterDelete), whose error rolls all of it back
 //
@@ -115,6 +133,7 @@ func (s *Store) DeleteUser(ctx context.Context, id string) error {
 			{&models.Account{}, models.AccountUserID},
 			{&models.Token{}, models.TokenSubject},
 			{&models.VerificationCode{}, models.VerificationCodeSubject},
+			{&models.ReservedValue{}, models.ReservedValueUserID},
 		} {
 			if err := tx.db.DeleteMany(ctx, owned.model, eq(owned.column, id)); err != nil {
 				return err
