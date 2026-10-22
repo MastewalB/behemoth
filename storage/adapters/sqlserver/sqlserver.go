@@ -87,7 +87,7 @@ func (ms *SQLServerAdapter) where(m behemoth.Model, expr *clause.Expression, opt
 	return adapters.BuildSQLWhereClause(adapters.PhysicalExpression(ms.names(), m, expr), options)
 }
 
-// SQL Server uses @p1, @p2, … positional named parameters. The counter N
+// SQL Server uses @p1, @p2, ... positional named parameters. The counter N
 // is threaded through recursive calls so nested expressions and multi-step
 // operations (UpdateOne SET args + WHERE args) share a single sequence.
 var defaultMSSQLClauseOptions = &adapters.ClauseOptions{
@@ -270,7 +270,7 @@ func (ms *SQLServerAdapter) UpdateOne(
 
 	columns, values := utils.MapToSlice(updates)
 
-	// SET args occupy @p1 … @pN; WHERE args start at @p(N+1).
+	// SET args occupy @p1 ... @pN; WHERE args start at @p(N+1).
 	setClause := mssqlSETClause(adapters.PhysicalColumns(ms.names(), m, columns), 1)
 	whereClause, whereArgs := ms.where(m, &expr, NewMSSQLClauseOptions(len(values)+1))
 

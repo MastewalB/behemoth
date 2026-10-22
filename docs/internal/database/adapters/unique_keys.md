@@ -27,8 +27,8 @@ A unique violation names the key in one of two forms, depending on the engine:
 | --- | --- | --- |
 | SQLite | the physical columns: `UNIQUE constraint failed: users.email` | the message, which SQLite does not translate |
 | PostgreSQL | the constraint's name (SQLSTATE `23505`) | the error's constraint field: `Get('n')` on lib/pq, `Field('n')` on bun's pgdriver, the `ConstraintName` field on pgx. The message is not read: the server may translate it. |
-| MySQL | the key's name: `Duplicate entry '…' for key 'users.users_email_key'` | the message. MySQL 8.0.19 and later put the table before the name. |
-| SQL Server | the index's or constraint's name: `… with unique index 'users_email_key'`, `Violation of UNIQUE KEY constraint '…'` | the message |
+| MySQL | the key's name: `Duplicate entry '...' for key 'users.users_email_key'` | the message. MySQL 8.0.19 and later put the table before the name. |
+| SQL Server | the index's or constraint's name: `... with unique index 'users_email_key'`, `Violation of UNIQUE KEY constraint '...'` | the message |
 | MongoDB | the index's key pattern, `{email: 1}`, physical field names | the write error's or the command error's raw document (`keyPattern`). Without it, the index's name in the message, matched against the names `DeclaredIndexes` gives. |
 
 `UniqueViolation` reads the first four. It knows no driver's type, so the GORM and Bun adapters use it whatever driver the application chose. The MongoDB adapter reads its errors itself (`keyColumns`).
@@ -99,7 +99,7 @@ A unique index, a primary key, and a key the adapter could not name stay duplica
 
 **Options considered:**
 
-- *Read the columns from the message* (PostgreSQL's detail, `Key (email)=(…)`). PostgreSQL translates it.
+- *Read the columns from the message* (PostgreSQL's detail, `Key (email)=(...)`). PostgreSQL translates it.
 - *Always ask the catalog.* Right for any table, at the cost of a query on every duplicate key.
 - *Match the names the drivers give, and ask the catalog for the rest.* No query for a key Behemoth declared.
 

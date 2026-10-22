@@ -197,9 +197,9 @@ func CatalogQuery(dialect Dialect, placeholder func(n int) string) string {
 //     each expose differently. The message is not read: the server may
 //     translate it.
 //   - SQLite: "UNIQUE constraint failed: users.email".
-//   - MySQL (1062): "Duplicate entry '…' for key 'users.users_email_key'".
-//   - SQL Server (2601, 2627): "… with unique index 'users_email_key'" or
-//     "Violation of UNIQUE KEY constraint 'UQ__users__…'".
+//   - MySQL (1062): "Duplicate entry '...' for key 'users.users_email_key'".
+//   - SQL Server (2601, 2627): "... with unique index 'users_email_key'" or
+//     "Violation of UNIQUE KEY constraint 'UQ__users__...'".
 func UniqueViolation(err error) (name string, physicalColumns []string) {
 	if err == nil {
 		return "", nil
