@@ -80,12 +80,13 @@ func resolveTTL(def core.TokenKindDef, cfg core.TokenConfig) time.Duration {
 	return def.DefaultTTL
 }
 
-func checkConsumable(tok *models.Token) error {
+// checkConsumable reports why tok can't be used at now, the store's time.
+func checkConsumable(tok *models.Token, now time.Time) error {
 	const op = "TokenManager.checkConsumable"
 	if tok.RevokedAt != nil {
 		return errs.NewTokenError(op, "token_revoked", nil)
 	}
-	if !tok.ExpiresAt.IsZero() && time.Now().After(tok.ExpiresAt) {
+	if !tok.ExpiresAt.IsZero() && now.After(tok.ExpiresAt) {
 		return errs.NewTokenError(op, "token_expired", nil)
 	}
 	if tok.ConsumedAt != nil {
@@ -155,10 +156,13 @@ func (tm *DefaultTokenManager) issue(
 		return nil, "", err
 	}
 
+	// The expiry comes from the store's clock, in UTC like every time the
+	// store writes: the purge compares it in the database, and SQLite
+	// compares times as text.
 	ttl := resolveTTL(def, tm.cfg)
 	var expiresAt time.Time
 	if ttl > 0 {
-		expiresAt = time.Now().Add(ttl)
+		expiresAt = tm.st.Now().Add(ttl)
 	}
 
 	tok := &models.Token{
@@ -203,7 +207,7 @@ func (tm *DefaultTokenManager) persist(ctx context.Context, def core.TokenKindDe
 	case core.TokenBackendKV:
 		// No store involved: the KV entry is the whole record, so its
 		// identity and creation time are assigned here.
-		token.ID, token.CreatedAt = utils.GenerateUUID(), time.Now()
+		token.ID, token.CreatedAt = utils.GenerateUUID(), tm.st.Now()
 		data, err := json.Marshal(token)
 		if err != nil {
 			return errs.NewValidationError(op, "token", err)
@@ -274,7 +278,7 @@ func (tm *DefaultTokenManager) Verify(ctx context.Context, kind models.TokenKind
 	if err != nil {
 		return nil, err // already fully classified inside fetch
 	}
-	if err := checkConsumable(m); err != nil {
+	if err := checkConsumable(m, tm.st.Now()); err != nil {
 		return nil, err
 	}
 	return m, nil
@@ -320,7 +324,7 @@ func (tm *DefaultTokenManager) consume(ctx context.Context, kind models.TokenKin
 			if err != nil {
 				return err // already fully classified inside fetch
 			}
-			if err := checkConsumable(tok); err != nil {
+			if err := checkConsumable(tok, tx.Now()); err != nil {
 				return err
 			}
 			at, err := tx.ConsumeToken(ctx, tok.ID)
@@ -341,11 +345,11 @@ func (tm *DefaultTokenManager) consume(ctx context.Context, kind models.TokenKin
 			consumeErr = err // already fully classified inside fetch
 			break
 		}
-		if err := checkConsumable(tok); err != nil {
+		now := tm.st.Now()
+		if err := checkConsumable(tok, now); err != nil {
 			consumeErr = err
 			break
 		}
-		now := time.Now()
 		tok.ConsumedAt = &now
 		result = tok
 	}
@@ -413,9 +417,9 @@ func (tm *DefaultTokenManager) ListForSubject(ctx context.Context, kind models.T
 	if err != nil {
 		return nil, errs.WrapOp(op, "token", err)
 	}
-	usable := found[:0]
+	usable, now := found[:0], tm.st.Now()
 	for _, tok := range found {
-		if checkConsumable(tok) == nil {
+		if checkConsumable(tok, now) == nil {
 			usable = append(usable, tok)
 		}
 	}

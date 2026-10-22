@@ -272,7 +272,7 @@ The purge follows these rules:
 - It is safe to run at any time and from several processes. Deleting an expired row loses nothing: the next attempt for that key starts at 1 either way.
 - It can race with an increment that is resetting the same expired row. The increment's update then matches no row, and it retries and inserts.
 
-`[Not built]` Nothing calls it. `Boot` does not start a background job. Until one exists, the application has to call it on a schedule, for example from a cron job or a ticker started after `Boot`. An interval about as long as the longest configured window is enough.
+`Store.Purge` calls it on every run, with the store's other purges. Behemoth schedules neither: `Boot` starts no background job, and the application runs `Purge` from a cron job, a ticker started after `Boot`, or a job such as a Kubernetes CronJob. For the counters alone, an interval about as long as the longest configured window is enough. `[Not built]` A helper that runs `Purge` on an interval and stops with its context.
 
 ---
 
@@ -336,7 +336,7 @@ These limits apply:
 - **A skipped hook rule does not limit the call.** That is the point of skipping, and it means a rule attached to a point that never publishes what it reads limits nothing. `result="skipped"` in `behemoth.ratelimit.checks` shows it.
 - **An empty key from a route rule is still one shared count.** Only a hook rule's `KeyFunc` can say it does not apply.
 - **A plugin can't add an algorithm by name.** `knownAlgorithms` is fixed. A rule's own `Limiter` is the extension point.
-- **Old database counters are not removed** unless the application schedules `PurgeExpiredRateLimits` (above).
+- **Old database counters are not removed** unless the application schedules `Store.Purge` or `PurgeExpiredRateLimits` (above).
 - **A refusal still writes the counter.** Only the audit event is limited to one per window. With the counters in the `rate_limits` table, each refused attempt is one update of the key's row, which does not grow the table.
 - **A rule's own `Limiter` decides what is audited.** One that never sets `FirstRefusal` gets no `ratelimit.exceeded` event; its refusals are still counted in the metric.
 - **A lower limit can skip a window's event.** When `RateLimitConfig.Limits` lowers a rule's `Max` at a restart, a key whose count in the current window is already past the new `Max+1` gets no event until that window ends.

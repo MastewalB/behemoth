@@ -253,6 +253,7 @@ func TestStoreContract(t *testing.T) {
 			t.Run("VerificationCodes", func(t *testing.T) { verificationCodesContract(t, st) })
 			t.Run("ReservedValues", func(t *testing.T) { reservedValuesContract(t, st) })
 			t.Run("UniqueKeys", func(t *testing.T) { uniqueKeysContract(t, st, db, resolver) })
+			t.Run("Purge", func(t *testing.T) { purgeContract(t, st, db, resolver) })
 		})
 	}
 }
@@ -620,12 +621,56 @@ func sessionsContract(t *testing.T, st *store.Store) {
 	require.NoError(t, err, "neither the expired nor the pending session counts")
 	_, _, err = limited.Create(ctx, "u2", core.SessionMeta{State: models.SessionActive})
 	assert.True(t, errs.IsCode(err, errs.CodeSessionLimitReached), "the active session counts: %v", err)
+
+	// The purge removes the sessions that expired before its cutoff, revoked
+	// or not, and keeps the rest. The times are an hour or more apart, for
+	// the backends that store whole seconds.
+	now := st.Now()
+	session := func(expires time.Time, revoked bool) string {
+		t.Helper()
+		sess, _, err := sm.Create(ctx, "u-purge", core.SessionMeta{State: models.SessionActive})
+		require.NoError(t, err)
+		if revoked {
+			require.NoError(t, sm.Revoke(ctx, sess.ID, "user_logout"))
+		}
+		_, err = st.UpdateSession(ctx, sess.ID, behemoth.M{models.SessionExpiresAt: expires})
+		require.NoError(t, err)
+		return sess.ID
+	}
+	kept := func(id string) bool {
+		t.Helper()
+		_, err := st.FindSessionByID(ctx, id)
+		if errs.IsNotFound(err) {
+			return false
+		}
+		require.NoError(t, err)
+		return true
+	}
+	old := session(now.Add(-2*time.Hour), false)
+	oldRevoked := session(now.Add(-2*time.Hour), true)
+	recent := session(now.Add(-30*time.Minute), false)
+	revoked := session(now.Add(time.Hour), true)
+	live := session(now.Add(time.Hour), false)
+	require.NoError(t, st.PurgeExpiredSessions(ctx, now.Add(-time.Hour)))
+	assert.False(t, kept(old), "expired before the cutoff")
+	assert.False(t, kept(oldRevoked), "revoked, and expired before the cutoff")
+	assert.True(t, kept(recent), "expired after the cutoff")
+	assert.True(t, kept(revoked), "revoked, and not expired")
+	assert.True(t, kept(live))
+
+	// A cutoff later than the store's time is taken as the store's time.
+	require.NoError(t, st.PurgeExpiredSessions(ctx, now.Add(24*time.Hour)))
+	assert.False(t, kept(recent), "expired before now")
+	assert.True(t, kept(revoked), "a revoked session waits for its expiry")
+	assert.True(t, kept(live), "a live session is never purged")
+	require.NoError(t, st.PurgeExpiredSessions(ctx, now.Add(-time.Hour)), "a second pass finds nothing to delete")
 }
 
 func tokensContract(t *testing.T, st *store.Store) {
 	ctx := context.Background()
 	catalog := auth.NewDefaultTokenCatalog()
 	require.NoError(t, catalog.Declare(core.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: core.TokenBackendDB, Owner: "core"}))
+	require.NoError(t, catalog.Declare(core.TokenKindDef{Kind: kindAPI, Backend: core.TokenBackendDB, Owner: "core"}))
 	tm := auth.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, core.TokenConfig{}, nil)
 
 	_, raw, err := tm.Issue(ctx, kindReset, "u1", behemoth.M{"redirect": "/reset"})
@@ -684,6 +729,129 @@ func tokensContract(t *testing.T, st *store.Store) {
 	require.NoError(t, err)
 	require.Len(t, unrevoked, 1, "the consumed token was revoked")
 	assert.Equal(t, keep.ID, unrevoked[0].ID)
+
+	// A kind with no expiry stores none, and verifies.
+	apiKey, apiRaw, err := tm.Issue(ctx, kindAPI, "u-purge", nil)
+	require.NoError(t, err)
+	found, err := st.FindTokenByID(ctx, apiKey.ID)
+	require.NoError(t, err)
+	assert.True(t, found.ExpiresAt.IsZero(), "expires_at %v", found.ExpiresAt)
+	_, err = tm.Verify(ctx, kindAPI, apiRaw)
+	require.NoError(t, err)
+
+	// The purge removes the tokens that expired before its cutoff, and the
+	// ones with no expiry that were consumed or revoked before it. A token
+	// with no expiry that is still usable is kept.
+	now := st.Now()
+	ago := func(d time.Duration) *time.Time { at := now.Add(-d); return &at }
+	n := 0
+	token := func(kind models.TokenKind, subject any, expires time.Time, consumed, revoked *time.Time) string {
+		t.Helper()
+		n++
+		tok := &models.Token{Kind: kind, Subject: subject, LookupHash: fmt.Sprintf("purge-%d", n), TokenHash: "h", KeyVersion: 1,
+			ExpiresAt: expires, ConsumedAt: consumed, RevokedAt: revoked}
+		require.NoError(t, st.CreateToken(ctx, tok))
+		return tok.ID
+	}
+	kept := func(id string) bool {
+		t.Helper()
+		_, err := st.FindTokenByID(ctx, id)
+		if errs.IsNotFound(err) {
+			return false
+		}
+		require.NoError(t, err)
+		return true
+	}
+	expired := token(kindReset, "u-purge", now.Add(-2*time.Hour), nil, nil)
+	expiredUsed := token(kindReset, "u-purge", now.Add(-2*time.Hour), ago(3*time.Hour), nil)
+	noSubject := token(kindReset, nil, now.Add(-2*time.Hour), nil, nil)
+	recent := token(kindReset, "u-purge", now.Add(-30*time.Minute), nil, nil)
+	revokedLive := token(kindReset, "u-purge", now.Add(time.Hour), nil, ago(2*time.Hour))
+	keyRevoked := token(kindAPI, "u-purge", time.Time{}, nil, ago(2*time.Hour))
+	keyUsed := token(kindAPI, "u-purge", time.Time{}, ago(2*time.Hour), nil)
+	keyRevokedRecently := token(kindAPI, "u-purge", time.Time{}, nil, ago(30*time.Minute))
+	require.NoError(t, st.PurgeExpiredTokens(ctx, now.Add(-time.Hour)))
+	assert.False(t, kept(expired), "expired before the cutoff")
+	assert.False(t, kept(expiredUsed), "consumed, and expired before the cutoff")
+	assert.False(t, kept(noSubject), "a token with no subject")
+	assert.False(t, kept(keyRevoked), "no expiry, revoked before the cutoff")
+	assert.False(t, kept(keyUsed), "no expiry, consumed before the cutoff")
+	assert.True(t, kept(recent), "expired after the cutoff")
+	assert.True(t, kept(revokedLive), "revoked before the cutoff, and not expired")
+	assert.True(t, kept(keyRevokedRecently), "no expiry, revoked after the cutoff")
+	assert.True(t, kept(apiKey.ID), "no expiry, and usable")
+
+	// A cutoff later than the store's time is taken as the store's time.
+	require.NoError(t, st.PurgeExpiredTokens(ctx, now.Add(24*time.Hour)))
+	assert.False(t, kept(recent), "expired before now")
+	assert.False(t, kept(keyRevokedRecently), "revoked before now")
+	assert.True(t, kept(revokedLive), "a revoked token waits for its expiry")
+	_, err = tm.Verify(ctx, kindAPI, apiRaw)
+	assert.NoError(t, err, "a usable token is never purged")
+}
+
+// purgeContract covers Purge: a table with a cutoff is purged up to it and
+// left alone without one, and the tables that take no cutoff are purged on
+// every run.
+func purgeContract(t *testing.T, st *store.Store, db behemoth.Database, resolver behemoth.SchemaResolver) {
+	ctx := context.Background()
+	now := st.Now()
+	twoHoursAgo := now.Add(-2 * time.Hour)
+
+	// One row in each table, past every cutoff used below.
+	sm := auth.NewSessionManager(st, nil, testCrypto(t), core.SessionConfig{ExpiresIn: time.Hour}, &passDispatcher{}, nil, nil)
+	sess, _, err := sm.Create(ctx, "u-purge-all", core.SessionMeta{State: models.SessionActive})
+	require.NoError(t, err)
+	_, err = st.UpdateSession(ctx, sess.ID, behemoth.M{models.SessionExpiresAt: twoHoursAgo})
+	require.NoError(t, err)
+	tok := &models.Token{Kind: kindReset, Subject: "u-purge-all", LookupHash: "purge-all", TokenHash: "h", KeyVersion: 1, ExpiresAt: twoHoursAgo}
+	require.NoError(t, st.CreateToken(ctx, tok))
+	require.NoError(t, st.RecordAuditEvent(ctx, telemetry.AuditEvent{
+		Type: "contract.purge", Outcome: telemetry.OutcomeSuccess, ActorType: telemetry.ActorUser, ActorID: "u-purge-all",
+		RequestID: "req-purge-all", Timestamp: twoHoursAgo,
+	}))
+	past := store.New(db, store.WithSchema(resolver), store.WithClock(func() time.Time { return twoHoursAgo }))
+	_, _, err = past.IncrementRateLimit(ctx, "purge:all", time.Minute)
+	require.NoError(t, err)
+	const codeKind models.CodeKind = "contract.purge"
+	require.NoError(t, st.ReplaceVerificationCode(ctx, &models.VerificationCode{Kind: codeKind, Subject: "u-purge-all", CodeHash: "h", AttemptsLeft: 1, ExpiresAt: twoHoursAgo}))
+	require.NoError(t, st.ReserveValue(ctx, models.UserEmail, "purge-all@example.com", "u-purge-all", twoHoursAgo))
+
+	sessionKept := func() bool {
+		_, err := st.FindSessionByID(ctx, sess.ID)
+		return err == nil
+	}
+	tokenKept := func() bool {
+		_, err := st.FindTokenByID(ctx, tok.ID)
+		return err == nil
+	}
+	auditKept := func() bool {
+		page, err := st.QueryAuditEvents(ctx, telemetry.AuditFilter{RequestID: "req-purge-all"})
+		require.NoError(t, err)
+		return len(page.Events) == 1
+	}
+
+	// Without cutoffs, only the tables that take none are purged.
+	require.NoError(t, st.Purge(ctx, store.PurgeOptions{}))
+	assert.True(t, sessionKept(), "no session cutoff")
+	assert.True(t, tokenKept(), "no token cutoff")
+	assert.True(t, auditKept(), "no audit cutoff")
+	counters, err := db.Count(ctx, &models.RateLimit{}, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.RateLimitKey, Operator: clause.OpEqual, Value: "purge:all"},
+	}})
+	require.NoError(t, err)
+	assert.Zero(t, counters, "the expired counter was purged")
+	_, err = st.FindVerificationCode(ctx, codeKind, "u-purge-all")
+	assert.True(t, errs.IsNotFound(err), "the expired code was purged: %v", err)
+	_, err = st.FindReservedValue(ctx, models.UserEmail, "purge-all@example.com")
+	assert.True(t, errs.IsNotFound(err), "the expired reservation was purged: %v", err)
+
+	// With cutoffs, the rest go too.
+	cutoff := now.Add(-time.Hour)
+	require.NoError(t, st.Purge(ctx, store.PurgeOptions{SessionsBefore: cutoff, TokensBefore: cutoff, AuditEventsBefore: cutoff}))
+	assert.False(t, sessionKept(), "the session was purged")
+	assert.False(t, tokenKept(), "the token was purged")
+	assert.False(t, auditKept(), "the audit event was purged")
 }
 
 func accountsContract(t *testing.T, st *store.Store, db behemoth.Database) {

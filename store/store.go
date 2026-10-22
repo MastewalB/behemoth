@@ -130,6 +130,16 @@ func WithClock(now func() time.Time) Option { return func(s *Store) { s.now = no
 // a test clock (WithClock) governs both.
 func (s *Store) Now() time.Time { return s.now() }
 
+// notAfterNow returns t in UTC, or Now when t is later. A purge takes its
+// cutoff through it: a cutoff in the future would remove live rows, and
+// SQLite compares the times it stores as text, which are in UTC.
+func (s *Store) notAfterNow(t time.Time) time.Time {
+	if now := s.now(); t.After(now) {
+		return now
+	}
+	return t.UTC()
+}
+
 // WithIDs replaces the id generator, for tests.
 func WithIDs(newID func() string) Option { return func(s *Store) { s.newID = newID } }
 

@@ -984,6 +984,31 @@ func TestTokenRevoke(t *testing.T) {
 	assert.NoError(t, err, "another subject's token is untouched")
 }
 
+// The token manager takes its time from the store's clock, in UTC like
+// every time the store writes: an expiry is stamped from it, and a token is
+// checked against it.
+func TestTokenExpiryFollowsTheStoreClock(t *testing.T) {
+	ctx := context.Background()
+	catalog := auth.NewDefaultTokenCatalog()
+	require.NoError(t, catalog.Declare(core.TokenKindDef{Kind: kindReset, SingleUse: true, DefaultTTL: time.Hour, Backend: core.TokenBackendDB, Owner: "core"}))
+	now := t0
+	st := store.New(sessionsTokensDB(t), store.WithClock(func() time.Time { return now }))
+	tm := auth.NewDefaultTokenManager(st, nil, catalog, testCrypto(t), &passDispatcher{}, core.TokenConfig{}, managersAuth)
+
+	tok, raw, err := tm.Issue(ctx, kindReset, "u1", nil)
+	require.NoError(t, err)
+	assert.True(t, tok.ExpiresAt.Equal(t0.Add(time.Hour)), "expires_at %v", tok.ExpiresAt)
+	assert.Equal(t, time.UTC, tok.ExpiresAt.Location())
+	_, err = tm.Verify(ctx, kindReset, raw)
+	require.NoError(t, err)
+
+	now = t0.Add(2 * time.Hour)
+	_, err = tm.Verify(ctx, kindReset, raw)
+	assert.True(t, errs.IsCode(err, errs.CodeTokenExpired), "%v", err)
+	_, err = tm.Consume(ctx, kindReset, raw)
+	assert.True(t, errs.IsCode(err, errs.CodeTokenExpired), "%v", err)
+}
+
 // ListForSubject returns what a subject can still use of one kind, oldest
 // first: a consumed, a revoked and an expired token are left out, and so are
 // another subject's and another kind's.

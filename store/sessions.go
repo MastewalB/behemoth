@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
@@ -84,6 +85,20 @@ func (s *Store) ListLiveSessions(ctx context.Context, userID, exceptID string, l
 func (s *Store) ListSessionsForUser(ctx context.Context, userID string) ([]*models.Session, error) {
 	return s.findSessions(ctx, eq(models.SessionUserID, userID),
 		&behemoth.QueryOptions{OrderBy: behemoth.Order{Field: models.SessionCreatedAt, Direction: behemoth.Desc}})
+}
+
+// PurgeExpiredSessions deletes the sessions that expired before the given
+// time, revoked ones included. A session keeps its expiry when it is
+// revoked, so a revoked row goes once the cutoff passes that expiry, which
+// is later than the revocation. Until the row is gone, the session's token
+// gets errs.CodeSessionExpired or errs.CodeSessionRevoked; after it, a
+// not-found error. A time later than the store's (Now) is taken as Now, so a
+// live session is never removed. Like the other purges it does one pass and
+// is safe to run from several processes.
+func (s *Store) PurgeExpiredSessions(ctx context.Context, before time.Time) error {
+	return s.db.DeleteMany(ctx, &models.Session{}, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.SessionExpiresAt, Operator: clause.OpLessThan, Value: s.notAfterNow(before)},
+	}})
 }
 
 func liveSessionsOf(userID, exceptID string) clause.Expression {

@@ -108,6 +108,32 @@ func (s *Store) ListUnrevokedTokensForSubject(ctx context.Context, kind models.T
 	}, Logic: clause.OpAnd})
 }
 
+// PurgeExpiredTokens deletes the tokens that expired before the given time,
+// consumed and revoked ones included, and the tokens with no expiry that
+// were consumed or revoked before it. A token with no expiry that is still
+// usable, such as an API key, is kept. Until the row is gone, the token gets
+// errs.CodeTokenExpired, errs.CodeTokenAlreadyConsumed or
+// errs.CodeTokenRevoked; after it, errs.CodeTokenNotFound. A time later than
+// the store's (Now) is taken as Now. A kind kept in the key-value storage has
+// no rows here: its entries expire there. Like the other purges it does one
+// pass and is safe to run from several processes.
+func (s *Store) PurgeExpiredTokens(ctx context.Context, before time.Time) error {
+	before = s.notAfterNow(before)
+	// Two deletes rather than one OR, so that each can use the index on
+	// expires_at.
+	if err := s.db.DeleteMany(ctx, &models.Token{}, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.TokenExpiresAt, Operator: clause.OpLessThan, Value: before},
+	}}); err != nil {
+		return err
+	}
+	return s.db.DeleteMany(ctx, &models.Token{}, clause.Expression{Logic: clause.OpAnd, Conditions: []clause.Condition{
+		{Field: models.TokenExpiresAt, Operator: clause.OpIsNull},
+	}, Children: []*clause.Expression{{Logic: clause.OpOr, Conditions: []clause.Condition{
+		{Field: models.TokenConsumedAt, Operator: clause.OpLessThan, Value: before},
+		{Field: models.TokenRevokedAt, Operator: clause.OpLessThan, Value: before},
+	}}}})
+}
+
 // listTokens returns the tokens that match where, oldest first.
 func (s *Store) listTokens(ctx context.Context, where clause.Expression) ([]*models.Token, error) {
 	found, err := s.db.FindMany(ctx, &models.Token{}, where, &behemoth.QueryOptions{OrderBy: behemoth.Order{Field: models.TokenCreatedAt, Direction: behemoth.Asc}})

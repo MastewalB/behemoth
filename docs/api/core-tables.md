@@ -177,8 +177,45 @@ A reservation behaves as follows:
 - **It refuses only where it is checked.** The store does not check reservations on every write. Call `CheckReservedValue` on `hctx.Tx` from your handlers on `data.user.beforeCreate` and `data.user.beforeUpdate`, for the column whose values you reserve. A reserved value then fails the write as a taken one does, and sign-up answers it as it answers a taken email.
 - **`column` is the column's canonical name**, and `value` is in the form the column stores.
 - **It goes with its user.** `Store.DeleteUser` removes the user's reservations.
-- **An expired reservation refuses nothing**, and its row stays until the purge runs. Nothing schedules `PurgeExpiredReservedValues`, so call it from a job, next to the other purges.
+- **An expired reservation refuses nothing**, and its row stays until a purge removes it. See [Remove old rows](#remove-old-rows).
 - **The table is new in core.** Generate and apply a migration before you deploy a version that has it, whether or not you use the email change flow, because deleting a user clears the user's reservations from it.
+
+## Remove old rows
+
+Some rows stay after they stop being of use: sessions that expired or were revoked, tokens that expired or were used, rate-limit windows that passed, expired one-time codes and reservations, and old audit events. Behemoth removes none of them by itself. Call `Store.Purge` from a scheduled job:
+
+```go
+now := time.Now()
+err := ac.Store.Purge(ctx, store.PurgeOptions{
+	SessionsBefore:    now.AddDate(0, 0, -30), // keep ended sessions for 30 days
+	TokensBefore:      now.AddDate(0, 0, -7),  // keep ended tokens for 7 days
+	AuditEventsBefore: now.AddDate(-1, 0, 0),  // keep audit events for one year
+})
+```
+
+Each run removes the following:
+
+| Table | What `Purge` removes | The purge alone |
+| --- | --- | --- |
+| `sessions` | The sessions that expired before `SessionsBefore`, revoked ones included | `PurgeExpiredSessions(ctx, before)` |
+| `tokens` | The tokens that expired before `TokensBefore`, used and revoked ones included, and the tokens with no expiry that were consumed or revoked before it | `PurgeExpiredTokens(ctx, before)` |
+| `audit_log` | The events recorded before `AuditEventsBefore` | `PurgeAuditEvents(ctx, before)` |
+| `rate_limits` | The counters whose window has passed | `PurgeExpiredRateLimits(ctx)` |
+| `verification_codes` | The expired codes | `PurgeExpiredVerificationCodes(ctx)` |
+| `reserved_values` | The expired reservations | `PurgeExpiredReservedValues(ctx)` |
+
+`Purge` behaves as follows:
+
+- **A zero cutoff leaves its table alone.** Without `AuditEventsBefore`, no audit event is removed. The last three tables take no cutoff, because an expired row there already acts as a missing one, and every run purges them.
+- **A cutoff later than now is taken as now.** A session or token that can still be used is never removed, and neither is a token with no expiry that was neither used nor revoked, such as an API key.
+- **The cutoff sets how long a client can tell why its token stopped working.** While its row exists, a revoked session's token is refused with `session_revoked` and an expired one's with `session_expired`. Once the row is removed, the token is refused with `session_invalid`. Tokens are reported as expired, revoked, or already used until their rows go, and as not found after. A revoked session or token keeps its expiry and is removed when that expiry is before the cutoff.
+- **It is safe to run from several processes at once.** Each purge deletes rows and nothing else, so a second run finds nothing to remove. Run it on a timer in every replica, or once from a job, such as a Kubernetes CronJob.
+- **A purge that fails does not stop the others.** The error joins the failures, and each one names its table.
+- **Rows kept in the key-value storage are not touched.** A token kind kept there, and rate-limit counters in Redis, expire in the storage.
+
+Run it often enough that each run has few rows to remove, for example every hour. The first run on a table that has grown for a long time removes all of its old rows in one statement.
+
+The purges of `sessions` and `tokens` read an index on `expires_at`. On a database created before these indexes existed, generate and apply a migration to add them, or call `EnsureIndexes` on MongoDB. Without them the purges work, but each one reads the whole table.
 
 ## Read core tables directly
 

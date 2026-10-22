@@ -296,7 +296,7 @@ Behemoth has no HTTP route for the audit log. Put `QueryAuditEvents` behind a ro
 
 `audit_log` is one of Behemoth's own tables and is created by your migrations like `users` and `sessions`. Because user changes write to it in their transaction, it has to exist before your application serves requests. After upgrading from a version without it, run your migrations first. The same holds for the table's `delegate_type` and `delegate_id` columns: generate and apply the migration that adds them before the new version writes events.
 
-Behemoth never deletes audit events. Remove old ones from a scheduled job of your own:
+Behemoth never deletes audit events by itself. Remove old ones from a scheduled job of your own, with the `AuditEventsBefore` cutoff of `Store.Purge` (see [Remove old rows](core-tables.md#remove-old-rows)) or on their own:
 
 ```go
 err := ac.Store.PurgeAuditEvents(ctx, time.Now().AddDate(-1, 0, 0)) // keep one year

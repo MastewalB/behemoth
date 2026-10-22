@@ -59,8 +59,13 @@ func (t *Token) PrimaryKeyField() any   { return t.ID }
 func (t *Token) New() behemoth.Model    { return &Token{} }
 
 // ToMap stores metadata as JSON text: a map can't be bound as a column value.
+// A token with no expiry is stored with a NULL expires_at, so that no
+// comparison with a time matches it.
 func (t *Token) ToMap() (map[string]any, error) {
-	var consumedAt, revokedAt, metadata any
+	var expiresAt, consumedAt, revokedAt, metadata any
+	if !t.ExpiresAt.IsZero() {
+		expiresAt = t.ExpiresAt
+	}
 	if t.ConsumedAt != nil {
 		consumedAt = *t.ConsumedAt
 	}
@@ -82,7 +87,7 @@ func (t *Token) ToMap() (map[string]any, error) {
 		TokenTokenHash:  t.TokenHash,
 		TokenKeyVersion: t.KeyVersion,
 		TokenMetadata:   metadata,
-		TokenExpiresAt:  t.ExpiresAt,
+		TokenExpiresAt:  expiresAt,
 		TokenConsumedAt: consumedAt,
 		TokenRevokedAt:  revokedAt,
 		TokenCreatedAt:  t.CreatedAt,

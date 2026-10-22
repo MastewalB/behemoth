@@ -62,6 +62,7 @@ For core's `users` and `tokens` that gives:
 | `tokens` | `pk_tokens` | `id` | yes |
 | `tokens` | `uq_tokens_kind_lookup_hash` | `kind`, `lookup_hash` | yes |
 | `tokens` | `idx_tokens_kind_subject` | `kind`, `subject` | no |
+| `tokens` | `idx_tokens_expires_at` | `expires_at` | no |
 
 Rules:
 

@@ -251,7 +251,7 @@ The store has these audit methods:
 
 - `Store.RecordAuditEvent(ctx, event)` inserts one row with a new id. It writes through `s.db` directly: the table fires no data hooks. On a store bound to a transaction the row belongs to it.
 - `Store.QueryAuditEvents(ctx, filter)` returns one page, newest first.
-- `Store.PurgeAuditEvents(ctx, before)` deletes the events recorded before a time. Behemoth never calls it; the application runs it from its own scheduled job.
+- `Store.PurgeAuditEvents(ctx, before)` deletes the events recorded before a time. `Store.Purge` runs it when `PurgeOptions.AuditEventsBefore` is set, and not otherwise. Behemoth schedules neither; the application runs them from its own scheduled job.
 
 There is no operation to change or delete one event.
 

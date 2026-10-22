@@ -285,6 +285,8 @@ A request it refuses does not reach your handler. The response is JSON with a me
 | has the token of an expired session | `401` | `{"error": "session expired", "code": "session_expired"}` | removed |
 | has the token of a session that waits for a second factor | `401` | `{"error": "additional verification required", "code": "session_pending"}` | kept: the client needs it to present the second factor |
 
+A revoked or expired session is told apart only while its row exists. After a purge removes the row, its token gets `session_invalid`. See [Remove old rows](core-tables.md#remove-old-rows).
+
 A session that is invalid, revoked, or expired does not come back, so with a cookie delivery the response also removes the cookie. The router does this for any request that carries such a token, whatever its route. A browser can't delete it itself, and would send the dead token with every request until the cookie expired. With `httpapi.DeliveryBoth` this applies when the token came in the cookie. A request that sent a bearer token keeps its cookie. Clients of the header and body deliveries hold the token themselves and discard it when they get one of these codes.
 
 A `401` always means the client has no usable session. If Behemoth could not check the session, because the database is down for example, the answer is `500` with a generic message, and the error is logged. No cookie is removed, and a client should not sign its user out on a `500`.

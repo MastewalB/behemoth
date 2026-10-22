@@ -60,7 +60,7 @@ A six-digit code can't be found by its own hash: two users can hold the same cod
 
 **`Revoke`** deletes the row for a kind and subject.
 
-`Store.DeleteUser` deletes the rows whose subject is the user's id, in the transaction that deletes the user. `Store.PurgeExpiredVerificationCodes` does one pass over expired rows; nothing schedules it.
+`Store.DeleteUser` deletes the rows whose subject is the user's id, in the transaction that deletes the user. `Store.PurgeExpiredVerificationCodes` does one pass over expired rows. `Store.Purge` runs it with the other purges; Behemoth schedules neither.
 
 ## What is left out
 
