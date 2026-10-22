@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/MastewalB/behemoth"
+	"github.com/MastewalB/behemoth/clause"
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/crypto"
 	"github.com/MastewalB/behemoth/engine"
 	"github.com/MastewalB/behemoth/errs"
 	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/MastewalB/behemoth/models"
+	"github.com/MastewalB/behemoth/plugins/emailpassword"
 	"github.com/MastewalB/behemoth/plugins/emailverification"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/stretchr/testify/assert"
@@ -228,8 +230,151 @@ func TestEmailChangeOlderRevertLinkWins(t *testing.T) {
 	})
 }
 
+// changedTwice changes a new account from a@ to b@ to c@, and returns the
+// revert link sent to a@ and the one sent to b@.
+func (app *verificationApp) changedTwice(t *testing.T) (userID, linkAtA, linkAtB string) {
+	t.Helper()
+	ctx := context.Background()
+	user, _ := app.verifiedUser(t, "a@example.com")
+	noticeA, confirmB := app.requestChange(t, user.ID, "b@example.com", 2)
+	_, err := app.plugin.ConfirmChange(ctx, confirmB.Token)
+	require.NoError(t, err)
+	noticeB, confirmC := app.requestChange(t, user.ID, "c@example.com", 4)
+	_, err = app.plugin.ConfirmChange(ctx, confirmC.Token)
+	require.NoError(t, err)
+	require.Equal(t, "c@example.com", app.emailOf(t, user.ID))
+	return user.ID, noticeA.Token, noticeB.Token
+}
+
+// A confirm that read the account before the owner's revert, and writes
+// after it, is refused: the address the revert put back stays. The revert
+// runs in the gap between the confirm's lookup of the user and its write.
+func TestEmailChangeConfirmCannotUndoARevert(t *testing.T) {
+	ctx := context.Background()
+	app := bootVerification(t, changeOptions())
+	user, _ := app.verifiedUser(t, "a@example.com")
+	noticeA, confirmB := app.requestChange(t, user.ID, "b@example.com", 2)
+	_, err := app.plugin.ConfirmChange(ctx, confirmB.Token)
+	require.NoError(t, err)
+	_, confirmC := app.requestChange(t, user.ID, "c@example.com", 4)
+
+	var reverted *models.User
+	var revertErr error
+	app.gap.open(models.UserID, user.ID, false, func() {
+		reverted, revertErr = app.plugin.RevertChange(ctx, noticeA.Token)
+	})
+	_, err = app.plugin.ConfirmChange(ctx, confirmC.Token)
+	require.NoError(t, revertErr, "the revert ran in the gap")
+	require.NotNil(t, reverted)
+	assert.Equal(t, "a@example.com", reverted.Email)
+	assert.True(t, invalidChangeLink(err), "the confirm decided from an address the revert replaced: %v", err)
+	assert.Equal(t, "a@example.com", app.emailOf(t, user.ID), "the revert's address stays")
+}
+
+// A revert by a newer link that read the account before a revert by an
+// older link, and writes after it, is refused: the older link's address
+// stays. The older revert runs in the gap after the newer one has used its
+// link and looked the user up.
+func TestEmailChangeNewerRevertCannotUndoAnOlderOne(t *testing.T) {
+	ctx := context.Background()
+	app := bootVerification(t, changeOptions())
+	userID, linkAtA, linkAtB := app.changedTwice(t)
+
+	var restored *models.User
+	var olderErr error
+	app.gap.open(models.UserID, userID, false, func() {
+		restored, olderErr = app.plugin.RevertChange(ctx, linkAtA)
+	})
+	_, err := app.plugin.RevertChange(ctx, linkAtB)
+	require.NoError(t, olderErr, "the older revert ran in the gap")
+	require.NotNil(t, restored)
+	assert.Equal(t, "a@example.com", restored.Email)
+	assert.True(t, invalidChangeLink(err), "the older link ended the newer one while it ran: %v", err)
+	assert.Equal(t, "a@example.com", app.emailOf(t, userID), "the older link's address stays")
+}
+
+// After a change, the old address is kept for the account while the link
+// sent to it works. A sign-up with it is refused as one with a taken address
+// is, and so is another account's change to it, by the flow or by a direct
+// write. The link then puts the address back.
+func TestEmailChangeKeepsTheOldAddress(t *testing.T) {
+	ctx := context.Background()
+	app := bootVerification(t, changeOptions())
+	user, _ := app.verifiedUser(t, "ada@example.com")
+	other, _ := app.verifiedUser(t, "grace@example.com")
+	notice, confirm := app.requestChange(t, user.ID, "ada@new.example.com", 2)
+	_, err := app.plugin.ConfirmChange(ctx, confirm.Token)
+	require.NoError(t, err)
+
+	_, err = app.passwords.SignUp(ctx, behemoth.M{"email": "Ada@example.com", "password": "correct horse"})
+	assert.True(t, changeError(err, errs.CategoryConflict, emailpassword.ErrorCodeEmailTaken), "a sign-up with the old address: %v", err)
+	_, err = app.plugin.RequestChange(actingFor(ctx, other.ID), emailverification.ChangeRequest{NewEmail: "ada@example.com"})
+	assert.ErrorIs(t, err, emailverification.ErrEmailTaken, "another account's change to it")
+	_, err = app.ac.Store.UpdateUser(ctx, other.ID, behemoth.M{models.UserEmail: "ada@example.com"})
+	assert.True(t, changeError(err, errs.CategoryConflict, "email_taken"), "a direct write of it: %v", err)
+	assert.Equal(t, "grace@example.com", app.emailOf(t, other.ID))
+
+	restored, err := app.plugin.RevertChange(ctx, notice.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "ada@example.com", restored.Email, "the link puts the address back")
+	_, err = app.ac.Store.FindReservedValue(ctx, models.UserEmail, "ada@example.com")
+	assert.True(t, errs.IsNotFound(err), "the account holds the address again, so its reservation is gone: %v", err)
+}
+
+// The old address stays the account's own, and its reservation ends when
+// the link at it can no longer put it back.
+func TestEmailChangeReservationEnds(t *testing.T) {
+	ctx := context.Background()
+	signUp := func(app *verificationApp, email string) error {
+		_, err := app.passwords.SignUp(ctx, behemoth.M{"email": email, "password": "correct horse"})
+		return err
+	}
+	changed := func(t *testing.T) (*verificationApp, *models.User) {
+		app := bootVerification(t, changeOptions())
+		user, _ := app.verifiedUser(t, "ada@example.com")
+		_, confirm := app.requestChange(t, user.ID, "ada@new.example.com", 2)
+		_, err := app.plugin.ConfirmChange(ctx, confirm.Token)
+		require.NoError(t, err)
+		return app, user
+	}
+
+	t.Run("the account changes back to it", func(t *testing.T) {
+		app, user := changed(t)
+		_, confirm := app.requestChange(t, user.ID, "ada@example.com", 4)
+		back, err := app.plugin.ConfirmChange(ctx, confirm.Token)
+		require.NoError(t, err, "the reservation does not refuse its own account")
+		assert.Equal(t, "ada@example.com", back.User.Email)
+	})
+
+	t.Run("its time is up", func(t *testing.T) {
+		app, _ := changed(t)
+		require.NoError(t, app.ac.DB.UpdateMany(ctx, &models.ReservedValue{},
+			clause.Expression{Conditions: []clause.Condition{{Field: models.ReservedValueValue, Operator: clause.OpEqual, Value: "ada@example.com"}}},
+			behemoth.M{models.ReservedValueExpiresAt: time.Now().UTC().Add(-time.Minute)}))
+		assert.NoError(t, signUp(app, "ada@example.com"), "an expired reservation refuses nothing")
+	})
+
+	t.Run("the account is deleted", func(t *testing.T) {
+		app, user := changed(t)
+		require.NoError(t, app.ac.Store.DeleteUser(ctx, user.ID))
+		_, err := app.ac.Store.FindReservedValue(ctx, models.UserEmail, "ada@example.com")
+		assert.True(t, errs.IsNotFound(err), "the reservation goes with the account: %v", err)
+		assert.NoError(t, signUp(app, "ada@example.com"))
+	})
+
+	t.Run("an older link ends a newer one", func(t *testing.T) {
+		app := bootVerification(t, changeOptions())
+		_, linkAtA, _ := app.changedTwice(t)
+		_, err := app.plugin.RevertChange(ctx, linkAtA)
+		require.NoError(t, err)
+		assert.NoError(t, signUp(app, "b@example.com"), "the link at b@ was revoked, so b@ is free")
+		assert.NoError(t, signUp(app, "c@example.com"), "c@ was never reserved")
+	})
+}
+
 // An address that belongs to another account: at the request nothing goes
-// to it, at the confirm and at the revert the write is refused.
+// to it, at the confirm and at the revert the write is refused. At the
+// revert it takes a write that bypassed the old address's reservation.
 func TestEmailChangeToAnAddressThatIsTaken(t *testing.T) {
 	ctx := context.Background()
 	app := bootVerification(t, changeOptions())
@@ -251,10 +396,14 @@ func TestEmailChangeToAnAddressThatIsTaken(t *testing.T) {
 	assert.True(t, emailTaken(err), "%v", err)
 	assert.Equal(t, "ada@example.com", app.emailOf(t, user.ID))
 
-	// The old address is taken after a change went through.
+	// The old address is taken after a change went through, by a write
+	// that its reservation did not stop.
 	notice, confirm := app.requestChange(t, user.ID, "ada@third.example.com", 5)
 	_, err = app.plugin.ConfirmChange(ctx, confirm.Token)
 	require.NoError(t, err)
+	require.NoError(t, app.ac.DB.DeleteMany(ctx, &models.ReservedValue{}, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.ReservedValueValue, Operator: clause.OpEqual, Value: "ada@example.com"},
+	}}))
 	app.verifiedUser(t, "ada@example.com")
 	_, rawSession, err := app.ac.SessionManager.Create(ctx, user.ID, core.SessionMeta{State: models.SessionActive})
 	require.NoError(t, err)

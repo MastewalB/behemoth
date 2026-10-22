@@ -139,6 +139,8 @@ Your mail sender gets two more kinds of message. Both carry the two addresses in
 
 `Data` comes from the plugin. `Metadata` is still what the request carried.
 
+The flow keeps an account's old address in the core `reserved_values` table while the link at it works (see [What to know about the revert link](#what-to-know-about-the-revert-link)). Generate and apply a migration that creates the table before you deploy a version that has it. [Write Behemoth's tables from a plugin](core-tables.md#reserved-values) describes the table.
+
 ### Routes
 
 | Route | Needs | Body | Result |
@@ -155,7 +157,7 @@ Your mail sender gets two more kinds of message. Both carry the two addresses in
 | change | `redirect_url` is not allowed | `400` | `redirect_url_invalid_input` |
 | change | the notice could not be handed to your mail sender | `500` | |
 | confirm, revert | the link is unknown, expired, used, or overtaken by a later request or a revert | `401` | `invalid_email_change_link` |
-| confirm, revert | the address belongs to another account by now | `409` | `email_taken` |
+| confirm, revert | the address belongs to another account by now, or is kept for another account that changed away from it | `409` | `email_taken` |
 | all | too many requests | `429` with `Retry-After` | `rate_limited` |
 
 The change flow behaves as follows:
@@ -193,7 +195,8 @@ The last point matters after several changes in sequence. Suppose the account go
 ### What to know about the revert link
 
 - **The old mailbox can still affect the account for `RevertTTL`.** That is the purpose: the owner can take the account back. It also means that a user who changed address because the old mailbox was compromised can have the change undone from that mailbox. Shorten `RevertTTL` if that is the likelier case for your users.
-- **The old address is not reserved.** If another account registers it during the window, the revert can't put it back. The revert then ends the sessions and answers `409` with `email_taken`. Someone who took over an account could do this on purpose; handle that code by sending the user to your support channel.
+- **The old address is kept for the account while the link works.** No other account can take it in that time. A sign-up with it, a change to it, and a write of it through the store are refused as for a taken address, with `409` and `email_taken`. The account itself can change back to it. The reservation ends when `RevertTTL` has passed, when the link puts the address back, when a revert by an older link stops the link, and when the user is deleted.
+- **A write that bypasses the reservation can still take the old address.** A write to the `users` table that does not go through the store is not checked. The revert can't put such an address back: it ends the sessions and answers `409` with `email_taken`. Handle that code by sending the user to your support channel.
 - **The request waits for the notice.** If your mail sender returns an error for it, the change does not start. The confirmation to the new address is sent in the background, like a verification link.
 - **A direct write still bypasses all of this.** `Store.UpdateUser` with a new `email` takes effect at once. Use `RequestChange` in your own code.
 
@@ -210,7 +213,7 @@ user, err := verification.RevertChange(ctx, rawToken)
 ```
 
 - `RequestChange` changes the address of the user the caller on `ctx` acts for. A signed-in user needs a fresh session. Code in the process names the user with `identity.System(name).For(userID)`, which passes without a session; a system caller that names no user is a configuration error.
-- It returns `emailverification.ErrEmailTaken` when the address belongs to another account, which the route hides, and `emailverification.ErrNoAccount` for an unknown user.
+- It returns `emailverification.ErrEmailTaken` when the address belongs to another account, or is kept for one that changed away from it, which the route hides. It returns `emailverification.ErrNoAccount` for an unknown user.
 - With the flow off, all three return a configuration error.
 
 ## What a link does
@@ -265,7 +268,7 @@ With the change flow on, it declares nine more, three per step:
 
 Their constants are `emailverification.HookChangeRequestBefore`, `HookChangeConfirmAfter` and so on. The after and failed points are audited, so the audit log shows who asked for a change, when it was applied, and whether it was undone. `auth.emailChange.afterRevert` is a signal worth alerting on: someone said a change to their account was not theirs.
 
-The plugin also registers handlers of its own on `data.user.created`, `data.user.beforeUpdate`, and `data.user.updated`, and with `RequireVerified` on `auth.signIn.credentialsVerified`. Use `emailverification.PluginName` in `HookOptions.Before`/`After` to order a handler around them.
+The plugin also registers handlers of its own on `data.user.created`, `data.user.beforeUpdate`, and `data.user.updated`, with the change flow on `data.user.beforeCreate`, and with `RequireVerified` on `auth.signIn.credentialsVerified`. Use `emailverification.PluginName` in `HookOptions.Before`/`After` to order a handler around them.
 
 ## Rate limits
 
@@ -286,5 +289,5 @@ The rule per email is attached to `auth.emailVerification.beforeSend`, so it cou
 The plugin has these limits:
 
 - **Verifying does not sign the user in.** It sets the flag and creates no session.
-- **The old address is not reserved during the revert window.** See [What to know about the revert link](#what-to-know-about-the-revert-link).
+- **A revert of a pending change does not stop a confirmation that is already running.** When the revert link is used before the change was confirmed, and the confirmation link is used at the same moment, the confirmation can still apply the change after the revert has answered. After a change was confirmed, a revert always wins over a confirmation or a newer revert that runs at the same moment.
 - **A session is not refreshed in place.** A user whose session is no longer fresh signs in again before changing their address.

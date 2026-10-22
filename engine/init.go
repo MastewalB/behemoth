@@ -886,6 +886,7 @@ func CoreDeclareSchema(ic *core.PluginInitContext) error {
 		{&models.RateLimit{}, models.RateLimitTableSchema()},
 		{&models.AuditLog{}, models.AuditLogTableSchema()},
 		{&models.VerificationCode{}, models.VerificationCodeTableSchema()},
+		{&models.ReservedValue{}, models.ReservedValueTableSchema()},
 	} {
 		if err := ic.Schemas.Declare(d.model, d.table); err != nil {
 			return err

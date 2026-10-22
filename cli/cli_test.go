@@ -205,7 +205,7 @@ func TestGenerateShowsThenWrites(t *testing.T) {
 			t.Errorf("preview: stdout lacks %q:\n%s", want, stdout)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(f.dir, "0001_create_accounts_and_7_more.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(f.dir, "0001_create_accounts_and_8_more.json")); !os.IsNotExist(err) {
 		t.Fatalf("preview wrote the migration (stat error: %v)", err)
 	}
 
@@ -214,7 +214,7 @@ func TestGenerateShowsThenWrites(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("confirm: exit code = %d, stderr = %q", code, stderr)
 	}
-	for _, file := range []string{"0001_create_accounts_and_7_more.json", "0001_create_accounts_and_7_more.sql"} {
+	for _, file := range []string{"0001_create_accounts_and_8_more.json", "0001_create_accounts_and_8_more.sql"} {
 		if _, err := os.Stat(filepath.Join(f.dir, file)); err != nil {
 			t.Errorf("confirm: %s was not written: %v\nstdout: %s", file, err, stdout)
 		}
@@ -280,7 +280,7 @@ func TestGenerateThenMigrateOnTheManagedPath(t *testing.T) {
 	if code != ExitOK || !strings.Contains(stdout, "create table notes") {
 		t.Fatalf("generate -confirm: exit code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
-	if _, err := os.Stat(filepath.Join(f.dir, "0001_create_accounts_and_7_more.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.dir, "0001_create_accounts_and_8_more.json")); err != nil {
 		t.Fatalf("generate -confirm wrote no migration: %v", err)
 	}
 	if len(f.ledger) != 0 || len(f.live) != 0 {

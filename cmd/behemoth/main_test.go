@@ -252,7 +252,7 @@ func (empty) Introspect(context.Context, string) (migration.IntrospectedTable, e
 	// The name counts core's tables beyond the first: update it when
 	// CoreDeclareSchema gains or loses a table (docs/internal/models/models.md,
 	// "Declaration").
-	const migrationName = "0001_create_accounts_and_6_more.json"
+	const migrationName = "0001_create_accounts_and_7_more.json"
 	if _, err := os.Stat(filepath.Join(module, "migrations", migrationName)); err != nil {
 		written, _ := filepath.Glob(filepath.Join(module, "migrations", "*.json"))
 		t.Errorf("the migration was not written: %v\nwritten: %v\nIf a core table was added or removed, update migrationName.", err, written)
