@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"maps"
 	"slices"
 	"sync"
 
@@ -175,7 +174,12 @@ func (km *DefaultKeyManager) deriveKey(purpose KeyPurpose, version int) ([]byte,
 // applyUpdate is the hot-reload callback. It's triggered either by a watch callback or manually via an admin API.
 // It only adds the new keys in secret. It doesn't remove the "old" keys. Removal must be done via the RemoveVersion function.
 // It validates the incoming update before applying to the running KeyManager.
-// The secret souce must be responsible for making sure that the new versions do not clash with the old ones.
+//
+// A version's secret never changes. An update that gives a version km holds
+// another secret is refused whole, like an invalid one: applying it would
+// leave everything hashed, signed, or sealed under that version unverifiable
+// or unreadable, and the replicas that did not get the update would disagree
+// with the ones that did. A new secret gets a new version.
 func (km *DefaultKeyManager) applyUpdate(rawSecrets map[int]string, newCurrent int) {
 	decoded, err := decodeAndValidate(rawSecrets, newCurrent, km.cfg)
 	if err != nil {
@@ -185,16 +189,25 @@ func (km *DefaultKeyManager) applyUpdate(rawSecrets map[int]string, newCurrent i
 	km.mu.Lock()
 	defer km.mu.Unlock()
 
+	added, changed := km.compare(decoded)
+	if len(changed) > 0 {
+		err := errs.NewConfigurationError("KeyManager.Update", fmt.Sprintf(
+			"the update gives versions %v, which the key manager holds, another secret; a version's secret never changes, so add a new version instead", changed), nil)
+		km.tel.Logger.Error(context.Background(), "rejected invalid secret rotation update", telemetry.ErrorFields(err))
+		return
+	}
 	// A watcher that polls reports what it loaded, changed or not. An update
 	// that changes nothing is not a rotation, and is neither logged nor
 	// audited.
-	if newCurrent == km.current && km.holds(decoded) {
+	if len(added) == 0 && newCurrent == km.current {
 		return
 	}
 
-	// write the new secrets.
-	// if the new version overwrites an older one, all keys created with the old secret will be invalid
-	maps.Copy(km.secrets, decoded)
+	// Only new versions are written, so the derived keys in the cache stay
+	// those of the secrets km holds.
+	for _, version := range added {
+		km.secrets[version] = decoded[version]
+	}
 
 	km.current = newCurrent
 	km.tel.Logger.Info(context.Background(), "secret rotation applied", behemoth.M{"newCurrent": newCurrent})
@@ -205,15 +218,22 @@ func (km *DefaultKeyManager) applyUpdate(rawSecrets map[int]string, newCurrent i
 
 }
 
-// holds reports whether km already holds every secret of decoded, with the
-// same value. The caller holds the lock.
-func (km *DefaultKeyManager) holds(decoded map[int][]byte) bool {
+// compare sorts the versions of decoded against the secrets km holds: added
+// are the versions km lacks, and changed the ones it holds with another
+// value, both in ascending order. The caller holds the lock.
+func (km *DefaultKeyManager) compare(decoded map[int][]byte) (added, changed []int) {
 	for version, secret := range decoded {
-		if held, ok := km.secrets[version]; !ok || !bytes.Equal(held, secret) {
-			return false
+		held, ok := km.secrets[version]
+		switch {
+		case !ok:
+			added = append(added, version)
+		case !bytes.Equal(held, secret):
+			changed = append(changed, version)
 		}
 	}
-	return true
+	slices.Sort(added)
+	slices.Sort(changed)
+	return added, changed
 }
 
 // RemoveVersion is explicit secret removal method
