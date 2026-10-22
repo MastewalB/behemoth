@@ -81,7 +81,7 @@ func (sqlt *SQLiteAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := sqlt.q().ExecContext(ctx, query, values...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 }
 
 func (sqlt *SQLiteAdapter) FindOne(
@@ -112,7 +112,7 @@ func (sqlt *SQLiteAdapter) FindOne(
 	row := sqlt.q().QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -174,7 +174,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 
 	rows, err := sqlt.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 
 	defer rows.Close()
@@ -183,7 +183,7 @@ func (sqlt *SQLiteAdapter) FindMany(
 	for rows.Next() {
 		err := rows.Scan(valuePtrs...)
 		if err != nil {
-			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -216,11 +216,11 @@ func (sqlt *SQLiteAdapter) Update(ctx context.Context, m behemoth.Model) error {
 
 	res, err := sqlt.q().ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 	return adapters.ExpectOneRow("Update", m, n, nil)
 }
@@ -271,11 +271,11 @@ func (sqlt *SQLiteAdapter) UpdateOne(
 
 	res, err := sqlt.q().ExecContext(ctx, query, queryArgs...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 	return adapters.ExpectOneRow("UpdateOne", m, n, nil)
 }
@@ -308,7 +308,7 @@ func (sqlt *SQLiteAdapter) UpdateMany(
 
 	_, err := sqlt.q().ExecContext(ctx, query, append(values, args...)...)
 
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 }
 
 func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
@@ -319,11 +319,11 @@ func (sqlt *SQLiteAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	)
 	res, err := sqlt.q().ExecContext(ctx, query, m.PrimaryKeyField())
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 	return adapters.ExpectOneRow("Delete", m, n, nil)
 }
@@ -356,11 +356,11 @@ func (sqlt *SQLiteAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 	query += " AND (" + whereClause + ")"
 	res, err := sqlt.q().ExecContext(ctx, query, append(args, args...)...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 	return adapters.ExpectOneRow("DeleteOne", m, n, nil)
 }
@@ -379,7 +379,7 @@ func (sqlt *SQLiteAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 	)
 
 	_, err := sqlt.q().ExecContext(ctx, query, args...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 }
 
 func (sqlt *SQLiteAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
@@ -389,7 +389,7 @@ func (sqlt *SQLiteAdapter) DeleteAll(ctx context.Context, m behemoth.Model) erro
 	)
 
 	_, err := sqlt.q().ExecContext(ctx, query)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 }
 
 func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
@@ -405,14 +405,14 @@ func (sqlt *SQLiteAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 
 	row, err := sqlt.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+		return 0, adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 	}
 
 	defer row.Close()
 	var count int64
 	if row.Next() {
 		if err := row.Scan(&count); err != nil {
-			return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapSQLiteErrors)
+			return 0, adapters.WrapWithCaller(err, m.SchemaName(), sqlt.mapErrors)
 		}
 	}
 
@@ -465,8 +465,9 @@ func (sqlt *SQLiteAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 	return tx.Commit()
 }
 
-// mapSQLiteErrors classifies mattn/go-sqlite3 errors by result code.
-func mapSQLiteErrors(op, entity string, err error) error {
+// mapErrors classifies mattn/go-sqlite3 errors by result code. A unique
+// violation names its columns, which the error gets.
+func (sqlt *SQLiteAdapter) mapErrors(op, entity string, err error) error {
 	if classified, ok := adapters.MapStdSQLErrors(op, entity, err); ok {
 		return classified
 	}
@@ -476,7 +477,7 @@ func mapSQLiteErrors(op, entity string, err error) error {
 		return adapters.Classify(op, entity, adapters.SentinelUndefinedTable, err)
 	case isSQLiteConstraintViolation(err):
 		if isUniqueConstraint(err) {
-			return adapters.Classify(op, entity, adapters.SentinelDuplicateKey, err)
+			return adapters.KeyFinder{Dialect: adapters.DialectSQLite, Resolver: sqlt.names()}.DuplicateKey(op, entity, err)
 		}
 		if isForeignKeyConstraint(err) {
 			return adapters.Classify(op, entity, adapters.SentinelForeignKey, err)

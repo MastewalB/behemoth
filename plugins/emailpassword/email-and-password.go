@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -429,13 +430,16 @@ func (p *Plugin) signUpBody(hctx *core.HookContext, userData behemoth.M) (*model
 		return nil, errInvalidPassword("emailpassword.SignUp", err)
 	}
 
+	emailTaken := func() error {
+		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, core.FailureReason{Code: "user_exists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
+			return err
+		}
+		return errEmailTaken()
+	}
 	_, err := ac.Store.FindUserByEmail(hctx.Ctx, email)
 	if err == nil {
 		hashPassword(hctx, password) // timing mitigation, unchanged
-		if err := dispatcher.Fail(hctx, hooks.HookSignUpFailed, core.FailureReason{Code: "user_exists", Metadata: behemoth.M{hooks.HookValueEmail: email}}); err != nil {
-			return nil, err
-		}
-		return nil, errEmailTaken()
+		return nil, emailTaken()
 	}
 	if !errs.IsNotFound(err) {
 		return nil, err // infra error (DB down): not "no such user"
@@ -476,11 +480,18 @@ func (p *Plugin) signUpBody(hctx *core.HookContext, userData behemoth.M) (*model
 		})
 	})
 	if err != nil {
-		// The error is returned as it is. A typed one keeps its category
-		// and public message: a data hook's veto on data.user.beforeCreate
-		// or afterCreate, or a classified store error. An untyped one is a
-		// failure of the system: the router answers 500 without its text
-		// and logs it.
+		// Another sign-up took the email after the lookup above: the
+		// database refused the insert. It is answered as the lookup would
+		// have answered.
+		if slices.Equal(errs.DuplicateKeyColumns(err), []string{models.UserEmail}) {
+			return nil, emailTaken()
+		}
+		// Otherwise the error is returned as it is. A typed one keeps its
+		// category and public message: a data hook's veto on
+		// data.user.beforeCreate or afterCreate, or a classified store
+		// error, such as the conflict of another unique column a plugin
+		// added (username_taken). An untyped one is a failure of the
+		// system: the router answers 500 without its text and logs it.
 		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignUpFailed, err,
 			core.FailureReason{Metadata: behemoth.M{hooks.HookValueEmail: email}})
 	}

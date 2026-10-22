@@ -38,6 +38,12 @@ type BunAdapter struct {
 	resolver behemoth.SchemaResolver
 	mysql    bool // db's dialect is MySQL
 	mssql    bool // db's dialect is SQL Server
+
+	// pool is the database a transaction of this adapter was begun on. A
+	// duplicate key error aborts a PostgreSQL transaction, so the catalog
+	// lookup that names the key's columns runs on pool instead. nil outside
+	// such a transaction.
+	pool bun.IDB
 }
 
 // NewBunAdapter wraps db (a *bun.DB, or a bun.Tx). resolver maps canonical
@@ -210,7 +216,28 @@ func (ba *BunAdapter) scan(m behemoth.Model, rows *sql.Rows, columns []string) (
 }
 
 func (ba *BunAdapter) err(m behemoth.Model, err error) error {
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapBunError)
+	return adapters.WrapWithCaller(err, m.SchemaName(), ba.mapError)
+}
+
+// keys tells which unique key a duplicate key error broke, by the dialect
+// of the application's driver. bun writes each ? of a query itself.
+func (ba *BunAdapter) keys() adapters.KeyFinder {
+	var d adapters.Dialect
+	switch ba.db.Dialect().Name() {
+	case dialect.PG:
+		d = adapters.DialectPostgres
+	case dialect.MySQL:
+		d = adapters.DialectMySQL
+	case dialect.MSSQL:
+		d = adapters.DialectSQLServer
+	case dialect.SQLite:
+		d = adapters.DialectSQLite
+	}
+	catalog := ba.db
+	if ba.pool != nil {
+		catalog = ba.pool
+	}
+	return adapters.KeyFinder{Dialect: d, Resolver: ba.resolver, Catalog: adapters.CatalogOn(catalog)}
 }
 
 func (ba *BunAdapter) Create(ctx context.Context, m behemoth.Model) error {
@@ -434,18 +461,28 @@ func (ba *BunAdapter) recount(ctx context.Context, m behemoth.Model, expr clause
 // see "Nested transactions keep each library's behaviour" in
 // docs/internal/database/adapters/transactions.md.
 func (ba *BunAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
+	pool := ba.pool
+	if pool == nil {
+		pool = ba.db
+	}
 	return ba.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		_, err := fn(ctx, NewBunAdapter(tx, ba.resolver))
+		txAdapter := NewBunAdapter(tx, ba.resolver)
+		txAdapter.pool = pool
+		_, err := fn(ctx, txAdapter)
 		return err
 	})
 }
 
-func mapBunError(op, entity string, err error) error {
+func (ba *BunAdapter) mapError(op, entity string, err error) error {
 	if classified, ok := adapters.MapStdSQLErrors(op, entity, err); ok {
 		return classified
 	}
 	// bun hands back the application's driver errors untranslated.
-	if kind := adapters.ConstraintKind(err); kind != adapters.SentinelUnknown {
+	switch kind := adapters.ConstraintKind(err); kind {
+	case adapters.SentinelDuplicateKey:
+		return ba.keys().DuplicateKey(op, entity, err)
+	case adapters.SentinelUnknown:
+	default:
 		return adapters.Classify(op, entity, kind, err)
 	}
 	return errs.NewDatabaseError(op, err)

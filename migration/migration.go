@@ -1,9 +1,11 @@
 package migration
 
 import (
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/schema"
 )
 
@@ -43,6 +45,9 @@ type SchemaResolverTable struct {
 	// ColumnOrder lists each table's canonical columns in declaration order
 	// (contributions after the base columns, as schema.Registry merges them).
 	ColumnOrder map[string][]string
+	// UniqueKeys lists each table's unique keys: its columns declared
+	// unique, then its unique indexes.
+	UniqueKeys map[string][]behemoth.UniqueKey
 }
 
 type DefaultSchemaResolver struct {
@@ -88,6 +93,13 @@ func (r *DefaultSchemaResolver) Columns(canonicalTable string) []string {
 	return append([]string(nil), cols...)
 }
 
+// UniqueKeys implements [behemoth.UniqueKeyResolver].
+func (r *DefaultSchemaResolver) UniqueKeys(canonicalTable string) []behemoth.UniqueKey {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Clone(r.table.UniqueKeys[canonicalTable])
+}
+
 // Freeze is called exactly once, by Boot, after schema.Registry.Freeze()
 // has run — same "construct empty, populate in place, every early holder
 // of the reference sees the populated state automatically" pattern as
@@ -108,18 +120,29 @@ func BuildSchemaResolverTable(registry schema.Registry, cfg MigrationConfig) Sch
 		Tables:      map[string]string{},
 		Columns:     map[string]map[string]string{},
 		ColumnOrder: map[string][]string{},
+		UniqueKeys:  map[string][]behemoth.UniqueKey{},
 	}
 	for _, t := range registry.All() {
 		table.Tables[t.Name] = orDefault(t.PhysicalName, t.Name)
 
 		cols := make(map[string]string, len(t.Columns))
 		order := make([]string, 0, len(t.Columns))
+		var keys []behemoth.UniqueKey
 		for _, c := range t.Columns {
 			cols[c.Name] = orDefault(c.PhysicalName, c.Name)
 			order = append(order, c.Name)
+			if c.Unique && !c.PrimaryKey {
+				keys = append(keys, behemoth.UniqueKey{Columns: []string{c.Name}, TakenCode: orDefault(c.ConflictCode, c.Name+"_taken")})
+			}
+		}
+		for _, idx := range t.Indexes {
+			if idx.Unique {
+				keys = append(keys, behemoth.UniqueKey{Index: idx.Name, Columns: slices.Clone(idx.Columns)})
+			}
 		}
 		table.Columns[t.Name] = cols
 		table.ColumnOrder[t.Name] = order
+		table.UniqueKeys[t.Name] = keys
 	}
 	// Ledger/snapshot aren't plugin-declared tables at all — they're
 	// framework-internal bookkeeping, sourced from MigrationConfig instead.
@@ -135,4 +158,7 @@ func orDefault(v, def string) string {
 	return v
 }
 
-var _ SchemaResolver = (*DefaultSchemaResolver)(nil)
+var (
+	_ SchemaResolver             = (*DefaultSchemaResolver)(nil)
+	_ behemoth.UniqueKeyResolver = (*DefaultSchemaResolver)(nil)
+)

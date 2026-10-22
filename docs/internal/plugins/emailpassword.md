@@ -234,7 +234,7 @@ Two changes a client can observe: a wrong password is a `401` where it was a `40
 
 Three changes a client can observe: the three rejections carry a `code`, a taken email is a `409` where it was a `400`, and a failure is a `500` where it was a `400`.
 
-`[Limit]` Two sign-ups racing for one email both pass the lookup, and the loser fails on the unique constraint. That is the store's duplicate key error, also a `409`, but with the store's code and not `email_taken`, and `auth.signUp.failed` does not fire for it.
+Two sign-ups racing for one email both pass the lookup, and the database refuses the loser's insert. Its duplicate key error names the `email` column ([`../database/adapters/unique_keys.md`](../database/adapters/unique_keys.md)), and `signUpBody` answers it as the lookup would have: `auth.signUp.failed` with `user_exists`, and `email_taken`. Another unique column a plugin added to `users` comes back from the store as that column's conflict, such as `username_taken`, and goes through `FailIfRejected`. `TestSignUpThatLosesTheRaceForAnEmail` (`tests/plugins/signup_race_test.go`) covers the email.
 
 ### Password reset is part of this plugin and off by default
 

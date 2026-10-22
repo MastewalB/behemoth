@@ -122,7 +122,7 @@ func (ms *SQLServerAdapter) Create(ctx context.Context, m behemoth.Model) error 
 	)
 
 	_, err := ms.q().ExecContext(ctx, query, values...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 
 }
 
@@ -152,7 +152,7 @@ func (ms *SQLServerAdapter) FindOne(
 
 	row := ms.q().QueryRowContext(ctx, query, args...)
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -209,14 +209,14 @@ func (ms *SQLServerAdapter) FindMany(
 
 	rows, err := ms.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	defer rows.Close()
 
 	var results []behemoth.Model
 	for rows.Next() {
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -249,11 +249,11 @@ func (ms *SQLServerAdapter) Update(ctx context.Context, m behemoth.Model) error 
 
 	res, err := ms.q().ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	return adapters.ExpectOneRow("Update", m, n, nil)
 }
@@ -293,11 +293,11 @@ func (ms *SQLServerAdapter) UpdateOne(
 
 	res, err := ms.q().ExecContext(ctx, query, args...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	return adapters.ExpectOneRow("UpdateOne", m, n, nil)
 }
@@ -324,7 +324,7 @@ func (ms *SQLServerAdapter) UpdateMany(
 	)
 
 	_, err := ms.q().ExecContext(ctx, query, append(values, whereArgs...)...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 }
 
 // Delete  (by primary key field on the model)
@@ -336,11 +336,11 @@ func (ms *SQLServerAdapter) Delete(ctx context.Context, m behemoth.Model) error 
 	)
 	res, err := ms.q().ExecContext(ctx, query, m.PrimaryKeyField())
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	return adapters.ExpectOneRow("Delete", m, n, nil)
 }
@@ -363,11 +363,11 @@ func (ms *SQLServerAdapter) DeleteOne(
 	)
 	res, err := ms.q().ExecContext(ctx, query, args...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	return adapters.ExpectOneRow("DeleteOne", m, n, nil)
 }
@@ -389,13 +389,13 @@ func (ms *SQLServerAdapter) DeleteMany(
 	)
 
 	_, err := ms.q().ExecContext(ctx, query, args...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 }
 
 func (ms *SQLServerAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf("DELETE FROM %s", adapters.PhysicalTable(ms.names(), m))
 	_, err := ms.q().ExecContext(ctx, query)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+	return adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 }
 
 func (ms *SQLServerAdapter) Count(
@@ -415,14 +415,14 @@ func (ms *SQLServerAdapter) Count(
 
 	row, err := ms.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+		return 0, adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 	}
 	defer row.Close()
 
 	var count int64
 	if row.Next() {
 		if err := row.Scan(&count); err != nil {
-			return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapMSSQLError)
+			return 0, adapters.WrapWithCaller(err, m.SchemaName(), ms.mapError)
 		}
 	}
 
@@ -510,6 +510,16 @@ func appendMSSQLPagination(query, orderBy string, options *behemoth.QueryOptions
 	return query
 }
 
+// keys tells which unique key a duplicate key error broke. A duplicate key
+// ends the statement and leaves the transaction usable (XACT_ABORT is off by
+// default), so the catalog lookup runs on the adapter's own connection.
+func (ms *SQLServerAdapter) keys() adapters.KeyFinder {
+	return adapters.KeyFinder{
+		Dialect: adapters.DialectSQLServer, Resolver: ms.names(), Catalog: adapters.CatalogOn(ms.DB),
+		Placeholder: func(n int) string { return fmt.Sprintf("@p%d", n) },
+	}
+}
+
 // Error mapping
 //
 // go-mssqldb surfaces constraint and server errors as *mssql.Error.
@@ -521,8 +531,9 @@ func appendMSSQLPagination(query, orderBy string, options *behemoth.QueryOptions
 //	208         — invalid object name (table not found — undefined_table)
 //
 // sql.ErrNoRows is returned by QueryRowContext when no row is found,
-// and sql.ErrTxDone signals a completed or rolled-back transaction.
-func mapMSSQLError(op, entity string, err error) error {
+// and sql.ErrTxDone signals a completed or rolled-back transaction. A
+// unique violation names the columns of its key.
+func (ms *SQLServerAdapter) mapError(op, entity string, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -539,7 +550,7 @@ func mapMSSQLError(op, entity string, err error) error {
 		case 208:
 			return adapters.Classify(op, entity, adapters.SentinelUndefinedTable, err)
 		case 2627, 2601:
-			return errs.NewDuplicateKey(op, entity, err)
+			return ms.keys().DuplicateKey(op, entity, err)
 		case 547:
 			return errs.NewForeignKeyViolation(op, entity, err)
 		case 515, 245:

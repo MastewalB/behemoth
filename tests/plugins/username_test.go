@@ -317,7 +317,7 @@ func TestUsernameIsUniqueUnderConcurrentSignUps(t *testing.T) {
 			won++
 			continue
 		}
-		assert.True(t, errs.IsCategory(err, errs.CategoryConflict) || errs.IsDuplicateKey(err), "a loser is refused as a conflict: %v", err)
+		assert.True(t, hasCode(err, errs.CategoryConflict, username.ErrorCodeUsernameTaken), "a loser is refused with username_taken: %v", err)
 	}
 	assert.Equal(t, 1, won)
 	var holders int

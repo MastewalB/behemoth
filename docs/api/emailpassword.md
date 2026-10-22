@@ -82,7 +82,9 @@ An error response is JSON with an `error` message and, for most errors, a `code`
 | any | too many requests. Sign-in and sign-up each allow 10 attempts a minute per client address (`engine.RuleSignInAddress`, `engine.RuleSignUpAddress`) | `429` with a `Retry-After` header: the seconds left until the limit resets | `{"error": "too many requests, please try again later", "code": "rate_limited"}` |
 | any | Behemoth failed (the database is down, for example) | `500` | a generic message; the error's own text is logged, not sent |
 
-Sign-in gives the same answer for an unknown email and a wrong password, so the response does not show which addresses have an account. Sign-up does show it: a `409` says the address is registered.
+Sign-in gives the same answer for an unknown email and a wrong password, so the response does not show which addresses have an account. Sign-up does show it: a `409` says the address is registered. Two sign-ups for the same new address at the same moment get one account, and the other gets the same `409` with `email_taken`.
+
+A unique column another plugin adds to users, such as the username plugin's, gets its own `409` code at sign-up: `username_taken`.
 
 The codes are exported: `emailpassword.ErrorCodeInvalidEmail`, `ErrorCodeInvalidPassword`, `ErrorCodeEmailTaken`, and `ErrorCodeInvalidCredentials`. Branch on the code and not on the message.
 

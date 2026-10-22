@@ -81,7 +81,7 @@ The response is the email/password plugin's `201` with `{"user": {...}}`, and th
 | `display_username` is not a string, does not spell the username, or comes without one | `400` | `{"error": "<which rule>", "code": "display_username_invalid_input"}` |
 | another user holds the username | `409` | `{"error": "this username is taken", "code": "username_taken"}` |
 
-A `409` shows that a username exists, as the email/password plugin's `email_taken` does for an address. Two sign-ups that ask for the same new username at the same moment are both checked before either is written. The database then refuses the second with a `409` that carries the store's code, not `username_taken`.
+A `409` shows that a username exists, as the email/password plugin's `email_taken` does for an address. Two sign-ups that ask for the same new username at the same moment are both checked before either is written. The database then refuses the second, which also gets `409` with `username_taken`. Its message is "username is already taken".
 
 ## Sign in
 

@@ -505,7 +505,8 @@ func (d *PostgreSQLDriver) renderColumnDefinition(table string, raw schema.Colum
 // uniqueConstraintName follows Postgres's own naming convention for unnamed
 // UNIQUE column constraints. Postgres truncates identifiers to 63 bytes; since
 // both CREATE and ALTER go through this function, a truncated name is still
-// truncated identically on both sides.
+// truncated identically on both sides. The adapter recognizes the key in a
+// duplicate key error by the name as stored (adapters.UniqueKeyName).
 func uniqueConstraintName(table, column string) string { return table + "_" + column + "_key" }
 
 // renderDefaultExpr returns the DEFAULT expression for a column, or "" for

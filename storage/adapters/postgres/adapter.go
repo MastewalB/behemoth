@@ -28,6 +28,12 @@ type PostgresAdapter struct {
 	// Logger receives the text of every statement at Debug. nil = none.
 	// Set it with WithLogger.
 	Logger telemetry.Logger
+
+	// pool is the database a transaction of this adapter was begun on. A
+	// duplicate key error aborts the transaction, so the catalog lookup that
+	// names the key's columns runs on pool instead. nil outside such a
+	// transaction.
+	pool adapters.Querier
 }
 
 func NewPostgresAdapter(db adapters.Querier, resolver behemoth.SchemaResolver) *PostgresAdapter {
@@ -65,9 +71,22 @@ type sqlStater interface {
 	SQLState() string
 }
 
-// mapPostgresErrors classifies Postgres errors by SQLSTATE
-// (https://www.postgresql.org/docs/current/errcodes-appendix.html).
-func mapPostgresErrors(op, entity string, err error) error {
+// keys tells which unique key a duplicate key error broke.
+func (pg *PostgresAdapter) keys() adapters.KeyFinder {
+	catalog := pg.DB
+	if pg.pool != nil {
+		catalog = pg.pool
+	}
+	return adapters.KeyFinder{
+		Dialect: adapters.DialectPostgres, Resolver: pg.names(), Catalog: adapters.CatalogOn(catalog),
+		Placeholder: func(n int) string { return fmt.Sprintf("$%d", n) },
+	}
+}
+
+// mapErrors classifies Postgres errors by SQLSTATE
+// (https://www.postgresql.org/docs/current/errcodes-appendix.html). A unique
+// violation names the columns of its key.
+func (pg *PostgresAdapter) mapErrors(op, entity string, err error) error {
 	if classified, ok := adapters.MapStdSQLErrors(op, entity, err); ok {
 		return classified
 	}
@@ -78,7 +97,7 @@ func mapPostgresErrors(op, entity string, err error) error {
 	}
 	switch code := pgErr.SQLState(); code {
 	case "23505": // unique_violation
-		return adapters.Classify(op, entity, adapters.SentinelDuplicateKey, err)
+		return pg.keys().DuplicateKey(op, entity, err)
 	case "23503": // foreign_key_violation
 		return adapters.Classify(op, entity, adapters.SentinelForeignKey, err)
 	case "42P01": // undefined_table
@@ -128,7 +147,7 @@ func (pg *PostgresAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	)
 	_, err := pg.q().ExecContext(ctx, query, values...)
 
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 }
 
 func (pg *PostgresAdapter) FindOne(
@@ -159,7 +178,7 @@ func (pg *PostgresAdapter) FindOne(
 	row := pg.q().QueryRowContext(ctx, query, args...)
 
 	if err := row.Scan(valuePtrs...); err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -221,7 +240,7 @@ func (pg *PostgresAdapter) FindMany(
 
 	rows, err := pg.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 
 	defer rows.Close()
@@ -229,7 +248,7 @@ func (pg *PostgresAdapter) FindMany(
 	var results []behemoth.Model
 	for rows.Next() {
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -263,11 +282,11 @@ func (pg *PostgresAdapter) Update(ctx context.Context, m behemoth.Model) error {
 
 	res, err := pg.q().ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 	return adapters.ExpectOneRow("Update", m, n, nil)
 }
@@ -323,11 +342,11 @@ func (pg *PostgresAdapter) UpdateOne(
 
 	res, err := pg.q().ExecContext(ctx, query, queryArgs...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 	return adapters.ExpectOneRow("UpdateOne", m, n, nil)
 }
@@ -360,7 +379,7 @@ func (pg *PostgresAdapter) UpdateMany(
 
 	_, err := pg.q().ExecContext(ctx, query, append(values, args...)...)
 
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 }
 
 func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
@@ -372,11 +391,11 @@ func (pg *PostgresAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 
 	res, err := pg.q().ExecContext(ctx, query, m.PrimaryKeyField())
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 	return adapters.ExpectOneRow("Delete", m, n, nil)
 }
@@ -411,11 +430,11 @@ func (pg *PostgresAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr
 	query += " AND (" + guard + ")"
 	res, err := pg.q().ExecContext(ctx, query, append(args, guardArgs...)...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 	return adapters.ExpectOneRow("DeleteOne", m, n, nil)
 }
@@ -434,7 +453,7 @@ func (pg *PostgresAdapter) DeleteMany(ctx context.Context, m behemoth.Model, exp
 	)
 
 	_, err := pg.q().ExecContext(ctx, query, args...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 }
 
 func (pg *PostgresAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
@@ -444,7 +463,7 @@ func (pg *PostgresAdapter) DeleteAll(ctx context.Context, m behemoth.Model) erro
 	)
 
 	_, err := pg.q().ExecContext(ctx, query)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 }
 
 func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
@@ -460,14 +479,14 @@ func (pg *PostgresAdapter) Count(ctx context.Context, m behemoth.Model, expr cla
 
 	row, err := pg.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+		return 0, adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 	}
 
 	defer row.Close()
 	var count int64
 	if row.Next() {
 		if err := row.Scan(&count); err != nil {
-			return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapPostgresErrors)
+			return 0, adapters.WrapWithCaller(err, m.SchemaName(), pg.mapErrors)
 		}
 	}
 
@@ -508,6 +527,7 @@ func (pg *PostgresAdapter) Transaction(ctx context.Context, fn behemoth.Transact
 	}()
 
 	txAdapter := NewPostgresAdapter(tx, pg.Resolver).WithLogger(pg.Logger)
+	txAdapter.pool = db
 	_, err = fn(ctx, txAdapter)
 
 	if err != nil {

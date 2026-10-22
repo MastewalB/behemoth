@@ -71,6 +71,12 @@ type DomainError struct {
 	Original        error
 	Retryable       bool // whether the operation that produced this error is worth retrying (e.g. connection timeout)
 	RetryAfter      time.Duration
+
+	// Columns are, for a duplicate key error, the canonical names of the
+	// columns of the unique key the write broke, in the key's order. They
+	// are nil when the adapter could not tell, and for every other kind of
+	// error. Read them with [DuplicateKeyColumns].
+	Columns []string
 }
 
 func (e *DomainError) Error() string {

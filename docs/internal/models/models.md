@@ -54,6 +54,8 @@ A plugin or the application may add a column to a core table (`Registry.ExtendCo
 
 `User`, `Account`, `Session`, and `Token` embed `Extension`. `RateLimit` does not: it is an internal counter, and a column contributed to it would be ignored.
 
+A column declared `Unique`, core's or contributed, gets a conflict code: `<column>_taken`, or its `ConflictCode`. When a write through the store gives it a value another row holds, the store answers `409` with that code instead of the duplicate key error, whichever flow wrote the row. `users.email` is `email_taken`, the username plugin's column `username_taken`. [`../database/adapters/unique_keys.md`](../database/adapters/unique_keys.md) explains how the store learns which column was taken.
+
 ### What a client sees: public columns
 
 A model has two serializations, and neither is what a route should send:

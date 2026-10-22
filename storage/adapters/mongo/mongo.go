@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/MastewalB/behemoth"
@@ -149,7 +151,7 @@ func (mdb *MongoAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	}
 
 	_, err = mdb.collection(m).InsertOne(ctx, adapters.PhysicalDocument(mdb.names(), m, doc))
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 }
 
 func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr clause.Expression) (behemoth.Model, error) {
@@ -161,12 +163,12 @@ func (mdb *MongoAdapter) FindOne(ctx context.Context, m behemoth.Model, expr cla
 
 	result := mdb.collection(m).FindOne(ctx, mdb.filter(m, &expr))
 	if result.Err() != nil {
-		return nil, adapters.WrapWithCaller(result.Err(), m.SchemaName(), mapMongoErrors)
+		return nil, adapters.WrapWithCaller(result.Err(), m.SchemaName(), mdb.mapErrors)
 	}
 
 	var raw map[string]any
 	if err := result.Decode(&raw); err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 	}
 
 	return mdb.decode(m, adapters.CanonicalFields(mdb.names(), m), raw)
@@ -198,7 +200,7 @@ func (mdb *MongoAdapter) FindMany(
 	}
 
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 	}
 	defer cursor.Close(ctx) // only once cursor is known to be non-nil
 
@@ -207,7 +209,7 @@ func (mdb *MongoAdapter) FindMany(
 	for cursor.Next(ctx) {
 		var raw map[string]any
 		if err := cursor.Decode(&raw); err != nil {
-			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 		}
 		model, err := mdb.decode(m, canonical, raw)
 		if err != nil {
@@ -253,7 +255,7 @@ func (mdb *MongoAdapter) Update(ctx context.Context, m behemoth.Model) error {
 
 	res, err := mdb.collection(m).UpdateOne(ctx, mdb.byPrimaryKey(m), update)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 	}
 	return adapters.ExpectOneRow("Update", m, res.MatchedCount, nil)
 }
@@ -276,7 +278,7 @@ func (mdb *MongoAdapter) UpdateOne(
 	// document as written; MatchedCount gives the UpdateOne convention.
 	res, err := mdb.collection(m).UpdateOne(ctx, mdb.filter(m, &expr), update)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 	}
 	return adapters.ExpectOneRow("UpdateOne", m, res.MatchedCount, nil)
 }
@@ -299,13 +301,13 @@ func (mdb *MongoAdapter) UpdateMany(
 			"$set": adapters.PhysicalDocument(mdb.names(), m, updates),
 		},
 	)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 }
 
 func (mdb *MongoAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	res, err := mdb.collection(m).DeleteOne(ctx, mdb.byPrimaryKey(m))
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 	}
 	return adapters.ExpectOneRow("Delete", m, res.DeletedCount, nil)
 }
@@ -319,7 +321,7 @@ func (mdb *MongoAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr c
 	// The filter is evaluated atomically per document.
 	res, err := mdb.collection(m).DeleteOne(ctx, filter)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 	}
 	return adapters.ExpectOneRow("DeleteOne", m, res.DeletedCount, nil)
 }
@@ -331,18 +333,18 @@ func (mdb *MongoAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr 
 		return errs.NewValidationError(adapters.OpDeleteMany, "clause", nil)
 	}
 	_, err := mdb.collection(m).DeleteMany(ctx, filter)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 }
 
 func (mdb *MongoAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 	_, err := mdb.collection(m).DeleteMany(ctx, bson.M{})
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 }
 
 func (mdb *MongoAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
 	count, err := mdb.collection(m).CountDocuments(ctx, mdb.filter(m, &expr))
 	if err != nil {
-		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapMongoErrors)
+		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mdb.mapErrors)
 	}
 	return count, nil
 }
@@ -466,7 +468,7 @@ func mapLogicalOperator(logic clause.Logic) string {
 	}
 }
 
-func mapMongoErrors(op, entity string, err error) error {
+func (mdb *MongoAdapter) mapErrors(op, entity string, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -475,7 +477,7 @@ func mapMongoErrors(op, entity string, err error) error {
 	case errors.Is(err, mongo.ErrNoDocuments):
 		return adapters.Classify(op, entity, adapters.SentinelNotFound, err)
 	case mongo.IsDuplicateKeyError(err): // E11000, from a unique index
-		return adapters.Classify(op, entity, adapters.SentinelDuplicateKey, err)
+		return errs.NewDuplicateKeyOn(op, entity, mdb.keyColumns(entity, err), err)
 	case errors.Is(err, mongo.ErrEmptySlice) || errors.Is(err, mongo.ErrNilValue) || errors.Is(err, mongo.ErrNilDocument):
 		return errs.NewValidationError(op, entity, err)
 	default:
@@ -556,4 +558,69 @@ func buildDistinctPipeline(filter bson.M, options *behemoth.QueryOptions) mongo.
 		pipeline = append(pipeline, bson.D{{Key: "$limit", Value: options.Limit}})
 	}
 	return pipeline
+}
+
+// keyColumns returns the canonical columns of the unique index a duplicate
+// key error of table broke. The server reports the index's key pattern with
+// the error, physical field names in the index's order. Without it, the
+// index's name is read from the message and matched against the names
+// DeclaredIndexes gives: "uq_<table>_<column>" for a column declared unique,
+// and the declared name for a unique index.
+func (mdb *MongoAdapter) keyColumns(table string, err error) []string {
+	if fields := keyPattern(err); len(fields) > 0 {
+		return adapters.CanonicalColumns(mdb.names(), table, fields)
+	}
+	_, rest, ok := strings.Cut(err.Error(), " index: ")
+	if !ok {
+		return nil
+	}
+	name, _, _ := strings.Cut(rest, " ")
+	keys, ok := mdb.names().(behemoth.UniqueKeyResolver)
+	if !ok {
+		return nil
+	}
+	for _, key := range keys.UniqueKeys(table) {
+		if key.Index == name || (key.Index == "" && len(key.Columns) == 1 && "uq_"+table+"_"+key.Columns[0] == name) {
+			return slices.Clone(key.Columns)
+		}
+	}
+	return nil
+}
+
+// keyPattern returns the fields of the key pattern a duplicate key error
+// carries: in a write error of an insert or an update, or in a command's
+// error.
+func keyPattern(err error) []string {
+	var raws []bson.Raw
+	var we mongo.WriteException
+	var bwe mongo.BulkWriteException
+	var ce mongo.CommandError
+	switch {
+	case errors.As(err, &we):
+		for _, e := range we.WriteErrors {
+			raws = append(raws, e.Raw)
+		}
+	case errors.As(err, &bwe):
+		for _, e := range bwe.WriteErrors {
+			raws = append(raws, e.Raw)
+		}
+	case errors.As(err, &ce):
+		raws = append(raws, ce.Raw)
+	}
+	for _, raw := range raws {
+		pattern, ok := raw.Lookup("keyPattern").DocumentOK()
+		if !ok {
+			continue
+		}
+		elements, err := pattern.Elements()
+		if err != nil {
+			continue
+		}
+		fields := make([]string, len(elements))
+		for i, e := range elements {
+			fields[i] = e.Key()
+		}
+		return fields
+	}
+	return nil
 }

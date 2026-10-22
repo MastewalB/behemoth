@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"slices"
 	"strconv"
 	"strings"
@@ -786,15 +785,10 @@ func foreignKeySQL(table, name string, columns []string, refTable string, refCol
 // names. A fixed name lets Introspect tell it from a unique index the
 // application declared. A name over SQL Server's 128-character limit is cut
 // and given a hash of the full name.
+//
+// The adapter recognizes the key in a duplicate key error by the same name.
 func uniqueKeyName(table, column string) string {
-	name := table + "_" + column + "_key"
-	if len(name) <= maxIdentifierLength {
-		return name
-	}
-	h := fnv.New32a()
-	h.Write([]byte(name))
-	suffix := fmt.Sprintf("_%08x", h.Sum32())
-	return name[:maxIdentifierLength-len(suffix)] + suffix
+	return adapters.UniqueKeyName(adapters.DialectSQLServer, table, column)
 }
 
 // renderDefaultExpr returns the DEFAULT expression for a column, or "" for

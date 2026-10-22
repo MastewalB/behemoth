@@ -37,6 +37,12 @@ type GormAdapter struct {
 	db       *gorm.DB
 	resolver behemoth.SchemaResolver
 	mysql    bool // db's dialect is MySQL
+
+	// pool is the database a transaction of this adapter was begun on. A
+	// duplicate key error aborts a PostgreSQL transaction, so the catalog
+	// lookup that names the key's columns runs on pool instead. nil outside
+	// such a transaction.
+	pool *gorm.DB
 }
 
 // NewGormAdapter wraps db. resolver maps canonical names to physical ones; nil
@@ -87,10 +93,47 @@ func (ga *GormAdapter) err(m behemoth.Model, err error) error {
 	// The dialect's translation, which GORM applies only with
 	// Config.TranslateError: constraint violations become ErrDuplicatedKey /
 	// ErrForeignKeyViolated whatever the application configured.
+	original := err
 	if t, ok := ga.db.Dialector.(gorm.ErrorTranslator); ok {
 		err = t.Translate(err)
 	}
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapGormError)
+	return adapters.WrapWithCaller(err, m.SchemaName(), func(op, entity string, err error) error {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			// The translation drops the driver's error, which names the key.
+			return errs.NewDuplicateKeyOn(op, entity, ga.keys().Columns(entity, original), fmt.Errorf("%w: %w", err, original))
+		}
+		return mapGormError(op, entity, err)
+	})
+}
+
+// keys tells which unique key a duplicate key error broke, by the dialect
+// of the application's driver.
+func (ga *GormAdapter) keys() adapters.KeyFinder {
+	var dialect adapters.Dialect
+	if ga.db.Dialector != nil {
+		switch ga.db.Dialector.Name() {
+		case "postgres":
+			dialect = adapters.DialectPostgres
+		case "mysql":
+			dialect = adapters.DialectMySQL
+		case "sqlserver":
+			dialect = adapters.DialectSQLServer
+		case "sqlite":
+			dialect = adapters.DialectSQLite
+		}
+	}
+	catalog := ga.db
+	if ga.pool != nil {
+		catalog = ga.pool
+	}
+	// GORM writes each ? of a raw query in the dialect's own form.
+	return adapters.KeyFinder{Dialect: dialect, Resolver: ga.resolver,
+		Catalog: func(ctx context.Context, query string, args ...any) ([]string, error) {
+			var columns []string
+			err := catalog.WithContext(ctx).Raw(query, args...).Scan(&columns).Error
+			return columns, err
+		},
+	}
 }
 
 // row returns m's ToMap keyed by physical column.
@@ -331,8 +374,14 @@ func (ga *GormAdapter) recount(ctx context.Context, m behemoth.Model, expr claus
 // deferred; see "Nested transactions keep each library's behaviour" in
 // docs/internal/database/adapters/transactions.md.
 func (ga *GormAdapter) Transaction(ctx context.Context, fn behemoth.TransactionFunc) error {
+	pool := ga.pool
+	if pool == nil {
+		pool = ga.db
+	}
 	return ga.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		_, err := fn(ctx, NewGormAdapter(tx, ga.resolver))
+		txAdapter := NewGormAdapter(tx, ga.resolver)
+		txAdapter.pool = pool
+		_, err := fn(ctx, txAdapter)
 		return err
 	})
 }

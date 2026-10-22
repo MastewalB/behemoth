@@ -78,9 +78,17 @@ func (my *MySQLAdapter) where(m behemoth.Model, expr *clause.Expression) (string
 	return adapters.BuildSQLWhereClause(adapters.PhysicalExpression(my.names(), m, expr), adapters.DefaultClauseOption)
 }
 
-// mapMySQLErrors classifies MySQL server errors by error number
+// keys tells which unique key a duplicate key error broke. A duplicate key
+// leaves a MySQL transaction usable, so the catalog lookup runs on the
+// adapter's own connection.
+func (my *MySQLAdapter) keys() adapters.KeyFinder {
+	return adapters.KeyFinder{Dialect: adapters.DialectMySQL, Resolver: my.names(), Catalog: adapters.CatalogOn(my.DB)}
+}
+
+// mapErrors classifies MySQL server errors by error number
 // (https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html).
-func mapMySQLErrors(op, entity string, err error) error {
+// A duplicate entry names the columns of its key.
+func (my *MySQLAdapter) mapErrors(op, entity string, err error) error {
 	if classified, ok := adapters.MapStdSQLErrors(op, entity, err); ok {
 		return classified
 	}
@@ -91,7 +99,7 @@ func mapMySQLErrors(op, entity string, err error) error {
 	}
 	switch myErr.Number {
 	case 1062: // ER_DUP_ENTRY
-		return adapters.Classify(op, entity, adapters.SentinelDuplicateKey, err)
+		return my.keys().DuplicateKey(op, entity, err)
 	case 1451, 1452, 1216, 1217: // ER_ROW_IS_REFERENCED_2, ER_NO_REFERENCED_ROW_2, and their pre-5.1 forms
 		return adapters.Classify(op, entity, adapters.SentinelForeignKey, err)
 	case 1146: // ER_NO_SUCH_TABLE
@@ -137,7 +145,7 @@ func (my *MySQLAdapter) Create(ctx context.Context, m behemoth.Model) error {
 	)
 
 	_, err := my.q().ExecContext(ctx, query, values...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 }
 
 func (my *MySQLAdapter) FindOne(
@@ -165,23 +173,23 @@ func (my *MySQLAdapter) FindOne(
 
 	rows, err := my.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	defer rows.Close()
 
 	types, err := rows.ColumnTypes()
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 		}
-		return nil, adapters.WrapWithCaller(sql.ErrNoRows, m.SchemaName(), mapMySQLErrors)
+		return nil, adapters.WrapWithCaller(sql.ErrNoRows, m.SchemaName(), my.mapErrors)
 	}
 	values, err := adapters.ScanMySQLRow(rows, types)
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 
 	return models.GenerateModelFromRows(m, columns, values)
@@ -242,20 +250,20 @@ func (my *MySQLAdapter) FindMany(
 
 	rows, err := my.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	defer rows.Close()
 
 	types, err := rows.ColumnTypes()
 	if err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 
 	var results []behemoth.Model
 	for rows.Next() {
 		values, err := adapters.ScanMySQLRow(rows, types)
 		if err != nil {
-			return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+			return nil, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 		}
 		result, err := models.GenerateModelFromRows(m, columns, values)
 		if err != nil {
@@ -264,7 +272,7 @@ func (my *MySQLAdapter) FindMany(
 		results = append(results, result)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return nil, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 
 	return results, nil
@@ -288,11 +296,11 @@ func (my *MySQLAdapter) Update(ctx context.Context, m behemoth.Model) error {
 	// MySQL reports changed rows unless the connection sets clientFoundRows.
 	res, err := my.q().ExecContext(ctx, query, append(values, m.PrimaryKeyField())...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	return adapters.ExpectOneRow("Update", m, n, func() (int64, error) { return my.count(ctx, m, adapters.ByPrimaryKey(m), true) })
 }
@@ -329,11 +337,11 @@ func (my *MySQLAdapter) UpdateOne(
 
 	res, err := my.q().ExecContext(ctx, query, args...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	// MySQL reports changed rows unless the connection sets clientFoundRows.
 	return adapters.ExpectOneRow("UpdateOne", m, n, func() (int64, error) { return my.count(ctx, m, expr, true) })
@@ -360,7 +368,7 @@ func (my *MySQLAdapter) UpdateMany(
 	)
 
 	_, err := my.q().ExecContext(ctx, query, append(values, whereArgs...)...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 
 }
 
@@ -372,11 +380,11 @@ func (my *MySQLAdapter) Delete(ctx context.Context, m behemoth.Model) error {
 	)
 	res, err := my.q().ExecContext(ctx, query, m.PrimaryKeyField())
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	return adapters.ExpectOneRow("Delete", m, n, nil)
 }
@@ -395,11 +403,11 @@ func (my *MySQLAdapter) DeleteOne(ctx context.Context, m behemoth.Model, expr cl
 	)
 	res, err := my.q().ExecContext(ctx, query, args...)
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	return adapters.ExpectOneRow("DeleteOne", m, n, nil)
 }
@@ -417,13 +425,13 @@ func (my *MySQLAdapter) DeleteMany(ctx context.Context, m behemoth.Model, expr c
 	)
 
 	_, err := my.q().ExecContext(ctx, query, args...)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 }
 
 func (my *MySQLAdapter) DeleteAll(ctx context.Context, m behemoth.Model) error {
 	query := fmt.Sprintf("DELETE FROM %s", adapters.PhysicalTable(my.names(), m))
 	_, err := my.q().ExecContext(ctx, query)
-	return adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+	return adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 }
 
 func (my *MySQLAdapter) Count(ctx context.Context, m behemoth.Model, expr clause.Expression) (int64, error) {
@@ -452,14 +460,14 @@ func (my *MySQLAdapter) count(ctx context.Context, m behemoth.Model, expr clause
 
 	row, err := my.q().QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+		return 0, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 	}
 	defer row.Close()
 
 	var count int64
 	if row.Next() {
 		if err := row.Scan(&count); err != nil {
-			return 0, adapters.WrapWithCaller(err, m.SchemaName(), mapMySQLErrors)
+			return 0, adapters.WrapWithCaller(err, m.SchemaName(), my.mapErrors)
 		}
 	}
 

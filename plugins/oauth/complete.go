@@ -375,7 +375,9 @@ func (p *Plugin) resolveUser(hctx *core.HookContext, providerID string, identity
 		switch {
 		case err == nil:
 			return user, nil
-		case attempt == 0 && errs.IsCategory(err, errs.CategoryDuplicateKey):
+		case attempt == 0 && errs.IsDuplicateKey(err):
+			// The email or the account, taken by the winner. A taken
+			// email is a conflict that holds the duplicate key.
 			continue
 		}
 		return nil, core.FailIfRejected(dispatcher, hctx, hooks.HookSignInFailed, err,
