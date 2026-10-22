@@ -185,14 +185,19 @@ func (rl *DefaultRateLimiter) CheckRule(ctx context.Context, name, key, ip strin
 }
 
 // evaluate is the shared core: it asks the rule's limiter and turns a
-// refusal into an audit event and a rate-limited error. Hook rules and the
-// rules a transport applies (CheckRule) both go through it, so there is
-// exactly one place that handles a refusal and a failing counter.
+// refusal into a rate-limited error. Hook rules and the rules a transport
+// applies (CheckRule) both go through it, so there is exactly one place that
+// handles a refusal and a failing counter.
+//
+// Only the first refusal of a window is an audit event. One per refusal
+// would make a client that keeps trying past its limit insert into
+// audit_log at the rate it sends; the metric counts every refusal instead.
 //
 // Deferred: ActionLockout. No rule reaches here with it, because the catalog
 // rejects it at declaration. When it is built it belongs here, around the
 // call to the limiter: check a lockout key before counting and set it on the
-// first refusal. action and lockoutFor are passed for that and not read.
+// first refusal (FirstRefusal). action and lockoutFor are passed for that and
+// not read.
 func (rl *DefaultRateLimiter) evaluate(
 	ctx context.Context,
 	name, key string,
@@ -207,12 +212,12 @@ func (rl *DefaultRateLimiter) evaluate(
 		spanAttrs = behemoth.M{telemetry.AttrRule: name}
 	}
 	spanCtx, span := rl.tel.StartSpan(ctx, telemetry.SpanRateLimitCheck, spanAttrs)
-	allowed, retryAfter, err := algo.Allow(spanCtx, key, limit)
+	decision, err := algo.Allow(spanCtx, key, limit)
 	result := "allowed"
 	switch {
 	case err != nil:
 		result = "error"
-	case !allowed:
+	case !decision.Allowed:
 		result = "limited"
 	}
 	if rl.tel.TracingEnabled() {
@@ -224,8 +229,8 @@ func (rl *DefaultRateLimiter) evaluate(
 		return rl.handleStoreFailure(ctx, name, err)
 	}
 
-	if !allowed {
-		if rl.tel != nil {
+	if !decision.Allowed {
+		if rl.tel != nil && decision.FirstRefusal {
 			event := telemetry.AuditEvent{
 				Type: telemetry.AuditRateLimitExceeded, Outcome: telemetry.OutcomeDenied,
 				IPAddress: ip, Metadata: behemoth.M{"rule": name, "key": key},
@@ -237,7 +242,7 @@ func (rl *DefaultRateLimiter) evaluate(
 			}
 			rl.tel.RecordAudit(ctx, event)
 		}
-		return errs.NewRateLimited(name, name, retryAfter)
+		return errs.NewRateLimited(name, name, decision.RetryAfter)
 	}
 
 	return nil

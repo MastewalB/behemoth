@@ -37,7 +37,7 @@ const (
 	AuditUserCreated       = "user.created"
 	AuditUserUpdated       = "user.updated"
 	AuditUserDeleted       = "user.deleted"
-	AuditRateLimitExceeded = "ratelimit.exceeded"
+	AuditRateLimitExceeded = "ratelimit.exceeded" // the first refused attempt of a rule's window, per key
 	AuditMigrationApplied  = "migration.applied"
 	AuditSecretRotated     = "crypto.secret.rotated"
 )

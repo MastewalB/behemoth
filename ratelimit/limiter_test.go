@@ -77,9 +77,9 @@ func TestRateLimitRulesNameTheirAlgorithm(t *testing.T) {
 // was asked about.
 type keyRecorder struct{ keys *[]string }
 
-func (l keyRecorder) Allow(_ context.Context, key string, _ core.Limit) (bool, time.Duration, error) {
+func (l keyRecorder) Allow(_ context.Context, key string, _ core.Limit) (core.LimitDecision, error) {
 	*l.keys = append(*l.keys, key)
-	return true, 0, nil
+	return core.LimitDecision{Allowed: true}, nil
 }
 
 // A hook rule whose KeyFunc returns false is skipped for the call: nothing
@@ -127,15 +127,17 @@ func TestHookRuleIsSkippedWhenItDoesNotApply(t *testing.T) {
 // fixedLimiter answers every check the same way.
 type fixedLimiter struct {
 	allowed bool
+	first   bool // a refusal is the first of its window
 	err     error
 }
 
-func (l fixedLimiter) Allow(context.Context, string, core.Limit) (bool, time.Duration, error) {
-	return l.allowed, time.Second, l.err
+func (l fixedLimiter) Allow(context.Context, string, core.Limit) (core.LimitDecision, error) {
+	return core.LimitDecision{Allowed: l.allowed, RetryAfter: time.Second, FirstRefusal: l.first}, l.err
 }
 
-// Each evaluated rule is counted once with how it ended, and a rejection is
-// also an audit event with the outcome "denied".
+// Each evaluated rule is counted once with how it ended. The first rejection
+// of a window is also an audit event with the outcome "denied"; a later one
+// is counted and not recorded.
 func TestRateLimiterMetrics(t *testing.T) {
 	tel, rec := telemetrytest.New()
 	rl := &DefaultRateLimiter{tel: tel}
@@ -147,31 +149,33 @@ func TestRateLimiterMetrics(t *testing.T) {
 	if err := check(fixedLimiter{allowed: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := check(fixedLimiter{allowed: false}); !errs.IsCategory(err, errs.CategoryRateLimited) {
-		t.Fatalf("a rejected check returned %v", err)
+	for _, first := range []bool{true, false} {
+		if err := check(fixedLimiter{first: first}); !errs.IsCategory(err, errs.CategoryRateLimited) {
+			t.Fatalf("a rejected check (first %v) returned %v", first, err)
+		}
 	}
 	if err := check(fixedLimiter{err: errors.New("redis down")}); err != nil {
 		t.Fatalf("a store failure with fail-open returned %v", err)
 	}
 
-	for result, want := range map[string]int64{"allowed": 1, "limited": 1, "error": 1} {
+	for result, want := range map[string]int64{"allowed": 1, "limited": 2, "error": 1} {
 		if n := rec.Metrics.Count(telemetry.MetricRateLimitChecks, behemoth.M{telemetry.AttrRule: "signin", telemetry.AttrResult: result}); n != want {
 			t.Errorf("checks with result %q = %d, want %d", result, n, want)
 		}
 	}
 	events := rec.Audit.OfType(telemetry.AuditRateLimitExceeded)
 	if len(events) != 1 || events[0].Outcome != telemetry.OutcomeDenied || events[0].IPAddress != "203.0.113.7" {
-		t.Errorf("audit events = %+v, want one denied event with the address", events)
+		t.Errorf("audit events = %+v, want one denied event with the address, for the first rejection", events)
 	}
 }
 
 // limitRecorder allows every check and records the rule and limit of each.
 type limitRecorder struct{ seen map[string]core.Limit }
 
-func (l limitRecorder) Allow(_ context.Context, key string, limit core.Limit) (bool, time.Duration, error) {
+func (l limitRecorder) Allow(_ context.Context, key string, limit core.Limit) (core.LimitDecision, error) {
 	rule, _, _ := strings.Cut(key, ":")
 	l.seen[rule] = limit
-	return true, 0, nil
+	return core.LimitDecision{Allowed: true}, nil
 }
 
 // RateLimitConfig.Limits replaces a rule's limit and Disabled turns a rule
@@ -242,7 +246,7 @@ func TestRateLimitRefusalOmitsTheAddressWhenConfigured(t *testing.T) {
 	tel, rec := telemetrytest.New()
 	rl := &DefaultRateLimiter{tel: tel, audit: core.AuditConfig{OmitIPAndAgent: true}}
 	ctx := context.Background()
-	err := rl.evaluate(ctx, "signin", "signin:203.0.113.7", "203.0.113.7", fixedLimiter{allowed: false}, core.Limit{}, "", 0)
+	err := rl.evaluate(ctx, "signin", "signin:203.0.113.7", "203.0.113.7", fixedLimiter{first: true}, core.Limit{}, "", 0)
 	if !errs.IsCategory(err, errs.CategoryRateLimited) {
 		t.Fatalf("got %v", err)
 	}
@@ -261,7 +265,7 @@ func TestCheckRuleCountsWhatTheTransportPasses(t *testing.T) {
 	var keys []string
 	for _, rule := range []core.RateLimitRule{
 		{Name: "transport.counted", Limiter: keyRecorder{&keys}, Owner: "test"},
-		{Name: "transport.refused", Limiter: fixedLimiter{allowed: false}, Owner: "test"},
+		{Name: "transport.refused", Limiter: fixedLimiter{first: true}, Owner: "test"},
 		{Name: "transport.exempt", Disabled: true, Owner: "test"},
 	} {
 		if err := catalog.DeclareRule(rule); err != nil {

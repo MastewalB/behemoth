@@ -18,6 +18,10 @@ import (
 //
 // A refused attempt is counted too, so a client that keeps trying does not
 // get through earlier; the window still ends when it was going to.
+//
+// The attempt counted Max+1 is the window's first refusal. The counter never
+// returns the same count twice in a window, so there is exactly one per key
+// and window, across replicas too.
 type FixedWindow struct {
 	counter core.AtomicIncrementer
 	now     func() time.Time
@@ -34,20 +38,22 @@ func (l *FixedWindow) WithClock(now func() time.Time) *FixedWindow {
 	return l
 }
 
-// Allow implements [core.Limiter]. retryAfter is the time left in the
+// Allow implements [core.Limiter]. RetryAfter is the time left in the
 // window, never more than the window itself: the counter's clock (the
 // database's rows are stamped by another application server, Redis by its
 // own) may not agree with this one.
-func (l *FixedWindow) Allow(ctx context.Context, key string, limit core.Limit) (bool, time.Duration, error) {
+func (l *FixedWindow) Allow(ctx context.Context, key string, limit core.Limit) (core.LimitDecision, error) {
 	count, resetAt, err := l.counter.Increment(ctx, key, limit.Window)
 	if err != nil {
-		return false, 0, err
+		return core.LimitDecision{}, err
 	}
 	if count <= limit.Max {
-		return true, 0, nil
+		return core.LimitDecision{Allowed: true}, nil
 	}
-	retryAfter := min(max(resetAt.Sub(l.now()), 0), limit.Window)
-	return false, retryAfter, nil
+	return core.LimitDecision{
+		RetryAfter:   min(max(resetAt.Sub(l.now()), 0), limit.Window),
+		FirstRefusal: count == limit.Max+1,
+	}, nil
 }
 
 var _ core.Limiter = (*FixedWindow)(nil)

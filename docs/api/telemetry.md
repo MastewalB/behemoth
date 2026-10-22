@@ -206,7 +206,7 @@ The audit log records actions on accounts: who signed up and signed in, which si
 | `auth.signOut.after` | a sign-out finished | success |
 | `auth.session.afterCreate`, `auth.session.afterRevoke` | a session was created or revoked. A session that ended because its user was deleted is recorded as revoked. | success |
 | `token.afterIssue`, `token.consumed`, `token.failed` | a token was issued, used, or refused | success, failure |
-| `ratelimit.exceeded` | a request was stopped by a rate limit | denied |
+| `ratelimit.exceeded` | a rate limit stopped a request, the first time in its window | denied |
 | `migration.applied` | a migration was applied | success |
 | `crypto.secret.rotated` | a secret rotation took effect | success |
 
@@ -239,7 +239,7 @@ Things worth knowing:
   A `ratelimit.exceeded` event then also leaves out the counter key from its metadata: for a limit per client address the key is the address.
 
 - **An impersonated action names both users.** The impersonated user is the actor, so a query by their id finds it, and the impersonator is the delegate.
-- **Rate-limit rejections are recorded one by one.** A client that keeps sending requests past its limit adds one event per request.
+- **A rate limit records one event per window.** A client that keeps sending requests past its limit adds one `ratelimit.exceeded` event, for the first refused request, and none for the rest of the window. To see how many requests were refused, use the `behemoth.ratelimit.checks` metric with `result="limited"`.
 
 ### Read events
 
