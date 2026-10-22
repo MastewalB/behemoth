@@ -21,11 +21,12 @@ func NewEncryptor(km KeyManager, rnd Randomizer) *AESGCMEncryptor {
 	return &AESGCMEncryptor{km: km, rnd: rnd}
 }
 
-// Encrypt seals plaintext under the current key and returns the version of
-// that key. The ciphertext is a random 12-byte nonce, then the sealed
-// plaintext and its 16-byte tag; two calls with the same plaintext return
-// different ciphertexts. No associated data is bound to it.
-func (e *AESGCMEncryptor) Encrypt(plaintext []byte) ([]byte, int, error) {
+// Encrypt seals plaintext under the current key, bound to associatedData,
+// and returns the version of that key. The ciphertext is a random 12-byte
+// nonce, then the sealed plaintext and its 16-byte tag; two calls with the
+// same plaintext return different ciphertexts. associatedData is
+// authenticated by the tag and not part of the ciphertext.
+func (e *AESGCMEncryptor) Encrypt(plaintext, associatedData []byte) ([]byte, int, error) {
 	key, version, err := e.km.Current(KeyPurposeEncryptAtRest)
 	if err != nil {
 		return nil, 0, err
@@ -42,16 +43,17 @@ func (e *AESGCMEncryptor) Encrypt(plaintext []byte) ([]byte, int, error) {
 
 	// GCM convention: Nonce is prepended to the ciphertext, so Decrypt
 	// only needs (ciphertext, keyVersion), nothing else to store separately.
-	sealed := gcm.Seal(nonce, nonce, plaintext, nil)
+	sealed := gcm.Seal(nonce, nonce, plaintext, associatedData)
 	return sealed, version, nil
 }
 
-// Decrypt opens a ciphertext Encrypt returned, with the key of keyVersion.
-// A ciphertext shorter than a nonce is a security error with the code
-// short_cipher_length, and one that does not open under the key (changed,
-// cut, or sealed under another version) has the code invalid_payload. A
-// version the key manager does not hold is its error.
-func (e *AESGCMEncryptor) Decrypt(ciphertext []byte, keyVersion int) ([]byte, error) {
+// Decrypt opens a ciphertext Encrypt returned, with the key of keyVersion
+// and the associated data Encrypt was given. A ciphertext shorter than a
+// nonce is a security error with the code short_cipher_length, and one that
+// does not open (changed, cut, sealed under another version, or bound to
+// other associated data) has the code invalid_payload. A version the key
+// manager does not hold is its error.
+func (e *AESGCMEncryptor) Decrypt(ciphertext []byte, keyVersion int, associatedData []byte) ([]byte, error) {
 	key, err := e.km.GetByVersion(KeyPurposeEncryptAtRest, keyVersion)
 	if err != nil {
 		return nil, err
@@ -65,7 +67,7 @@ func (e *AESGCMEncryptor) Decrypt(ciphertext []byte, keyVersion int) ([]byte, er
 	}
 
 	nonce, sealed := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
-	plaintext, err := gcm.Open(nil, nonce, sealed, nil)
+	plaintext, err := gcm.Open(nil, nonce, sealed, associatedData)
 	if err != nil {
 		return nil, errs.NewSecurityError("AESGCMEncryptor.Decrypt", "invalid_payload", err)
 	}

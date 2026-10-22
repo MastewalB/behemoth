@@ -260,7 +260,7 @@ func (p *Plugin) completeBody(hctx *core.HookContext, in completeInput) (*core.S
 	}
 
 	sealedVerifier, _ := meta[metaVerifier].(string)
-	verifier, err := ac.Store.Open(sealedVerifier)
+	verifier, err := ac.Store.Open(sealedVerifier, verifierBinding(bindingHash))
 	if err != nil {
 		return nil, err
 	}

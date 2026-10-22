@@ -653,6 +653,24 @@ func accountsContract(t *testing.T, st *store.Store, db behemoth.Database) {
 	_, err = st.FindAccount(ctx, "github", "gh-1")
 	assert.True(t, errs.IsNotFound(err), "%v", err)
 
+	// A token is bound to its account and its column: copied into another
+	// account's row, or into another column of its own, it does not open.
+	other := &models.Account{UserID: "u4", ProviderID: "github", AccountID: "gh-4", AccessToken: "access-4"}
+	require.NoError(t, st.CreateAccount(ctx, other))
+	raw, err = db.FindOne(ctx, &models.Account{}, clause.Expression{Conditions: []clause.Condition{
+		{Field: models.AccountID, Operator: clause.OpEqual, Value: google.ID}}})
+	require.NoError(t, err)
+	googleAccess := raw.(*models.Account).AccessToken
+	byID := func(id string) clause.Expression {
+		return clause.Expression{Conditions: []clause.Condition{{Field: models.AccountID, Operator: clause.OpEqual, Value: id}}}
+	}
+	require.NoError(t, db.UpdateOne(ctx, &models.Account{}, byID(other.ID), behemoth.M{models.AccountAccessToken: googleAccess}))
+	_, err = st.FindAccountByID(ctx, other.ID)
+	assert.True(t, errs.IsCode(err, "invalid_payload"), "another account's token: %v", err)
+	require.NoError(t, db.UpdateOne(ctx, &models.Account{}, byID(other.ID), behemoth.M{models.AccountAccessToken: nil, models.AccountRefreshToken: googleAccess}))
+	_, err = st.FindAccountByID(ctx, other.ID)
+	assert.True(t, errs.IsCode(err, "invalid_payload"), "an access token as a refresh token: %v", err)
+
 	// A stored value that isn't a valid ciphertext is an error, not a panic.
 	require.NoError(t, db.UpdateOne(ctx, &models.Account{}, clause.Expression{Conditions: []clause.Condition{
 		{Field: models.AccountID, Operator: clause.OpEqual, Value: google.ID}}}, behemoth.M{models.AccountAccessToken: "v1:AAAA"}))

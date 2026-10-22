@@ -77,7 +77,7 @@ Each failure is a configuration error from `Boot`.
 | 2 | find the provider by its id | a validation error, code `provider_invalid_input` |
 | 3 | check `RedirectURL` with `core.TrustedRedirect(ac.Origins, url)`, if one was given | a validation error, code `redirect_url_invalid_input` |
 | 4 | create the PKCE verifier, the nonce, and the binding value: 32 random bytes each | a security error |
-| 5 | `Store.Seal(verifier)` | the error is returned |
+| 5 | `Store.Seal(verifier, verifierBinding(bindingHash))`: bound to the hash of the binding value | the error is returned |
 | 6 | `TokenManager.Issue(oauth_state, no subject, metadata)` | `FailIfRejected`, for a refusal on `token.beforeIssue` |
 | 7 | `Provider.AuthorizationURL` with the state, the redirect URI, the S256 challenge, and the nonce. Then check that the URL is absolute `http` or `https`. | revoke the token, and return the error wrapped |
 | 8 | `RunAfter(auth.oauth.afterBegin)` with a copy of the result that has no URL, no state, and no binding value | |
@@ -91,7 +91,7 @@ The token's metadata is the authorization transaction:
 | `provider` | the provider's id | |
 | `redirect_url` | the checked redirect target. Absent when none was given. | |
 | `nonce` | the nonce, as it is | The provider puts it into the ID token, so it is not a secret. |
-| `verifier_secret` | the PKCE verifier, sealed | Handlers on the token points and readers of the database see the metadata. |
+| `verifier_secret` | the PKCE verifier, sealed with the purpose `oauth.pkce_verifier` and the binding hash as the owner | Handlers on the token points and readers of the database see the metadata. The verifier is sealed before the token exists, so the token's id can't be the owner. |
 | `binding_hash` | the SHA-256 of the binding value, in hex | The raw value is only in `BeginResult`. Finishing the sign-in compares hashes. |
 
 Both key names end in a word the telemetry redactor knows (`secret`, `hash`).

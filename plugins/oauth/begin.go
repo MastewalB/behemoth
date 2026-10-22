@@ -12,6 +12,7 @@ import (
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/core"
 	"github.com/MastewalB/behemoth/errs"
+	"github.com/MastewalB/behemoth/store"
 	"github.com/MastewalB/behemoth/telemetry"
 	"github.com/MastewalB/behemoth/utils"
 )
@@ -33,6 +34,13 @@ const (
 	metaVerifier    = "verifier_secret"
 	metaBindingHash = "binding_hash"
 )
+
+// verifierBinding binds the sealed verifier of a sign-in to the hash of its
+// binding value, kept beside it. The token's id would be the obvious owner,
+// but the verifier is sealed before the token exists.
+func verifierBinding(bindingHash string) store.SealBinding {
+	return store.SealBinding{Purpose: "oauth.pkce_verifier", Owner: bindingHash}
+}
 
 // BeginRequest is the input of Begin.
 //
@@ -188,7 +196,8 @@ func (p *Plugin) beginBody(hctx *core.HookContext, req BeginRequest) (*BeginResu
 		}
 		*secret = value
 	}
-	sealedVerifier, err := ac.Store.Seal(verifier)
+	bindingHash := utils.LookupHashOf(binding)
+	sealedVerifier, err := ac.Store.Seal(verifier, verifierBinding(bindingHash))
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +206,7 @@ func (p *Plugin) beginBody(hctx *core.HookContext, req BeginRequest) (*BeginResu
 		metaProvider:    provider.ID(),
 		metaNonce:       nonce,
 		metaVerifier:    sealedVerifier,
-		metaBindingHash: utils.LookupHashOf(binding),
+		metaBindingHash: bindingHash,
 	}
 	if req.RedirectURL != "" {
 		meta[metaRedirectURL] = req.RedirectURL

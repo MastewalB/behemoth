@@ -91,11 +91,13 @@ The other core tables declare no public column. `Public.Of` on a session, an acc
 | Opening them on read | the store | A direct read returns the sealed string (`v1:<base64>`), which is not a usable token. |
 | Consistency between the two | the store | A row you wrote in plaintext can't be read through the store afterwards: `FindAccount` returns a security error (`invalid_sealed_value`) for it. |
 
-Two more points:
+Each token is sealed for its account and its column. A sealed token copied into another account's row, or into another column, can't be read through the store: `FindAccount` returns a security error (`invalid_payload`) for it.
+
+These points also apply:
 
 - `password_hash` is not sealed. It is a one-way hash and is stored as given in both paths. Hash it with `ac.Crypto.Passwords` before you store it.
 - If you need to write tokens directly, use `UpdateAccount` for the token columns and the adapter for the rest.
-- `Store.Seal` returns the sealed form of a value, and `Store.Open` reads it back. Use them for a secret your plugin keeps in a table of its own or in a token's metadata.
+- `Store.Seal(value, binding)` returns the sealed form of a value, and `Store.Open(sealed, binding)` reads it back. Use them for a secret your plugin keeps in a table of its own or in a token's metadata. The `store.SealBinding` names what the value is (`Purpose`, starting with your plugin's name) and what it belongs to (`Owner`, such as the user's id). `Open` reads the value only with the binding it was sealed with, so a value copied into another user's row can't be read there. Pick an owner that never changes, and use the same purpose and owner to open the value.
 
 ## Sessions
 

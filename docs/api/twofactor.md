@@ -70,7 +70,7 @@ The setup follows these rules:
 - **The first method ends the user's other sessions**, with the revoke reason `two_factor_enabled` (`twofactor.SessionRevokedEnabled`): they were opened without a second factor. The session that confirms stays.
 - **A method keeps the destination it was confirmed with.** Codes go to that address or number, whatever the account's email or phone number becomes. Set the method up again to change it.
 - **A new TOTP setup keeps the old secret working** until the new one is confirmed.
-- **The TOTP secret is stored sealed,** like an OAuth token: the store encrypts it with your secrets.
+- **The TOTP secret is stored sealed,** like an OAuth token: the store encrypts it with your secrets, for its user. A secret copied into another user's row does not work there.
 - **Turning the last method off** deletes the recovery codes too.
 
 A number is accepted in E.164 form only, as for the phone number plugin. See [Phone number](phonenumber.md#phone-numbers).
