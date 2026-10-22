@@ -1163,3 +1163,22 @@ func TestCommittedDataPointsUnderBoot(t *testing.T) {
 
 	assert.Equal(t, []string{"created ada@example.com", "updated true"}, seen)
 }
+
+// Purge runs every purge when one fails, and its error names each table that
+// failed. This database has no rate_limits, verification_codes or
+// reserved_values table.
+func TestPurgeRunsEveryPurge(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(sessionsTokensDB(t))
+	tok := &models.Token{Kind: kindReset, Subject: "u1", LookupHash: "purge", TokenHash: "h", KeyVersion: 1, ExpiresAt: st.Now().Add(-time.Hour)}
+	require.NoError(t, st.CreateToken(ctx, tok))
+
+	err := st.Purge(ctx, store.PurgeOptions{TokensBefore: st.Now()})
+	require.Error(t, err)
+	for _, table := range []string{models.RateLimitTable, models.VerificationCodeTable, models.ReservedValueTable} {
+		assert.Contains(t, err.Error(), "store: purge "+table+":")
+	}
+	assert.NotContains(t, err.Error(), "purge "+models.TokenTable)
+	_, err = st.FindTokenByID(ctx, tok.ID)
+	assert.True(t, errs.IsNotFound(err), "the tokens were purged: %v", err)
+}

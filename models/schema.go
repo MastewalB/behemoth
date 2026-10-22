@@ -55,7 +55,10 @@ func SessionTableSchema() schema.Table {
 			{Name: SessionCreatedAt, Type: schema.ColTypeTimestamp},
 			{Name: SessionUpdatedAt, Type: schema.ColTypeTimestamp},
 		},
-		Indexes: []schema.Index{{Name: "idx_sessions_user_id", Columns: []string{SessionUserID}}},
+		Indexes: []schema.Index{
+			{Name: "idx_sessions_user_id", Columns: []string{SessionUserID}},
+			{Name: "idx_sessions_expires_at", Columns: []string{SessionExpiresAt}}, // Store.PurgeExpiredSessions
+		},
 		ForeignKeys: []schema.ForeignKey{{
 			Name: "fk_sessions_user", Columns: []string{SessionUserID},
 			RefTable: UserTable, RefColumns: []string{UserID}, OnDelete: schema.FKCascade,
@@ -82,6 +85,7 @@ func TokenTableSchema() schema.Table {
 		Indexes: []schema.Index{
 			{Name: "uq_tokens_kind_lookup_hash", Columns: []string{TokenKindColumn, TokenLookupHash}, Unique: true},
 			{Name: "idx_tokens_kind_subject", Columns: []string{TokenKindColumn, TokenSubject}},
+			{Name: "idx_tokens_expires_at", Columns: []string{TokenExpiresAt}}, // Store.PurgeExpiredTokens
 		},
 	}
 }

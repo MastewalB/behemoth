@@ -67,6 +67,6 @@ Codes behave as follows:
 - Only a keyed hash is stored, in the core `verification_codes` table. The table is new in core. Generate and apply a migration before you deploy a version that has it, whether or not you use codes, because deleting a user clears the user's codes from it.
 - `Consume` gives one error for every refusal, with the code `code_invalid`.
 - Use a user id as the subject when the code belongs to a user: `Store.DeleteUser` removes the codes whose subject is the user's id.
-- Expired codes that were never used stay until `ac.Store.PurgeExpiredVerificationCodes(ctx)` runs. Nothing schedules it, so call it from a job, next to the other purges.
+- Expired codes that were never used stay until a purge removes them. `ac.Store.Purge` does on every run. See [Remove old rows](core-tables.md#remove-old-rows).
 
 A code is not a token. Use `ac.TokenManager` for a long secret that travels in a link, and a code for a short one a person types.

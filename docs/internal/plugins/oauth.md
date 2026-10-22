@@ -311,7 +311,7 @@ An ID token without a `kid` is checked against every key of the set that fits it
 
 **Decision:** the database backend.
 
-**Revisit if:** a purge of tokens is not built and the rows become a problem. "Nothing removes old sessions, tokens, or rate-limit counters" in `docs/ongoing.md` is the entry.
+**Revisit if:** the rows become a problem although the application runs `Store.Purge`. Since the decision, `Store.PurgeExpiredTokens` removes the used and expired state tokens, and `Purge` runs it when `TokensBefore` is set.
 
 ### Handlers on the after point do not get the URL or the binding value
 

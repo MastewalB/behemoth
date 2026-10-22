@@ -84,7 +84,7 @@ A component keeps its state on the value its constructor returns. Two of them ca
 
 ### Background work is a method first
 
-`Store.PurgeExpiredRateLimits(ctx)` does one pass and returns. It can be run by a ticker, by an application's scheduler or by a Kubernetes CronJob, and from several replicas at once, since a second pass finds nothing to delete.
+`Store.Purge(ctx, opts)` runs each of the store's purges once and returns. It can be run by a ticker, by an application's scheduler or by a Kubernetes CronJob, and from several replicas at once, since a second pass finds nothing to delete.
 
 A component that needs periodic work offers it this way, and leaves the schedule to whoever owns the process. A constructor that starts its own ticker runs once per replica, can't be turned off, and keeps running in tests.
 
@@ -127,7 +127,6 @@ The framework and storage adapters are modules of their own, and the root `go.mo
 Not models to copy. Each has an entry in `docs/ongoing.md` under the quoted title, unless noted:
 
 - `emailpassword.Options.ValidatePassword` and `ValidateEmail` are functions. `BootConfig.Hooks` and `PrepareConfig.Schema` are functions too. The application's `MailSender` is the only way to send, and it writes the message. `StaticSecretSource` is the only secret source. `outbound.Options.Transport` is an interface with no plain-value form for a proxy or a CA bundle, and the default transport takes the proxy from the environment. "An application configures behemoth with Go values only".
-- Nothing schedules the purges, and no method removes old sessions or tokens. "Nothing removes old sessions, tokens, or rate-limit counters".
 - The mail queue is in memory, and `Boot` returns no handle that stops everything it started. "The background mail queue is in memory and does not retry".
 - No call reports whether the database and the key-value store answer. No entry.
 
