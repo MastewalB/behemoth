@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/MastewalB/behemoth/telemetry"
@@ -297,6 +298,54 @@ func TestDefaultKeyManager_UpdateThatChangesNothing(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, applied)
+}
+
+// An update that gives a version the key manager holds another secret is
+// refused whole and logged at Error, even when it also adds a version or
+// moves the current one: the manager keeps its secrets and the keys derived
+// from them. A version names one secret for good.
+func TestDefaultKeyManager_RefusesANewSecretForAHeldVersion(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	secrets := createTestSecrets(1, 2)
+	km, err := NewDefaultKeyManager(t.Context(), KeyManagerConfig{}, StaticSecretSource{Secrets: secrets, Current: 2}, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := km.GetByVersion(KeyPurposeTokenHash, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := createTestSecrets(7)[7]
+
+	for name, update := range map[string]struct {
+		secrets map[int]string
+		current int
+	}{
+		"version 2 changed":                        {map[int]string{1: secrets[1], 2: other}, 2},
+		"version 2 changed, version 3 added":       {map[int]string{1: secrets[1], 2: other, 3: createTestSecrets(3)[3]}, 3},
+		"version 1 changed, the current moved":     {map[int]string{1: other, 2: secrets[2]}, 1},
+		"version 2 changed, only it in the update": {map[int]string{2: other}, 2},
+	} {
+		rec.Logger.Reset()
+		km.applyUpdate(update.secrets, update.current)
+
+		assert.Equal(t, 2, km.CurrentVersion(), name)
+		assert.Equal(t, []int{1, 2}, km.Versions(), name)
+		key, err := km.GetByVersion(KeyPurposeTokenHash, 2)
+		assert.NoError(t, err, name)
+		assert.Equal(t, before, key, "%s: the derived key is the held secret's", name)
+
+		lines := rec.Logger.At(slog.LevelError)
+		if assert.Len(t, lines, 1, name) {
+			assert.Equal(t, "rejected invalid secret rotation update", lines[0].Message)
+			assert.Contains(t, fmt.Sprint(lines[0].Fields), "never changes", name)
+			assert.NotContains(t, fmt.Sprint(lines[0].Fields), other, "%s: the line does not carry the secret", name)
+		}
+	}
+	assert.Empty(t, rec.Audit.OfType(telemetry.AuditSecretRotated), "no rotation took effect")
+
+	km.applyUpdate(createTestSecrets(1, 2, 3), 3)
+	assert.Equal(t, 3, km.CurrentVersion(), "an update that only adds a version is applied")
 }
 
 // Benchmark tests

@@ -44,8 +44,9 @@ Every comparison of a hash or a signature uses `hmac.Equal`. The secret hasher c
 A source that implements `WatchableSecretSource` reports new secrets to the key manager (`applyUpdate`), which then:
 
 1. Validates the update like the first load. An invalid update is logged at Error and ignored; the manager keeps its secrets.
-2. Ignores an update that changes nothing: the same current version, and every secret already held with the same value. A polling watcher reports every load, so this is what keeps a poll from counting as a rotation.
-3. Adds the secrets, sets the current version, logs `secret rotation applied` at Info, and records a `crypto.secret.rotated` audit event.
+2. Refuses an update that gives a version it holds another secret, whatever else the update holds. It is logged at Error like an invalid update, and nothing of it is applied. See *A version's secret never changes*.
+3. Ignores an update that changes nothing: the same current version, and no version it lacks. A polling watcher reports every load, so this is what keeps a poll from counting as a rotation.
+4. Adds the new versions, sets the current version, logs `secret rotation applied` at Info, and records a `crypto.secret.rotated` audit event.
 
 An update never removes a version: what was signed or sealed under an old version stays readable. `RemoveVersion` removes one explicitly, and refuses the current one.
 
@@ -62,16 +63,32 @@ These formats are stored, in rows and in clients, so changing any of them breaks
 - **The secret hash**: HMAC-SHA256 as lowercase hex. A change makes every token, session, one-time code, and recovery code fail to verify.
 - **The signature**: HMAC-SHA256. A change makes every internal JWT fail to verify, and any value signed with the cookie signer.
 - **The ciphertext layout**: the nonce first, then the GCM output, with no associated data. A change makes every sealed value unreadable.
-- **A version's secret never changes.** A key version names one secret; a new secret gets a new version.
+- **A version's secret never changes.** A key version names one secret; a new secret gets a new version. The key manager refuses an update that breaks this, so the keys it has derived always belong to the secrets it holds.
 
 The tests pin each of them with known answers computed outside the code under test.
 
 ## Limits
 
 - **A sealed value is not bound to where it is stored.** With no associated data, a value sealed for one row opens in any other. Someone who can write the database, without the secrets, can copy a two-factor secret from an account they control into another user's row. A password hash can be copied the same way.
-- **A new value for a version already held replaces the secret but not the keys derived from it.** The cache keeps them until the process restarts.
+- **A changed secret is caught only by a process that is running.** Nothing records what a version's secret was, so a replica that starts after the change loads the new secret, and disagrees with the replicas that refused it. Their Error line is the sign. A fingerprint of each version, stored and checked at startup, would catch it.
+- **A refused update is logged at every poll** until the source is fixed, as an invalid one is.
 - **A polling watcher does not log a failed load.** A source that stays unreachable leaves the key manager on its current secrets without a line.
 - **A version removed while the source still lists it comes back** at the next update, which counts as a rotation.
+
+## Design decisions
+
+### A version's secret never changes
+
+**Context:** An update could give a version the key manager holds another secret. The manager replaced the secret and kept the keys it had derived from the old one, so it signed with old keys for some purposes and new ones for others until it restarted, and replicas that started later disagreed with it.
+
+**Options considered:**
+
+- *Apply it, and remove the version's derived keys from the cache.* Every replica that gets the update agrees. But a new secret for a version in use makes everything under it unusable: sealed two-factor secrets and OAuth tokens can't be decrypted, token, session, and code hashes stop verifying, and passwords hashed with the old pepper fail.
+- *Refuse it.* A key version names one secret, as in key management systems (Vault's transit engine, Google Tink, AWS KMS), and as a JWK `kid` names one key. Behemoth publishes its external keys under the version, so a changed secret would also change a published key under the same `kid`.
+
+**Decision:** Refuse it, and the whole update with it. A changed secret for a version in use is almost always a mistake: a secret edited in place, or a store that returns its latest value under a fixed version. Refusing keeps the process serving with the keys it has, and the Error line tells the operator.
+
+**Revisit if:** a deployment needs to replace a compromised secret without a new version. Then the data under it is lost anyway, and a forced apply that clears the cache would fit.
 
 ## Tests
 
@@ -102,5 +119,6 @@ The tests pin each of them with known answers computed outside the code under te
 | `TestKeyManagerRotatesThroughAPollingWatcher` | same | a rotation is picked up and audited once, polls that find nothing new are not |
 | `TestDefaultKeyManager_CurrentDuringRotation` | `crypto/key_manager_test.go` | the key and the version `Current` returns agree while rotations run; with `-race`, no unlocked read |
 | `TestDefaultKeyManager_UpdateThatChangesNothing` | same | an update that changes nothing is neither logged nor audited |
+| `TestDefaultKeyManager_RefusesANewSecretForAHeldVersion` | same | an update that changes a held version's secret is refused whole, with an Error line that does not carry the secret, also when it adds a version or moves the current one |
 
 The known answers were computed with Python's standard library (`hmac`, `hashlib`, and an HKDF checked against RFC 5869 test case 3) and its `cryptography` package for AES-GCM.
