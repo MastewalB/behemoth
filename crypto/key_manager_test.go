@@ -1,12 +1,14 @@
 package crypto
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
 	"testing"
 
 	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -220,6 +222,81 @@ func TestDefaultKeyManager_ConcurrentAccess(t *testing.T) {
 		err := <-errChan
 		assert.NoError(t, err)
 	}
+}
+
+// While rotations run, every key Current returns is the key of the version
+// it returns with it. Current reads the current version once, under the
+// lock; reading it twice could pair one version's key with the other's
+// number, and a signature would name a key that did not make it. Run with
+// -race, the test also catches an unlocked read.
+func TestDefaultKeyManager_CurrentDuringRotation(t *testing.T) {
+	secrets := createTestSecrets(1, 2)
+	km, err := NewDefaultKeyManager(t.Context(), KeyManagerConfig{}, StaticSecretSource{Secrets: secrets, Current: 1}, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			default:
+				km.applyUpdate(secrets, 1+i%2)
+			}
+		}
+	}()
+	for range 20000 {
+		key, version, err := km.Current(KeyPurposeTokenHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := km.GetByVersion(KeyPurposeTokenHash, version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(key, want) {
+			t.Fatalf("Current returned version %d with another version's key", version)
+		}
+	}
+	close(done)
+	<-stopped
+}
+
+// An update that changes nothing, such as a poll that found the same
+// secrets, is not a rotation: it is neither logged nor audited. A new
+// current version and a new secret are.
+func TestDefaultKeyManager_UpdateThatChangesNothing(t *testing.T) {
+	tel, rec := telemetrytest.New()
+	secrets := createTestSecrets(1, 2)
+	km, err := NewDefaultKeyManager(t.Context(), KeyManagerConfig{}, StaticSecretSource{Secrets: secrets, Current: 2}, tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotations := func() int { return len(rec.Audit.OfType(telemetry.AuditSecretRotated)) }
+
+	km.applyUpdate(secrets, 2)
+	km.applyUpdate(map[int]string{2: secrets[2]}, 2)
+	assert.Zero(t, rotations(), "the same secrets, or fewer of them")
+
+	km.applyUpdate(secrets, 1)
+	assert.Equal(t, 1, rotations(), "another current version")
+	assert.Equal(t, 1, km.CurrentVersion())
+
+	km.applyUpdate(createTestSecrets(1, 2, 3), 1)
+	assert.Equal(t, 2, rotations(), "a new secret")
+	assert.Equal(t, []int{1, 2, 3}, km.Versions())
+
+	applied := 0
+	for _, line := range rec.Logger.Entries() {
+		if line.Message == "secret rotation applied" {
+			applied++
+		}
+	}
+	assert.Equal(t, 2, applied)
 }
 
 // Benchmark tests

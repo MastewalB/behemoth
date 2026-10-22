@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -74,9 +75,12 @@ func NewDefaultKeyManager(ctx context.Context, cfg KeyManagerConfig, source Secr
 	return km, nil
 }
 
+// Current reads the current version once, under the lock, so that a
+// rotation can't pair the key of one version with the number of another.
 func (km *DefaultKeyManager) Current(purpose KeyPurpose) (key []byte, version int, err error) {
-	key, err = km.deriveKey(purpose, km.current)
-	return key, km.current, err
+	version = km.CurrentVersion()
+	key, err = km.deriveKey(purpose, version)
+	return key, version, err
 }
 
 func (km *DefaultKeyManager) GetByVersion(purpose KeyPurpose, version int) (key []byte, err error) {
@@ -84,6 +88,8 @@ func (km *DefaultKeyManager) GetByVersion(purpose KeyPurpose, version int) (key 
 }
 
 func (km *DefaultKeyManager) CurrentVersion() int {
+	km.mu.RLock()
+	defer km.mu.RUnlock()
 	return km.current
 }
 
@@ -179,6 +185,13 @@ func (km *DefaultKeyManager) applyUpdate(rawSecrets map[int]string, newCurrent i
 	km.mu.Lock()
 	defer km.mu.Unlock()
 
+	// A watcher that polls reports what it loaded, changed or not. An update
+	// that changes nothing is not a rotation, and is neither logged nor
+	// audited.
+	if newCurrent == km.current && km.holds(decoded) {
+		return
+	}
+
 	// write the new secrets.
 	// if the new version overwrites an older one, all keys created with the old secret will be invalid
 	maps.Copy(km.secrets, decoded)
@@ -190,6 +203,17 @@ func (km *DefaultKeyManager) applyUpdate(rawSecrets map[int]string, newCurrent i
 		Metadata: behemoth.M{"current_version": newCurrent},
 	})
 
+}
+
+// holds reports whether km already holds every secret of decoded, with the
+// same value. The caller holds the lock.
+func (km *DefaultKeyManager) holds(decoded map[int][]byte) bool {
+	for version, secret := range decoded {
+		if held, ok := km.secrets[version]; !ok || !bytes.Equal(held, secret) {
+			return false
+		}
+	}
+	return true
 }
 
 // RemoveVersion is explicit secret removal method

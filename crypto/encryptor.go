@@ -7,15 +7,24 @@ import (
 	"github.com/MastewalB/behemoth/errs"
 )
 
+// AESGCMEncryptor is the Encryptor Boot builds: AES-256-GCM under the key
+// manager's KeyPurposeEncryptAtRest key. The store seals OAuth tokens and
+// the two-factor secrets with it.
 type AESGCMEncryptor struct {
 	km  KeyManager
 	rnd Randomizer
 }
 
+// NewEncryptor returns an AESGCMEncryptor that takes its keys from km and
+// its nonces from rnd.
 func NewEncryptor(km KeyManager, rnd Randomizer) *AESGCMEncryptor {
 	return &AESGCMEncryptor{km: km, rnd: rnd}
 }
 
+// Encrypt seals plaintext under the current key and returns the version of
+// that key. The ciphertext is a random 12-byte nonce, then the sealed
+// plaintext and its 16-byte tag; two calls with the same plaintext return
+// different ciphertexts. No associated data is bound to it.
 func (e *AESGCMEncryptor) Encrypt(plaintext []byte) ([]byte, int, error) {
 	key, version, err := e.km.Current(KeyPurposeEncryptAtRest)
 	if err != nil {
@@ -37,6 +46,11 @@ func (e *AESGCMEncryptor) Encrypt(plaintext []byte) ([]byte, int, error) {
 	return sealed, version, nil
 }
 
+// Decrypt opens a ciphertext Encrypt returned, with the key of keyVersion.
+// A ciphertext shorter than a nonce is a security error with the code
+// short_cipher_length, and one that does not open under the key (changed,
+// cut, or sealed under another version) has the code invalid_payload. A
+// version the key manager does not hold is its error.
 func (e *AESGCMEncryptor) Decrypt(ciphertext []byte, keyVersion int) ([]byte, error) {
 	key, err := e.km.GetByVersion(KeyPurposeEncryptAtRest, keyVersion)
 	if err != nil {
@@ -44,7 +58,7 @@ func (e *AESGCMEncryptor) Decrypt(ciphertext []byte, keyVersion int) ([]byte, er
 	}
 	gcm, err := newGCM(key)
 	if err != nil {
-		return nil, err
+		return nil, errs.NewSecurityError("AESGCMEncryptor.Decrypt", "aes_gcm_error", err)
 	}
 	if len(ciphertext) < gcm.NonceSize() {
 		return nil, errs.NewSecurityError("AESGCMEncryptor.Decrypt", "short_cipher_length", nil)
