@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/MastewalB/behemoth"
 	"github.com/MastewalB/behemoth/clause"
@@ -46,7 +47,7 @@ func (s *Store) create(ctx context.Context, m behemoth.Model, prepare func(behem
 			return errs.NewValidationError("Store.Create", m.SchemaName(), fmt.Errorf("row rewritten by a before-create hook: %w", err))
 		}
 		if err := tx.db.Create(ctx, m); err != nil {
-			return err
+			return tx.taken("Store.Create", m.SchemaName(), err)
 		}
 		// The hook's error rolls the insert back; returned as-is.
 		if err := tx.hooks.AfterCreate(ctx, tx, m.SchemaName(), m); err != nil {
@@ -95,7 +96,7 @@ func (s *Store) update(ctx context.Context, m behemoth.Model, id any, changes be
 			where = clause.Expression{Logic: clause.OpAnd, Conditions: append(append([]clause.Condition{}, byKey.Conditions...), guard...)}
 		}
 		if err := tx.db.UpdateOne(ctx, m, where, changes); err != nil {
-			return err
+			return tx.taken(op, m.SchemaName(), err)
 		}
 		updated, err = tx.db.FindOne(ctx, m, byKey)
 		if err != nil {
@@ -111,6 +112,28 @@ func (s *Store) update(ctx context.Context, m behemoth.Model, id any, changes be
 		return nil, err
 	}
 	return updated, nil
+}
+
+// taken answers a duplicate key on a column of table declared unique with
+// the column's conflict (errs.NewTaken), whichever flow wrote the row: a
+// value a concurrent write took after the flow's own check gets the code the
+// check would have answered with. A duplicate key on any other key, or one
+// whose key the adapter could not name, is returned as it is.
+func (s *Store) taken(op, table string, err error) error {
+	columns := errs.DuplicateKeyColumns(err)
+	if len(columns) != 1 {
+		return err
+	}
+	keys, ok := s.schema.(behemoth.UniqueKeyResolver)
+	if !ok {
+		return err
+	}
+	for _, key := range keys.UniqueKeys(table) {
+		if key.TakenCode != "" && slices.Equal(key.Columns, columns) {
+			return errs.NewTaken(op, table, columns[0], key.TakenCode, err)
+		}
+	}
+	return err
 }
 
 // hooked runs write, a write to table together with its data hooks. When the

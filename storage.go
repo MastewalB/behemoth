@@ -227,6 +227,33 @@ type SchemaResolver interface {
 	Columns(canonicalTable string) []string
 }
 
+// UniqueKeyResolver is an optional capability of a SchemaResolver: the
+// unique keys a table is declared with. An adapter reads them to tell which
+// key a duplicate key error broke, and the store to answer a duplicate value
+// of a column declared unique with the column's code. The resolver Prepare
+// builds has it.
+type UniqueKeyResolver interface {
+	// UniqueKeys returns canonicalTable's unique keys, contributed ones
+	// included, or nil when the table isn't declared. A primary key is not
+	// one of them.
+	UniqueKeys(canonicalTable string) []UniqueKey
+}
+
+// UniqueKey is one unique key of a table: a column declared unique, or a
+// unique index.
+type UniqueKey struct {
+	// Index is the declared name of a unique index, and empty for a column
+	// declared unique, whose name each database picks by its convention.
+	Index string
+	// Columns are the key's columns, canonical names, in the key's order.
+	Columns []string
+	// TakenCode is, for a column declared unique, the code of the conflict
+	// a duplicate value gets: the column's ConflictCode, or
+	// "<column>_taken". It is empty for an index, whose duplicate stays a
+	// duplicate key error.
+	TakenCode string
+}
+
 // Extensible is a model that carries columns beyond its own fields: values
 // of columns contributed to its table by another declarer (a plugin's
 // ExtendColumn on users, say). Its ToMap includes them and its FromMap

@@ -45,7 +45,7 @@ A user read from the database has the key with a nil value, and one fresh from `
 
 - **The data handlers are the enforcement.** They run for a sign-up, for `Store.UpdateUser` and `Store.CreateUser` called by the application, and for any later plugin that writes users. The email verification plugin covers address changes the same way.
 - **The sign-up handler exists for two reasons.** The email/password plugin copies only its own profile fields from the sign-up input to the user, so the username has to travel another way: the user's create is an operation nested in the sign-up, and starts with a copy of the sign-up's `Values`. The handler also refuses a bad username before the password is hashed.
-- **The taken check runs in the write's transaction** (`hctx.Tx.FindUserBy`). It gives the typed `username_taken` in the usual case. Two writes racing for one name can both pass it, and the unique constraint refuses the second with the store's duplicate key error. `docs/ongoing.md` has the entry.
+- **The taken check runs in the write's transaction** (`hctx.Tx.FindUserBy`). It gives the typed `username_taken` in the usual case. Two writes racing for one name can both pass it, and the unique constraint refuses the second. The store answers that with the column's code, `username_taken` too, since the column is declared unique ([`../database/adapters/unique_keys.md`](../database/adapters/unique_keys.md)). Only the message differs: "username is already taken".
 - **`onSignUp` clears its note first.** A sign-up started inside another sign-up's operation would otherwise inherit the outer one's username.
 - **`resolve` pairs the two values.** It takes the username and the display form as they arrive and returns both in the form to store. Without a display form it uses the username as typed, trimmed. With one it requires `Normalize(display) == name`.
 - **`respell` does not validate the username again.** It reads the user's username in the write's transaction and compares. A username accepted under older limits can still be respelled, as it can still sign in.
@@ -99,7 +99,8 @@ The lookup uses `AuthContext.Store`, outside any transaction, and nothing is res
 | `TestUsernameRulesAtSignUp` | same | each rule's code, `auth.signUp.failed`, no user created, users without a username and the `NULL` they store |
 | `TestUsernameRequiredAtSignUp` | same | the option, and that it does not apply to other creates |
 | `TestUsernameRulesOnDirectWrites` | same | `SetUsername`, `Store.UpdateUser` and `Store.CreateUser`, the row's own name, removing a name and reusing it |
-| `TestUsernameIsUniqueUnderConcurrentSignUps` | same | one winner among racing sign-ups |
+| `TestUsernameIsUniqueUnderConcurrentSignUps` | same | one winner among racing sign-ups, the losers refused with `username_taken` |
+| `TestSignUpThatLosesTheRaceForAUsername`, `TestSetUsernameThatLosesTheRace` | `tests/plugins/signup_race_test.go` | a value taken after the check: the database's refusal answered with `username_taken` |
 | `TestUsernameRoutes` | same | the bodies and statuses of sign-up and sign-in |
 | `TestUsernameSignInPassesTheSecondFactorCheckpoint` | same | a pending session |
 | `TestUsernameSignInsCanBeLimitedPerUsername` | same | an application's hook rule keyed on `HookValueUsername` |
@@ -116,7 +117,6 @@ These limits apply:
 - `[Not built]` A route to change the caller's username or its spelling. `SetUsername` is the flow such a route would call.
 - `[Limit]` The availability route's limit is a route rule, so `Available` called from code has none: the flow fires no hook point for a hook rule to sit on. A sign-in by username is counted by core's `core.signin.address` under the method `username`, which `SignIn` passes to `emailpassword.SignInWith`.
 - `[Limit]` A released username is free at once. `docs/ongoing.md` has the entry.
-- `[Limit]` The loser of two writes racing for a username gets the store's code. `docs/ongoing.md` has the entry.
 - The validation messages are sent to the client, unlike `emailpassword`'s `invalid email`: they are the plugin's own text and say which rule was broken.
 
 ## Design decisions

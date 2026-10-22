@@ -49,8 +49,13 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// coreSchema is what Prepare would freeze: core's tables, plus two plugin
-// contributions to users (plan stored under another physical name). The
+// handle is a unique column a plugin contributes to users, stored under
+// another physical name and with a conflict code of its own.
+var handle = schema.Field[string]{Table: models.UserTable, Name: "handle"}
+
+// coreSchema is what Prepare would freeze: core's tables, plus three plugin
+// contributions to users (plan stored under another physical name, and
+// handle, unique, under another physical name too). The
 // tables come without their foreign keys: the contract writes sessions and
 // accounts for users that don't exist.
 func coreSchema(t *testing.T) ([]schema.Table, behemoth.SchemaResolver) {
@@ -80,6 +85,10 @@ func coreSchemaWithForeignKeys(t *testing.T) ([]schema.Table, behemoth.SchemaRes
 	p := plan.Contribution(schema.Column{Type: schema.ColTypeString, Length: 32, Nullable: true, PhysicalName: "subscription_plan"})
 	p.Owner = "billing"
 	require.NoError(t, reg.ExtendColumn(p))
+	h := handle.Contribution(schema.Column{Type: schema.ColTypeString, Length: 64, Nullable: true, Unique: true,
+		PhysicalName: "user_handle", ConflictCode: "handle_in_use"})
+	h.Owner = "profiles"
+	require.NoError(t, reg.ExtendColumn(h))
 	require.NoError(t, reg.Freeze())
 
 	resolver := migration.NewSchemaResolver()
@@ -240,8 +249,60 @@ func TestStoreContract(t *testing.T) {
 			t.Run("RateLimits", func(t *testing.T) { rateLimitsContract(t, db, resolver) })
 			t.Run("AuditLog", func(t *testing.T) { auditLogContract(t, st) })
 			t.Run("VerificationCodes", func(t *testing.T) { verificationCodesContract(t, st) })
+			t.Run("UniqueKeys", func(t *testing.T) { uniqueKeysContract(t, st, db, resolver) })
 		})
 	}
+}
+
+// A write that breaks a unique key gets an error that names the key's
+// columns, canonical names, whatever the database calls the key. Through the
+// store, a duplicate value of a column declared unique is the column's
+// conflict (409, "<column>_taken" or the column's own code), and still a
+// duplicate key. A duplicate of any other key stays a duplicate key error.
+//
+// The primary key is declared by no unique key, so the adapter names its
+// columns from the database's catalog. The write runs in a transaction,
+// which PostgreSQL aborts with the error: the lookup has to run outside it.
+func uniqueKeysContract(t *testing.T, st *store.Store, db behemoth.Database, resolver behemoth.SchemaResolver) {
+	ctx := context.Background()
+	taken := func(err error, code string, columns []string, msgAndArgs ...any) {
+		t.Helper()
+		assert.True(t, errs.IsCategory(err, errs.CategoryConflict) && errs.IsCode(err, code), "want a conflict with %s, got %v", code, err)
+		assert.True(t, errs.IsDuplicateKey(err), "the duplicate key stays in the chain: %v", err)
+		assert.Equal(t, columns, errs.DuplicateKeyColumns(err), msgAndArgs...)
+	}
+
+	first := &models.User{Email: "keys@example.com"}
+	require.NoError(t, handle.Set(first, "ada"))
+	require.NoError(t, st.CreateUser(ctx, first))
+	second := &models.User{Email: "keys-2@example.com"}
+	require.NoError(t, st.CreateUser(ctx, second))
+
+	err := st.CreateUser(ctx, &models.User{Email: "keys@example.com"})
+	taken(err, "email_taken", []string{models.UserEmail}, "a core column: the code is the column's name with _taken")
+	_, err = st.UpdateUser(ctx, second.ID, behemoth.M{models.UserEmail: "keys@example.com"})
+	taken(err, "email_taken", []string{models.UserEmail}, "an update")
+
+	again := &models.User{Email: "keys-3@example.com"}
+	require.NoError(t, handle.Set(again, "ada"))
+	err = st.CreateUser(ctx, again)
+	taken(err, "handle_in_use", []string{handle.Name}, "a contributed column under another physical name, with a code of its own")
+	_, err = st.UpdateUser(ctx, second.ID, behemoth.M{handle.Name: "ada"})
+	taken(err, "handle_in_use", []string{handle.Name})
+
+	account := &models.Account{UserID: first.ID, ProviderID: "github", AccountID: "gh-keys"}
+	require.NoError(t, st.CreateAccount(ctx, account))
+	err = st.CreateAccount(ctx, &models.Account{UserID: second.ID, ProviderID: "github", AccountID: "gh-keys"})
+	assert.True(t, errs.IsCategory(err, errs.CategoryDuplicateKey), "a unique index stays a duplicate key: %v", err)
+	assert.Equal(t, []string{models.AccountProviderID, models.AccountAccountID}, errs.DuplicateKeyColumns(err), "the index's columns, in its order")
+
+	fixed := store.New(db, store.WithSchema(resolver), store.WithIDs(func() string { return "u-keys-fixed" }))
+	require.NoError(t, fixed.CreateUser(ctx, &models.User{Email: "keys-4@example.com"}))
+	err = fixed.Transaction(ctx, func(ctx context.Context, tx *store.Store) error {
+		return tx.CreateUser(ctx, &models.User{Email: "keys-5@example.com"})
+	})
+	assert.True(t, errs.IsCategory(err, errs.CategoryDuplicateKey), "the primary key stays a duplicate key: %v", err)
+	assert.Equal(t, []string{models.UserID}, errs.DuplicateKeyColumns(err), "the primary key's column, from the catalog")
 }
 
 // TestDeleteUserRemovesSessionsAndAccounts checks that nothing of a deleted

@@ -58,6 +58,15 @@ type Column struct {
 	// files, and changing it plans no migration.
 	Public bool `json:"-"`
 
+	// ConflictCode is, for a column declared Unique, the code of the
+	// conflict error (409) a write gets when another row holds the value:
+	// "username_taken". Empty means the column's name followed by
+	// "_taken". The store answers with it whichever flow wrote the row, so
+	// a value taken by a concurrent write gets the same code as one a
+	// flow's check found taken. Like Public, it is not a property of the
+	// database, and changing it plans no migration.
+	ConflictCode string `json:"-"`
+
 	// optional per-db overrides
 	Overrides map[string]ColumnOverride
 }

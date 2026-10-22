@@ -35,6 +35,7 @@ Nothing enforces this. The adapter accepts any declared model, and a write to a 
 | Deleting a user's sessions, accounts, and tokens with the user, clearing the session cache, and the `data.user.*Delete` and `auth.session.afterRevoke` points | `Store.DeleteUser` | A direct delete of the user row leaves all of it to the database. Where foreign keys cascade, the rows go without any hook, and cached sessions keep working until they expire. On MongoDB, and on SQLite without `_foreign_keys=on`, the sessions and accounts stay. See [Delete a user](hooks.md#delete-a-user). |
 | The transaction around the write and its hooks | the store | Your write is a single statement. Wrap it yourself if it belongs with other writes. |
 | Email normalization (trim, lowercase) | the store | A user stored as `Ada@Example.com` is not found by `FindUserByEmail`, and can sign up a second time as `ada@example.com`. `store.NormalizeEmail` is exported if you need the same form. |
+| Answering a taken value of a unique column with the column's code (`email_taken`) | the store | You get the duplicate key error, with the table's code (`users_already_exists`). `errs.DuplicateKeyColumns(err)` names the column. |
 
 ### What a client sees of a user
 
@@ -82,6 +83,29 @@ return rctx.Response.JSON(http.StatusOK, behemoth.M{"user": view})
 Don't pass a `*models.User` to `Response.JSON`. Encoded directly, a user carries every contributed column under `"extra"`, the private ones included. That encoding exists for Behemoth's own storage.
 
 The other core tables declare no public column. `Public.Of` on a session, an account or a token returns an empty map.
+
+### A unique column you add
+
+A column you declare `Unique` gets a conflict code of its own. When a write through the store gives it a value another user holds, the store answers `409` with the code `<column>_taken`, whichever flow wrote the row. Set `ConflictCode` to use another code:
+
+```go
+var Handle = schema.Field[string]{Table: models.UserTable, Name: "handle"}
+
+func (p *Plugin) Declare(ic *core.PluginInitContext) error {
+	return ic.Schemas.ExtendColumn(Handle.Contribution(schema.Column{
+		Type: schema.ColTypeString, Length: 64, Nullable: true, Unique: true,
+		ConflictCode: "handle_in_use", // the default would be "handle_taken"
+	}))
+}
+```
+
+The answer follows these rules:
+
+- **It covers a race.** Check the value in your flow or in a `data.user.beforeCreate` handler, to answer with a message of your own, as the username plugin does. Two writes can both pass that check. The database then refuses the second, and the store answers it with the same code.
+- **The message is generic:** "handle is already taken". The code is what a client branches on.
+- **It is a conflict that holds the duplicate key.** `errs.IsCategory(err, errs.CategoryConflict)` and `errs.IsDuplicateKey(err)` are both true, and `errs.DuplicateKeyColumns(err)` names the column.
+- **It is for one column.** A unique index of several columns keeps the duplicate key error, with the table's code (`users_already_exists`).
+- **It is not a database property.** Setting `ConflictCode` plans no migration.
 
 ## Accounts
 

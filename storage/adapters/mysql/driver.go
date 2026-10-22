@@ -684,16 +684,10 @@ func (d *MySQLDriver) uniqueKeyDefinition(table string, col schema.Column) strin
 // Introspect tell it from a unique index the application declared.
 //
 // A name over MySQL's 64-character limit is cut and given a hash of the full
-// name, so two long names that share a prefix stay distinct.
+// name, so two long names that share a prefix stay distinct. The adapter
+// recognizes the key in a duplicate key error by the same name.
 func uniqueKeyName(table, column string) string {
-	name := table + "_" + column + "_key"
-	if len(name) <= maxIdentifierLength {
-		return name
-	}
-	h := fnv.New32a()
-	h.Write([]byte(name))
-	suffix := fmt.Sprintf("_%08x", h.Sum32())
-	return name[:maxIdentifierLength-len(suffix)] + suffix
+	return adapters.UniqueKeyName(adapters.DialectMySQL, table, column)
 }
 
 // needsExpressionDefault reports whether ct is rendered as a type whose

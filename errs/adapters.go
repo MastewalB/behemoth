@@ -3,6 +3,7 @@ package errs
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // type ErrorType string
@@ -37,16 +38,83 @@ func NewUndefinedTable(op, entity string, original error) error {
 	}
 }
 
+// NewDuplicateKey is the error of a write that broke a unique key of
+// entity, when the adapter can't tell which one. NewDuplicateKeyOn names it.
 func NewDuplicateKey(op, entity string, original error) error {
+	return NewDuplicateKeyOn(op, entity, nil, original)
+}
+
+// NewDuplicateKeyOn is the error of a write that broke the unique key of
+// entity made of columns (canonical names). The store turns one on a column
+// declared unique into a conflict with the column's code; see
+// [DuplicateKeyColumns].
+func NewDuplicateKeyOn(op, entity string, columns []string, original error) error {
+	internal := fmt.Sprintf("%s: %s already exists", op, entity)
+	if len(columns) > 0 {
+		internal = fmt.Sprintf("%s: %s already exists (unique key %s)", op, entity, strings.Join(columns, ", "))
+	}
 	return &DomainError{
 		Category:        CategoryDuplicateKey,
 		Op:              op,
 		Entity:          entity,
 		Code:            entity + "_already_exists",
 		PublicMessage:   entity + " already exists",
-		InternalMessage: fmt.Sprintf("%s: %s already exists", op, entity),
+		InternalMessage: internal,
 		Original:        original,
+		Columns:         columns,
 	}
+}
+
+// NewTaken is the conflict (409) of a write whose value of column, a column
+// of entity declared unique, another row holds. code is the column's
+// (behemoth.UniqueKey.TakenCode), such as "username_taken". duplicate, the
+// adapter's duplicate key error, stays in the chain, so [IsDuplicateKey]
+// still holds. The store returns it whichever flow wrote the row.
+func NewTaken(op, entity, column, code string, duplicate error) *DomainError {
+	return &DomainError{
+		Category:        CategoryConflict,
+		Op:              op,
+		Entity:          entity,
+		Code:            code,
+		PublicMessage:   strings.ReplaceAll(column, "_", " ") + " is already taken",
+		InternalMessage: fmt.Sprintf("%s: %s.%s is already taken", op, entity, column),
+		Original:        duplicate,
+	}
+}
+
+// DuplicateKeyColumns returns the columns of the unique key a duplicate key
+// error in err's chain names, or nil when it names none or there is no such
+// error.
+func DuplicateKeyColumns(err error) []string {
+	if de := duplicateKey(err); de != nil {
+		return de.Columns
+	}
+	return nil
+}
+
+// duplicateKey returns the first duplicate key error in err's chain. It looks
+// past other DomainErrors, because the store wraps the duplicate key of a
+// unique column in the column's conflict.
+func duplicateKey(err error) *DomainError {
+	for err != nil {
+		if de, ok := err.(*DomainError); ok && de.Category == CategoryDuplicateKey {
+			return de
+		}
+		switch e := err.(type) {
+		case interface{ Unwrap() error }:
+			err = e.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, inner := range e.Unwrap() {
+				if de := duplicateKey(inner); de != nil {
+					return de
+				}
+			}
+			return nil
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 func NewDatabaseError(op string, original error) error {
@@ -167,7 +235,10 @@ func IsNotFound(err error) bool { return IsCategory(err, CategoryNotFound) }
 
 func IsUndefinedTable(err error) bool { return IsCategory(err, CategoryUndefinedTable) }
 
-func IsDuplicateKey(err error) bool { return IsCategory(err, CategoryDuplicateKey) }
+// IsDuplicateKey reports whether a write broke a unique key: err is a
+// duplicate key error, or holds one, as the conflict the store returns for a
+// column declared unique does.
+func IsDuplicateKey(err error) bool { return duplicateKey(err) != nil }
 
 func IsValidationError(err error) bool { return IsCategory(err, CategoryValidation) }
 
