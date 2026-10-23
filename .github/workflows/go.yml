@@ -2,7 +2,7 @@
 #
 # The root module, each storage, router and telemetry adapter, the examples
 # and tests/ each have a go.mod of their own, so `go test ./...` at the root
-# covers the root module only. This workflow has three jobs:
+# covers the root module only. This workflow has four jobs:
 #
 #   modules           finds every go.mod outside tests/, so that a module
 #                     added later is tested without a change here.
@@ -12,6 +12,10 @@
 #                     (Postgres, MySQL, SQL Server, MongoDB) through
 #                     testcontainers, on the runner's Docker. The slow
 #                     container suites run on runners of their own.
+#   test-suite        succeeds only when the three jobs above all did. It is
+#                     the one check a branch ruleset requires: the checks of
+#                     the other jobs are named after a module or a Go release,
+#                     so a list of them would change with every module added.
 
 name: Go - Behemoth Test
 
@@ -123,3 +127,15 @@ jobs:
           other)   packages=$(go list ./... | grep -v -E '/tests/(store|storage)(/|$)') ;;
         esac
         go test -count=1 -timeout 25m $packages
+
+  test-suite:
+    name: Behemoth Test Suite
+    needs: [ modules, test-modules, test-integration ]
+    # always(): when a needed job fails, a job that only lists it in needs is
+    # skipped, and GitHub counts a skipped required check as passed.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fail unless every job succeeded
+      run: |
+        [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false" ]
