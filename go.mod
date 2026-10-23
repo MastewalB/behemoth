@@ -1,3 +1,4 @@
+// Deprecated: use github.com/go-behemoth/behemoth instead.
 module github.com/MastewalB/behemoth
 
 go 1.23.3
