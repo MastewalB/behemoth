@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/MastewalB/behemoth/core"
+	"github.com/go-behemoth/behemoth/core"
 )
 
 // FixedWindow is the limiter of core.AlgorithmFixedWindow. It counts each

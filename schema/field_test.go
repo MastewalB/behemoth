@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 type plan string

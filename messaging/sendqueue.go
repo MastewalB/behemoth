@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // Defaults of the background sends, for mail and for SMS.

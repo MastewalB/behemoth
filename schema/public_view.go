@@ -3,8 +3,8 @@ package schema
 import (
 	"fmt"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // PublicView builds what a client is sent of a row: the columns its table

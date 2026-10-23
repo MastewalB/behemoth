@@ -3,8 +3,8 @@ package plugins_test
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/identity"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/identity"
 )
 
 // actingFor returns ctx with a caller that acts for the user with userID:

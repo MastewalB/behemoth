@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // Canonical names of the rate_limits table and its columns. The key column

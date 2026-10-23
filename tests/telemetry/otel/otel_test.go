@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/telemetry"
-	behemothotel "github.com/MastewalB/behemoth/telemetry/adapters/otel"
-	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/telemetry"
+	behemothotel "github.com/go-behemoth/behemoth/telemetry/adapters/otel"
+	"github.com/go-behemoth/behemoth/telemetry/telemetrytest"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -49,7 +49,7 @@ func TestTracer(t *testing.T) {
 	if req.Parent().SpanID() != appSpan.SpanContext().SpanID() {
 		t.Error("behemoth's request span is not a child of the application's span")
 	}
-	if req.InstrumentationScope().Name != "github.com/MastewalB/behemoth" {
+	if req.InstrumentationScope().Name != "github.com/go-behemoth/behemoth" {
 		t.Errorf("scope = %q", req.InstrumentationScope().Name)
 	}
 	attrs := attribute.NewSet(req.Attributes()...)
@@ -92,7 +92,7 @@ func TestMetrics(t *testing.T) {
 	if err := reader.Collect(ctx, &collected); err != nil {
 		t.Fatal(err)
 	}
-	if len(collected.ScopeMetrics) != 1 || collected.ScopeMetrics[0].Scope.Name != "github.com/MastewalB/behemoth" {
+	if len(collected.ScopeMetrics) != 1 || collected.ScopeMetrics[0].Scope.Name != "github.com/go-behemoth/behemoth" {
 		t.Fatalf("scopes = %+v", collected.ScopeMetrics)
 	}
 	found := map[string]metricdata.Metrics{}

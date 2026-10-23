@@ -3,8 +3,8 @@ package auth
 import (
 	"testing"
 
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

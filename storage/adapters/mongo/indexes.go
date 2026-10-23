@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/schema"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"

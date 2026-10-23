@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // A typed error is answered with its category's status and its public

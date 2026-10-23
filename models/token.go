@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // TokenKind names what a token is for (email verification, password reset,

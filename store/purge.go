@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth/models"
+	"github.com/go-behemoth/behemoth/models"
 )
 
 // PurgeOptions holds the cutoffs of Purge. A zero cutoff leaves its table

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/MastewalB/behemoth/core"
+	"github.com/go-behemoth/behemoth/core"
 )
 
 // trace logs one hook handler call: who ran, on which point and phase, where

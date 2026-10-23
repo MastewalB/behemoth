@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/core/hooks"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/store"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/core/hooks"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/store"
 )
 
 type recordingDispatcher struct {

@@ -28,8 +28,8 @@ Pass the plugin to `Prepare`. It uses the core `users`, `accounts`, `sessions`, 
 
 ```go
 import (
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/plugins/oauth"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/plugins/oauth"
 )
 
 plugin := oauth.New(oauth.Options{

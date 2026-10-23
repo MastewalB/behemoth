@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"github.com/MastewalB/behemoth/keysource"
+	"github.com/go-behemoth/behemoth/keysource"
 )
 
 func ExampleJWKSet_Keys() {

@@ -9,11 +9,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/clause"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/storage/adapters"
 	"gorm.io/gorm"
 	gormclause "gorm.io/gorm/clause"
 )

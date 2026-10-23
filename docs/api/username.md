@@ -8,8 +8,8 @@ Build the email/password plugin first and hand it to `username.New`. Pass both t
 
 ```go
 import (
-	"github.com/MastewalB/behemoth/plugins/emailpassword"
-	"github.com/MastewalB/behemoth/plugins/username"
+	"github.com/go-behemoth/behemoth/plugins/emailpassword"
+	"github.com/go-behemoth/behemoth/plugins/username"
 )
 
 passwords := emailpassword.New(emailpassword.Options{})

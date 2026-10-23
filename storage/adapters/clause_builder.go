@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/MastewalB/behemoth/clause"
+	"github.com/go-behemoth/behemoth/clause"
 )
 
 // ClauseOptions defines the options for building SQL WHERE clauses, including placeholder format and numbering.

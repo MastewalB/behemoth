@@ -58,7 +58,7 @@ const (
 	// handed to.
 	prepareFunc = "Prepare"
 	backendFunc = "MigrationBackend"
-	cliPackage  = "github.com/MastewalB/behemoth/cli"
+	cliPackage  = "github.com/go-behemoth/behemoth/cli"
 
 	// appEnv names the setup package's directory when -app is not given.
 	appEnv = "BEHEMOTH_APP"

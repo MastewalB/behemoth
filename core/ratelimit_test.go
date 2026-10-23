@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/identity"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/identity"
 )
 
 // KeyByValues joins the named Values entries, and says the rule does not

@@ -3,7 +3,7 @@
 // and the Registry they declare them into.
 //
 // It sits below the types package so PluginInitContext can carry a Registry.
-// It must never import github.com/MastewalB/behemoth/core — that would
+// It must never import github.com/go-behemoth/behemoth/core — that would
 // reintroduce the cycle this package exists to break. Migration planning,
 // operations and running stay in migration.
 package schema

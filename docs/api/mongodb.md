@@ -5,7 +5,7 @@ This page covers what is different when Behemoth runs on MongoDB: what the serve
 ## Setup
 
 ```go
-import mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
+import mongoAdapter "github.com/go-behemoth/behemoth/storage/adapters/mongo"
 
 app, err := engine.Prepare(plugins, prepareCfg)
 if err != nil {

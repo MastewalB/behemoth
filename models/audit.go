@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // Canonical names of the audit_log table and its columns. The event's type

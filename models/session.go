@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 type SessionState string

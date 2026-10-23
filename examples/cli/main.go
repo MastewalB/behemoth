@@ -31,14 +31,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/examples/cli/auth"
-	"github.com/MastewalB/behemoth/httpapi"
-	"github.com/MastewalB/behemoth/plugins/adapters/nethttp"
-	"github.com/MastewalB/behemoth/storage/adapters/postgres"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/engine"
+	"github.com/go-behemoth/behemoth/examples/cli/auth"
+	"github.com/go-behemoth/behemoth/httpapi"
+	"github.com/go-behemoth/behemoth/plugins/adapters/nethttp"
+	"github.com/go-behemoth/behemoth/storage/adapters/postgres"
 )
 
 func main() {

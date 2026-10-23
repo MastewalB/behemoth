@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // ClientIPConfig says which peers may name the client in a header: the

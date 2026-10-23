@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MastewalB/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/crypto"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

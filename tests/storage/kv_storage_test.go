@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/core"
-	redisAdapter "github.com/MastewalB/behemoth/storage/adapters/redis"
-	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/go-behemoth/behemoth/core"
+	redisAdapter "github.com/go-behemoth/behemoth/storage/adapters/redis"
+	"github.com/go-behemoth/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

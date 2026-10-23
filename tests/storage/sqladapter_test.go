@@ -3,8 +3,8 @@ package models
 import (
 	"testing"
 
-	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/go-behemoth/behemoth/clause"
+	"github.com/go-behemoth/behemoth/storage/adapters"
 	"github.com/stretchr/testify/assert"
 )
 

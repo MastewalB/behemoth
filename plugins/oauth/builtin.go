@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/outbound"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/outbound"
 )
 
 // Kinds of the providers that ship with the plugin (ProviderConfig.Kind).

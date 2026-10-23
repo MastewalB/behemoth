@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // The view of a user has the table's public columns and the contributed

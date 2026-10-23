@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // Public is not a property of the database: it stays out of the JSON that

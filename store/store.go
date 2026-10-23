@@ -4,7 +4,7 @@
 // through it (AuthContext.Store). For their own tables they use the adapter
 // directly: AuthContext.DB, or Store.DB inside a transaction or a data hook.
 //
-// It must not import github.com/MastewalB/behemoth/core: core imports store
+// It must not import github.com/go-behemoth/behemoth/core: core imports store
 // (AuthContext holds a *Store). Anything store needs from above — today, the
 // hook dispatcher — it declares as its own small interface (Hooks), and Boot
 // supplies the implementation. Contracts that sit below it, such as those of
@@ -16,12 +16,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/utils"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/utils"
 )
 
 // Hooks are the data-level (Tier 1) hooks the store fires around writes.

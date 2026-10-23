@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/MastewalB/behemoth/telemetry"
-	behemothotel "github.com/MastewalB/behemoth/telemetry/adapters/otel"
+	"github.com/go-behemoth/behemoth/telemetry"
+	behemothotel "github.com/go-behemoth/behemoth/telemetry/adapters/otel"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"

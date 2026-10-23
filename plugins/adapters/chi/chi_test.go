@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/MastewalB/behemoth/httpapi"
+	"github.com/go-behemoth/behemoth/httpapi"
 	"github.com/go-chi/chi/v5"
 )
 

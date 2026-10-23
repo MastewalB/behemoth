@@ -3,8 +3,8 @@ package telemetry
 import (
 	"errors"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // Field keys shared by every component's log lines. Call sites use these

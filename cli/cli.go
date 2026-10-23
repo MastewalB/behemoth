@@ -40,11 +40,11 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/identity"
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/engine"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/identity"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // Exit codes of Run and Main.

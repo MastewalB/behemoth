@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/storage/adapters/postgres"
+	"github.com/go-behemoth/behemoth/engine"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/storage/adapters/postgres"
 )
 
 // migrate needs the full declared schema but must not boot the

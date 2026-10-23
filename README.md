@@ -17,17 +17,17 @@ The project is under active development, and the API may still change.
 ## Installation
 
 ```bash
-go get github.com/MastewalB/behemoth
+go get github.com/go-behemoth/behemoth
 ```
 
 Database and router adapters are separate modules, so you only download what you use:
 
 ```bash
-go get github.com/MastewalB/behemoth/storage/adapters/postgres
-go get github.com/MastewalB/behemoth/plugins/adapters/gin
+go get github.com/go-behemoth/behemoth/storage/adapters/postgres
+go get github.com/go-behemoth/behemoth/plugins/adapters/gin
 ```
 
-The adapter for the standard library's `http.ServeMux` has no dependency of its own, so it comes with Behemoth: import `github.com/MastewalB/behemoth/plugins/adapters/nethttp`.
+The adapter for the standard library's `http.ServeMux` has no dependency of its own, so it comes with Behemoth: import `github.com/go-behemoth/behemoth/plugins/adapters/nethttp`.
 
 ## Quick start
 
@@ -35,12 +35,12 @@ Setup has two steps. `Prepare` collects the declarations of your plugins and sch
 
 ```go
 import (
-	"github.com/MastewalB/behemoth/plugins/emailpassword"
-	"github.com/MastewalB/behemoth/storage/adapters/postgres"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/httpapi"
-	ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
+	"github.com/go-behemoth/behemoth/plugins/emailpassword"
+	"github.com/go-behemoth/behemoth/storage/adapters/postgres"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/engine"
+	"github.com/go-behemoth/behemoth/httpapi"
+	ginadapter "github.com/go-behemoth/behemoth/plugins/adapters/gin"
 )
 
 plugin := emailpassword.New(emailpassword.Options{})

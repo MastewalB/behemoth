@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/storage/adapters"
 	"github.com/redis/go-redis/v9"
 )
 

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/storage/adapters/mysql"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/schema"
+	"github.com/go-behemoth/behemoth/storage/adapters/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

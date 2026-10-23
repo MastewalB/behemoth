@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/identity"
-	"github.com/MastewalB/behemoth/plugins/emailpassword"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/identity"
+	"github.com/go-behemoth/behemoth/plugins/emailpassword"
 )
 
 // signup creates a user and signs them in without an HTTP request, by

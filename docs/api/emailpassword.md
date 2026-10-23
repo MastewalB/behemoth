@@ -7,7 +7,7 @@ The `emailpassword` plugin adds sign-up, sign-in, and sign-out with an email add
 Pass the plugin to `Prepare`. It needs no tables of its own: users, accounts, and sessions are core tables.
 
 ```go
-import "github.com/MastewalB/behemoth/plugins/emailpassword"
+import "github.com/go-behemoth/behemoth/plugins/emailpassword"
 
 plugin := emailpassword.New(emailpassword.Options{})
 

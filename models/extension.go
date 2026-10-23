@@ -1,6 +1,6 @@
 package models
 
-import "github.com/MastewalB/behemoth"
+import "github.com/go-behemoth/behemoth"
 
 // Extension carries the values of columns other declarers contributed to a
 // model's table (schema.Registry ExtendColumn) — a plugin adding

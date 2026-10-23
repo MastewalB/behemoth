@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 func TestLiteralsEqual(t *testing.T) {

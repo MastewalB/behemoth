@@ -8,8 +8,8 @@ The `twofactor` plugin lets a user turn on a second factor: a code from an authe
 
 ```go
 import (
-	"github.com/MastewalB/behemoth/plugins/emailpassword"
-	"github.com/MastewalB/behemoth/plugins/twofactor"
+	"github.com/go-behemoth/behemoth/plugins/emailpassword"
+	"github.com/go-behemoth/behemoth/plugins/twofactor"
 )
 
 passwords := emailpassword.New(emailpassword.Options{})

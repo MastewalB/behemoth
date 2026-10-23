@@ -1,8 +1,8 @@
 package httpapi
 
 import (
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/identity"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/identity"
 )
 
 // AuthenticateRequests returns the stage that authenticates a request before

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // Field is a typed key for one column contributed to a table — the way a

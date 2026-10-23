@@ -1,17 +1,17 @@
-module github.com/MastewalB/behemoth/tests
+module github.com/go-behemoth/behemoth/tests
 
 go 1.26.0
 
 require (
-	github.com/MastewalB/behemoth v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/bun v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/gorm v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/mongo v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/mysql v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/postgres v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/redis v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/sqlite v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/sqlserver v0.0.0
+	github.com/go-behemoth/behemoth v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/bun v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/gorm v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/mongo v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/mysql v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/postgres v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/redis v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/sqlite v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/sqlserver v0.0.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/lib/pq v1.10.9
 	github.com/mattn/go-sqlite3 v1.14.52
@@ -44,7 +44,6 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
-	github.com/MastewalB/behemoth/telemetry/adapters/otel v0.0.0
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -60,6 +59,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/go-behemoth/behemoth/telemetry/adapters/otel v0.0.0
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -127,22 +127,22 @@ require (
 	modernc.org/sqlite v1.46.1 // indirect
 )
 
-replace github.com/MastewalB/behemoth => ../
+replace github.com/go-behemoth/behemoth => ../
 
-replace github.com/MastewalB/behemoth/storage/adapters/bun => ../storage/adapters/bun
+replace github.com/go-behemoth/behemoth/storage/adapters/bun => ../storage/adapters/bun
 
-replace github.com/MastewalB/behemoth/storage/adapters/postgres => ../storage/adapters/postgres
+replace github.com/go-behemoth/behemoth/storage/adapters/postgres => ../storage/adapters/postgres
 
-replace github.com/MastewalB/behemoth/storage/adapters/sqlite => ../storage/adapters/sqlite
+replace github.com/go-behemoth/behemoth/storage/adapters/sqlite => ../storage/adapters/sqlite
 
-replace github.com/MastewalB/behemoth/storage/adapters/gorm => ../storage/adapters/gorm
+replace github.com/go-behemoth/behemoth/storage/adapters/gorm => ../storage/adapters/gorm
 
-replace github.com/MastewalB/behemoth/storage/adapters/mongo => ../storage/adapters/mongo
+replace github.com/go-behemoth/behemoth/storage/adapters/mongo => ../storage/adapters/mongo
 
-replace github.com/MastewalB/behemoth/storage/adapters/mysql => ../storage/adapters/mysql
+replace github.com/go-behemoth/behemoth/storage/adapters/mysql => ../storage/adapters/mysql
 
-replace github.com/MastewalB/behemoth/storage/adapters/sqlserver => ../storage/adapters/sqlserver
+replace github.com/go-behemoth/behemoth/storage/adapters/sqlserver => ../storage/adapters/sqlserver
 
-replace github.com/MastewalB/behemoth/storage/adapters/redis => ../storage/adapters/redis
+replace github.com/go-behemoth/behemoth/storage/adapters/redis => ../storage/adapters/redis
 
-replace github.com/MastewalB/behemoth/telemetry/adapters/otel => ../telemetry/adapters/otel
+replace github.com/go-behemoth/behemoth/telemetry/adapters/otel => ../telemetry/adapters/otel

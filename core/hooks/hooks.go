@@ -2,7 +2,7 @@
 // the values a firing site publishes for handlers and rate-limit rules.
 package hooks
 
-import "github.com/MastewalB/behemoth/core"
+import "github.com/go-behemoth/behemoth/core"
 
 const (
 	HookUserBeforeCreate          core.HookPoint = "data.user.beforeCreate"

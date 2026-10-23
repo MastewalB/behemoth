@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/httpapi"
-	"github.com/MastewalB/behemoth/plugins/twofactor"
-	"github.com/MastewalB/behemoth/plugins/twofactor/totp"
+	"github.com/go-behemoth/behemoth/engine"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/httpapi"
+	"github.com/go-behemoth/behemoth/plugins/twofactor"
+	"github.com/go-behemoth/behemoth/plugins/twofactor/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

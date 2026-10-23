@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/MastewalB/behemoth/clause"
-	mongoAdapter "github.com/MastewalB/behemoth/storage/adapters/mongo"
-	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/go-behemoth/behemoth/clause"
+	mongoAdapter "github.com/go-behemoth/behemoth/storage/adapters/mongo"
+	"github.com/go-behemoth/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/bson"
 )

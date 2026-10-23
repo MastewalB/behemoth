@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/utils"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/schema"
+	"github.com/go-behemoth/behemoth/utils"
 )
 
 type DefaultMigrationGenerator struct{}

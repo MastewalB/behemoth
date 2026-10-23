@@ -21,8 +21,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/httpapi"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/httpapi"
 )
 
 // ServeMuxDriver mounts behemoth's routes onto a *http.ServeMux.

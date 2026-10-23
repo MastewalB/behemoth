@@ -3,8 +3,8 @@ package models
 import (
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // Canonical names of the reserved_values table and its columns.

@@ -3,7 +3,7 @@ package behemoth
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/clause"
+	"github.com/go-behemoth/behemoth/clause"
 )
 
 // DatabaseName is a string type that represents the name of the database.

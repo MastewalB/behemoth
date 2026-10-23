@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 func TestNormalizeColumn(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 type MigrationPlan struct {

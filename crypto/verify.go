@@ -8,7 +8,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 	"github.com/golang-jwt/jwt/v5"
 )
 

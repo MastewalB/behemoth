@@ -3,8 +3,8 @@ package adapters
 import (
 	"sort"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/clause"
 )
 
 // Name resolution shared by every adapter — exported so adapters living in

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/MastewalB/behemoth/core"
+	"github.com/go-behemoth/behemoth/core"
 )
 
 // appURL is where the application's own pages are served, without a

@@ -21,7 +21,7 @@ As with a [magic link](magiclink.md), the link points at your page and the page 
 ## Setup
 
 ```go
-import "github.com/MastewalB/behemoth/plugins/emailverification"
+import "github.com/go-behemoth/behemoth/plugins/emailverification"
 
 verification := emailverification.New(emailverification.Options{
 	LinkURL: "https://app.example.com/auth/verify-email",

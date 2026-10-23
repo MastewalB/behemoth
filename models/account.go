@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // ProviderCredential is the provider id of the account holding a user's

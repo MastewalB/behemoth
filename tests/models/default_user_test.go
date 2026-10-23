@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/tests/testutils"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/tests/testutils"
 	"github.com/stretchr/testify/assert"
 
 	_ "github.com/mattn/go-sqlite3"

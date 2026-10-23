@@ -22,8 +22,8 @@ The number is written at step 5 and not before, so a number on a user is always 
 
 ```go
 import (
-	"github.com/MastewalB/behemoth/plugins/emailpassword"
-	"github.com/MastewalB/behemoth/plugins/phonenumber"
+	"github.com/go-behemoth/behemoth/plugins/emailpassword"
+	"github.com/go-behemoth/behemoth/plugins/phonenumber"
 )
 
 passwords := emailpassword.New(emailpassword.Options{})

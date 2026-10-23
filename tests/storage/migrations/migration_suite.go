@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/schema"
 	"github.com/stretchr/testify/suite"
 )
 

@@ -1,6 +1,6 @@
 package httpapi
 
-import "github.com/MastewalB/behemoth/core"
+import "github.com/go-behemoth/behemoth/core"
 
 // Plugin is a core.Plugin that serves HTTP routes. Boot mounts the routes of
 // every plugin that implements it, below RouterConfig.BasePath and the

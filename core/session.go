@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/models"
+	"github.com/go-behemoth/behemoth/models"
 )
 
 // SessionManager creates, resolves, extends and revokes sessions. It knows

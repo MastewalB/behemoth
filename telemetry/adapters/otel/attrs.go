@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 	"go.opentelemetry.io/otel/attribute"
 )
 

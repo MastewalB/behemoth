@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // SentinelKind is an adapter-level failure kind; Classify turns it into the

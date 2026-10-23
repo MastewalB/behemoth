@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MastewalB/behemoth/httpapi"
+	"github.com/go-behemoth/behemoth/httpapi"
 	"github.com/gofiber/fiber/v3"
 )
 

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/clause"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // create runs BeforeCreate on m's row, inserts the (possibly rewritten) row

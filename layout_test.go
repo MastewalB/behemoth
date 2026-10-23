@@ -49,7 +49,7 @@ var sameRow = map[string][]string{
 // in core, so that an application can replace an implementation.
 var noImport = map[int][]int{10: {9}, 11: {9}}
 
-const modulePath = "github.com/MastewalB/behemoth"
+const modulePath = "github.com/go-behemoth/behemoth"
 
 // TestPackageLayout checks that every package of the repository, in every
 // module, imports Behemoth's packages only in the order of layoutRows. Test

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // audit prints the newest audit events from behemoth's audit_log table,

@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // derivedKeySet is the ExternalKeySet whose keys are derived from the master

@@ -3,7 +3,7 @@ package telemetry
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // Logger is the logging interface behemoth and its plugins write to. It is

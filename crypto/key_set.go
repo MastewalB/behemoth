@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // KeySource gives a key set its keys: fetched over the network, read from a

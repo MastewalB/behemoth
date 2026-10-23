@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // Todo is an application-owned table. Its canonical name is "todos", but it

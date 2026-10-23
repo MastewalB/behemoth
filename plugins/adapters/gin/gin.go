@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/gin-gonic/gin"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/httpapi"
 )
 
 type GinDriver struct {

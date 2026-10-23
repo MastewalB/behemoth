@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // PathSessionToken is the route that exchanges the caller's session for a

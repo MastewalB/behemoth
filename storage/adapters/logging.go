@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // LogQueries returns a Querier that writes the text of each statement to

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // PollingWatcher makes a SecretSource that can't report a change watchable:

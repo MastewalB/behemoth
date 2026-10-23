@@ -22,7 +22,7 @@ The link points at your page and not at Behemoth, and step 5 is a `POST`. Mail s
 Pass the plugin to `Prepare`. It uses the core `users`, `sessions`, and `tokens` tables and has none of its own.
 
 ```go
-import "github.com/MastewalB/behemoth/plugins/magiclink"
+import "github.com/go-behemoth/behemoth/plugins/magiclink"
 
 plugin := magiclink.New(magiclink.Options{
 	LinkURL: "https://app.example.com/auth/magic",

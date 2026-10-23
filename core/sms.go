@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/models"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/models"
 )
 
 // SMSKind says what a text message is for, so that the application's sender

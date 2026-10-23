@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/keysource"
-	"github.com/MastewalB/behemoth/outbound"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/keysource"
+	"github.com/go-behemoth/behemoth/outbound"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
