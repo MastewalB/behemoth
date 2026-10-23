@@ -6,8 +6,8 @@
 #
 #   modules           finds every go.mod outside tests/, so that a module
 #                     added later is tested without a change here.
-#   test-modules      builds, vets and tests each of those modules. Their
-#                     tests need no service.
+#   test-modules      builds, vets and tests each of those modules on the
+#                     two newest Go releases. Their tests need no service.
 #   test-integration  runs tests/, whose suites start database containers
 #                     (Postgres, MySQL, SQL Server, MongoDB) through
 #                     testcontainers, on the runner's Docker. The slow
@@ -49,7 +49,7 @@ jobs:
         echo "list=$list" >> "$GITHUB_OUTPUT"
 
   test-modules:
-    name: Module ${{ matrix.module }}
+    name: Module ${{ matrix.module }} (Go ${{ matrix.go }})
     needs: modules
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -58,6 +58,12 @@ jobs:
       fail-fast: false
       matrix:
         module: ${{ fromJSON(needs.modules.outputs.list) }}
+        # The go line of each go.mod is the oldest Go release the module
+        # supports, and not the toolchain to test with: the toolchain is the
+        # newest patch of each of the two newest releases, so that CI runs
+        # with the standard library fixes. Move both when a new Go release
+        # comes out.
+        go: [ "1.26.x", "1.27.x" ]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -67,7 +73,8 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version-file: go.mod
+        go-version: ${{ matrix.go }}
+        check-latest: true
         cache-dependency-path: "**/go.sum"
 
     - name: Build
@@ -101,7 +108,8 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version-file: go.mod
+        go-version: 1.27.x
+        check-latest: true
         cache-dependency-path: "**/go.sum"
 
     - name: Vet
