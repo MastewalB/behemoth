@@ -118,6 +118,8 @@ The comment at the top of its `main.go` has the full steps.
 | ORM | Bun, GORM |
 | Key-value (sessions, rate limits) | Redis |
 
+[Supported databases](./docs/api/supported-databases.md) lists the releases of each database that Behemoth supports and tests on.
+
 Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoDB has no migrations: the adapter creates the declared indexes (`EnsureIndexes`), and `Boot` checks them.
 
 ## Documentation
@@ -142,6 +144,7 @@ Migrations can be generated for PostgreSQL, MySQL, SQLite and SQL Server. MongoD
 | [Telemetry](./docs/api/telemetry.md) | Loggers, audit, metrics, tracing and the OpenTelemetry adapter |
 | [Command line](./docs/api/cli.md) | `behemoth generate`: setup, the launcher, the draft file, running it without the launcher |
 | [Core tables](./docs/api/core-tables.md) | Writing Behemoth's tables from a plugin |
+| [Supported databases](./docs/api/supported-databases.md) | The releases of PostgreSQL, MySQL, SQL Server, MongoDB, Redis and SQLite Behemoth supports, and running the tests against another release |
 | [MongoDB](./docs/api/mongodb.md) | What the server needs, and creating the indexes a schema declares |
 | [Internal docs](./docs/internal) | How the system works, for contributors |
 

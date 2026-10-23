@@ -747,7 +747,7 @@ func (m *BunAdapterTestManager) CleanupDatabase() {
 // before any write is attempted.
 func TestMongoAdapterRejectsAStandaloneServer(t *testing.T) {
 	ctx := context.Background()
-	container, err := mongodb.Run(ctx, "mongo:6") // no replica set
+	container, err := mongodb.Run(ctx, testutils.MongoImage()) // no replica set
 	if err != nil {
 		t.Fatalf("failed to start container: %s", err)
 	}

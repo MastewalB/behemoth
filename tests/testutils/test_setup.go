@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -40,6 +41,37 @@ import (
 )
 
 var MongoDBName = "testdb"
+
+// The images the container suites start. Each is the oldest release Behemoth
+// supports (docs/api/supported-databases.md), and an environment variable
+// replaces it, so the suites can run against any other release, such as the
+// newest:
+//
+//	BEHEMOTH_TEST_POSTGRES_IMAGE=postgres:17 go test ./storage/...
+const (
+	defaultPostgresImage = "postgres:15"
+	defaultMySQLImage    = "mysql:8.4"
+	defaultMongoImage    = "mongo:7.0"
+	defaultMSSQLImage    = "mcr.microsoft.com/mssql/server:2019-latest"
+	defaultRedisImage    = "redis:6.2-alpine"
+)
+
+// Image returns the image named by the environment variable env, or def when
+// the variable is empty.
+func Image(env, def string) string {
+	if v := os.Getenv(env); v != "" {
+		return v
+	}
+	return def
+}
+
+// PostgresImage, MySQLImage, MongoImage, MSSQLImage and RedisImage return the
+// image a container suite starts for that database.
+func PostgresImage() string { return Image("BEHEMOTH_TEST_POSTGRES_IMAGE", defaultPostgresImage) }
+func MySQLImage() string    { return Image("BEHEMOTH_TEST_MYSQL_IMAGE", defaultMySQLImage) }
+func MongoImage() string    { return Image("BEHEMOTH_TEST_MONGO_IMAGE", defaultMongoImage) }
+func MSSQLImage() string    { return Image("BEHEMOTH_TEST_MSSQL_IMAGE", defaultMSSQLImage) }
+func RedisImage() string    { return Image("BEHEMOTH_TEST_REDIS_IMAGE", defaultRedisImage) }
 
 func SetupSQLiteTestDB(t *testing.T) *sql.DB {
 	db, err := sql.Open("sqlite3", ":memory:")
@@ -86,7 +118,7 @@ func waitForLogin(t *testing.T, ctx context.Context, db *sql.DB, cleanup func(),
 func SetupPostgresTestDB(t *testing.T, ctx context.Context) (db *sql.DB, cleanup func()) {
 
 	req := testcontainers.ContainerRequest{
-		Image:        "postgres:15",
+		Image:        PostgresImage(),
 		Env:          map[string]string{"POSTGRES_PASSWORD": "secret", "POSTGRES_DB": "testdb"},
 		ExposedPorts: []string{"5432/tcp"},
 		// The image starts a server for its setup and then restarts it, and
@@ -138,7 +170,7 @@ func SetupPostgresTestDBWithSchema(t *testing.T, ctx context.Context, schema str
 func SetupMySQLTestDB(t *testing.T, ctx context.Context) (db *sql.DB, cleanup func()) {
 
 	mysqlContainer, err := mysql.Run(ctx,
-		"mysql:8.0.36",
+		MySQLImage(),
 		mysql.WithDatabase("testdb"),
 		mysql.WithUsername("root"),
 		mysql.WithPassword("secret"),
@@ -180,7 +212,7 @@ func SetupMySQLTestDBWithSchema(t *testing.T, ctx context.Context, schema string
 func SetupMongoTestDB(ctx context.Context, t *testing.T) (*mongo.Client, func()) {
 	// Create a new MongoDB container.
 	// Use ReplicaSet for transactions support.
-	mongodbContainer, err := mongodb.Run(ctx, "mongo:6", mongodb.WithReplicaSet("rs0"))
+	mongodbContainer, err := mongodb.Run(ctx, MongoImage(), mongodb.WithReplicaSet("rs0"))
 
 	if err != nil {
 		t.Fatalf("failed to start container: %s", err)
@@ -225,7 +257,7 @@ func SetupMSSQLTestDB(t *testing.T) (db *sql.DB, cleanup func()) {
 	password := "SuperStrong@Passw0rd"
 	mssqlContainer, err := testcontainers.Run(
 		ctx,
-		"mcr.microsoft.com/mssql/server:2019-latest",
+		MSSQLImage(),
 		testcontainers.WithEnv(map[string]string{
 			"ACCEPT_EULA": "Y",
 			"SA_PASSWORD": password,
@@ -347,7 +379,7 @@ func SetupBunTestDBWithSchema(t *testing.T, schema string) (db *bun.DB, cleanup 
 
 func SetupRedisClient(t *testing.T, ctx context.Context) (*goredis.Client, func()) {
 
-	redisContainer, err := redis.Run(ctx, "redis:7.4-alpine")
+	redisContainer, err := redis.Run(ctx, RedisImage())
 	assert.NoError(t, err)
 	cleanup := func() { _ = redisContainer.Terminate(ctx) }
 
