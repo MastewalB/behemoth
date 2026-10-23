@@ -1,6 +1,6 @@
 package models
 
-import "github.com/MastewalB/behemoth/schema"
+import "github.com/go-behemoth/behemoth/schema"
 
 // The tables core declares (CoreDeclareSchema), built from the same column
 // constants as each model's ToMap/FromMap. Other declarers may extend them

@@ -9,8 +9,8 @@
 package main
 
 import (
-	"github.com/MastewalB/behemoth/cli"
-	"github.com/MastewalB/behemoth/examples/cli/auth"
+	"github.com/go-behemoth/behemoth/cli"
+	"github.com/go-behemoth/behemoth/examples/cli/auth"
 )
 
 func main() { cli.Main(auth.Prepare, auth.MigrationBackend) }

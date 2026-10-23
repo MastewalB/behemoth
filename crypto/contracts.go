@@ -4,7 +4,7 @@
 // keys that come from elsewhere arrive through a KeySource.
 //
 // It sits below store, which uses its contracts, so it must never import
-// github.com/MastewalB/behemoth/store or any package above it.
+// github.com/go-behemoth/behemoth/store or any package above it.
 package crypto
 
 import (
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // Services bundles the cryptographic services Boot builds: the key manager,

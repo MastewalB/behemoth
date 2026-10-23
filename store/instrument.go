@@ -5,10 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/clause"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // WithTelemetry measures and traces every database operation the Store

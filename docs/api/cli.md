@@ -28,11 +28,11 @@ package auth
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/plugins/emailpassword"
-	"github.com/MastewalB/behemoth/storage/adapters/postgres"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/engine"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/plugins/emailpassword"
+	"github.com/go-behemoth/behemoth/storage/adapters/postgres"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/engine"
 )
 
 // Prepare returns what the application declares. It opens no connection.
@@ -70,7 +70,7 @@ Keep `Prepare` free of connections and secrets. The command calls it before it o
 ### 2. Install the launcher
 
 ```bash
-go install github.com/MastewalB/behemoth/cmd/behemoth@latest
+go install github.com/go-behemoth/behemoth/cmd/behemoth@latest
 ```
 
 ### 3. Run it where your application runs
@@ -212,7 +212,7 @@ Write the program yourself, once:
 package main
 
 import (
-	"github.com/MastewalB/behemoth/cli"
+	"github.com/go-behemoth/behemoth/cli"
 
 	"example.com/my-app/internal/auth"
 )

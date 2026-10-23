@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
+	"github.com/go-behemoth/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/telemetry/telemetrytest"
 )
 
 // countingQuerier counts the statements that reach the database.

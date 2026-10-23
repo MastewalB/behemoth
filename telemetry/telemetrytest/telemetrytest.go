@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // Recorder holds the sinks behind a Telemetry built by New.

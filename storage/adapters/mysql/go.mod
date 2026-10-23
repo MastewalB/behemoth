@@ -1,9 +1,9 @@
-module github.com/MastewalB/behemoth/storage/adapters/mysql
+module github.com/go-behemoth/behemoth/storage/adapters/mysql
 
 go 1.26.0
 
 require (
-	github.com/MastewalB/behemoth v0.0.0
+	github.com/go-behemoth/behemoth v0.0.0
 	github.com/go-sql-driver/mysql v1.10.0
 )
 
@@ -12,4 +12,4 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 )
 
-replace github.com/MastewalB/behemoth => ../../../
+replace github.com/go-behemoth/behemoth => ../../../

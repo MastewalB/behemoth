@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // type JWTConfig struct {

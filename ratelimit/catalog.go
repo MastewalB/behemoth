@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/MastewalB/behemoth/core"
+	"github.com/go-behemoth/behemoth/core"
 )
 
 type DefaultRateLimitCatalog struct {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // DefaultRandomizer is the Randomizer Boot builds. Every byte it returns

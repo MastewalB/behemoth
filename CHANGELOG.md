@@ -25,10 +25,10 @@ Behemoth is one repository with several Go modules. These modules are published,
 
 | Module | Path |
 | --- | --- |
-| Core | `github.com/MastewalB/behemoth` |
-| Storage adapters | `github.com/MastewalB/behemoth/storage/adapters/NAME` |
-| Router adapters | `github.com/MastewalB/behemoth/plugins/adapters/NAME` |
-| Telemetry adapters | `github.com/MastewalB/behemoth/telemetry/adapters/NAME` |
+| Core | `github.com/go-behemoth/behemoth` |
+| Storage adapters | `github.com/go-behemoth/behemoth/storage/adapters/NAME` |
+| Router adapters | `github.com/go-behemoth/behemoth/plugins/adapters/NAME` |
+| Telemetry adapters | `github.com/go-behemoth/behemoth/telemetry/adapters/NAME` |
 
 NAME is the adapter's directory name, such as `postgres`, `gin`, or `otel`.
 
@@ -60,6 +60,7 @@ Tags are never moved or deleted after they are pushed.
 ### Changed
 
 - The module path changes from `github.com/MastewalB/behemoth` to `github.com/go-behemoth/behemoth`, and so does the path of every adapter module. Replace the old path with the new one in your imports and in your `go.mod`.
+- The OpenTelemetry instrumentation scope of the `otel` adapter is now `github.com/go-behemoth/behemoth`. Update a dashboard or a filter that selects spans or metrics by the old scope name.
 - The `go` line of every module is `1.26.0`, the oldest Go release Behemoth supports. Earlier versions named a patch release, which made `go` fetch that exact toolchain. Behemoth supports the two newest Go releases, and CI tests with the newest patch of each. Build your application with the newest patch release of your Go version, because the standard library receives security fixes in patch releases.
 - Each adapter module requires the matching release of the core module, so `go get` installs an adapter on its own. Earlier adapter modules required a version that doesn't exist.
 

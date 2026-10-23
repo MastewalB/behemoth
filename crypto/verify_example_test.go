@@ -10,8 +10,8 @@ import (
 	"net/http/httptest"
 	"time"
 
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/keysource"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/keysource"
 	"github.com/golang-jwt/jwt/v5"
 )
 

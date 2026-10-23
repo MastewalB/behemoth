@@ -3,8 +3,8 @@ package postgres
 import (
 	"database/sql"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/migration"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/migration"
 )
 
 // MigrationBackend returns the migration backend of db for migration.Generate, migration.Migrate and the

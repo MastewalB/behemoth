@@ -4,12 +4,12 @@ import (
 	"database/sql"
 	"os"
 
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/plugins/emailpassword"
-	"github.com/MastewalB/behemoth/plugins/magiclink"
-	"github.com/MastewalB/behemoth/plugins/twofactor"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/engine"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/plugins/emailpassword"
+	"github.com/go-behemoth/behemoth/plugins/magiclink"
+	"github.com/go-behemoth/behemoth/plugins/twofactor"
 	_ "github.com/lib/pq"
 )
 

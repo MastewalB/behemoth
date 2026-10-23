@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/MastewalB/behemoth/httpapi"
 	"github.com/gin-gonic/gin"
+	"github.com/go-behemoth/behemoth/httpapi"
 )
 
 func TestMountServesAndReportsConflicts(t *testing.T) {

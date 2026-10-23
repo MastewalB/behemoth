@@ -8,11 +8,11 @@ This page lists the adapters and covers what is specific to each router.
 
 | Router | Import path | Installed with | Constructor takes |
 | --- | --- | --- | --- |
-| `net/http` (`http.ServeMux`) | `github.com/MastewalB/behemoth/plugins/adapters/nethttp` | Behemoth itself | `*http.ServeMux` |
-| Gin | `github.com/MastewalB/behemoth/plugins/adapters/gin` | its own `go get` | `*gin.Engine` or a `*gin.RouterGroup` |
-| Echo v5 | `github.com/MastewalB/behemoth/plugins/adapters/echo` | its own `go get` | `*echo.Echo` |
-| chi v5 | `github.com/MastewalB/behemoth/plugins/adapters/chi` | its own `go get` | `chi.Router`: a mux, a `Group`, or a `Route` |
-| Fiber v3 | `github.com/MastewalB/behemoth/plugins/adapters/fiber` | its own `go get` | `*fiber.App` |
+| `net/http` (`http.ServeMux`) | `github.com/go-behemoth/behemoth/plugins/adapters/nethttp` | Behemoth itself | `*http.ServeMux` |
+| Gin | `github.com/go-behemoth/behemoth/plugins/adapters/gin` | its own `go get` | `*gin.Engine` or a `*gin.RouterGroup` |
+| Echo v5 | `github.com/go-behemoth/behemoth/plugins/adapters/echo` | its own `go get` | `*echo.Echo` |
+| chi v5 | `github.com/go-behemoth/behemoth/plugins/adapters/chi` | its own `go get` | `chi.Router`: a mux, a `Group`, or a `Route` |
+| Fiber v3 | `github.com/go-behemoth/behemoth/plugins/adapters/fiber` | its own `go get` | `*fiber.App` |
 
 The framework adapters are separate modules, so your application downloads Gin only if it uses Gin. The `net/http` adapter needs nothing outside the standard library and is part of Behemoth's module.
 
@@ -35,7 +35,7 @@ These hold for all of them:
 ## net/http
 
 ```go
-import "github.com/MastewalB/behemoth/plugins/adapters/nethttp"
+import "github.com/go-behemoth/behemoth/plugins/adapters/nethttp"
 
 mux := http.NewServeMux()
 mux.HandleFunc("GET /{$}", home) // your own routes
@@ -104,7 +104,7 @@ The mux sends a `HEAD` request to the matching `GET` route.
 
 ```go
 import (
-	fiberadapter "github.com/MastewalB/behemoth/plugins/adapters/fiber"
+	fiberadapter "github.com/go-behemoth/behemoth/plugins/adapters/fiber"
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -156,21 +156,21 @@ Fiber differs from the `net/http` routers in a few ways that reach your hooks an
 ## Gin, Echo, and chi
 
 ```go
-import ginadapter "github.com/MastewalB/behemoth/plugins/adapters/gin"
+import ginadapter "github.com/go-behemoth/behemoth/plugins/adapters/gin"
 
 engine := gin.New()
 // HTTP: ginadapter.New(engine)
 ```
 
 ```go
-import echoadapter "github.com/MastewalB/behemoth/plugins/adapters/echo"
+import echoadapter "github.com/go-behemoth/behemoth/plugins/adapters/echo"
 
 e := echo.New()
 // HTTP: echoadapter.New(e)
 ```
 
 ```go
-import chiadapter "github.com/MastewalB/behemoth/plugins/adapters/chi"
+import chiadapter "github.com/go-behemoth/behemoth/plugins/adapters/chi"
 
 r := chi.NewRouter()
 // HTTP: chiadapter.New(r)

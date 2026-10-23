@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/httpapi"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/httpapi"
 	"github.com/labstack/echo/v5"
 )
 

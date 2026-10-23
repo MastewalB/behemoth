@@ -4,12 +4,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/core/hooks"
-	"github.com/MastewalB/behemoth/httpapi"
-	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/utils"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/core/hooks"
+	"github.com/go-behemoth/behemoth/httpapi"
+	"github.com/go-behemoth/behemoth/schema"
+	"github.com/go-behemoth/behemoth/utils"
 )
 
 // ActivityPlugin is a minimal third-party plugin that owns one table. It

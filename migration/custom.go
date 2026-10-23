@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // Declared is everything an application declares for migrations to converge

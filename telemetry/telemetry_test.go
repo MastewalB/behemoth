@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/identity"
-	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/identity"
+	"github.com/go-behemoth/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/telemetry/telemetrytest"
 )
 
 func TestNewFillsNoOps(t *testing.T) {

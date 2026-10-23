@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/clause"
+	"github.com/go-behemoth/behemoth/schema"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 type OperationKind string

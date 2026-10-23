@@ -1,9 +1,9 @@
-module github.com/MastewalB/behemoth/plugins/adapters/echo
+module github.com/go-behemoth/behemoth/plugins/adapters/echo
 
 go 1.26.0
 
 require (
-	github.com/MastewalB/behemoth v0.0.0
+	github.com/go-behemoth/behemoth v0.0.0
 	github.com/labstack/echo/v5 v5.2.1
 )
 
@@ -15,4 +15,4 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 )
 
-replace github.com/MastewalB/behemoth => ../../../
+replace github.com/go-behemoth/behemoth => ../../../

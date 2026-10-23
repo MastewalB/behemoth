@@ -1,4 +1,4 @@
-module github.com/MastewalB/behemoth
+module github.com/go-behemoth/behemoth
 
 go 1.26.0
 

@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // Tracer starts spans. It is the tracing counterpart of Logger and Metrics:

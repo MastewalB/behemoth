@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 const (

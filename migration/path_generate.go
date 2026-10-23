@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 const StatusGenerated RunStatus = "generated" // Path II's terminal state - file written

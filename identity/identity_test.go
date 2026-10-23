@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/identity"
+	"github.com/go-behemoth/behemoth/identity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

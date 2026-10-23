@@ -1,12 +1,12 @@
-module github.com/MastewalB/behemoth/plugins/adapters/gin
+module github.com/go-behemoth/behemoth/plugins/adapters/gin
 
 go 1.26.0
 
-replace github.com/MastewalB/behemoth => ../../../
+replace github.com/go-behemoth/behemoth => ../../../
 
 require (
-	github.com/MastewalB/behemoth v0.0.0
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-behemoth/behemoth v0.0.0
 )
 
 require (

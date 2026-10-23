@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/engine"
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/storage/adapters/sqlite"
+	"github.com/go-behemoth/behemoth/engine"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/schema"
+	"github.com/go-behemoth/behemoth/storage/adapters/sqlite"
 	"github.com/stretchr/testify/require"
 )
 

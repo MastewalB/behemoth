@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MastewalB/behemoth/core"
+	"github.com/go-behemoth/behemoth/core"
 )
 
 // RouteRateLimitRule limits the requests to the routes whose method and path

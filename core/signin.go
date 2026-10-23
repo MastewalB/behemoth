@@ -1,7 +1,7 @@
 package core
 
 import (
-	"github.com/MastewalB/behemoth/models"
+	"github.com/go-behemoth/behemoth/models"
 )
 
 // SignInResult is what a sign-in produces and what handlers on

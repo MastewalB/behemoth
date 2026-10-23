@@ -1,13 +1,13 @@
-module github.com/MastewalB/behemoth/examples/init
+module github.com/go-behemoth/behemoth/examples/init
 
 go 1.26.0
 
 require (
-	github.com/MastewalB/behemoth v0.0.0
-	github.com/MastewalB/behemoth/plugins/adapters/gin v0.0.0
-	github.com/MastewalB/behemoth/storage/adapters/postgres v0.0.0
-	github.com/MastewalB/behemoth/telemetry/adapters/otel v0.0.0
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-behemoth/behemoth v0.0.0
+	github.com/go-behemoth/behemoth/plugins/adapters/gin v0.0.0
+	github.com/go-behemoth/behemoth/storage/adapters/postgres v0.0.0
+	github.com/go-behemoth/behemoth/telemetry/adapters/otel v0.0.0
 	github.com/lib/pq v1.10.9
 	go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin v0.72.0
 	go.opentelemetry.io/otel v1.47.0
@@ -66,8 +66,8 @@ require (
 )
 
 replace (
-	github.com/MastewalB/behemoth => ../../
-	github.com/MastewalB/behemoth/plugins/adapters/gin => ../../plugins/adapters/gin
-	github.com/MastewalB/behemoth/storage/adapters/postgres => ../../storage/adapters/postgres
-	github.com/MastewalB/behemoth/telemetry/adapters/otel => ../../telemetry/adapters/otel
+	github.com/go-behemoth/behemoth => ../../
+	github.com/go-behemoth/behemoth/plugins/adapters/gin => ../../plugins/adapters/gin
+	github.com/go-behemoth/behemoth/storage/adapters/postgres => ../../storage/adapters/postgres
+	github.com/go-behemoth/behemoth/telemetry/adapters/otel => ../../telemetry/adapters/otel
 )

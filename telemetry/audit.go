@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/identity"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/identity"
 )
 
 // AuditOutcome says how the audited action ended.

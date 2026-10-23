@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/identity"
+	"github.com/go-behemoth/behemoth/identity"
 )
 
 // CredentialKind says what a Credential is.

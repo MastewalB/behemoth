@@ -3,7 +3,7 @@ package migration
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 type SchemaDriver interface {

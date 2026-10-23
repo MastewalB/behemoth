@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/clause"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // The tables the plugin declares. A method that is on is a row of

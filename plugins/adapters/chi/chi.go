@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/httpapi"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/httpapi"
 	"github.com/go-chi/chi/v5"
 )
 

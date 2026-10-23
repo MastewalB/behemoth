@@ -4,7 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // AESGCMEncryptor is the Encryptor Boot builds: AES-256-GCM under the key

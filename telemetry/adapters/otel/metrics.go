@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/telemetry"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 )

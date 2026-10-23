@@ -13,7 +13,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 tel := telemetry.New(
@@ -501,7 +501,7 @@ func (p *Plugin) onUserCreated(hctx *core.HookContext, result any) error {
 The adapter is a separate module, so applications that do not use OpenTelemetry do not download it:
 
 ```
-go get github.com/MastewalB/behemoth/telemetry/adapters/otel
+go get github.com/go-behemoth/behemoth/telemetry/adapters/otel
 ```
 
 It provides three things:
@@ -516,8 +516,8 @@ You build the OpenTelemetry SDK, its providers and exporters, and shut them down
 
 ```go
 import (
-	"github.com/MastewalB/behemoth/telemetry"
-	behemothotel "github.com/MastewalB/behemoth/telemetry/adapters/otel"
+	"github.com/go-behemoth/behemoth/telemetry"
+	behemothotel "github.com/go-behemoth/behemoth/telemetry/adapters/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -553,7 +553,7 @@ meterProvider.Shutdown(ctx)
 - **Jaeger** needs nothing special. Jaeger accepts OTLP, so point the trace exporter at it: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces`. Jaeger takes traces and no metrics, so set the traces variable and not the general one, or the metric exporter logs errors.
 - **Incoming traces** are picked up by your framework's middleware, such as `otelgin`, `otelecho`, or `otelhttp`, not by Behemoth. Add it to your router as usual.
 - **SQL statements** as spans come from your driver's instrumentation, such as `otelsql`. They appear under Behemoth's `behemoth.store.*` spans.
-- **Metrics** arrive under the names in the [Metrics](#metrics) table, in the instrumentation scope `github.com/MastewalB/behemoth`. Durations have the unit `s`.
+- **Metrics** arrive under the names in the [Metrics](#metrics) table, in the instrumentation scope `github.com/go-behemoth/behemoth`. Durations have the unit `s`.
 - **Logs** still go where your logger writes them. `WithTraceIDs` adds the two IDs so a line can be matched to its trace. To export logs through OpenTelemetry as well, build a slog logger over the `otelslog` bridge and pass it to `telemetry.NewSlogLogger`.
 
 ## A complete example

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/models"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/models"
 )
 
 // Defaults of CodeOptions.

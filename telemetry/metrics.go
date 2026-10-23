@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // Metrics is the sink for measurements. It has the two instruments behemoth

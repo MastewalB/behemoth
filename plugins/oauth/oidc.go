@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/keysource"
-	"github.com/MastewalB/behemoth/outbound"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/keysource"
+	"github.com/go-behemoth/behemoth/outbound"
 )
 
 // How long a discovery document and a key set are used before they are

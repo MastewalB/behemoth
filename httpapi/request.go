@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/core"
 )
 
 // RequestContext is the normalized, framework-agnostic context every plugin

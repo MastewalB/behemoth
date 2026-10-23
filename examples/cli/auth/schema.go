@@ -3,8 +3,8 @@ package auth
 import (
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // Plan is a column the application adds to behemoth's users table. The

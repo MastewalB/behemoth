@@ -1,9 +1,9 @@
-module github.com/MastewalB/behemoth/storage/adapters/bun
+module github.com/go-behemoth/behemoth/storage/adapters/bun
 
 go 1.26.0
 
 require (
-	github.com/MastewalB/behemoth v0.0.0
+	github.com/go-behemoth/behemoth v0.0.0
 	github.com/uptrace/bun v1.2.18
 )
 
@@ -16,4 +16,4 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 )
 
-replace github.com/MastewalB/behemoth => ../../../
+replace github.com/go-behemoth/behemoth => ../../../

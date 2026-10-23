@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/migration"
 )
 
 // FileExtension implements [migration.MigrationRenderer].

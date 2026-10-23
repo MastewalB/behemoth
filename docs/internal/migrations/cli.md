@@ -74,7 +74,7 @@ Exit codes are 0 when the command ran, with or without changes, 1 when it failed
 package main
 
 import (
-	"github.com/MastewalB/behemoth/cli"
+	"github.com/go-behemoth/behemoth/cli"
 
 	app "example.com/shop/internal/auth"
 )

@@ -3,11 +3,11 @@ package core
 import (
 	"net/http"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/store"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/schema"
+	"github.com/go-behemoth/behemoth/store"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 type AuthContext struct {

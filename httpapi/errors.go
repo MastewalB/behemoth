@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // ErrorMapper turns the error a route returned into the status and the JSON

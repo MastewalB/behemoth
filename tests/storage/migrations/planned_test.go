@@ -1,8 +1,8 @@
 package migrations
 
 import (
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // TestPlannedTablesGetTheirIndexes runs the pipeline's own plan for two new

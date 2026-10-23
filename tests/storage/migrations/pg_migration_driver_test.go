@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/storage/adapters/postgres"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/schema"
+	"github.com/go-behemoth/behemoth/storage/adapters/postgres"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

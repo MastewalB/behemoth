@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/schema"
-	"github.com/MastewalB/behemoth/storage/adapters"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/schema"
+	"github.com/go-behemoth/behemoth/storage/adapters"
 )
 
 // mapSQLServerType is the reverse (native -> canonical) type mapping, from a

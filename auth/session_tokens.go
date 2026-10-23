@@ -5,13 +5,13 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/core/hooks"
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/identity"
-	"github.com/MastewalB/behemoth/models"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/core/hooks"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/identity"
+	"github.com/go-behemoth/behemoth/models"
 )
 
 // DefaultSessionTokens is the SessionTokens of behemoth: it signs external

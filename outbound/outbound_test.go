@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/outbound"
-	"github.com/MastewalB/behemoth/telemetry"
-	"github.com/MastewalB/behemoth/telemetry/telemetrytest"
+	"github.com/go-behemoth/behemoth/outbound"
+	"github.com/go-behemoth/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/telemetry/telemetrytest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/errs"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/errs"
 )
 
 // keySetMaxAge is how long a verifier may cache the key set. A key published

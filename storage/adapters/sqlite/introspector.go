@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/schema"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/schema"
 )
 
 // sqliteTypeMapping maps declared column types, upper-cased with their

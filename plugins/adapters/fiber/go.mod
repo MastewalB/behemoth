@@ -1,9 +1,9 @@
-module github.com/MastewalB/behemoth/plugins/adapters/fiber
+module github.com/go-behemoth/behemoth/plugins/adapters/fiber
 
 go 1.26.0
 
 require (
-	github.com/MastewalB/behemoth v0.0.0
+	github.com/go-behemoth/behemoth v0.0.0
 	github.com/gofiber/fiber/v3 v3.5.0
 )
 
@@ -26,4 +26,4 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 )
 
-replace github.com/MastewalB/behemoth => ../../../
+replace github.com/go-behemoth/behemoth => ../../../

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/MastewalB/behemoth/crypto"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/store"
+	"github.com/go-behemoth/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

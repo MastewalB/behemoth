@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/clause"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/telemetry"
 	"github.com/google/uuid"
 )
 

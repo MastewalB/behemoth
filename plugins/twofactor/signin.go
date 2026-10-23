@@ -6,15 +6,15 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/clause"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/core/hooks"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/identity"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/plugins/twofactor/totp"
-	"github.com/MastewalB/behemoth/store"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/clause"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/core/hooks"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/identity"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/plugins/twofactor/totp"
+	"github.com/go-behemoth/behemoth/store"
 )
 
 // onCredentialsVerified handles auth.signIn.credentialsVerified, the

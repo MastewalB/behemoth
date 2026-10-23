@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/MastewalB/behemoth/outbound"
+	"github.com/go-behemoth/behemoth/outbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -3,7 +3,7 @@ package telemetry
 import (
 	"strings"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 )
 
 // Redacted replaces the value of a redacted log field.

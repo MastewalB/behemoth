@@ -7,9 +7,9 @@ package tests
 // 	"testing"
 // 	"time"
 
-// 	"github.com/MastewalB/behemoth"
-// 	"github.com/MastewalB/behemoth/auth"
-// 	"github.com/MastewalB/behemoth/models"
+// 	"github.com/go-behemoth/behemoth"
+// 	"github.com/go-behemoth/behemoth/auth"
+// 	"github.com/go-behemoth/behemoth/models"
 // 	_ "github.com/mattn/go-sqlite3"
 // 	"github.com/stretchr/testify/assert"
 // )

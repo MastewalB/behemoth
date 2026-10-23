@@ -3,8 +3,8 @@ package crypto
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // Config is the security configuration an application hands to Boot. Boot

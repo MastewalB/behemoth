@@ -4,11 +4,11 @@ import (
 	"context"
 	"slices"
 
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/identity"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/identity"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // DefaultAuthenticator is the Authenticator Boot builds. It resolves a

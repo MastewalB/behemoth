@@ -1,11 +1,11 @@
 package engine
 
 import (
-	"github.com/MastewalB/behemoth/dispatch"
+	"github.com/go-behemoth/behemoth/dispatch"
 	"testing"
 
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/core/hooks"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/core/hooks"
 )
 
 // Core declares every point its own code fires, each in the phase it is

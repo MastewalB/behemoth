@@ -142,7 +142,7 @@ func TestMainSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`"github.com/MastewalB/behemoth/cli"`,
+		`"github.com/go-behemoth/behemoth/cli"`,
 		`app "example.com/shop/internal/auth"`,
 		"cli.Main(app.Prepare, app.MigrationBackend)",
 	} {
@@ -203,16 +203,16 @@ func TestLauncherRunsAnApplication(t *testing.T) {
 	module := t.TempDir()
 	writeTree(t, module, map[string]string{
 		"go.mod": "module example.com/shop\n\n" + goLine + "\n\n" +
-			"require github.com/MastewalB/behemoth v0.0.0\n\n" +
-			"replace github.com/MastewalB/behemoth v0.0.0 => " + repo + "\n",
+			"require github.com/go-behemoth/behemoth v0.0.0\n\n" +
+			"replace github.com/go-behemoth/behemoth v0.0.0 => " + repo + "\n",
 		"go.sum": string(gosum),
 		"internal/auth/behemoth.go": `package auth
 
 import (
 	"context"
 
-	"github.com/MastewalB/behemoth/migration"
-	"github.com/MastewalB/behemoth/engine"
+	"github.com/go-behemoth/behemoth/migration"
+	"github.com/go-behemoth/behemoth/engine"
 )
 
 func Prepare() (*engine.PreparedApp, error) {

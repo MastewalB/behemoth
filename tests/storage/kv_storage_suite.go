@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth"
+	"github.com/go-behemoth/behemoth"
 	"github.com/stretchr/testify/assert"
 )
 

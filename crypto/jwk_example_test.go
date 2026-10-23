@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/MastewalB/behemoth/crypto"
+	"github.com/go-behemoth/behemoth/crypto"
 )
 
 func ExampleParseJWKSet() {

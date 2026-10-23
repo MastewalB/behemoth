@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // Defaults of a client and of the helpers.

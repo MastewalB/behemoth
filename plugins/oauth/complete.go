@@ -9,13 +9,13 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/core/hooks"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/store"
-	"github.com/MastewalB/behemoth/utils"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/core/hooks"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/store"
+	"github.com/go-behemoth/behemoth/utils"
 )
 
 // HookValueProvider is the key under which Complete publishes the id of the

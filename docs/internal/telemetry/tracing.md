@@ -131,7 +131,7 @@ Because the adapter is called with the span's context, a driver's own instrument
 
 ## The OpenTelemetry adapter
 
-`telemetry/adapters/otel` is its own module (`github.com/MastewalB/behemoth/telemetry/adapters/otel`, package `behemothotel`), like the storage adapters. The root module has no OpenTelemetry dependency.
+`telemetry/adapters/otel` is its own module (`github.com/go-behemoth/behemoth/telemetry/adapters/otel`, package `behemothotel`), like the storage adapters. The root module has no OpenTelemetry dependency.
 
 | Constructor | Returns | Maps to |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ Because the adapter is called with the span's context, a driver's own instrument
 | `NewMetrics(metric.MeterProvider)` | `telemetry.Metrics` | an `Int64Counter` or `Float64Histogram` per name |
 | `WithTraceIDs(telemetry.Logger)` | `telemetry.Logger` | adds `trace_id` and `span_id` to lines |
 
-A nil provider means the global one. The instrumentation scope of every span and instrument is `github.com/MastewalB/behemoth`.
+A nil provider means the global one. The instrumentation scope of every span and instrument is `github.com/go-behemoth/behemoth`.
 
 The adapter has these properties:
 

@@ -24,12 +24,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MastewalB/behemoth"
-	"github.com/MastewalB/behemoth/core"
-	"github.com/MastewalB/behemoth/core/hooks"
-	"github.com/MastewalB/behemoth/errs"
-	"github.com/MastewalB/behemoth/models"
-	"github.com/MastewalB/behemoth/telemetry"
+	"github.com/go-behemoth/behemoth"
+	"github.com/go-behemoth/behemoth/core"
+	"github.com/go-behemoth/behemoth/core/hooks"
+	"github.com/go-behemoth/behemoth/errs"
+	"github.com/go-behemoth/behemoth/models"
+	"github.com/go-behemoth/behemoth/telemetry"
 )
 
 // PluginName is the name the plugin registers under (PluginMeta.Name). It

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/core"
+	"github.com/go-behemoth/behemoth/core"
 )
 
 // counter is an AtomicIncrementer that counts in memory and reports the end

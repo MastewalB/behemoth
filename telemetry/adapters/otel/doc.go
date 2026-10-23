@@ -23,4 +23,4 @@
 package behemothotel
 
 // scopeName is the instrumentation scope of every span and instrument.
-const scopeName = "github.com/MastewalB/behemoth"
+const scopeName = "github.com/go-behemoth/behemoth"

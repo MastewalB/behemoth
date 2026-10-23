@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MastewalB/behemoth/outbound"
+	"github.com/go-behemoth/behemoth/outbound"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 )

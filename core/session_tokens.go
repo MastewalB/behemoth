@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/MastewalB/behemoth/models"
+	"github.com/go-behemoth/behemoth/models"
 )
 
 // Keys of the session token route's body and of the auth.sessionToken.beforeIssue
