@@ -14,7 +14,7 @@ require (
 	github.com/MastewalB/behemoth/storage/adapters/sqlserver v0.0.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/lib/pq v1.10.9
-	github.com/mattn/go-sqlite3 v1.14.44
+	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/redis/go-redis/v9 v9.20.0
 	github.com/stretchr/testify v1.11.1
