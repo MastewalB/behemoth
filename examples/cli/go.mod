@@ -1,6 +1,6 @@
 module github.com/MastewalB/behemoth/examples/cli
 
-go 1.26.4
+go 1.26.0
 
 require (
 	github.com/MastewalB/behemoth v0.0.0
@@ -16,6 +16,6 @@ require (
 )
 
 replace (
-	github.com/MastewalB/behemoth v0.0.0 => ../../
-	github.com/MastewalB/behemoth/storage/adapters/postgres v0.0.0 => ../../storage/adapters/postgres
+	github.com/MastewalB/behemoth => ../../
+	github.com/MastewalB/behemoth/storage/adapters/postgres => ../../storage/adapters/postgres
 )

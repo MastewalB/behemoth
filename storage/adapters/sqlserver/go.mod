@@ -1,6 +1,6 @@
 module github.com/MastewalB/behemoth/storage/adapters/sqlserver
 
-go 1.26.4
+go 1.26.0
 
 require (
 	github.com/MastewalB/behemoth v0.0.0
@@ -16,4 +16,4 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 )
 
-replace github.com/MastewalB/behemoth v0.0.0 => ../../../
+replace github.com/MastewalB/behemoth => ../../../

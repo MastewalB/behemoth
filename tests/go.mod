@@ -1,6 +1,6 @@
 module github.com/MastewalB/behemoth/tests
 
-go 1.26.4
+go 1.26.0
 
 require (
 	github.com/MastewalB/behemoth v0.0.0
@@ -38,7 +38,7 @@ require (
 	gorm.io/gorm v1.31.2
 )
 
-require golang.org/x/mod v0.35.0 // indirect
+require golang.org/x/mod v0.37.0 // indirect
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -117,9 +117,9 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.68.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
@@ -127,22 +127,22 @@ require (
 	modernc.org/sqlite v1.46.1 // indirect
 )
 
-replace github.com/MastewalB/behemoth v0.0.0 => ../
+replace github.com/MastewalB/behemoth => ../
 
-replace github.com/MastewalB/behemoth/storage/adapters/bun v0.0.0 => ../storage/adapters/bun
+replace github.com/MastewalB/behemoth/storage/adapters/bun => ../storage/adapters/bun
 
-replace github.com/MastewalB/behemoth/storage/adapters/postgres v0.0.0 => ../storage/adapters/postgres
+replace github.com/MastewalB/behemoth/storage/adapters/postgres => ../storage/adapters/postgres
 
-replace github.com/MastewalB/behemoth/storage/adapters/sqlite v0.0.0 => ../storage/adapters/sqlite
+replace github.com/MastewalB/behemoth/storage/adapters/sqlite => ../storage/adapters/sqlite
 
-replace github.com/MastewalB/behemoth/storage/adapters/gorm v0.0.0 => ../storage/adapters/gorm
+replace github.com/MastewalB/behemoth/storage/adapters/gorm => ../storage/adapters/gorm
 
-replace github.com/MastewalB/behemoth/storage/adapters/mongo v0.0.0 => ../storage/adapters/mongo
+replace github.com/MastewalB/behemoth/storage/adapters/mongo => ../storage/adapters/mongo
 
-replace github.com/MastewalB/behemoth/storage/adapters/mysql v0.0.0 => ../storage/adapters/mysql
+replace github.com/MastewalB/behemoth/storage/adapters/mysql => ../storage/adapters/mysql
 
-replace github.com/MastewalB/behemoth/storage/adapters/sqlserver v0.0.0 => ../storage/adapters/sqlserver
+replace github.com/MastewalB/behemoth/storage/adapters/sqlserver => ../storage/adapters/sqlserver
 
-replace github.com/MastewalB/behemoth/storage/adapters/redis v0.0.0 => ../storage/adapters/redis
+replace github.com/MastewalB/behemoth/storage/adapters/redis => ../storage/adapters/redis
 
 replace github.com/MastewalB/behemoth/telemetry/adapters/otel => ../telemetry/adapters/otel

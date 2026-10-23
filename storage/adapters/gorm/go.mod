@@ -1,6 +1,6 @@
 module github.com/MastewalB/behemoth/storage/adapters/gorm
 
-go 1.26.4
+go 1.26.0
 
 require (
 	github.com/MastewalB/behemoth v0.0.0
@@ -10,7 +10,7 @@ require (
 require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 )
 
-replace github.com/MastewalB/behemoth v0.0.0 => ../../../
+replace github.com/MastewalB/behemoth => ../../../

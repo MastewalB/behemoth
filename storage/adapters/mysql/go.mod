@@ -1,6 +1,6 @@
 module github.com/MastewalB/behemoth/storage/adapters/mysql
 
-go 1.26.4
+go 1.26.0
 
 require (
 	github.com/MastewalB/behemoth v0.0.0
@@ -10,7 +10,6 @@ require (
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	golang.org/x/crypto v0.50.0 // indirect
 )
 
-replace github.com/MastewalB/behemoth v0.0.0 => ../../../
+replace github.com/MastewalB/behemoth => ../../../
