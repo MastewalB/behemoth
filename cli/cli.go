@@ -20,6 +20,11 @@
 // what generate wrote, on PathManaged, and refuses an application that
 // applies its migrations with its own tool.
 //
+// Experimental: the command line is a first version. Only PostgreSQL has a
+// ready-made setup (postgres.MigrationBackend); for MySQL, SQLite and SQL
+// Server the application fills in migration.Backend itself. Its behavior can
+// change between versions.
+//
 // Deferred: there is no prompt for the questions planning raises (they are
 // answered in the draft file), no --previous override and no schema snapshot
 // command. See docs/internal/migrations/cli.md.
