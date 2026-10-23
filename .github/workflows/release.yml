@@ -1,0 +1,54 @@
+# Creates a GitHub Release when scripts/release.sh pushes a version tag.
+#
+# The script tags the root module `vX.Y.Z` and every submodule `DIR/vX.Y.Z`.
+# A `*` in a tag filter does not match `/`, so only the root tag starts this
+# workflow, and one version gets one release. The release notes are the
+# version's section of CHANGELOG.md, so the script refuses to tag a version
+# that has none. A version with a suffix, such as v0.3.0-rc.1, is a
+# pre-release.
+
+name: Release
+
+on:
+  push:
+    tags: [ "v*" ]
+
+permissions:
+  contents: read
+
+jobs:
+
+  release:
+    name: Create the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # The one job that writes: it creates the release.
+      contents: write
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        persist-credentials: false
+
+    - name: Cut the changelog section of this version
+      env:
+        TAG: ${{ github.ref_name }}
+      run: |
+        awk -v heading="## [${TAG#v}]" '
+          index($0, "## ") == 1 { if (found) exit; found = (index($0, heading) == 1); next }
+          found { print }
+        ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+        if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+          echo "CHANGELOG.md has no notes under \"## [${TAG#v}]\"" >&2
+          exit 1
+        fi
+
+    - name: Create the release
+      env:
+        TAG: ${{ github.ref_name }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        flags=()
+        case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+        gh release create "$TAG" --verify-tag --title "$TAG" \
+          --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"

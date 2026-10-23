@@ -1,0 +1,44 @@
+# Keeps the dependencies of every module, and the actions in the workflows,
+# up to date. Pull requests go to dev, where development happens until v1.0.0.
+version: 2
+
+updates:
+
+  - package-ecosystem: gomod
+    # One entry covers every module: each directory has a go.mod of its own.
+    directories:
+      - "/"
+      - "/storage/adapters/*"
+      - "/plugins/adapters/*"
+      - "/telemetry/adapters/*"
+      - "/tests"
+      - "/examples/*"
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      # Patch and minor updates arrive as one pull request. A major update
+      # gets a pull request of its own.
+      go-dependencies:
+        patterns: [ "*" ]
+        update-types: [ minor, patch ]
+    ignore:
+      # The modules of this repository require each other at a version that
+      # a replace directive points to a local directory. They are released
+      # by scripts/release.sh, not by Dependabot.
+      - dependency-name: "github.com/go-behemoth/behemoth"
+      - dependency-name: "github.com/go-behemoth/behemoth/*"
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: [ "*" ]
+        update-types: [ minor, patch ]
+    commit-message:
+      prefix: "ci(deps)"
