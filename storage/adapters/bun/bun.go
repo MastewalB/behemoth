@@ -300,10 +300,10 @@ func (ba *BunAdapter) FindMany(
 			q = q.OrderExpr("? ?", ba.column(m, options.OrderBy.Field), bun.Safe(string(options.OrderBy.Direction)))
 		}
 		if options.Limit != 0 {
-			q = q.Limit(options.Limit)
+			q = q.Limit(int64(options.Limit))
 		}
 		if options.Offset != 0 {
-			q = q.Offset(options.Offset)
+			q = q.Offset(int64(options.Offset))
 		}
 	}
 
