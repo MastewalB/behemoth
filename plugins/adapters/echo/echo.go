@@ -29,13 +29,24 @@ func toEchoPath(path string) string {
 	return pathParam.ReplaceAllString(path, ":$1")
 }
 
-// Mount implements [httpapi.FrameworkDriver].
+// Mount implements [httpapi.FrameworkDriver]. It returns an error for a route
+// that the Echo instance already has with the same method and path.
+//
+// The adapter checks this itself. Echo v5.4 and later let echo.New overwrite a
+// duplicate route without an error, and a route of Behemoth must never replace
+// one of the application's, or be replaced by it, unnoticed.
 func (ed *EchoDriver) Mount(routes ...httpapi.Route) error {
 	for _, rt := range routes {
 		handler := rt.Handler
+		path := toEchoPath(rt.Path)
+		for _, existing := range ed.e.Router().Routes() {
+			if existing.Method == rt.Method && existing.Path == path {
+				return fmt.Errorf("echo: cannot mount %s %s: the server already has that route", rt.Method, rt.Path)
+			}
+		}
 		_, err := ed.e.AddRoute(echo.Route{
 			Method: rt.Method,
-			Path:   toEchoPath(rt.Path),
+			Path:   path,
 			Handler: func(c *echo.Context) error {
 				rctx := buildRequestContext(c)
 				if err := handler(rctx); err != nil {

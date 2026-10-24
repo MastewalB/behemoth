@@ -176,6 +176,8 @@ r := chi.NewRouter()
 // HTTP: chiadapter.New(r)
 ```
 
+The Echo adapter returns an error for a route that your Echo instance already has with the same method and path. It checks this itself, so the result does not depend on Echo's `AllowOverwritingRoute` setting, which `echo.New` turns on from v5.4.
+
 The Gin and chi adapters also take a group. Behemoth's routes then sit behind the group's prefix and its middleware:
 
 ```go
