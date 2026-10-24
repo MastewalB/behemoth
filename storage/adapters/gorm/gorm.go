@@ -55,6 +55,24 @@ func NewGormAdapter(db *gorm.DB, resolver behemoth.SchemaResolver) *GormAdapter 
 	}
 }
 
+var _ behemoth.ForeignKeyChecker = (*GormAdapter)(nil)
+
+// CheckForeignKeys implements behemoth.ForeignKeyChecker. On SQLite it asks
+// the connection it gets from the pool whether it enforces foreign keys, and
+// returns a configuration error that says how to switch them on when it does
+// not. On every other dialect it returns nil: those databases always enforce
+// them. Boot calls it.
+func (ga *GormAdapter) CheckForeignKeys(ctx context.Context) error {
+	if ga.db.Dialector == nil || ga.db.Dialector.Name() != "sqlite" {
+		return nil
+	}
+	var enabled int
+	if err := ga.db.WithContext(ctx).Raw(adapters.SQLiteForeignKeysPragma).Scan(&enabled).Error; err != nil {
+		return fmt.Errorf("GormAdapter.CheckForeignKeys: %w", err)
+	}
+	return adapters.SQLiteForeignKeysError("GormAdapter.CheckForeignKeys", enabled)
+}
+
 func (ga *GormAdapter) table(ctx context.Context, m behemoth.Model) *gorm.DB {
 	return ga.db.WithContext(ctx).Table(adapters.PhysicalTable(ga.resolver, m))
 }

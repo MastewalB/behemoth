@@ -38,7 +38,7 @@ import (
 // (Until core declares its tables, the test creates it by hand.)
 func usersDB(t *testing.T) behemoth.Database {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "store.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "store.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(`CREATE TABLE users (
@@ -1022,7 +1022,7 @@ func TestDeleteUserUnderBoot(t *testing.T) {
 	ctx := context.Background()
 	app, err := engine.Prepare(nil, engine.PrepareConfig{})
 	require.NoError(t, err)
-	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "delete.db")+"?_busy_timeout=10000")
+	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "delete.db")+"?_foreign_keys=on&_busy_timeout=10000")
 	require.NoError(t, err)
 	t.Cleanup(func() { sqlDB.Close() })
 	createTables(t, sqliteAdapter.NewSQLiteDriver(sqlDB, app.Resolver), app.Schemas.All())

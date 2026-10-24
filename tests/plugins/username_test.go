@@ -43,7 +43,7 @@ type usernameApp struct {
 // bootUsernames boots the email/password and username plugins.
 func bootUsernames(t *testing.T, opts username.Options, hookFn func(reg core.HookRegistry) error) *usernameApp {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "username.db")+"?_busy_timeout=10000&_txlock=immediate")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "username.db")+"?_foreign_keys=on&_busy_timeout=10000&_txlock=immediate")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(usernameSchema)
@@ -403,7 +403,7 @@ func TestUsernameSignInPassesTheSecondFactorCheckpoint(t *testing.T) {
 // route and from code, for a known and an unknown name alike.
 func TestUsernameSignInsCanBeLimitedPerUsername(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "limit.db")+"?_busy_timeout=10000")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "limit.db")+"?_foreign_keys=on&_busy_timeout=10000")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(usernameSchema)

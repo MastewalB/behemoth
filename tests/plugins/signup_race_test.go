@@ -108,7 +108,7 @@ type raceApp struct {
 // bootUsernames.
 func bootRace(t *testing.T, withUsernames bool, hookFn func(reg core.HookRegistry) error) *raceApp {
 	t.Helper()
-	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "race.db")+"?_busy_timeout=10000&_txlock=immediate")
+	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "race.db")+"?_foreign_keys=on&_busy_timeout=10000&_txlock=immediate")
 	require.NoError(t, err)
 	t.Cleanup(func() { sqlDB.Close() })
 	_, err = sqlDB.Exec(usernameSchema)

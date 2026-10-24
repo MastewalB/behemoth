@@ -35,6 +35,20 @@ func NewSQLiteAdapter(db adapters.Querier, resolver behemoth.SchemaResolver) *SQ
 	return &SQLiteAdapter{DB: db, Resolver: resolver}
 }
 
+var _ behemoth.ForeignKeyChecker = (*SQLiteAdapter)(nil)
+
+// CheckForeignKeys implements behemoth.ForeignKeyChecker. It asks the
+// connection it gets from the pool whether it enforces foreign keys, and
+// returns a configuration error that says how to switch them on when it does
+// not. Boot calls it.
+func (sqlt *SQLiteAdapter) CheckForeignKeys(ctx context.Context) error {
+	var enabled int
+	if err := sqlt.DB.QueryRowContext(ctx, adapters.SQLiteForeignKeysPragma).Scan(&enabled); err != nil {
+		return fmt.Errorf("SQLiteAdapter.CheckForeignKeys: %w", err)
+	}
+	return adapters.SQLiteForeignKeysError("SQLiteAdapter.CheckForeignKeys", enabled)
+}
+
 // WithLogger makes the adapter write the text of every statement it runs to
 // logger at Debug, and returns the adapter. Argument values are never
 // logged: they hold password hashes and token hashes. Adapters bound to a

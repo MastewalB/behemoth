@@ -45,7 +45,7 @@ type verificationApp struct {
 func bootVerification(t *testing.T, opts emailverification.Options, configure ...func(*engine.BootConfig)) *verificationApp {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "verification.db")+"?_busy_timeout=10000")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "verification.db")+"?_foreign_keys=on&_busy_timeout=10000")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(magicLinkSchema)
@@ -322,7 +322,7 @@ func TestEmailVerificationOptions(t *testing.T) {
 		"no link URL":    {emailverification.Options{}, sender},
 		"a negative TTL": {emailverification.Options{LinkURL: "https://app.example.com/verify", TTL: -time.Minute}, sender},
 	} {
-		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "verification-opts.db"))
+		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "verification-opts.db")+"?_foreign_keys=on")
 		require.NoError(t, err)
 		t.Cleanup(func() { db.Close() })
 		_, err = db.Exec(magicLinkSchema)

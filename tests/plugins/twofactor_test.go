@@ -50,7 +50,7 @@ func bootTwoFactor(t *testing.T, opts twofactor.Options, configure func(*engine.
 
 func tryBootTwoFactor(t *testing.T, opts twofactor.Options, configure func(*engine.BootConfig)) (*twoFactorApp, error) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "twofactor.db")+"?_busy_timeout=10000&_txlock=immediate")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "twofactor.db")+"?_foreign_keys=on&_busy_timeout=10000&_txlock=immediate")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 

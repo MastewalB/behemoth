@@ -132,7 +132,7 @@ func createTables(t *testing.T, driver migration.SchemaDriver, tables []schema.T
 // over it. The raw adapters are the control: the contract holds for them.
 func contractBackends() map[string]func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) behemoth.Database {
 	openSQLite := func(t *testing.T, tables []schema.Table, r behemoth.SchemaResolver) *sql.DB {
-		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "contract.db")+"?_busy_timeout=10000")
+		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "contract.db")+"?_foreign_keys=on&_busy_timeout=10000")
 		require.NoError(t, err)
 		t.Cleanup(func() { db.Close() })
 		createTables(t, sqliteAdapter.NewSQLiteDriver(db, r), tables)
@@ -324,7 +324,7 @@ func TestDeleteUserRemovesSessionsAndAccounts(t *testing.T) {
 	backends := contractBackends()
 	open := map[string]func(t *testing.T) behemoth.Database{
 		"sqlite, foreign keys on": func(t *testing.T) behemoth.Database {
-			db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "delete-user.db")+"?_busy_timeout=10000&_foreign_keys=on")
+			db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "delete-user.db")+"?_foreign_keys=on&_busy_timeout=10000&_foreign_keys=on")
 			require.NoError(t, err)
 			t.Cleanup(func() { db.Close() })
 			createTables(t, sqliteAdapter.NewSQLiteDriver(db, resolver), tables)

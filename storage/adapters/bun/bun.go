@@ -3,6 +3,7 @@ package bun
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/go-behemoth/behemoth"
 	"github.com/go-behemoth/behemoth/clause"
@@ -55,6 +56,24 @@ func NewBunAdapter(db bun.IDB, resolver behemoth.SchemaResolver) *BunAdapter {
 		mysql:    db.Dialect().Name() == dialect.MySQL,
 		mssql:    db.Dialect().Name() == dialect.MSSQL,
 	}
+}
+
+var _ behemoth.ForeignKeyChecker = (*BunAdapter)(nil)
+
+// CheckForeignKeys implements behemoth.ForeignKeyChecker. On SQLite it asks
+// the connection it gets from the pool whether it enforces foreign keys, and
+// returns a configuration error that says how to switch them on when it does
+// not. On every other dialect it returns nil: those databases always enforce
+// them. Boot calls it.
+func (ba *BunAdapter) CheckForeignKeys(ctx context.Context) error {
+	if ba.db.Dialect().Name() != dialect.SQLite {
+		return nil
+	}
+	var enabled int
+	if err := ba.db.QueryRowContext(ctx, adapters.SQLiteForeignKeysPragma).Scan(&enabled); err != nil {
+		return fmt.Errorf("BunAdapter.CheckForeignKeys: %w", err)
+	}
+	return adapters.SQLiteForeignKeysError("BunAdapter.CheckForeignKeys", enabled)
 }
 
 // dialectBool is a bool that bun renders the way the connection's dialect

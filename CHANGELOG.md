@@ -60,6 +60,7 @@ Tags are never moved or deleted after they are pushed.
 
 ### Changed
 
+- `Boot` fails on a SQLite database that does not enforce foreign keys, which includes the Bun and GORM adapters on SQLite. Open the database with `_foreign_keys=on` in the DSN of `github.com/mattn/go-sqlite3`, or set `BootConfig.AllowUnenforcedForeignKeys` to start anyway, with a warning. Without foreign keys, a sign-in that races a user's deletion can leave a session for a user that no longer exists.
 - The Bun adapter requires Bun v1.3.0. Use v1.3.0 of Bun's dialect modules (`pgdialect`, `mysqldialect`, `mssqldialect` and `sqlitedialect`) as well, because Bun stops at startup when a dialect module has another version.
 - The Echo adapter checks for a route that the Echo instance already has with the same method and path, and returns an error for it. Echo v5.4 lets `echo.New` overwrite a duplicate route without an error, so the adapter no longer relies on Echo for this.
 - The module path changes from `github.com/MastewalB/behemoth` to `github.com/go-behemoth/behemoth`, and so does the path of every adapter module. Replace the old path with the new one in your imports and in your `go.mod`.

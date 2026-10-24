@@ -68,7 +68,7 @@ func TestContributedColumnsReachTheModel(t *testing.T) {
 
 	backends := map[string]func(t *testing.T) behemoth.Database{
 		"sqlite": func(t *testing.T) behemoth.Database {
-			db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ext.db"))
+			db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ext.db")+"?_foreign_keys=on")
 			require.NoError(t, err)
 			t.Cleanup(func() { db.Close() })
 			createTable(t, sqliteAdapter.NewSQLiteDriver(db, resolver), users)
@@ -134,7 +134,7 @@ func TestContributedColumnsReachTheModel(t *testing.T) {
 func TestHooksCanSetContributedColumns(t *testing.T) {
 	ctx := context.Background()
 	users, resolver := extendedUsers(t)
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "hooks.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "hooks.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	createTable(t, sqliteAdapter.NewSQLiteDriver(db, resolver), users)

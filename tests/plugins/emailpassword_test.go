@@ -74,7 +74,7 @@ func (passDispatcher) Fail(*core.HookContext, core.HookPoint, core.FailureReason
 // dispatcher. TestEmailPasswordThroughPrepareAndBoot covers the booted path.
 func authContext(t *testing.T) *core.AuthContext {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema)
@@ -283,7 +283,7 @@ func TestEmailPasswordPluginMetadata(t *testing.T) {
 // dispatch through the real dispatcher: every point they fire is declared.
 func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-boot.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-boot.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema)
@@ -381,7 +381,7 @@ func TestEmailPasswordThroughPrepareAndBoot(t *testing.T) {
 // its error reaches the route's caller unchanged, and auth.signUp.failed fires.
 func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-veto.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-veto.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema)
@@ -458,7 +458,7 @@ func TestEmailPasswordSignUpReturnsADataHooksVeto(t *testing.T) {
 // (the user write, the session create). What those write stays their own.
 func TestEmailPasswordFlowsShareValuesAndRunWithoutARequest(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-values.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-values.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema)
@@ -674,7 +674,7 @@ func TestEmailAndPasswordCredentialsPayload(t *testing.T) {
 // window is an audit event; every refusal is counted in the metric.
 func TestSignInRouteIsRateLimited(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-limit.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-limit.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema)
@@ -763,7 +763,7 @@ func TestSignInLimitsHoldForEveryTransport(t *testing.T) {
 	ctx := context.Background()
 	boot := func(t *testing.T, cfg core.RateLimitConfig) (*emailpassword.Plugin, error) {
 		t.Helper()
-		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-transports.db"))
+		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-transports.db")+"?_foreign_keys=on")
 		require.NoError(t, err)
 		t.Cleanup(func() { db.Close() })
 		_, err = db.Exec(schema)
@@ -861,7 +861,7 @@ func (limitsPlugin) Declare(ic *core.PluginInitContext) error {
 // a CLI or a job as they do for a route.
 func TestHookRateLimitRulesKeyOnPublishedValues(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-hook-limit.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-hook-limit.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema + `
@@ -1010,7 +1010,7 @@ func TestEmailPasswordOptions(t *testing.T) {
 // values, and a sign-in that failed because the database did.
 func TestEmailPasswordLogging(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-log.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-log.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema)
@@ -1108,7 +1108,7 @@ func TestEmailPasswordLogging(t *testing.T) {
 // text, logged once. It used to be a 401 that carried the text.
 func TestSessionCheckThroughTheRouter(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-session-check.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-session-check.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema)
@@ -1184,7 +1184,7 @@ func auditApp(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.Hoo
 // its flows from code.
 func bootedPlugin(t *testing.T, tel *telemetry.Telemetry, appHooks func(reg core.HookRegistry) error) (*core.AuthContext, *emailpassword.Plugin, map[string]httpapi.Route) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-audit.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "ep-audit.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(schema)

@@ -107,6 +107,27 @@ type TransactionChecker interface {
 	CheckTransactions(ctx context.Context) error
 }
 
+// ForeignKeyChecker is an optional interface of a Database that can run
+// without enforcing the foreign keys its tables declare. Boot calls
+// CheckForeignKeys once, before anything is written, and fails when it
+// returns an error, unless BootConfig.AllowUnenforcedForeignKeys is set.
+//
+// Without enforced foreign keys, a sign-in that races the deletion of its
+// user can leave a session for a user that no longer exists, and the session
+// stays valid until it expires.
+//
+// The SQLite adapter, and the Bun and GORM adapters on SQLite, implement it:
+// SQLite enforces foreign keys only on a connection that switched them on,
+// and a new connection has them off. The other SQL adapters don't need to;
+// their databases always enforce them. MongoDB has no foreign keys.
+type ForeignKeyChecker interface {
+	// CheckForeignKeys returns nil when foreign keys are enforced on this
+	// database, and a configuration error that says how to switch them on
+	// otherwise. It checks one connection of the pool: a database opened
+	// with the setting in its DSN has it on every connection.
+	CheckForeignKeys(ctx context.Context) error
+}
+
 // KeyValueStorage defines the interface for key-value storage operations.
 //
 // Implementations must handle the following common scenarios:
