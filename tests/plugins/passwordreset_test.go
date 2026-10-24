@@ -48,7 +48,7 @@ type resetApp struct {
 func bootReset(t *testing.T, opts emailpassword.ResetOptions, hookFn func(reg core.HookRegistry) error) (*resetApp, *models.User) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "reset.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "reset.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(magicLinkSchema)
@@ -351,7 +351,7 @@ func TestPasswordResetWithoutAPasswordAndLeavingEmailUnverified(t *testing.T) {
 func TestPasswordResetOptions(t *testing.T) {
 	boot := func(t *testing.T, opts emailpassword.ResetOptions, sender core.MailSender) (*emailpassword.Plugin, mountedRoutes, error) {
 		t.Helper()
-		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "reset-opts.db"))
+		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "reset-opts.db")+"?_foreign_keys=on")
 		require.NoError(t, err)
 		t.Cleanup(func() { db.Close() })
 		_, err = db.Exec(magicLinkSchema)

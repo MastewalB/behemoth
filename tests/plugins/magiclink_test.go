@@ -85,7 +85,7 @@ type magicLinkApp struct {
 func bootMagicLink(t *testing.T, opts magiclink.Options, hookFn func(reg core.HookRegistry) error) (*magicLinkApp, *models.User) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "magiclink.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "magiclink.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(magicLinkSchema)
@@ -367,7 +367,7 @@ func TestMagicLinkOptions(t *testing.T) {
 		"a relative link URL": {magiclink.Options{LinkURL: "/auth/magic"}, sender},
 		"a negative TTL":      {magiclink.Options{LinkURL: "https://app.example.com/auth/magic", TTL: -time.Minute}, sender},
 	} {
-		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "magiclink-opts.db"))
+		db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "magiclink-opts.db")+"?_foreign_keys=on")
 		require.NoError(t, err)
 		t.Cleanup(func() { db.Close() })
 		_, err = db.Exec(magicLinkSchema)

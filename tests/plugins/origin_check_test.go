@@ -31,7 +31,7 @@ func bootWithRouter(t *testing.T, delivery httpapi.TokenDelivery, router httpapi
 // configuration.
 func bootRouter(t *testing.T, router httpapi.RouterConfig) (*core.AuthContext, mountedRoutes, error) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "origin.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "origin.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(magicLinkSchema)

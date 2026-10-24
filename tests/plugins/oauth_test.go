@@ -105,7 +105,7 @@ type oauthApp struct {
 func bootOAuth(t *testing.T, opts oauth.Options, hookFn func(reg core.HookRegistry) error, configure ...func(*engine.BootConfig)) (*oauthApp, error) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "oauth.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "oauth.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(magicLinkSchema)

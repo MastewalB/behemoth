@@ -85,7 +85,7 @@ const (
 // after the call.
 func bootPhones(t *testing.T, opts phonenumber.Options, hookFn func(reg core.HookRegistry) error) *phoneApp {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "phone.db")+"?_busy_timeout=10000&_txlock=immediate")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "phone.db")+"?_foreign_keys=on&_busy_timeout=10000&_txlock=immediate")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(phoneSchema)
@@ -754,7 +754,7 @@ func TestPhoneNumberOptionsAndWiring(t *testing.T) {
 	assert.Equal(t, []core.PluginDependency{{Name: emailpassword.PluginName}}, meta.Dependencies)
 
 	// Boot fails without an SMS sender.
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "nosms.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "nosms.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(phoneSchema)

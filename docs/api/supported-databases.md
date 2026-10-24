@@ -23,6 +23,20 @@ SQLite has no server to install. The SQLite adapter uses the `github.com/mattn/g
 
 The driver needs cgo. Build with a C compiler installed and `CGO_ENABLED=1`.
 
+### Foreign keys
+
+SQLite starts every connection with foreign keys off, and Behemoth's tables declare them. Without them, a sign-in that races the deletion of its user can leave a session for a user that no longer exists. `Boot` therefore refuses a SQLite database that does not enforce foreign keys, and the error says how to switch them on. This applies to the SQLite adapter, and to the Bun and GORM adapters on SQLite.
+
+Open the database with foreign keys on, in the DSN, so that every connection of the pool has them:
+
+```go
+db, err := sql.Open("sqlite3", "file:app.db?_foreign_keys=on") // github.com/mattn/go-sqlite3
+```
+
+With `modernc.org/sqlite`, the DSN parameter is `_pragma=foreign_keys(1)`. A `PRAGMA foreign_keys = ON` that you run yourself covers only the connection it ran on.
+
+To start without them, set `BootConfig.AllowUnenforcedForeignKeys`. `Boot` then logs a warning. Use it for a throwaway database, not for one that holds users.
+
 ## Run the tests against another release
 
 The container suites in `tests/` start the minimum release of each database. Set an environment variable to start another release:

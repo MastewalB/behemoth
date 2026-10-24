@@ -230,6 +230,14 @@ type BootConfig struct {
 	Session   core.SessionConfig
 	Token     core.TokenConfig
 
+	// AllowUnenforcedForeignKeys lets Boot start on a database that does not
+	// enforce the foreign keys its tables declare, which SQLite does not
+	// unless the connection was opened with them on. Boot then logs a
+	// warning instead of failing. Without enforced foreign keys, a session
+	// can outlive a user that was deleted while the user signed in. Default
+	// false: Boot fails.
+	AllowUnenforcedForeignKeys bool
+
 	// Audit says what the audit events behemoth records hold. Zero value =
 	// every event in full, the client's IP address and user agent included.
 	// Where events go is Telemetry's audit recorder.
@@ -323,6 +331,16 @@ func Boot(ctx context.Context, app *PreparedApp, db behemoth.Database, cfg BootC
 		}
 		for _, w := range warnings {
 			tel.Named("boot").Logger.Warn(ctx, "a declared index is missing; reads that use it scan the collection", behemoth.M{"index": w})
+		}
+	}
+	// Fail here when a deleted user's session could outlive the user: on
+	// SQLite a connection enforces foreign keys only if it was opened so.
+	if checker, ok := db.(behemoth.ForeignKeyChecker); ok {
+		if err := checker.CheckForeignKeys(ctx); err != nil {
+			if !cfg.AllowUnenforcedForeignKeys {
+				return nil, fmt.Errorf("database foreign key check failed: %w", err)
+			}
+			tel.Named("boot").Logger.Warn(ctx, "foreign keys are not enforced; a session can outlive a user deleted while signing in", behemoth.M{"reason": err.Error()})
 		}
 	}
 	if !tel.AuditConfigured() {

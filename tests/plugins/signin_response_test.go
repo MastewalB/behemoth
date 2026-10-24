@@ -34,7 +34,7 @@ import (
 // token carrier's settings.
 func bootPasswords(t *testing.T, session core.SessionConfig, carrier httpapi.TokenCarrierConfig, hookFn func(core.HookRegistry) error) (*core.AuthContext, mountedRoutes, error) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "signin.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "signin.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(magicLinkSchema)
@@ -360,7 +360,7 @@ func (visibilityPlugin) Register(reg core.HookRegistry) error {
 // not marked stays on the server, where its plugin still reads it.
 func TestResponsesCarryOnlyPublicColumns(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "public.db")+"?_busy_timeout=10000")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "public.db")+"?_foreign_keys=on&_busy_timeout=10000")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(magicLinkSchema + `

@@ -91,5 +91,6 @@ Follow these rules:
 ## Other differences
 
 - **Foreign keys are not enforced.** MongoDB has none, so a row that references a missing user is stored, and deleting a row does not delete the rows that reference it. `Store.DeleteUser` removes a user's sessions, accounts, and tokens itself, on every database. Delete your own rows that reference a user in a handler on `data.user.beforeDelete`. See [Delete a user](hooks.md#delete-a-user).
+- **A sign-in that races a user's deletion can leave a session behind.** A sign-in that found the user just before `Store.DeleteUser` commits can still create its session after the commit. A database with foreign keys refuses that insert. MongoDB stores it. Session validation reads the session and not the user, so that session stays valid until it expires, which is `SessionConfig.ExpiresIn` after sign-in (7 days by default). The window is the time between the sign-in's user lookup and its session insert, which is short. To remove what the race leaves, call `RevokeAllForUser` on your session manager for the deleted user's id once the deletion has finished. To shorten the exposure, lower `ExpiresIn`.
 - **Hook handlers can run more than once.** The driver retries a transaction on a transient error. See [Hooks](hooks.md#other-things-to-know).
 - **Dates are stored in milliseconds** and read back in UTC.

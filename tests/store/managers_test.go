@@ -48,7 +48,7 @@ CREATE TABLE tokens (
 // concurrency tests exercise the logic, not lock errors.
 func sessionsTokensDB(t *testing.T) behemoth.Database {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "managers.db")+"?_busy_timeout=10000")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "managers.db")+"?_foreign_keys=on&_busy_timeout=10000")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
@@ -287,7 +287,7 @@ func TestSessionTouchDecidesFromTheSessionItIsGiven(t *testing.T) {
 // and keeps its text from the client.
 func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 	ctx := context.Background()
-	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "refusals.db")+"?_busy_timeout=10000")
+	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "refusals.db")+"?_foreign_keys=on&_busy_timeout=10000")
 	require.NoError(t, err)
 	t.Cleanup(func() { sqlDB.Close() })
 	_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
@@ -361,7 +361,7 @@ func TestRequireSessionRefusesWithTypedErrors(t *testing.T) {
 // it back with the refusal. A cookie that may still be needed stays.
 func TestRequireSessionTakesBackTheCookieOfASessionThatIsGone(t *testing.T) {
 	ctx := context.Background()
-	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "gone.db")+"?_busy_timeout=10000")
+	sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "gone.db")+"?_foreign_keys=on&_busy_timeout=10000")
 	require.NoError(t, err)
 	t.Cleanup(func() { sqlDB.Close() })
 	_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)
@@ -471,7 +471,7 @@ func TestRequireSessionReadsNoMoreThanItNeeds(t *testing.T) {
 		// The adapter logs each statement at debug, which is how they are
 		// counted.
 		_, rec := telemetrytest.New()
-		sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "cost.db")+"?_busy_timeout=10000")
+		sqlDB, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "cost.db")+"?_foreign_keys=on&_busy_timeout=10000")
 		require.NoError(t, err, name)
 		t.Cleanup(func() { sqlDB.Close() })
 		_, err = sqlDB.Exec(sessionsTokensSQLite + testutils.AuditLogSQLiteSchema)

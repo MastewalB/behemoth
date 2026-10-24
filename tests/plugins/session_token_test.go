@@ -56,7 +56,7 @@ type tokenApp struct {
 func bootSessionTokens(t *testing.T, jwtCfg crypto.JWTConfig, hookFn func(reg core.HookRegistry) error, configure ...func(*engine.BootConfig)) (*tokenApp, error) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "tokens.db"))
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "tokens.db")+"?_foreign_keys=on")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(magicLinkSchema)
