@@ -55,10 +55,13 @@ Tags are never moved or deleted after they are pushed.
 
 ### Security
 
+- Every module requires dependency releases that have no known vulnerabilities. The Gin, chi, GORM and Echo adapters needed newer releases of `golang.org/x/net`, `github.com/quic-go/quic-go`, `github.com/go-chi/chi/v5`, `golang.org/x/text` and `github.com/labstack/echo/v5`.
 - The SQLite adapter requires `github.com/mattn/go-sqlite3` v1.14.52, which compiles in SQLite 3.53.4. The earlier requirement, v1.14.22, compiled in SQLite 3.45.1, which lacks the fixes for several memory-corruption vulnerabilities reported in 2025 and 2026.
 
 ### Changed
 
+- The Bun adapter requires Bun v1.3.0. Use v1.3.0 of Bun's dialect modules (`pgdialect`, `mysqldialect`, `mssqldialect` and `sqlitedialect`) as well, because Bun stops at startup when a dialect module has another version.
+- The Echo adapter checks for a route that the Echo instance already has with the same method and path, and returns an error for it. Echo v5.4 lets `echo.New` overwrite a duplicate route without an error, so the adapter no longer relies on Echo for this.
 - The module path changes from `github.com/MastewalB/behemoth` to `github.com/go-behemoth/behemoth`, and so does the path of every adapter module. Replace the old path with the new one in your imports and in your `go.mod`.
 - The OpenTelemetry instrumentation scope of the `otel` adapter is now `github.com/go-behemoth/behemoth`. Update a dashboard or a filter that selects spans or metrics by the old scope name.
 - The `go` line of every module is `1.26.0`, the oldest Go release Behemoth supports. Earlier versions named a patch release, which made `go` fetch that exact toolchain. Behemoth supports the two newest Go releases, and CI tests with the newest patch of each. Build your application with the newest patch release of your Go version, because the standard library receives security fixes in patch releases.
