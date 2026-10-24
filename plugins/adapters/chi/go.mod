@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/go-behemoth/behemoth v0.0.0
-	github.com/go-chi/chi/v5 v5.2.2
+	github.com/go-chi/chi/v5 v5.4.0
 )
 
 require (
